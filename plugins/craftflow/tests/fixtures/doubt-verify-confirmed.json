@@ -1,0 +1,51 @@
+{
+  "id": "doubt-verify-confirmed",
+  "workflow_type": "BUILD",
+  "starting_artifact": {
+    "workflow_uuid": "wf-20260601T120000Z-doubt-confirmed",
+    "workflow_id": "wf-20260601T120000Z-doubt-confirmed",
+    "workflow_type": "BUILD",
+    "state_root": ".craftflow/v10",
+    "plan_mode": "execution_plan",
+    "verification_rigor": "standard",
+    "proof_status": "passed",
+    "traceability": {"requirements": [], "phases": [], "verification": [], "remediation": []},
+    "phase_cursor": "phase-1",
+    "task_ids": {},
+    "results": {},
+    "intent": {"goal": "Build payment webhook handler"},
+    "evidence": {},
+    "quality": {"convergence_state": "stable"},
+    "status_history": [],
+    "remediation_history": []
+  },
+  "relevant_tasks": {
+    "doubt_verify_cycle1": {
+      "phase": "doubt-verify",
+      "status": "completed",
+      "blockedBy": []
+    }
+  },
+  "agent_outputs": {
+    "doubt_verifier_contract": {
+      "DOUBT_VERDICT": "CONFIRMED",
+      "CYCLE": 1,
+      "CYCLE_COMPLETE": false,
+      "CLAIMS_EXAMINED": 3,
+      "BLOCKING": [],
+      "REFUTED_CLAIMS": [],
+      "DOUBT_THEATER": false,
+      "NEXT_ACTION": "advance_to_next_phase"
+    }
+  },
+  "expected": {
+    "next_action": "advance_to_next_phase",
+    "artifact_delta": {
+      "quality": {"convergence_state": "stable"},
+      "telemetry": {
+        "doubt_verify_cycles": 1,
+        "doubt_verify_verdict": "CONFIRMED"
+      }
+    }
+  }
+}

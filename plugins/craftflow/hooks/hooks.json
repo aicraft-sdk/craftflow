@@ -1,0 +1,185 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_pretooluse_guard.py\"",
+            "timeout": 10,
+            "statusMessage": "CRAFTFLOW protected-write guard"
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_memory_protect_pre.py\"",
+            "timeout": 5,
+            "statusMessage": "CRAFTFLOW memory content masking"
+          }
+        ]
+      },
+      {
+        "matcher": "WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_sdd_cache_pre.py\"",
+            "timeout": 8,
+            "statusMessage": "CRAFTFLOW SDD URL cache check"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_context_migration.py\"",
+            "timeout": 15,
+            "statusMessage": "CRAFTFLOW context migration check"
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_sessionstart_context.py\"",
+            "timeout": 10,
+            "statusMessage": "CRAFTFLOW workflow resume context"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_posttooluse_artifact_guard.py\"",
+            "timeout": 10,
+            "statusMessage": "CRAFTFLOW workflow artifact audit"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_memory_protect_restore.py\"",
+            "timeout": 5,
+            "statusMessage": "CRAFTFLOW memory placeholder restore (defensive)"
+          }
+        ]
+      },
+      {
+        "matcher": "WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_sdd_cache_post.py\"",
+            "timeout": 5,
+            "statusMessage": "CRAFTFLOW SDD URL cache update"
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_task_completed_guard.py\"",
+            "timeout": 10,
+            "statusMessage": "CRAFTFLOW task metadata guard"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_postcompact_context.py\"",
+            "timeout": 10,
+            "statusMessage": "CRAFTFLOW compaction event capture"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_subagent_stop_audit.py\"",
+            "timeout": 10,
+            "statusMessage": "CRAFTFLOW subagent contract audit"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_precompact_state.py\"",
+            "timeout": 5,
+            "statusMessage": "CRAFTFLOW pre-compaction state snapshot"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_stop_persist.py\"",
+            "timeout": 3,
+            "statusMessage": "CRAFTFLOW session state persistence"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_memory_protect_restore.py\"",
+            "timeout": 5,
+            "statusMessage": "CRAFTFLOW memory placeholder restore"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_stop_failure_log.py\"",
+            "timeout": 3,
+            "async": true,
+            "statusMessage": "CRAFTFLOW failure event logging"
+          }
+        ]
+      }
+    ],
+    "InstructionsLoaded": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_instructions_loaded_audit.py\"",
+            "timeout": 5,
+            "async": true,
+            "statusMessage": "CRAFTFLOW instruction audit"
+          }
+        ]
+      }
+    ]
+  }
+}

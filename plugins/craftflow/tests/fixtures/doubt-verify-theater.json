@@ -1,0 +1,57 @@
+{
+  "id": "doubt-verify-theater",
+  "workflow_type": "BUILD",
+  "starting_artifact": {
+    "workflow_uuid": "wf-20260601T140000Z-doubt-theater",
+    "workflow_id": "wf-20260601T140000Z-doubt-theater",
+    "workflow_type": "BUILD",
+    "state_root": ".craftflow/v10",
+    "plan_mode": "execution_plan",
+    "verification_rigor": "standard",
+    "proof_status": "passed",
+    "traceability": {"requirements": [], "phases": [], "verification": [], "remediation": []},
+    "phase_cursor": "phase-1",
+    "task_ids": {},
+    "results": {},
+    "intent": {"goal": "Build caching layer for API responses"},
+    "evidence": {},
+    "quality": {"convergence_state": "stable"},
+    "status_history": [],
+    "remediation_history": []
+  },
+  "relevant_tasks": {
+    "doubt_verify_cycle1": {
+      "phase": "doubt-verify",
+      "status": "completed",
+      "blockedBy": []
+    },
+    "doubt_verify_cycle2": {
+      "phase": "doubt-verify",
+      "status": "completed",
+      "blockedBy": ["doubt_verify_cycle1"]
+    }
+  },
+  "agent_outputs": {
+    "doubt_verifier_contract": {
+      "DOUBT_VERDICT": "DOUBT_THEATER",
+      "CYCLE": 2,
+      "CYCLE_COMPLETE": false,
+      "CLAIMS_EXAMINED": 3,
+      "BLOCKING": [],
+      "REFUTED_CLAIMS": [],
+      "DOUBT_THEATER": true,
+      "DOUBT_THEATER_REASON": "Cycle 2 surfaced findings identical to cycle 1 with zero actionable fixes across both cycles. Continued doubt cycling would consume resources without convergence.",
+      "NEXT_ACTION": "escalate_doubt_theater"
+    }
+  },
+  "expected": {
+    "next_action": "escalate_doubt_theater",
+    "artifact_delta": {
+      "quality": {"convergence_state": "escalation_needed"},
+      "telemetry": {
+        "doubt_verify_cycles": 2,
+        "doubt_verify_verdict": "DOUBT_THEATER"
+      }
+    }
+  }
+}

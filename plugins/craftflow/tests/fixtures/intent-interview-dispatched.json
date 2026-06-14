@@ -1,0 +1,78 @@
+{
+  "id": "intent-interview-dispatched",
+  "workflow_type": "PLAN",
+  "starting_artifact": {
+    "workflow_uuid": "wf-20260601T150000Z-intent-dispatched",
+    "workflow_id": "wf-20260601T150000Z-intent-dispatched",
+    "workflow_type": "PLAN",
+    "state_root": ".craftflow/v10",
+    "plan_mode": null,
+    "verification_rigor": "standard",
+    "proof_status": "gaps_found",
+    "traceability": {"requirements": [], "phases": [], "verification": [], "remediation": []},
+    "phase_cursor": null,
+    "task_ids": {},
+    "results": {},
+    "intent": {"goal": null, "non_goals": [], "constraints": [], "acceptance_criteria": [], "open_decisions": []},
+    "evidence": {},
+    "quality": {"convergence_state": "pending"},
+    "status_history": [],
+    "remediation_history": []
+  },
+  "relevant_tasks": {
+    "intent_interview": {
+      "phase": "plan-intent-interview",
+      "status": "completed",
+      "blockedBy": []
+    },
+    "planner_create": {
+      "phase": "plan-create",
+      "status": "pending",
+      "blockedBy": ["intent_interview"]
+    }
+  },
+  "agent_outputs": {
+    "intent_interview_contract": {
+      "goal": "Refactor the notification settings page to reduce TTI",
+      "non_goals": [
+        "Do not touch email notification logic",
+        "Do not change the visual design or component hierarchy"
+      ],
+      "constraints": [
+        "Must not break existing notification preferences stored in localStorage",
+        "Must remain under 200ms TTI on a mid-range mobile device"
+      ],
+      "acceptance_criteria": [
+        "Notification settings page loads in under 200ms on Lighthouse mobile simulation",
+        "All existing user notification preferences are preserved after the refactor",
+        "No regression in notification delivery behavior"
+      ],
+      "open_decisions": [],
+      "confidence": "high"
+    }
+  },
+  "expected": {
+    "next_action": "dispatch_planner_with_intent_contract",
+    "dispatch_trigger": "ambiguous_scope_terms",
+    "interview_skipped": false,
+    "artifact_delta": {
+      "intent": {
+        "goal": "Refactor the notification settings page to reduce TTI",
+        "non_goals": [
+          "Do not touch email notification logic",
+          "Do not change the visual design or component hierarchy"
+        ],
+        "constraints": [
+          "Must not break existing notification preferences stored in localStorage",
+          "Must remain under 200ms TTI on a mid-range mobile device"
+        ],
+        "acceptance_criteria": [
+          "Notification settings page loads in under 200ms on Lighthouse mobile simulation",
+          "All existing user notification preferences are preserved after the refactor",
+          "No regression in notification delivery behavior"
+        ],
+        "open_decisions": []
+      }
+    }
+  }
+}
