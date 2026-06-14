@@ -1,0 +1,38 @@
+{
+  "id": "intent-interview-skipped",
+  "workflow_type": "PLAN",
+  "starting_artifact": {
+    "workflow_uuid": "wf-20260601T160000Z-intent-skipped",
+    "workflow_id": "wf-20260601T160000Z-intent-skipped",
+    "workflow_type": "PLAN",
+    "state_root": ".craftflow/v10",
+    "plan_mode": null,
+    "verification_rigor": "standard",
+    "proof_status": "gaps_found",
+    "traceability": {"requirements": [], "phases": [], "verification": [], "remediation": []},
+    "phase_cursor": null,
+    "task_ids": {},
+    "results": {},
+    "intent": {"goal": null, "non_goals": [], "constraints": [], "acceptance_criteria": [], "open_decisions": []},
+    "evidence": {},
+    "quality": {"convergence_state": "pending"},
+    "status_history": [],
+    "remediation_history": []
+  },
+  "relevant_tasks": {
+    "planner_create": {
+      "phase": "plan-create",
+      "status": "pending",
+      "blockedBy": []
+    }
+  },
+  "agent_outputs": {},
+  "expected": {
+    "next_action": "skip_to_brainstorming",
+    "interview_skipped": true,
+    "skip_reason": "auto_proceed",
+    "session_settings": {
+      "AUTO_PROCEED": true
+    }
+  }
+}

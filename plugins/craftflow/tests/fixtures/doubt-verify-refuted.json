@@ -1,0 +1,58 @@
+{
+  "id": "doubt-verify-refuted",
+  "workflow_type": "BUILD",
+  "starting_artifact": {
+    "workflow_uuid": "wf-20260601T130000Z-doubt-refuted",
+    "workflow_id": "wf-20260601T130000Z-doubt-refuted",
+    "workflow_type": "BUILD",
+    "state_root": ".craftflow/v10",
+    "plan_mode": "execution_plan",
+    "verification_rigor": "standard",
+    "proof_status": "passed",
+    "traceability": {"requirements": [], "phases": [], "verification": [], "remediation": []},
+    "phase_cursor": "phase-1",
+    "task_ids": {},
+    "results": {},
+    "intent": {"goal": "Build payment webhook handler with idempotency"},
+    "evidence": {},
+    "quality": {"convergence_state": "stable"},
+    "status_history": [],
+    "remediation_history": []
+  },
+  "relevant_tasks": {
+    "doubt_verify_cycle1": {
+      "phase": "doubt-verify",
+      "status": "completed",
+      "blockedBy": []
+    }
+  },
+  "agent_outputs": {
+    "doubt_verifier_contract": {
+      "DOUBT_VERDICT": "REFUTED",
+      "CYCLE": 1,
+      "CYCLE_COMPLETE": false,
+      "CLAIMS_EXAMINED": 3,
+      "BLOCKING": [
+        {
+          "claim": "All 3 payment scenarios pass the idempotency check",
+          "verdict": "REFUTED",
+          "evidence": "tests/payment.test.ts:45 — only 1 scenario exercises retry logic; scenarios 2 and 3 hit the happy path only",
+          "actionable_fix": "Add retry scenario tests for scenarios 2 and 3"
+        }
+      ],
+      "REFUTED_CLAIMS": ["All 3 payment scenarios pass the idempotency check"],
+      "DOUBT_THEATER": false,
+      "NEXT_ACTION": "create_remfix_from_refuted_claim"
+    }
+  },
+  "expected": {
+    "next_action": "create_remfix_from_refuted_claim",
+    "artifact_delta": {
+      "quality": {"convergence_state": "needs_iteration"},
+      "telemetry": {
+        "doubt_verify_cycles": 1,
+        "doubt_verify_verdict": "REFUTED"
+      }
+    }
+  }
+}
