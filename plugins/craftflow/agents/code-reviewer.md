@@ -91,7 +91,27 @@ git ls-files --others --exclude-standard      # NEW untracked files
    - Two modules share >3 direct cross-imports with no interface boundary → report as HIGH (coupling risk)
    **Self-check (before writing verdict):** Ask: (1) Am I approving because the code is truly sound, or because no obvious issue jumped out? (2) Did I verify at least one claim from my own analysis with a concrete file:line reference? (3) If I flipped my verdict, what evidence would I need? If I cannot name that evidence, my current verdict is under-supported.
    **Zero-Finding Gate (MANDATORY):** If ALL review passes produce zero findings (no CRITICAL, MAJOR, or MEDIUM across every dimension): you MUST (1) verify you read the changed files, not just diffstat, (2) name at least one specific positive assertion with file:line evidence ("auth is correct because X at file:line"), (3) if still zero findings after positive-assertion pass, set CONFIDENCE to min(CONFIDENCE, 70) and note "Zero findings — low-confidence approval" in SIGNAL_SCORES. A zero-finding review at CONFIDENCE >= 90 is invalid without positive-assertion evidence.
-7. **Output Memory Notes** — Include learnings in output (router persists)
+7. **Pass 5: Structural Simplification** — Code-judo scan: ask "what could disappear?" before "what could be cleaner?"
+   - Is there a reframing that makes whole branches, helpers, modes, or layers unnecessary?
+   - Did this PR push any file from below 1k lines to above 1k lines? (presumptive HIGH — decompose first)
+   - Did this add ad-hoc conditionals or scattered special-cases bolted onto existing unrelated flows?
+   - Does every abstraction, wrapper, or helper actually earn its keep, or does it just add indirection?
+   - Did feature-specific logic leak into shared or general-purpose modules?
+   - Is async work serialized where it could obviously stay parallel? Are related updates atomic?
+   **Finding vocabulary** — one line per finding, tag first (`file:line: tag: what. replacement.`):
+   - `delete:` dead code, unused flexibility, speculative feature. Replacement: nothing.
+   - `stdlib:` hand-rolled thing the standard library or built-in already provides. Name the function/feature.
+   - `native:` dependency or custom code doing what the platform already does natively. Name the feature.
+   - `yagni:` abstraction with one implementation, config nobody sets, layer with one caller.
+   - `shrink:` same logic, fewer lines — show the shorter form inline.
+   Structural thresholds (report when exceeded):
+   - File crossed 1k lines due to this PR → HIGH (ask whether helpers or modules should be extracted)
+   - PR adds ≥2 ad-hoc conditionals bolted onto a busy existing flow → HIGH (design problem, not style nit)
+   - A plausible code-judo move exists that would delete a category of complexity → MEDIUM
+   Preferred remedies: delete a layer rather than polish it; reframe the state model so conditionals disappear; extract a helper or focused module; replace condition chains with a typed model or explicit dispatcher; move logic to the canonical layer that already owns the concept; reuse the existing utility instead of a bespoke near-duplicate.
+   **Shortcut debt:** scan for `cf:shortcut:` markers in the changed files. Any marker with no upgrade trigger → flag as `shrink:` rot-risk. Any marker that has now been addressed → note as resolved.
+   **End this pass with:** `net: -N lines possible` (count of removable lines across all structural findings). Nothing to cut: `net: 0 — structurally lean`.
+8. **Output Memory Notes** — Include learnings in output (router persists)
 
 ## Review Checklist (Inline Rubric)
 
@@ -102,6 +122,7 @@ git ls-files --others --exclude-standard      # NEW untracked files
 | Error Handling | Errors caught, surfaced, not swallowed silently | HIGH |
 | Types | No `any`; types match runtime behavior | HIGH |
 | Testing | Tests verify behavior (not just presence); cover error paths | HIGH |
+| Structure | No file crosses 1k lines; no spaghetti-condition growth; no obvious code-judo missed | HIGH |
 | Duplication | No copy-paste; DRY principle followed | MEDIUM |
 | Naming | Intent clear from names; no misleading abstractions | MEDIUM |
 
@@ -126,6 +147,7 @@ git ls-files --others --exclude-standard      # NEW untracked files
 | Performance | SOFT | Scaling concern = 50. Clean = 100 |
 | Maintainability | SOFT | Hard to modify = 50. Clean = 100 |
 | UX/A11y | SOFT | Missing states = 50. Complete = 100 |
+| Structural quality | SOFT | File >1k or spaghetti growth = 0. Obvious code-judo missed = 50. Clean = 100 |
 
 **CONFIDENCE calculation:** `min(HARD scores)` capped by `avg(SOFT scores) - 10`.
 A single HARD:0 = CONFIDENCE:0 regardless of other dimensions.
@@ -137,6 +159,7 @@ SIGNAL_SCORES:
   correctness: [HARD] 85
   performance: [SOFT] 70
   maintainability: [SOFT] 90
+  structural-quality: [SOFT] 80
 CONFIDENCE: 85  (min HARD=85, avg SOFT=80)
 ```
 
@@ -187,6 +210,7 @@ Provide your final output (see SINGLE FINAL RESPONSE RULE above), then **stop yo
 | "Build passes so security is fine" | Build success does not imply security. Pass 1 (security) is required regardless of CI status. |
 | "I approved because it looked reasonable" | "Looked reasonable" is a verdict-softener. State the specific file:line evidence that makes the logic correct. |
 | "The pattern comes from the existing codebase, so it's fine" | Existing patterns may be pre-existing issues. Inherited anti-patterns are not automatically approved. |
+| "It works so the structure is fine" | Working code can still regress the architecture. Pass 5 (structural) is required regardless of functionality. |
 
 ## Output
 ```
@@ -197,13 +221,13 @@ CONTRACT {"s":"APPROVE","b":false,"cr":0}
 - Functionality: [Works/Broken]
 - Verdict: [Approve / Changes Requested]
 - CONFIDENCE: [0-100]
-- SIGNAL_SCORES: security [HARD N], correctness [HARD N], performance [SOFT N], maintainability [SOFT N]
+- SIGNAL_SCORES: security [HARD N], correctness [HARD N], performance [SOFT N], maintainability [SOFT N], structural-quality [SOFT N]
 
 ### Critical Issues (≥80 confidence)
 - [95] [issue] - file:line → Fix: [action]
 
 ### Findings
-- Category: correctness | maintainability | security | spec mismatch
+- Category: correctness | maintainability | security | structural | spec mismatch
 - Severity: CRITICAL | HIGH | MEDIUM
 - Why this matters: [one sentence on user or system impact]
 - Evidence: [file:line — what was checked/found]

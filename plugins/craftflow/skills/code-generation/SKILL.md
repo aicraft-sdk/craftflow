@@ -119,7 +119,16 @@ Read(file_path="src/path/to/similar/file.ts")
 
 ### 2. Write Minimal Implementation
 
-Follow **YAGNI** (You Ain't Gonna Need It). Prefer editing existing files over creating new ones.
+**Before writing code, stop at the first rung that holds:**
+
+1. **Does this need to exist at all?** Speculative need = skip it, say so in one line. (YAGNI)
+2. **Stdlib / built-in does it?** Use it. No custom implementation needed.
+3. **Native platform feature covers it?** (`<input type="date">` over a picker lib, CSS over JS, DB constraint over app code)
+4. **Already-installed dependency solves it?** Use it. Never add a new dep for what a few lines can do.
+5. **Can it be one line?** One line.
+6. **Only then:** the minimum code that actually works.
+
+Stop at the first rung that holds. The first simple solution that works is the right one. Prefer editing existing files over creating new ones.
 
 **Good:**
 ```typescript
@@ -142,6 +151,19 @@ function calculateTotal(
   // YAGNI - Was this asked for?
 }
 ```
+
+**Deliberate shortcut convention (`cf:shortcut:`):**
+When a conscious simplification is made — a known ceiling accepted to keep the diff small — mark it in-code so it is not mistaken for ignorance and can be reviewed later:
+
+```typescript
+// cf:shortcut: linear scan; build an index when list grows past ~1k items
+const found = items.find(i => i.id === targetId);
+
+// cf:shortcut: in-process cache; move to Redis when multi-instance deployment needed
+const cache = new Map<string, Result>();
+```
+
+Format: `cf:shortcut: <what was simplified>; <ceiling or upgrade trigger>`. A shortcut with no upgrade trigger is flagged as rot-risk during review.
 
 ### Code Clarity
 
