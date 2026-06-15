@@ -8,6 +8,7 @@
 - [Sloppy Pattern Scan](#sloppy-pattern-scan)
 - [UI Quick Scan](#ui-quick-scan)
 - [Type Design Red Flags](#type-design-red-flags)
+- [Structural Simplification Scan](#structural-simplification-scan)
 
 ## Maintainability Scan
 
@@ -89,3 +90,52 @@ Typed code deserves an extra pass for:
 
 Flag these when they make the current change unsafe or misleading, not as a
 generic architecture lecture.
+
+## Structural Simplification Scan
+
+Run after the main review. Ask "what could disappear?" before "what could be cleaner?"
+
+**Code-judo check** — look for reframings that delete whole categories of complexity:
+- Can a branch, helper, mode, or layer be eliminated by restructuring the approach?
+- Does the state model have a simpler form where some conditionals become unnecessary?
+- Is there an ownership change that makes the feature a natural extension of an existing abstraction?
+- Would renaming, reordering, or inverting the control flow make the logic feel inevitable?
+
+**File-size check:**
+- Did this PR push a file from below 1k lines to above 1k lines? Flag as HIGH.
+- If so, ask whether helpers, subcomponents, or focused modules should be extracted first.
+- Waive only when there is a compelling structural reason and the file remains clearly organized.
+
+**Anti-spaghetti check:**
+- New ad-hoc conditionals bolted onto unrelated existing flows → design problem, not a style nit
+- Special-case branches scattered across shared code to solve a feature-local problem
+- One-off booleans or nullable modes that complicate existing control flow
+- "Temporary" branching that is likely to become permanent debt
+Prefer: push the logic into a dedicated abstraction, helper, state machine, or separate module.
+
+**Abstraction quality check:**
+- Thin wrappers or identity abstractions that add indirection without simplifying the API
+- Bespoke near-duplicate helpers when a canonical utility already exists
+- Generic mechanisms hiding simple data-shape assumptions
+- Abstractions justified only by hypothetical future requirements
+
+**Boundary and layer check:**
+- Feature-specific logic leaking into general-purpose or shared modules
+- Logic placed in the wrong package, service, or module when a clear canonical home exists
+- Implementation details exposed through a layer boundary that should hide them
+
+**Orchestration check:**
+- Independent async work serialized for no good reason (could stay parallel?)
+- Related updates that can leave state half-applied (could be made more atomic?)
+
+**Preferred remedies (structural):**
+- Delete a layer of indirection rather than polish it
+- Reframe the state model so conditionals disappear
+- Extract a helper or pure function; split a large file into focused modules
+- Replace condition chains with a typed model or explicit dispatcher
+- Move logic to the package/module that already owns the concept
+- Reuse the canonical helper instead of introducing a near-duplicate
+- Separate orchestration from business logic
+
+Flag structural issues only when they materially worsen maintainability or represent a missed
+opportunity for a dramatic simplification. Do not surface cosmetic structure nits as regressions.
