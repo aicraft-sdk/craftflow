@@ -437,16 +437,27 @@ TaskCreate({
 
 ### Task metrics and timing telemetry
 
-- Timing telemetry is measurement only. It must never bypass gates, phase exit, or remediation rules.
-- After `TaskGet()` / `TaskList()`, if Claude Code exposes task duration metrics, persist them into:
-  - `telemetry.workflow_wall_clock_seconds`
-  - `telemetry.agent_wall_clock_seconds.{agent}`
-- If task metrics are unavailable, keep `task_metrics_available="unknown"` and continue. Missing telemetry is never a reason to advance or block a workflow.
+Timing telemetry is measurement only. It must never bypass gates, phase exit, or remediation rules.
+
+**Router-owned timestamp instrumentation:**
+- When dispatching an agent task, append `"agent_started"` to the event log with `"ts": "{iso_now}"` before invoking the agent.
+- When capturing agent output, append `"agent_completed"` to the event log with `"ts": "{iso_now}"`.
+- At memory-finalize, for each agent that ran in this workflow, compute `completed_ts - started_ts` in seconds and write to `telemetry.agent_wall_clock_seconds.{agent}`.
+- Compute `workflow_wall_clock_seconds` as the delta between the `workflow_started` event `ts` and the `memory_finalized` event `ts`.
+- ISO timestamps are always UTC. Use `new Date().toISOString()` or equivalent. If the runtime does not expose a clock, omit the field rather than writing 0.
+
+**Legacy path (Claude Code task metrics):**
+- If Claude Code exposes task duration metrics via `TaskGet()`, use those as the primary source.
+- If unavailable, use the event log delta above.
+- Keep `task_metrics_available="unknown"` until one of these paths succeeds; set to `"event_log"` when using delta computation.
+
+**Verifier workload telemetry (unchanged):**
 - When `integration-verifier` reports a `### Timing & Workload` section, persist:
   - `telemetry.verifier.phase_exit_proof_runs`
   - `telemetry.verifier.extended_audit_runs`
   - `telemetry.verifier.workload_seconds`
-- Use telemetry to explain latency. Do not use it to auto-reduce verification scope.
+
+Use telemetry to explain latency. Do not use it to auto-reduce verification scope.
 
 ## 8. Post-Agent Validation
 
