@@ -614,6 +614,12 @@ Convergence rule:
    - mark both in_progress first
    - invoke them in the same message
    - If parallel invocation fails or is unavailable (API error, rate limit): fall back to sequential execution (reviewer first, then hunter). Never block a workflow because parallelism is unavailable. Log `event=parallel_fallback` in the workflow event log.
+5a. If both `research-web` and `research-github` tasks are runnable in the same round (PLAN workflow):
+   - Mark both in_progress first
+   - Dispatch them in the same message (same pattern as reviewer+hunter in BUILD)
+   - Both are read-only with no file-write overlap — safe to parallelize
+   - If parallel invocation fails (rate limit, API error): fall back to sequential (web first, then github). Log `event=parallel_fallback` in the event log.
+   - Wait for BOTH to complete before proceeding to planner or investigator.
 6. After each agent returns:
    - capture memory payload immediately
    - validate output
