@@ -46,13 +46,13 @@ skills:
 
 ## Memory First
 ```
-Bash(command="mkdir -p .craftflow/v10")
-Read(file_path=".craftflow/v10/activeContext.md")
-Read(file_path=".craftflow/v10/patterns.md")
-Read(file_path=".craftflow/v10/progress.md")
+Bash(command="mkdir -p .craftflow/state")
+Read(file_path=".craftflow/state/activeContext.md")
+Read(file_path=".craftflow/state/patterns.md")
+Read(file_path=".craftflow/state/progress.md")
 ```
 
-Do NOT edit `.craftflow/v10/*.md` directly. Emit structured `MEMORY_NOTES`; the router/workflow finalizer persists memory.
+Do NOT edit `.craftflow/state/*.md` directly. Emit structured `MEMORY_NOTES`; the router/workflow finalizer persists memory.
 
 ## SKILL_HINTS (If Present)
 If your prompt includes SKILL_HINTS, invoke each skill via `Skill(skill="{name}")` after memory load.
@@ -98,6 +98,23 @@ If the prompt or plan says `Verification Rigor: critical_path`:
 - prefer smallest verifiable unit before broad integration edits
 
 If the phase is not critical-path work, use normal TDD discipline without pretending formal proof exists.
+
+## Pre-Submit Gate (MANDATORY before STATUS=PASS)
+
+Run these 6 checks on every file you wrote or modified. If any check fails, fix it before emitting the Router Contract.
+
+| # | Check | Fail pattern | Required fix |
+|---|-------|-------------|--------------|
+| 1 | **No bare catch swallowing unintended errors** | `catch (e) { /* nothing or only log */ }` | Re-throw non-target errors: `catch (e) { if (e.code !== 'ENOENT') throw e; }` |
+| 2 | **Every `fetch()` checks `r.ok` before `.json()`** | `const data = await r.json()` without prior `if (!r.ok)` | Add `if (!r.ok) throw new Error('HTTP ' + r.status)` before `.json()` |
+| 3 | **No vacuous test assertions** | `expect(arr).toHaveLength(0)` on dynamically populated data; `expect(result).toBeTruthy()` without structure check | Assert the actual content: `expect(arr).toEqual([{ id: 1, ... }])` |
+| 4 | **Regex patterns cover suffix-attached forms** | Pattern `/\{a,b\}/` that misses `{a,b}.txt` | Verify pattern works when the match is immediately followed by a non-space character; use `[a-z]+(?:\s|$)` style only when suffix exclusion is intentional |
+| 5 | **Conditional logic covers all states** | `if (x === 'ok')` without an `else` for providerUnavailable, error, unknown | Enumerate all union members; `providerUnavailable: true` must be checked BEFORE `ok: false` |
+| 6 | **No logic inversion on boolean flags** | `if (!isDisabled)` when the stored field is `isEnabled` | Match the stored field polarity; note any inversion with a comment |
+
+**Gate rule:** If any check fails and you cannot fix it within the current phase scope, set `STATUS: FAIL`, `BLOCKING: true`, `REMEDIATION_REASON: "Pre-Submit Gate failed: {check number} — {specific pattern found}"`.
+
+This gate runs AFTER all TDD GREEN cycles and BEFORE emitting the Router Contract.
 
 ## TDD Quick Reference
 
