@@ -1,0 +1,218 @@
+{
+  "date": "2026-06-24",
+  "repos": [
+    {
+      "repo": "craftflow",
+      "available": true,
+      "context_load": {
+        "agent_files": 11,
+        "skill_files": 16,
+        "total_files": 27,
+        "total_bytes": 151098,
+        "estimated_tokens": 37774,
+        "largest_file": "planner.md",
+        "largest_bytes": 22734
+      },
+      "chain_depth": {
+        "BUILD": 5,
+        "DEBUG": 3,
+        "PLAN": 2,
+        "REVIEW": 1
+      },
+      "gates": {
+        "plan_trust_gate": true,
+        "phase_exit_gate": true,
+        "failure_stop_gate": true,
+        "scope_decision_gate": true,
+        "memory_sync_gate": true,
+        "skill_precedence_gate": true,
+        "doubt_verify_gate": true,
+        "review_loop": true,
+        "hunt_loop": true
+      },
+      "gates_score": [
+        9,
+        9
+      ],
+      "context_mgmt": {
+        "compact_hook": true,
+        "state_persist": true,
+        "context_eviction": true,
+        "summarization": true,
+        "context_resume": true,
+        "token_tracking": true
+      },
+      "context_mgmt_score": [
+        6,
+        6
+      ],
+      "parallelism": {
+        "parallel_agents": true,
+        "worktree_isolation": true,
+        "subagent_dispatch": true,
+        "concurrent_phases": false
+      },
+      "parallelism_score": [
+        3,
+        4
+      ],
+      "real_telemetry": {
+        "available": true,
+        "total_workflows": 42,
+        "by_type": {
+          "BUILD": 36,
+          "PLAN": 4,
+          "DEBUG": 2
+        },
+        "loop_stats": {
+          "re_review": {
+            "mean": 0.19,
+            "median": 0,
+            "max": 2,
+            "nonzero": 6,
+            "nonzero_pct": 14.3
+          },
+          "re_hunt": {
+            "mean": 0.19,
+            "median": 0,
+            "max": 2,
+            "nonzero": 6,
+            "nonzero_pct": 14.3
+          },
+          "re_verify": {
+            "mean": 0.02,
+            "median": 0,
+            "max": 1,
+            "nonzero": 1,
+            "nonzero_pct": 2.4
+          }
+        },
+        "events_per_workflow": {
+          "mean": 9.57,
+          "median": 8,
+          "max": 35,
+          "nonzero": 40,
+          "nonzero_pct": 100.0
+        }
+      }
+    },
+    {
+      "repo": "cc10x",
+      "available": true,
+      "context_load": {
+        "agent_files": 10,
+        "skill_files": 24,
+        "total_files": 34,
+        "total_bytes": 170494,
+        "estimated_tokens": 42623,
+        "largest_file": "bug-investigator.md",
+        "largest_bytes": 30419
+      },
+      "chain_depth": {
+        "BUILD": 5,
+        "DEBUG": 3,
+        "PLAN": 2,
+        "REVIEW": 1
+      },
+      "gates": {
+        "plan_trust_gate": true,
+        "phase_exit_gate": true,
+        "failure_stop_gate": true,
+        "scope_decision_gate": true,
+        "memory_sync_gate": true,
+        "skill_precedence_gate": true,
+        "doubt_verify_gate": true,
+        "review_loop": true,
+        "hunt_loop": true
+      },
+      "gates_score": [
+        9,
+        9
+      ],
+      "context_mgmt": {
+        "compact_hook": true,
+        "state_persist": true,
+        "context_eviction": true,
+        "summarization": false,
+        "context_resume": true,
+        "token_tracking": true
+      },
+      "context_mgmt_score": [
+        5,
+        6
+      ],
+      "parallelism": {
+        "parallel_agents": true,
+        "worktree_isolation": true,
+        "subagent_dispatch": true,
+        "concurrent_phases": true
+      },
+      "parallelism_score": [
+        4,
+        4
+      ],
+      "real_telemetry": {
+        "available": false
+      }
+    },
+    {
+      "repo": "superpowers",
+      "available": true,
+      "context_load": {
+        "agent_files": 0,
+        "skill_files": 14,
+        "total_files": 15,
+        "total_bytes": 30520,
+        "estimated_tokens": 7630,
+        "largest_file": "SKILL.md",
+        "largest_bytes": 21647
+      },
+      "chain_depth": {
+        "BUILD": 2,
+        "DEBUG": 1,
+        "PLAN": 1,
+        "REVIEW": 1
+      },
+      "gates": {
+        "plan_trust_gate": true,
+        "phase_exit_gate": false,
+        "failure_stop_gate": true,
+        "scope_decision_gate": true,
+        "memory_sync_gate": true,
+        "skill_precedence_gate": false,
+        "doubt_verify_gate": true,
+        "review_loop": true,
+        "hunt_loop": true
+      },
+      "gates_score": [
+        7,
+        9
+      ],
+      "context_mgmt": {
+        "compact_hook": true,
+        "state_persist": true,
+        "context_eviction": true,
+        "summarization": false,
+        "context_resume": true,
+        "token_tracking": true
+      },
+      "context_mgmt_score": [
+        5,
+        6
+      ],
+      "parallelism": {
+        "parallel_agents": true,
+        "worktree_isolation": true,
+        "subagent_dispatch": true,
+        "concurrent_phases": false
+      },
+      "parallelism_score": [
+        3,
+        4
+      ],
+      "real_telemetry": {
+        "available": false
+      }
+    }
+  ]
+}
