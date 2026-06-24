@@ -39,19 +39,19 @@ Always run this before routing or resuming. Memory is organized in two tiers:
 - **workflows/{wf-id}/** — per-workflow isolated state (current focus, active phase, in-flight tasks). Load only when a `workflow_uuid` is already known (resume path).
 
 ```text
-1. Bash("mkdir -p .craftflow/v10/project")
-2. Read(".craftflow/v10/project/activeContext.md")
-3. Read(".craftflow/v10/project/patterns.md")
-4. Read(".craftflow/v10/project/progress.md")
+1. Bash("mkdir -p .craftflow/state/project")
+2. Read(".craftflow/state/project/activeContext.md")
+3. Read(".craftflow/state/project/patterns.md")
+4. Read(".craftflow/state/project/progress.md")
 5. If workflow_uuid is known (resume path):
-   a. Bash("mkdir -p .craftflow/v10/workflows/{workflow_uuid}")
-   b. Read(".craftflow/v10/workflows/{workflow_uuid}/activeContext.md")
-   c. Read(".craftflow/v10/workflows/{workflow_uuid}/patterns.md")
-   d. Read(".craftflow/v10/workflows/{workflow_uuid}/progress.md")
+   a. Bash("mkdir -p .craftflow/state/workflows/{workflow_uuid}")
+   b. Read(".craftflow/state/workflows/{workflow_uuid}/activeContext.md")
+   c. Read(".craftflow/state/workflows/{workflow_uuid}/patterns.md")
+   d. Read(".craftflow/state/workflows/{workflow_uuid}/progress.md")
    Merge: workflow-scoped values override project-scoped for current-focus
    fields (## Current Focus, ## Next Steps, ## Tasks) only.
 6. Fallback: If project/ files are missing or empty, also read the root-flat
-   files (.craftflow/v10/activeContext.md etc.) and merge content into project/
+   files (.craftflow/state/activeContext.md etc.) and merge content into project/
    before proceeding. Root-flat files are the backward-compat layer.
 ```
 
@@ -85,8 +85,8 @@ v10 trust rule:
 ## 2a. Workflow Artifact And Hook Policy
 
 Core law:
-- Durable router state lives under `.craftflow/v10/workflows/{workflow_uuid}.json`
-- Companion event log lives under `.craftflow/v10/workflows/{workflow_uuid}.events.jsonl`
+- Durable router state lives under `.craftflow/state/workflows/{workflow_uuid}.json`
+- Companion event log lives under `.craftflow/state/workflows/{workflow_uuid}.events.jsonl`
 - Router-owned gates still include `plan_trust_gate`, `phase_exit_gate`, `failure_stop_gate`, `memory_sync_gate`, and `skill_precedence_gate`
 
 Mandatory reference read:
@@ -128,7 +128,7 @@ Hydration rules:
 - Find active parent workflow tasks by subject prefix `CRAFTFLOW BUILD:`, `CRAFTFLOW DEBUG:`, `CRAFTFLOW REVIEW:`, `CRAFTFLOW PLAN:`.
 - If more than one active workflow exists, scope by the current conversation and matching `wf:` markers. Do not resume a workflow you cannot scope confidently.
 - Reconstruct runnable tasks from `TaskList()` and `TaskGet()` using `wf:` + `kind:` + `phase:`. Do not rely on stored task IDs for correctness.
-- Read and write only the v10 namespace. Ignore legacy `.craftflow/*.md` and `.craftflow/workflows/*` state during hydration.
+- Read and write only the state namespace. Ignore legacy `.craftflow/*.md` and `.craftflow/workflows/*` state during hydration. State lives under `.craftflow/state/`.
 - `[craftflow-internal] memory_task_id` in `activeContext.md` is only a transient optimization. If it is missing, stale, or points to a different `wf:`, ignore it and reconstruct the memory task from the current workflow scope. [EASY TO MISS: stale memory_task_id is the #1 cause of cross-workflow pollution]
 - Never use an unscoped fallback like "first pending Memory Update task". [EASY TO MISS: unscoped lookups silently pick up orphan tasks from prior workflows]
 
@@ -167,7 +167,7 @@ Before creating a new workflow:
 - Read `activeContext.md ## References` to discover `Plan`, `Design`, and prior `Research` files.
 - Read `activeContext.md ## Decisions` for prior planner/build clarifications.
 - Read `progress.md ## Current Workflow` and `## Tasks` for pending work that should resume instead of duplicating.
-- Read the latest `.craftflow/v10/workflows/*.json` artifact if one exists for the current conversation.
+- Read the latest `.craftflow/state/workflows/*.json` artifact if one exists for the current conversation.
 
 **Intent Readiness Gate (MANDATORY before PLAN or BUILD):**
 Before dispatching to planner or builder, verify the intent contract meets three conditions:
@@ -185,6 +185,35 @@ Router-owned interface fields:
 
 - Before any BUILD-specific readiness decision or child-task creation, immediately read `references/build-workflow.md`.
 - Use the `### BUILD preparation` and `### BUILD task graph` blocks in that file as the canonical BUILD law.
+
+### Worktree Isolation (BUILD Default)
+
+Every new BUILD workflow attempts to isolate file writes in a dedicated git worktree:
+
+1. At BUILD start (before any child task creation), run:
+   ```
+   git worktree add ~/.claude/worktrees/wf-{short-id} -b worktree-wf-{short-id}
+   ```
+   where `short-id` = last 8 chars of `workflow_uuid`.
+
+2. On success:
+   - Set `worktree_mode: "auto_created"` in the workflow artifact
+   - Set `worktree_path: "~/.claude/worktrees/wf-{short-id}"`
+   - Set `worktree_branch: "worktree-wf-{short-id}"`
+   - Pass `worktree_path` to component-builder and integration-verifier scaffolds
+
+3. On failure (any git error — shallow clone, detached HEAD, path conflict):
+   - Set `worktree_mode: null`
+   - Append `{"event":"worktree_fallback","reason":"{error}"}` to the event log
+   - Continue with main tree — never block a workflow over worktree failure
+
+4. After `integration-verifier` returns PASS on the final phase:
+   - Merge worktree branch into main: `git -C {project_root} merge worktree-wf-{short-id}`
+   - Remove worktree: `git worktree remove ~/.claude/worktrees/wf-{short-id}`
+   - Remove branch: `git branch -d worktree-wf-{short-id}`
+   - If merge conflicts: stop, persist `pending_gate: "worktree_merge_conflict"`, ask user to resolve
+
+Safety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: "auto_created"` already set, re-use the existing path rather than creating a new worktree.
 
 ### DEBUG preparation
 
@@ -228,11 +257,11 @@ TaskCreate({
 
 ```text
 Write(
-  file_path=".craftflow/v10/workflows/{workflow_uuid}.json",
-  content="{\"workflow_uuid\":\"{workflow_uuid}\",\"workflow_id\":\"{workflow_uuid}\",\"workflow_type\":\"{WORKFLOW}\",\"state_root\":\".craftflow/v10\",\"user_request\":\"{request}\",\"plan_file\":null,\"design_file\":null,\"research_files\":[],\"approved_decisions\":[],\"plan_mode\":null,\"verification_rigor\":\"standard\",\"proof_status\":\"gaps_found\",\"traceability\":{\"requirements\":[],\"phases\":[],\"verification\":[],\"remediation\":[]},\"intent\":{\"goal\":null,\"non_goals\":[],\"constraints\":[],\"acceptance_criteria\":[],\"open_decisions\":[]},\"normalized_phases\":[],\"phase_cursor\":null,\"capabilities\":{\"brightdata_available\":\"unknown\",\"octocode_available\":\"unknown\",\"websearch_available\":\"unknown\",\"webfetch_available\":\"unknown\"},\"research_rounds\":[],\"research_backend_history\":[],\"research_quality\":{\"web\":\"none\",\"github\":\"none\",\"overall\":\"none\"},\"task_ids\":{\"planner_create\":null,\"planning_review_pass1\":null,\"planner_replan\":null,\"planning_review_pass2\":null,\"memory_finalize\":null},\"phase_status\":{},\"results\":{\"builder\":null,\"investigator\":null,\"reviewer\":null,\"hunter\":null,\"verifier\":null,\"planner\":null,\"planning_reviewer\":null,\"research\":{\"web\":null,\"github\":null,\"synthesis\":null}},\"evidence\":{\"builder\":[],\"investigator\":[],\"reviewer\":[],\"hunter\":[],\"verifier\":[],\"planning_reviewer\":[]},\"telemetry\":{\"task_metrics_available\":\"unknown\",\"workflow_wall_clock_seconds\":0,\"agent_wall_clock_seconds\":{\"builder\":0,\"investigator\":0,\"reviewer\":0,\"hunter\":0,\"verifier\":0,\"planner\":0},\"loop_counts\":{\"re_review\":0,\"re_hunt\":0,\"re_verify\":0},\"verifier\":{\"phase_exit_proof_runs\":0,\"extended_audit_runs\":0,\"workload_seconds\":{\"tests\":0,\"build\":0,\"scan\":0,\"reconcile\":0,\"reasoning\":0}}},\"quality\":{\"confidence\":null,\"evidence_complete\":false,\"scenario_coverage\":0,\"research_quality\":\"none\",\"convergence_state\":\"pending\"},\"planning_review_runs\":0,\"planning_review_findings\":[],\"planning_review_status\":\"not_started\",\"memory_notes\":[],\"pending_gate\":null,\"status_history\":[{\"event\":\"workflow_started\",\"ts\":\"{iso_timestamp}\",\"phase\":\"{build|debug|review|plan}\"}],\"remediation_history\":[],\"created_at\":\"{iso_timestamp}\",\"updated_at\":\"{iso_timestamp}\"}"
+  file_path=".craftflow/state/workflows/{workflow_uuid}.json",
+  content="{\"workflow_uuid\":\"{workflow_uuid}\",\"workflow_id\":\"{workflow_uuid}\",\"workflow_type\":\"{WORKFLOW}\",\"state_root\":\".craftflow/state\",\"user_request\":\"{request}\",\"plan_file\":null,\"design_file\":null,\"research_files\":[],\"approved_decisions\":[],\"plan_mode\":null,\"verification_rigor\":\"standard\",\"proof_status\":\"gaps_found\",\"traceability\":{\"requirements\":[],\"phases\":[],\"verification\":[],\"remediation\":[]},\"intent\":{\"goal\":null,\"non_goals\":[],\"constraints\":[],\"acceptance_criteria\":[],\"open_decisions\":[]},\"normalized_phases\":[],\"phase_cursor\":null,\"capabilities\":{\"brightdata_available\":\"unknown\",\"octocode_available\":\"unknown\",\"websearch_available\":\"unknown\",\"webfetch_available\":\"unknown\"},\"research_rounds\":[],\"research_backend_history\":[],\"research_quality\":{\"web\":\"none\",\"github\":\"none\",\"overall\":\"none\"},\"task_ids\":{\"planner_create\":null,\"planning_review_pass1\":null,\"planner_replan\":null,\"planning_review_pass2\":null,\"memory_finalize\":null},\"phase_status\":{},\"results\":{\"builder\":null,\"investigator\":null,\"reviewer\":null,\"hunter\":null,\"verifier\":null,\"planner\":null,\"planning_reviewer\":null,\"research\":{\"web\":null,\"github\":null,\"synthesis\":null}},\"evidence\":{\"builder\":[],\"investigator\":[],\"reviewer\":[],\"hunter\":[],\"verifier\":[],\"planning_reviewer\":[]},\"telemetry\":{\"task_metrics_available\":\"unknown\",\"workflow_wall_clock_seconds\":0,\"agent_wall_clock_seconds\":{\"builder\":0,\"investigator\":0,\"reviewer\":0,\"hunter\":0,\"verifier\":0,\"planner\":0},\"loop_counts\":{\"re_review\":0,\"re_hunt\":0,\"re_verify\":0},\"verifier\":{\"phase_exit_proof_runs\":0,\"extended_audit_runs\":0,\"workload_seconds\":{\"tests\":0,\"build\":0,\"scan\":0,\"reconcile\":0,\"reasoning\":0}}},\"quality\":{\"confidence\":null,\"evidence_complete\":false,\"scenario_coverage\":0,\"research_quality\":\"none\",\"convergence_state\":\"pending\"},\"planning_review_runs\":0,\"planning_review_findings\":[],\"planning_review_status\":\"not_started\",\"memory_notes\":[],\"pending_gate\":null,\"status_history\":[{\"event\":\"workflow_started\",\"ts\":\"{iso_timestamp}\",\"phase\":\"{build|debug|review|plan}\"}],\"remediation_history\":[],\"created_at\":\"{iso_timestamp}\",\"updated_at\":\"{iso_timestamp}\"}"
 )
 Write(
-  file_path=".craftflow/v10/workflows/{workflow_uuid}.events.jsonl",
+  file_path=".craftflow/state/workflows/{workflow_uuid}.events.jsonl",
   content="{\"ts\":\"{iso_timestamp}\",\"wf\":\"{workflow_uuid}\",\"event\":\"workflow_started\",\"phase\":\"{build|debug|review|plan}\",\"task_id\":\"{parent_task_id}\",\"agent\":\"router\",\"decision\":\"start\",\"reason\":\"User request\"}\n"
 )
 ```
@@ -240,7 +269,7 @@ Write(
 4. Immediately after artifact creation, initialize the per-workflow state directory:
 
 ```text
-Bash("mkdir -p .craftflow/v10/workflows/{workflow_uuid}")
+Bash("mkdir -p .craftflow/state/workflows/{workflow_uuid}")
 ```
 
 This directory is where the memory-finalize task will write workflow-scoped
@@ -304,7 +333,7 @@ Only create child tasks after the v10 artifact and state directory exist.
 - Task Phase: {phase}
 - Plan File: {plan_file or 'None'}
 - Workflow Scope: wf:{workflow_uuid}
-- Workflow Artifact: .craftflow/v10/workflows/{workflow_uuid}.json
+- Workflow Artifact: .craftflow/state/workflows/{workflow_uuid}.json
 
 ## User Request
 {request}
@@ -564,7 +593,7 @@ Convergence rule:
 3. If the runnable task kind is memory:
    - execute inline in the main context
    - persist workflow artifact results + Memory Notes from the task description
-   - append `memory_finalized` to `.craftflow/v10/workflows/{wf}.events.jsonl`
+   - append `memory_finalized` to `.craftflow/state/workflows/{wf}.events.jsonl`
    - clean up the matching [craftflow-internal] memory_task_id entry
    - mark the memory task completed
    - mark the parent workflow task completed
@@ -610,7 +639,7 @@ If any answer is "no" or "unknown", treat as incomplete and apply the fallback v
 4. Memory payload was already captured in step 0:
    - READ-ONLY agents: append extracted notes to the memory task description.
    - WRITE agents: append deferred or supplemental payload needed by the memory task.
-5. Update `.craftflow/v10/workflows/{workflow_uuid}.json` with:
+5. Update `.craftflow/state/workflows/{workflow_uuid}.json` with:
    - intent contract fields from planner output when available
    - task ids
    - phase status
@@ -662,7 +691,7 @@ The memory task also:
 - If any artifact or memory write fails, stop immediately. Never advance the workflow after a failed persistence write.
 
 Fallback: If `workflow_uuid` is unavailable, write to root-flat files
-(`.craftflow/v10/activeContext.md`, `.craftflow/v10/patterns.md`, `.craftflow/v10/progress.md`)
+(`.craftflow/state/activeContext.md`, `.craftflow/state/patterns.md`, `.craftflow/state/progress.md`)
 as in prior versions.
 
 For PLAN:
