@@ -5,7 +5,7 @@
     "workflow_uuid": "wf-20260601T140000Z-doubt-theater",
     "workflow_id": "wf-20260601T140000Z-doubt-theater",
     "workflow_type": "BUILD",
-    "state_root": ".craftflow/v10",
+    "state_root": ".craftflow/state",
     "plan_mode": "execution_plan",
     "verification_rigor": "standard",
     "proof_status": "passed",

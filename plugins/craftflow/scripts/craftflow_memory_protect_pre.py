@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PreToolUse hook — memory file content masking.
 
-When a builder agent reads a .craftflow/v10/ memory markdown file, this hook
+When a builder agent reads a .craftflow/state/ memory markdown file, this hook
 temporarily replaces section bodies with <!-- CRAFTFLOW_BLOCK_<sha1> --> placeholders
 so the model cannot see (and be tempted to restructure) the internal content.
 
@@ -42,14 +42,14 @@ def _cache_dir() -> Path:
 
 
 def _is_memory_file(path: Path) -> bool:
-    """Return True if path is a .craftflow/v10/ memory markdown file."""
+    """Return True if path is a .craftflow/state/ memory markdown file."""
     try:
         rel = path.relative_to(_project_dir())
     except ValueError:
         return False
     parts = rel.parts
-    # Must start with .craftflow/v10/
-    if len(parts) < 3 or parts[0] != ".craftflow" or parts[1] != "v10":
+    # Must start with .craftflow/state/
+    if len(parts) < 3 or parts[0] != ".craftflow" or parts[1] != "state":
         return False
     # Must end in .md
     if not path.suffix == ".md":

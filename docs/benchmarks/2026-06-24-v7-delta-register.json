@@ -1,0 +1,516 @@
+{
+  "baseline_tag": "v7.7.0",
+  "critical_files_reviewed": 20,
+  "partition": {
+    "critical": [
+      "CHANGELOG.md",
+      "README.md",
+      "docs/router-invariants.md",
+      "plugins/craftflow/agents/bug-investigator.md",
+      "plugins/craftflow/agents/code-reviewer.md",
+      "plugins/craftflow/agents/component-builder.md",
+      "plugins/craftflow/agents/integration-verifier.md",
+      "plugins/craftflow/agents/planner.md",
+      "plugins/craftflow/agents/silent-failure-hunter.md",
+      "plugins/craftflow/scripts/craftflow_harness_audit.py",
+      "plugins/craftflow/scripts/craftflow_hooklib.py",
+      "plugins/craftflow/scripts/craftflow_posttooluse_artifact_guard.py",
+      "plugins/craftflow/scripts/craftflow_pretooluse_guard.py",
+      "plugins/craftflow/scripts/craftflow_sessionstart_context.py",
+      "plugins/craftflow/scripts/craftflow_task_completed_guard.py",
+      "plugins/craftflow/scripts/craftflow_workflow_replay_check.py",
+      "plugins/craftflow/skills/architecture-patterns/SKILL.md",
+      "plugins/craftflow/skills/craftflow-router/SKILL.md",
+      "plugins/craftflow/skills/debugging-patterns/SKILL.md",
+      "plugins/craftflow/skills/frontend-patterns/SKILL.md"
+    ],
+    "supporting": [],
+    "noncritical": []
+  },
+  "entries": [
+    {
+      "path": "plugins/craftflow/skills/craftflow-router/SKILL.md",
+      "category": "router",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "stable workflow identity independent of task ids",
+        "sequential phase gating",
+        "explicit instruction precedence enforcement",
+        "state root is the shared memory namespace"
+      ],
+      "current_evidence": [
+        {
+          "needle": "workflow_uuid",
+          "line": 39,
+          "snippet": "- **workflows/{wf-id}/** — per-workflow isolated state (current focus, active phase, in-flight tasks). Load only when a `workflow_uuid` is already known (resume path)."
+        },
+        {
+          "needle": "phase_exit_gate",
+          "line": 90,
+          "snippet": "- Router-owned gates still include `plan_trust_gate`, `phase_exit_gate`, `failure_stop_gate`, `memory_sync_gate`, and `skill_precedence_gate`"
+        },
+        {
+          "needle": "skill_precedence_gate",
+          "line": 90,
+          "snippet": "- Router-owned gates still include `plan_trust_gate`, `phase_exit_gate`, `failure_stop_gate`, `memory_sync_gate`, and `skill_precedence_gate`"
+        },
+        {
+          "needle": ".craftflow/state",
+          "line": 42,
+          "snippet": "1. Bash(\"mkdir -p .craftflow/state/project\")"
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/agents/planner.md",
+      "category": "planner",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "open decisions are first-class",
+        "differences from agreement are explicit",
+        "planner blocks on high-impact ambiguity"
+      ],
+      "current_evidence": [
+        {
+          "needle": "OPEN_DECISIONS",
+          "line": 218,
+          "snippet": "| \"I'll clarify the details during build\" | Details left for build become hidden assumptions. Builder stops on ambiguity — surface it in OPEN_DECISIONS or return NEEDS_CLARIFICATION. |"
+        },
+        {
+          "needle": "DIFFERENCES_FROM_AGREEMENT",
+          "line": 221,
+          "snippet": "| \"The plan is 90% complete — I'll note the gaps\" | An incomplete plan is a failed plan. PLAN_CREATED requires empty OPEN_DECISIONS and DIFFERENCES_FROM_AGREEMENT present. |"
+        },
+        {
+          "needle": "STATUS=NEEDS_CLARIFICATION",
+          "line": 52,
+          "snippet": "| Multiple valid interpretations with material implementation impact | → Return `STATUS=NEEDS_CLARIFICATION` |"
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/agents/component-builder.md",
+      "category": "builder",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "phase-level completion reporting",
+        "phase exit evidence gate",
+        "sequential execution contract"
+      ],
+      "current_evidence": [
+        {
+          "needle": "PHASE_STATUS",
+          "line": 90,
+          "snippet": "If any of these are missing from a non-trivial approved phase, stop and return `STATUS: FAIL` with `PHASE_STATUS: blocked`. Do not invent a hidden phase contract."
+        },
+        {
+          "needle": "PHASE_EXIT_READY",
+          "line": 236,
+          "snippet": "| \"Tests pass, phase is done\" | TDD_GREEN_EXIT=0 is necessary but not sufficient — Truths, Artifacts, and Wiring must all reconcile before PHASE_EXIT_READY=true. |"
+        },
+        {
+          "needle": "Execute the current approved BUILD phase",
+          "line": 3,
+          "snippet": "description: \"Execute the current approved build phase with TDD when implementation work is ready to be carried out.\""
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/agents/bug-investigator.md",
+      "category": "debugger",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "blast-radius scan is mandatory",
+        "variant coverage is explicit",
+        "debug memory reads are versioned"
+      ],
+      "current_evidence": [
+        {
+          "needle": "BLAST_RADIUS_SCAN",
+          "line": 215,
+          "snippet": "| \"I fixed the repro — adjacent duplicates are deferred\" | Deferred duplicates must be named in BLAST_RADIUS_SCAN.result and MEMORY_NOTES.deferred. Silent omission is a false FIXED. |"
+        },
+        {
+          "needle": "Variant Coverage",
+          "line": 20,
+          "snippet": "**No root cause, no fix. No variant coverage, no confidence.**"
+        },
+        {
+          "needle": ".craftflow/state",
+          "line": 58,
+          "snippet": "Bash(command=\"mkdir -p .craftflow/state\")"
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/agents/integration-verifier.md",
+      "category": "verifier",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "verifier emits explicit machine-readable contract envelope",
+        "verifier treats upstream approvals as inputs, not proof",
+        "verifier obeys router-owned internal skill precedence"
+      ],
+      "current_evidence": [
+        {
+          "needle": "CONTRACT {\"s\":\"PASS\",\"b\":false,\"cr\":0}",
+          "line": 93,
+          "snippet": "`CONTRACT {\"s\":\"PASS\",\"b\":false,\"cr\":0}`"
+        },
+        {
+          "needle": "## Independence Rule",
+          "line": 142,
+          "snippet": "## Independence Rule"
+        },
+        {
+          "needle": "Do not self-load internal CRAFTFLOW skills",
+          "line": 60,
+          "snippet": "Do not self-load internal CRAFTFLOW skills. The router is the only authority allowed to pass `frontend-patterns`, `architecture-patterns`, or other internal skill overrides."
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/agents/code-reviewer.md",
+      "category": "reviewer",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "review output is structured for router handling",
+        "review can signal revert-worthy state",
+        "review integrates with scoped remediation"
+      ],
+      "current_evidence": [
+        {
+          "needle": "REMEDIATION_NEEDED",
+          "line": 237,
+          "snippet": "- REMEDIATION_NEEDED: [true if BUILD/DEBUG should create a REM-FIX]"
+        },
+        {
+          "needle": "REVERT_RECOMMENDED",
+          "line": 240,
+          "snippet": "- REVERT_RECOMMENDED: false"
+        },
+        {
+          "needle": "REMEDIATION_SCOPE_REQUESTED",
+          "line": 194,
+          "snippet": "- BUILD review: request `REMEDIATION_SCOPE_REQUESTED: N/A` so the router can decide `CRITICAL_ONLY` vs `ALL_ISSUES` after combining parallel findings."
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/agents/silent-failure-hunter.md",
+      "category": "hunter",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "hunter reads only state memory",
+        "hunter obeys router-owned internal skill precedence",
+        "hunter must state scan coverage and blind spots"
+      ],
+      "current_evidence": [
+        {
+          "needle": ".craftflow/state",
+          "line": 25,
+          "snippet": "- Memory files (`.craftflow/state/*.md`) are managed by the router, not this agent."
+        },
+        {
+          "needle": "Do not self-load internal CRAFTFLOW skills",
+          "line": 46,
+          "snippet": "Do not self-load internal CRAFTFLOW skills. The router is the only authority allowed to pass internal pattern skills into this agent."
+        },
+        {
+          "needle": "Coverage truthfulness",
+          "line": 122,
+          "snippet": "8. **Coverage truthfulness** - If search scope is incomplete, file access failed, or changed surfaces were skipped, report that gap explicitly. Never claim CLEAN unless the scanned scope is stated."
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/scripts/craftflow_hooklib.py",
+      "category": "hooks",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "hook state root is versioned",
+        "hooks prefer stable workflow identity",
+        "hook paths centralize v10 state"
+      ],
+      "current_evidence": [
+        {
+          "needle": "STATE_VERSION = \"v10\"",
+          "line": 10,
+          "snippet": "STATE_VERSION = \"v10\""
+        },
+        {
+          "needle": "workflow_uuid",
+          "line": 175,
+          "snippet": "workflow_uuid = payload.get(\"workflow_uuid\") or payload.get(\"workflow_id\")"
+        },
+        {
+          "needle": "state_root",
+          "line": 31,
+          "snippet": "def state_root() -> Path:"
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/scripts/craftflow_pretooluse_guard.py",
+      "category": "hooks",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "memory protection is scoped to versioned state"
+      ],
+      "current_evidence": [
+        {
+          "needle": "state_root()",
+          "line": 21,
+          "snippet": "paths = {state_root() / name for name in PROTECTED_MEMORY_FILES}"
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/scripts/craftflow_posttooluse_artifact_guard.py",
+      "category": "hooks",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "artifact guard expects stable ids",
+        "artifact guard validates phase-aware state",
+        "artifact guard validates v10 schema"
+      ],
+      "current_evidence": [
+        {
+          "needle": "workflow_uuid",
+          "line": 15,
+          "snippet": "\"workflow_uuid\","
+        },
+        {
+          "needle": "phase_cursor",
+          "line": 19,
+          "snippet": "\"phase_cursor\","
+        },
+        {
+          "needle": "state_root",
+          "line": 18,
+          "snippet": "\"state_root\","
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/scripts/craftflow_sessionstart_context.py",
+      "category": "hooks",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "session context is version-aware",
+        "resume context includes phase cursor"
+      ],
+      "current_evidence": [
+        {
+          "needle": "CRAFTFLOW v10 workflow context",
+          "line": 27,
+          "snippet": "f\"CRAFTFLOW v10 workflow context ({source}): \""
+        },
+        {
+          "needle": "phase_cursor",
+          "line": 30,
+          "snippet": "f\"phase_cursor={payload.get('phase_cursor') or 'none'} \""
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/scripts/craftflow_task_completed_guard.py",
+      "category": "hooks",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "task metadata enforcement remains explicit"
+      ],
+      "current_evidence": [
+        {
+          "needle": "REQUIRED_METADATA",
+          "line": 14,
+          "snippet": "REQUIRED_METADATA = ("
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/scripts/craftflow_harness_audit.py",
+      "category": "harness",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "harness covers workflow identity fixture",
+        "harness covers blocked phase fixture",
+        "harness validates planner trust fields"
+      ],
+      "current_evidence": [
+        {
+          "needle": "workflow-identity-v10.json",
+          "line": 204,
+          "snippet": "\"workflow-identity-v10.json\","
+        },
+        {
+          "needle": "build-phase-blocked.json",
+          "line": 198,
+          "snippet": "\"build-phase-blocked.json\","
+        },
+        {
+          "needle": "OPEN_DECISIONS:",
+          "line": 622,
+          "snippet": "\"OPEN_DECISIONS:\","
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/scripts/craftflow_workflow_replay_check.py",
+      "category": "harness",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "replay fixtures require stable workflow identity",
+        "replay validates debug generalization",
+        "replay validates phase gating"
+      ],
+      "current_evidence": [
+        {
+          "needle": "workflow_uuid",
+          "line": 46,
+          "snippet": "\"workflow_uuid\","
+        },
+        {
+          "needle": "BLAST_RADIUS_SCAN",
+          "line": 213,
+          "snippet": "bool(contract.get(\"BLAST_RADIUS_SCAN\")),"
+        },
+        {
+          "needle": "PHASE_EXIT_READY",
+          "line": 179,
+          "snippet": "require(contract[\"PHASE_EXIT_READY\"] is True, f\"{fixture_id}: phase exit must pass\")"
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/skills/frontend-patterns/SKILL.md",
+      "category": "internal-skill",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "frontend patterns are advisory instead of authoritative",
+        "user/project standards outrank style guidance"
+      ],
+      "current_evidence": [
+        {
+          "needle": "advisory in v10",
+          "line": 15,
+          "snippet": "This skill is advisory in v10. Explicit user instructions, `CLAUDE.md`, repo standards, and approved plans override every suggestion here."
+        },
+        {
+          "needle": "Explicit user instructions",
+          "line": 15,
+          "snippet": "This skill is advisory in v10. Explicit user instructions, `CLAUDE.md`, repo standards, and approved plans override every suggestion here."
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/skills/debugging-patterns/SKILL.md",
+      "category": "internal-skill",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "debugging patterns are advisory instead of authoritative",
+        "debugging guidance includes nearby duplicate scan"
+      ],
+      "current_evidence": [
+        {
+          "needle": "advisory in v10",
+          "line": 15,
+          "snippet": "This skill is advisory in v10. It deepens investigation quality. It does not authorize local-only patches, guesswork, or \"fix the line that crashed\" thinking."
+        },
+        {
+          "needle": "same signature nearby",
+          "line": 60,
+          "snippet": "After root cause is identified, scan for the same signature nearby before declaring success."
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "plugins/craftflow/skills/architecture-patterns/SKILL.md",
+      "category": "internal-skill",
+      "changed_since_v7": false,
+      "verdict": "better",
+      "delta_summary": [
+        "architecture patterns are advisory instead of authoritative",
+        "approved design outranks architecture heuristics"
+      ],
+      "current_evidence": [
+        {
+          "needle": "advisory in v10",
+          "line": 16,
+          "snippet": "This skill is advisory in v10. It frames decisions and tradeoffs; it does not outrank explicit user requirements, repo standards, or an approved plan/design doc."
+        },
+        {
+          "needle": "approved plan/design doc",
+          "line": 16,
+          "snippet": "This skill is advisory in v10. It frames decisions and tradeoffs; it does not outrank explicit user requirements, repo standards, or an approved plan/design doc."
+        }
+      ],
+      "v7_evidence": []
+    },
+    {
+      "path": "docs/router-invariants.md",
+      "category": "docs",
+      "changed_since_v7": false,
+      "verdict": "unclear",
+      "delta_summary": [
+        "No clear trust-contract improvement detected automatically."
+      ],
+      "current_evidence": [],
+      "v7_evidence": []
+    },
+    {
+      "path": "README.md",
+      "category": "docs",
+      "changed_since_v7": false,
+      "verdict": "unclear",
+      "delta_summary": [
+        "No clear trust-contract improvement detected automatically."
+      ],
+      "current_evidence": [],
+      "v7_evidence": []
+    },
+    {
+      "path": "CHANGELOG.md",
+      "category": "docs",
+      "changed_since_v7": false,
+      "verdict": "unclear",
+      "delta_summary": [
+        "No clear trust-contract improvement detected automatically."
+      ],
+      "current_evidence": [],
+      "v7_evidence": []
+    }
+  ]
+}

@@ -5,7 +5,7 @@
     "workflow_uuid": "wf-20260412T101500Z-plan-design-handoff",
     "workflow_id": "wf-20260412T101500Z-plan-design-handoff",
     "workflow_type": "PLAN",
-    "state_root": ".craftflow/v10",
+    "state_root": ".craftflow/state",
     "plan_mode": "execution_plan",
     "verification_rigor": "standard",
     "proof_status": "gaps_found",
@@ -87,7 +87,7 @@
     },
     "planner_markers": [
       "## Design File",
-      "Do NOT edit `.craftflow/v10/*.md` directly."
+      "Do NOT edit `.craftflow/state/*.md` directly."
     ],
     "gate_markers": []
   }

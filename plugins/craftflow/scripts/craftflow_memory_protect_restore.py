@@ -4,7 +4,7 @@
 Called by the Stop hook (and optionally PostToolUse) to expand any
 CRAFTFLOW_BLOCK_<sha1> placeholders back to their original content.
 
-Also called defensively after any Edit/Write that touches a .craftflow/v10/ file,
+Also called defensively after any Edit/Write that touches a .craftflow/state/ file,
 in case a placeholder leaked through the write-guard (belt-and-suspenders).
 """
 import json
@@ -91,8 +91,8 @@ def restore_all() -> int:
         # currently contain CRAFTFLOW_BLOCK placeholders.
         pass
 
-    # Scan .craftflow/v10/ for any files with stale placeholders and restore them
-    state_root = _project_dir() / ".craftflow" / "v10"
+    # Scan .craftflow/state/ for any files with stale placeholders and restore them
+    state_root = _project_dir() / ".craftflow" / "state"
     if not state_root.exists():
         return 0
     for md_file in state_root.rglob("*.md"):

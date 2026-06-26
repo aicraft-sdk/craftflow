@@ -3,7 +3,7 @@
 CRAFTFLOW durable orchestration state lives in:
 
 ```text
-.craftflow/v10/workflows/{workflow_uuid}.json
+.craftflow/state/workflows/{workflow_uuid}.json
 ```
 
 Artifact schema must include:
@@ -32,6 +32,9 @@ Artifact schema must include:
 - `planning_review_runs`
 - `planning_review_findings`
 - `planning_review_status`
+- `build_mode`
+- `fast_path_risk_signals`
+- `fast_path_escalated`
 - `memory_notes`
 - `pending_gate`
 - `status_history`
@@ -46,7 +49,7 @@ Rules:
 - Verifier handoff and memory finalization read structured data from the workflow artifact, not transient conversation recovery.
 - The workflow UUID is generated independently of Claude task ids and is the canonical workflow identifier everywhere in v10.
 - `workflow_id` remains as a compatibility alias and must equal `workflow_uuid` in new artifacts.
-- `state_root` must equal `.craftflow/v10`.
+- `state_root` must equal `.craftflow/state`.
 - `phase_cursor` points at the only BUILD phase that may run next.
 - `normalized_phases` stores planner-approved executable phases with:
   - `phase_id`
@@ -86,6 +89,11 @@ Rules:
   - `planning_review_runs`
   - `planning_review_findings`
   - `planning_review_status`
+- Fast-path routing fields (BUILD only; null/empty for non-BUILD workflows):
+  - `build_mode`: `"fast_path"` | `"fast_path_escalated"` | `"standard"` | `null`
+  - `fast_path_risk_signals`: matched risk keywords (`[]` when fast path taken)
+  - `fast_path_escalated`: `false` | `true`
+  - Migration note: Artifacts created before fast-path was implemented have `build_mode: null`. On resume, treat `build_mode: null` as `"standard"` — the standard BUILD chain applies.
 - `telemetry` is informational only and must never drive routing decisions:
   - `task_metrics_available`
   - `workflow_wall_clock_seconds`
@@ -129,7 +137,7 @@ Workflow event log:
 - For every workflow, keep a lightweight append-only companion file:
 
 ```text
-.craftflow/v10/workflows/{workflow_uuid}.events.jsonl
+.craftflow/state/workflows/{workflow_uuid}.events.jsonl
 ```
 
 - Append event objects with at least:

@@ -22,9 +22,10 @@ OUT_DIR = ROOT / "docs" / "benchmarks"
 TODAY = date.today().isoformat()
 
 TARGETS = [
-    ("craftflow", ROOT / "plugins" / "craftflow"),
-    ("cc10x",     REF_ROOT / "cc10x" / "plugins" / "cc10x"),
+    ("craftflow",   ROOT / "plugins" / "craftflow"),
+    ("cc10x",       REF_ROOT / "cc10x" / "plugins" / "cc10x"),
     ("superpowers", REF_ROOT / "superpowers"),
+    ("agent-skills", REF_ROOT / "agent-skills"),
 ]
 
 

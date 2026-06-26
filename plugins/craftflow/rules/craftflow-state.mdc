@@ -1,0 +1,57 @@
+---
+description: Craftflow state directory conventions — two-tier memory layout at .craftflow/state/
+alwaysApply: true
+---
+
+# Craftflow State Conventions
+
+## State Root
+
+`.craftflow/state/` is the state root. Do NOT use `.craftflow/v10/` — that was the old path.
+
+## Two-Tier Memory Layout
+
+### Project Tier (durable, cross-workflow)
+
+`.craftflow/state/project/`
+
+Files: `activeContext.md`, `patterns.md`, `progress.md`
+
+Write here when context should **survive beyond the current workflow** (architecture decisions, domain patterns, ongoing blockers, durable conventions).
+
+### Workflow Tier (per-workflow, isolated)
+
+`.craftflow/state/workflows/<wf-id>/`
+
+Files: `activeContext.md`, `patterns.md`, `progress.md`
+
+Write here for anything **scoped to the current workflow** (current focus, active phase, in-flight tasks). Use the `wf` ID from the session context.
+
+### Root-Flat Fallback
+
+`activeContext.md`, `patterns.md`, `progress.md` at `.craftflow/state/` root — for backward compatibility when no workflow ID is available.
+
+## Read Order
+
+When loading memory:
+1. Load `project/` tier first (durable decisions)
+2. Then load `workflows/<active-wf-id>/` tier (current workflow scope)
+
+The workflow tier overrides project tier when keys conflict.
+
+## Write Rules
+
+- Project-tier: decisions that should survive beyond this workflow
+- Workflow-tier: state scoped to the current workflow only
+- Never write directly to memory files from a WRITE agent — emit `MEMORY_NOTES` for the router to persist
+
+## Hook-Managed Files (NEVER DELETE)
+
+These files are managed by hooks and must not be deleted or manually modified:
+
+- `workflows/<wf-id>.json` — workflow execution artifact
+- `workflows/<wf-id>.events.jsonl` — event log for the workflow
+
+## Schema Version
+
+The internal schema version is tracked in `.craftflow/state/.schema-version` (JSON: `{"version":"v10"}`). Do not modify this file manually — it is written by the migration script on first run.

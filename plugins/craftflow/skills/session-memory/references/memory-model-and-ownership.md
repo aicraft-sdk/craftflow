@@ -37,9 +37,9 @@ information belongs where.
   - verification evidence
 - `docs/plans/*` and `docs/research/*`
   - detailed artifacts that memory points to
-- `.craftflow/v10/workflows/{wf}.json`
+- `.craftflow/state/workflows/{wf}.json`
   - canonical workflow state
-- `.craftflow/v10/workflows/{wf}.events.jsonl`
+- `.craftflow/state/workflows/{wf}.events.jsonl`
   - append-only event trail
 
 ## Ownership
@@ -56,7 +56,7 @@ information belongs where.
 ### WRITE Agents
 
 - read memory at start and before key decisions
-- do not edit `.craftflow/v10/*.md` directly
+- do not edit `.craftflow/state/*.md` directly
 - emit structured `MEMORY_NOTES` in their Router Contract
 
 ### READ-ONLY Agents

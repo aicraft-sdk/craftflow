@@ -8,8 +8,8 @@
         "agent_files": 11,
         "skill_files": 16,
         "total_files": 27,
-        "total_bytes": 151098,
-        "estimated_tokens": 37774,
+        "total_bytes": 152909,
+        "estimated_tokens": 38227,
         "largest_file": "planner.md",
         "largest_bytes": 22734
       },
@@ -88,7 +88,7 @@
           }
         },
         "events_per_workflow": {
-          "mean": 9.57,
+          "mean": 9.6,
           "median": 8,
           "max": 35,
           "nonzero": 40,
@@ -208,6 +208,65 @@
       },
       "parallelism_score": [
         3,
+        4
+      ],
+      "real_telemetry": {
+        "available": false
+      }
+    },
+    {
+      "repo": "agent-skills",
+      "available": true,
+      "context_load": {
+        "agent_files": 4,
+        "skill_files": 24,
+        "total_files": 29,
+        "total_bytes": 35255,
+        "estimated_tokens": 8813,
+        "largest_file": "web-performance-auditor.md",
+        "largest_bytes": 12278
+      },
+      "chain_depth": {
+        "BUILD": 2,
+        "DEBUG": 1,
+        "PLAN": 0,
+        "REVIEW": 1
+      },
+      "gates": {
+        "plan_trust_gate": true,
+        "phase_exit_gate": true,
+        "failure_stop_gate": false,
+        "scope_decision_gate": false,
+        "memory_sync_gate": false,
+        "skill_precedence_gate": false,
+        "doubt_verify_gate": false,
+        "review_loop": true,
+        "hunt_loop": false
+      },
+      "gates_score": [
+        3,
+        9
+      ],
+      "context_mgmt": {
+        "compact_hook": false,
+        "state_persist": false,
+        "context_eviction": true,
+        "summarization": true,
+        "context_resume": true,
+        "token_tracking": true
+      },
+      "context_mgmt_score": [
+        4,
+        6
+      ],
+      "parallelism": {
+        "parallel_agents": true,
+        "worktree_isolation": true,
+        "subagent_dispatch": true,
+        "concurrent_phases": true
+      },
+      "parallelism_score": [
+        4,
         4
       ],
       "real_telemetry": {

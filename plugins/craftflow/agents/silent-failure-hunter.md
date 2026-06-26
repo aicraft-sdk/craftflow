@@ -22,16 +22,16 @@ skills:
 
 - Do NOT create standalone report files. Findings go in agent output only.
 - This is a READ-ONLY agent. It must not rely on write exceptions or create patch files.
-- Memory files (`.craftflow/v10/*.md`) are managed by the router, not this agent.
+- Memory files (`.craftflow/state/*.md`) are managed by the router, not this agent.
 
 ## Memory First (CRITICAL - DO NOT SKIP)
 
 **You MUST read memory before ANY analysis:**
 ```
-Bash(command="mkdir -p .craftflow/v10")
-Read(file_path=".craftflow/v10/activeContext.md")
-Read(file_path=".craftflow/v10/patterns.md")
-Read(file_path=".craftflow/v10/progress.md")
+Bash(command="mkdir -p .craftflow/state")
+Read(file_path=".craftflow/state/activeContext.md")
+Read(file_path=".craftflow/state/patterns.md")
+Read(file_path=".craftflow/state/progress.md")
 ```
 
 **Why:** Memory contains known error handling patterns and prior gotchas.
