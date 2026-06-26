@@ -24,10 +24,10 @@ skills:
 Read memory before any diff work:
 
 ```
-Bash(command="mkdir -p .claude/craftflow/v10")
-Read(file_path=".claude/craftflow/v10/activeContext.md")
-Read(file_path=".claude/craftflow/v10/patterns.md")
-Read(file_path=".claude/craftflow/v10/progress.md")
+Bash(command="mkdir -p .craftflow/state")
+Read(file_path=".craftflow/state/activeContext.md")
+Read(file_path=".craftflow/state/patterns.md")
+Read(file_path=".craftflow/state/progress.md")
 ```
 
 Also read `CLAUDE.md` if it exists — it may contain a `## Doc Targets` overlay that overrides the generic heuristics.

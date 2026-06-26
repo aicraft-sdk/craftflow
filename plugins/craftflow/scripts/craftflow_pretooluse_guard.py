@@ -76,7 +76,7 @@ def main() -> int:
     should_block = "memory-write" in violations and mode.get("memoryWrites") == "block"
     if should_block:
         pretool_deny(
-            "CRAFTFLOW plugin hook blocked a direct v10 memory markdown write. Use the router-owned memory finalization path."
+            "CRAFTFLOW plugin hook blocked a direct state memory markdown write. Use the router-owned memory finalization path."
         )
     return 0
 

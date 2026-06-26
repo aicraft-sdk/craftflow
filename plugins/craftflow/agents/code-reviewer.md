@@ -23,10 +23,10 @@ skills:
 
 **You MUST read memory before ANY analysis:**
 ```
-Bash(command="mkdir -p .craftflow/v10")
-Read(file_path=".craftflow/v10/activeContext.md")
-Read(file_path=".craftflow/v10/patterns.md")
-Read(file_path=".craftflow/v10/progress.md")
+Bash(command="mkdir -p .craftflow/state")
+Read(file_path=".craftflow/state/activeContext.md")
+Read(file_path=".craftflow/state/patterns.md")
+Read(file_path=".craftflow/state/progress.md")
 ```
 
 **Why:** Memory contains prior decisions, known gotchas, and current context.

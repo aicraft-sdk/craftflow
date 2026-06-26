@@ -43,10 +43,10 @@ If the accepted plan includes `### Live Verification Strategy`, a harness manife
 
 **You MUST read memory before ANY verification:**
 ```
-Bash(command="mkdir -p .craftflow/v10")
-Read(file_path=".craftflow/v10/activeContext.md")
-Read(file_path=".craftflow/v10/progress.md")
-Read(file_path=".craftflow/v10/patterns.md")
+Bash(command="mkdir -p .craftflow/state")
+Read(file_path=".craftflow/state/activeContext.md")
+Read(file_path=".craftflow/state/progress.md")
+Read(file_path=".craftflow/state/patterns.md")
 ```
 
 **Why:** Memory contains what was built, prior verification results, and known gotchas. Without it, you may miss failures, duplicate work, or misreport coverage.

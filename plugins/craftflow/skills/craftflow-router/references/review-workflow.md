@@ -15,7 +15,7 @@ TaskCreate({
 
 TaskCreate({
   subject: "CRAFTFLOW Memory Update: Persist review learnings",
-  description: "wf:{workflow_uuid}\nkind:memory\norigin:router\nphase:memory-finalize\nplan:N/A\nscope:N/A\nreason:Persist captured Memory Notes\n\nROUTER ONLY: execute inline. Read the workflow artifact and THIS task description payload, persist to .craftflow/v10/*.md, then remove the matching [craftflow-internal] memory_task_id line from activeContext.md ## References. Never spawn Agent() for this task.",
+  description: "wf:{workflow_uuid}\nkind:memory\norigin:router\nphase:memory-finalize\nplan:N/A\nscope:N/A\nreason:Persist captured Memory Notes\n\nROUTER ONLY: execute inline. Read the workflow artifact and THIS task description payload, persist to .craftflow/state/*.md, then remove the matching [craftflow-internal] memory_task_id line from activeContext.md ## References. Never spawn Agent() for this task.",
   activeForm: "Persisting review learnings"
 }) -> memory_task_id
 TaskUpdate({ taskId: memory_task_id, addBlockedBy: [reviewer_task_id] })

@@ -2,8 +2,14 @@
 """Context migration script for CRAFTFLOW version upgrades.
 
 Merges valuable content from previous state version directories into the
-current STATE_VERSION on first SessionStart after an upgrade.  Idempotent
+current state root on first SessionStart after an upgrade.  Idempotent
 via a ``.migrated`` marker file inside the target state root.
+
+On-disk path change (v10 → state):
+  If .craftflow/state/ does not exist but .craftflow/v10/ does, this script
+  copies everything from v10/ into state/ before proceeding. A .schema-version
+  marker is written to record the schema version in the directory rather than
+  encoding it in the directory name.
 """
 import json
 import shutil
@@ -121,6 +127,127 @@ PROGRESS_TEMPLATE = """\
 """
 
 # ---------------------------------------------------------------------------
+# Schema-version marker helpers
+# ---------------------------------------------------------------------------
+
+
+def _schema_version_path(state_dir: Path) -> Path:
+    return state_dir / ".schema-version"
+
+
+def _read_schema_version(state_dir: Path) -> Dict[str, Any]:
+    """Read .schema-version marker, or return empty dict if missing/corrupt."""
+    marker = _schema_version_path(state_dir)
+    if not marker.exists():
+        return {}
+    try:
+        return json.loads(marker.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _write_schema_version(
+    state_dir: Path, version: str, migrated_from: List[str]
+) -> None:
+    """Write (or update) the .schema-version marker file."""
+    existing = _read_schema_version(state_dir)
+    # Preserve existing migrated_from list and extend it
+    prior_sources: List[str] = existing.get("migrated_from", [])
+    combined: List[str] = list(dict.fromkeys(prior_sources + migrated_from))
+    marker = _schema_version_path(state_dir)
+    data = {
+        "version": version,
+        "migrated_from": combined,
+        "migrated_at": now_iso(),
+    }
+    tmp = marker.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=True), encoding="utf-8")
+    tmp.replace(marker)
+
+
+def _schema_version_number(state_dir: Path) -> int:
+    """Return the integer version from .schema-version (e.g. "v10" -> 10).
+
+    Falls back to 0 if the marker is absent or unparseable.
+    """
+    info = _read_schema_version(state_dir)
+    ver = info.get("version", "")
+    if isinstance(ver, str) and ver.startswith("v") and ver[1:].isdigit():
+        return int(ver[1:])
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Legacy directory migration (v10 → state)
+# ---------------------------------------------------------------------------
+
+
+def _migrate_legacy_dirs_to_state(craftflow_base: Path, state_dir: Path) -> List[str]:
+    """Copy .craftflow/v10/ (and v10-from-cc10x-root/) into .craftflow/state/.
+
+    This is a one-time migration triggered when state/ does not yet exist.
+    Returns a list of source labels that were merged.
+
+    The .schema-version marker is written here (atomically with the copy) so
+    that a failure in the caller after copytree succeeds cannot leave state/
+    in a marker-less state that causes migrated_from to be lost on the next run.
+    """
+    migrated_from: List[str] = []
+
+    legacy_v10 = craftflow_base / "v10"
+    if legacy_v10.is_dir():
+        state_dir.mkdir(parents=True, exist_ok=True)
+        # Copy all files from v10/ into state/, overwriting nothing that
+        # already exists (state/ was just created, so dirs will be new).
+        shutil.copytree(str(legacy_v10), str(state_dir), dirs_exist_ok=True)
+        migrated_from.append("v10")
+        log_event(
+            "legacy_dir_migration",
+            {
+                "source": str(legacy_v10),
+                "target": str(state_dir),
+                "decision": "copytree",
+                "reason": "state_root_rename_v10_to_state",
+            },
+        )
+
+    # Companion dir from cc10x-root (only files not already in state/)
+    legacy_cc10x = craftflow_base / "v10-from-cc10x-root"
+    if legacy_cc10x.is_dir() and state_dir.exists():
+        _merge_dir_no_overwrite(legacy_cc10x, state_dir)
+        migrated_from.append("v10-from-cc10x-root")
+        log_event(
+            "legacy_dir_migration",
+            {
+                "source": str(legacy_cc10x),
+                "target": str(state_dir),
+                "decision": "merge_no_overwrite",
+                "reason": "companion_dir_fold_in",
+            },
+        )
+
+    # Write schema-version marker atomically with the copy so that a crash
+    # between copytree() and the caller's _write_schema_version() call cannot
+    # leave state/ without a marker (which would cause migrated_from to be lost).
+    if migrated_from or state_dir.exists():
+        state_dir.mkdir(parents=True, exist_ok=True)
+        _write_schema_version(state_dir, STATE_VERSION, migrated_from)
+
+    return migrated_from
+
+
+def _merge_dir_no_overwrite(src: Path, dst: Path) -> None:
+    """Recursively copy files from src into dst, skipping files that already exist."""
+    for item in src.rglob("*"):
+        if item.is_file():
+            rel = item.relative_to(src)
+            target = dst / rel
+            if not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(item), str(target))
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -142,7 +269,7 @@ def _current_version_number() -> int:
 def _migrate_flat_to_project(target_root: Path) -> int:
     """One-time: copy root-flat memory files into project/ if not yet done.
 
-    This is an intra-v10 migration for repos that existed before the
+    This is an intra-state migration for repos that existed before the
     project/ namespace was introduced. It copies (not moves) so that the
     root-flat fallback remains intact for backward compatibility.
     """
@@ -163,7 +290,11 @@ def _migrate_flat_to_project(target_root: Path) -> int:
 
 
 def _discover_sources(craftflow_base: Path) -> List[Dict[str, Any]]:
-    """Find all migration sources ordered oldest-first."""
+    """Find all migration sources ordered oldest-first.
+
+    Note: since the state root is now named 'state' (not a versioned dir),
+    we look at .schema-version inside it to determine the current version number.
+    """
     sources: List[Dict[str, Any]] = []
     current_num = _current_version_number()
 
@@ -171,15 +302,15 @@ def _discover_sources(craftflow_base: Path) -> List[Dict[str, Any]]:
     if (craftflow_base / "activeContext.md").exists():
         sources.append({"label": "legacy", "path": craftflow_base, "sort_key": -1})
 
-    # Versioned directories (skip namespace subdirs introduced in v10.2)
-    _NAMESPACE_DIRS = {"project", "workflows"}
+    # Versioned directories (skip namespace subdirs and the new 'state' dir)
+    _SKIP_DIRS = {"project", "workflows", "state"}
     if craftflow_base.is_dir():
         for child in sorted(craftflow_base.iterdir()):
             if not child.is_dir():
                 continue
             name = child.name
-            if name in _NAMESPACE_DIRS:
-                continue  # skip project/ and workflows/ — not migration sources
+            if name in _SKIP_DIRS:
+                continue
             if not (name.startswith("v") and name[1:].isdigit()):
                 continue
             ver_num = int(name[1:])
@@ -294,20 +425,45 @@ def _merge_sections(
 # ---------------------------------------------------------------------------
 
 
-def main() -> int:
+def run_migration() -> int:
+    """Run migration. Idempotent — safe to call on every SessionStart."""
     data = load_input()
     _ = data  # consumed for hook contract compliance
 
+    craftflow_base = project_dir() / ".craftflow"
+    state_dir = craftflow_base / "state"
+
+    # ------------------------------------------------------------------
+    # Step 1: Auto-migrate legacy .craftflow/v10/ → .craftflow/state/
+    # This only triggers when state/ does not yet exist.
+    # _migrate_legacy_dirs_to_state writes the schema-version marker
+    # atomically with the copy, so no separate call is needed here.
+    # ------------------------------------------------------------------
+    newly_created = False
+    if not state_dir.exists():
+        _migrate_legacy_dirs_to_state(craftflow_base, state_dir)
+        newly_created = True
+    else:
+        # Sentinel: state/ exists but .schema-version is missing (partial
+        # migration recovery — e.g. previous run crashed between copytree
+        # and the marker write). Self-heal by writing the marker now.
+        sv = _read_schema_version(state_dir)
+        if not sv:
+            _write_schema_version(state_dir, STATE_VERSION, [])
+
+    # Now derive target_root from the hooklib function (resolves to state/)
     target_root = state_root()
 
-    # Intra-v10 migration: promote root-flat files into project/ namespace
+    # ------------------------------------------------------------------
+    # Step 2: Intra-state migration — promote root-flat files into project/
+    # ------------------------------------------------------------------
     promoted = _migrate_flat_to_project(target_root)
     if promoted > 0:
         log_event(
             "context_migration",
             {
                 "source": "flat-root",
-                "target": f"{STATE_VERSION}/project",
+                "target": "state/project",
                 "files_merged": ["activeContext.md", "patterns.md", "progress.md"],
                 "bullets_added": 0,
                 "decision": "copy",
@@ -315,12 +471,15 @@ def main() -> int:
             },
         )
 
-    craftflow_base = project_dir() / ".claude" / "craftflow"
+    # ------------------------------------------------------------------
+    # Step 3: Legacy claude-path migration (old .claude/craftflow/ path)
+    # ------------------------------------------------------------------
+    claude_craftflow_base = project_dir() / ".claude" / "craftflow"
 
-    if not craftflow_base.exists():
-        return 0  # fresh install, nothing to migrate from legacy path
+    if not claude_craftflow_base.exists():
+        return 0  # no legacy .claude/craftflow path present
 
-    sources = _discover_sources(craftflow_base)
+    sources = _discover_sources(claude_craftflow_base)
     if not sources:
         return 0  # nothing to migrate
 
@@ -328,7 +487,7 @@ def main() -> int:
     pending = [s for s in sources if not _already_migrated(migrated, s["label"])]
 
     if not pending:
-        return 0  # all sources already migrated
+        return 0  # all sources already migrated — idempotent
 
     # Ensure target files exist with proper templates
     _ensure_file(target_root / "patterns.md", PATTERNS_TEMPLATE)
@@ -405,7 +564,7 @@ def main() -> int:
             "context_migration",
             {
                 "source": label,
-                "target": STATE_VERSION,
+                "target": "state",
                 "files_merged": files_merged,
                 "bullets_added": source_bullets,
                 "decision": "merge",
@@ -424,6 +583,10 @@ def main() -> int:
         )
 
     return 0
+
+
+def main() -> int:
+    return run_migration()
 
 
 if __name__ == "__main__":

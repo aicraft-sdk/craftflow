@@ -1,0 +1,44 @@
+{
+  "name": "craftflow",
+  "owner": {
+    "name": "David de la Cruz Gracia",
+    "email": "delacruzd93@gmail.com",
+    "url": "https://github.com/delacruzd93"
+  },
+  "metadata": {
+    "description": "craftflow v1.0.0 — David's owned AI-development orchestration flow, continuously extended as part of ai-craft.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "craftflow",
+      "description": "Owned orchestration flow for AI-assisted development: router-kernel routing, adversarial review, intent-interview gate, doubt-verifier, memory-protect hooks, SDD URL caching, TDD-first execution, and proof-of-work workflow artifacts.",
+      "version": "1.0.0",
+      "author": {
+        "name": "David de la Cruz Gracia",
+        "email": "delacruzd93@gmail.com",
+        "url": "https://github.com/delacruzd93"
+      },
+      "homepage": "https://github.com/delacruzd93/ai-craft",
+      "repository": "https://github.com/delacruzd93/ai-craft",
+      "license": "MIT",
+      "keywords": [
+        "workflow-routing",
+        "code-review",
+        "tdd",
+        "bdd",
+        "intent-first-planning",
+        "adversarial-review",
+        "debugging",
+        "planning",
+        "verification",
+        "proof-of-work",
+        "hooks",
+        "lean-skills",
+        "cursor"
+      ],
+      "category": "development-tools",
+      "source": "."
+    }
+  ]
+}

@@ -66,8 +66,8 @@ def test_memory_protect_pre_ignores_non_craftflow_files(tmp_dir: Path) -> None:
 
 
 def test_memory_protect_pre_masks_craftflow_file(tmp_dir: Path) -> None:
-    name = "memory-protect-pre/masks-craftflow-v10-file"
-    craftflow_dir = tmp_dir / ".craftflow" / "v10"
+    name = "memory-protect-pre/masks-craftflow-state-file"
+    craftflow_dir = tmp_dir / ".craftflow" / "state"
     craftflow_dir.mkdir(parents=True)
     target = craftflow_dir / "patterns.md"
     target.write_text(
@@ -102,7 +102,7 @@ def test_memory_protect_pre_ignores_non_read_tool(tmp_dir: Path) -> None:
     env = {"CLAUDE_PROJECT_DIR": str(tmp_dir)}
     payload = {
         "tool_name": "Edit",
-        "tool_input": {"file_path": str(tmp_dir / ".craftflow" / "v10" / "patterns.md")},
+        "tool_input": {"file_path": str(tmp_dir / ".craftflow" / "state" / "patterns.md")},
     }
     code, out = run_hook("craftflow_memory_protect_pre.py", payload, env)
     if code != 0:

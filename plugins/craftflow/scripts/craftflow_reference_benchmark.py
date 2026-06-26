@@ -128,7 +128,7 @@ def detect_signals(repo: Path) -> dict[str, bool]:
     )
     text_hits["workflow_artifacts"] = "workflows/" in corpus and "workflow" in lower
     text_hits["versioned_state"] = (
-        ".craftflow/v10" in corpus or "state_root" in lower
+        ".craftflow/state" in corpus or "state_root" in lower
     )
     text_hits["stable_workflow_identity"] = (
         "workflow_uuid" in lower or "workflow uuid" in lower

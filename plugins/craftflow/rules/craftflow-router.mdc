@@ -1,0 +1,43 @@
+---
+description: Craftflow orchestration entry point — route all dev tasks through craftflow-router
+alwaysApply: true
+---
+
+# Craftflow Orchestration (Always On)
+
+**Rule:** On ANY development request, invoke the `craftflow-router` skill FIRST before doing anything else.
+
+## Trigger Keywords
+
+Invoke craftflow-router when the user's message contains ANY of these:
+
+- **Build / implement:** build, implement, create, write, add
+- **Review / audit:** review, audit, check
+- **Debug / fix:** debug, fix, error, bug, broken
+- **Plan / design:** plan, design, architect, spec, brainstorm
+- **Test / quality:** test, refactor, optimize
+- **Update / change:** update, change
+- **Research:** research
+- **Craftflow itself:** craftflow
+
+## Entry Point
+
+Skills live under `skills/craftflow-router/SKILL.md` in the plugin.
+
+Invoke with: **`craftflow-router`** (the skill name).
+
+## Non-Negotiable Rules
+
+1. The router is the FIRST action — before reading files, before writing code, before any analysis
+2. Never bypass the router
+3. The router IS the system — it owns routing, memory, verification, and workflow artifacts
+4. Do not improvise outside what the router approves
+
+## Opt-Out (Exact Match Only)
+
+Skip Craftflow ONLY when the user says one of these EXACT phrases:
+- "don't use craftflow"
+- "without craftflow"
+- "skip craftflow"
+
+No interpretation. No guessing. Only these exact phrases bypass the router.

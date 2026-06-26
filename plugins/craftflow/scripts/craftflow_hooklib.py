@@ -29,7 +29,7 @@ def plugin_config_dir() -> Path:
 
 
 def state_root() -> Path:
-    path = project_dir() / ".craftflow" / STATE_VERSION
+    path = project_dir() / ".craftflow" / "state"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -41,14 +41,14 @@ def workflows_dir() -> Path:
 
 
 def project_state_dir() -> Path:
-    """Long-lived cross-workflow state: .craftflow/v10/project/"""
+    """Long-lived cross-workflow state: .craftflow/state/project/"""
     path = state_root() / "project"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def workflow_state_dir(workflow_id: str) -> Path:
-    """Per-workflow isolated state: .craftflow/v10/workflows/<wf-id>/"""
+    """Per-workflow isolated state: .craftflow/state/workflows/<wf-id>/"""
     path = workflows_dir() / workflow_id
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -64,7 +64,10 @@ def load_input() -> Dict[str, Any]:
     raw = sys.stdin.read()
     if not raw.strip():
         return {}
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return {}
 
 
 def load_mode() -> Dict[str, str]:

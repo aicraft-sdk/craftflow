@@ -394,8 +394,8 @@ def main() -> int:
                 f"README no longer documents optional MCP server '{required}'"
             )
 
-    if ".craftflow/v10/" not in readme:
-        errors.append("README does not document the live v10 memory namespace")
+    if ".craftflow/state/" not in readme:
+        errors.append("README does not document the live state memory namespace")
     for stale in (
         "live in `.craftflow/`",
         "MEMORY (.craftflow/)",
@@ -432,7 +432,7 @@ def main() -> int:
         "## 10. Research Orchestration",
         "## 12. Chain Execution Loop",
         "## 13. Memory Finalization",
-        ".craftflow/v10/workflows",
+        ".craftflow/state/workflows",
         "workflow_uuid",
         "phase_cursor",
         "plan_mode",
@@ -555,8 +555,8 @@ def main() -> int:
                 f"session-memory skill missing required reference/text: {required}"
             )
 
-    if ".craftflow/v10/*" not in planner_agent:
-        errors.append("planner agent no longer documents the live v10 memory namespace")
+    if ".craftflow/state/*" not in planner_agent:
+        errors.append("planner agent no longer documents the live state memory namespace")
 
     if "### session-memory" not in prompt_surface_inventory:
         errors.append("prompt surface inventory missing session-memory entry")
@@ -584,7 +584,7 @@ def main() -> int:
         ("orchestration logic analysis", orchestration_logic),
         ("orchestration safety", orchestration_safety),
     ):
-        if ".craftflow/v10/workflows" not in body:
+        if ".craftflow/state/workflows" not in body:
             errors.append(f"{name} does not reference the v10 workflow namespace")
 
     expected_router_fields = {
@@ -699,7 +699,7 @@ def main() -> int:
         ],
         "plan-gap-reviewer": [
             "Freshness rule:",
-            "Do NOT load `.craftflow/v10/*.md`.",
+            "Do NOT load `.craftflow/state/*.md`.",
             "Return structured findings only.",
             "You do not own orchestration, plan approval, or plan edits.",
         ],
@@ -737,9 +737,9 @@ def main() -> int:
         errors.append("planning-patterns missing live verification reference link")
 
     forbidden_direct_memory_writes = (
-        'Edit(file_path=".craftflow/v10/activeContext.md"',
-        'Edit(file_path=".craftflow/v10/progress.md"',
-        'Edit(file_path=".craftflow/v10/patterns.md"',
+        'Edit(file_path=".craftflow/state/activeContext.md"',
+        'Edit(file_path=".craftflow/state/progress.md"',
+        'Edit(file_path=".craftflow/state/patterns.md"',
     )
     for forbidden in forbidden_direct_memory_writes:
         if forbidden in planning_patterns:

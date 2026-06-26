@@ -44,16 +44,16 @@ If memory is narrated instead of distilled, it bloats context and loses signal.
 
 ## Load-Bearing Boundaries
 
-- Memory lives under `.craftflow/v10/` with two active namespaces:
+- Memory lives under `.craftflow/state/` with two active namespaces:
   - `project/` — long-lived cross-workflow state; always loaded at workflow start.
   - `workflows/{wf-id}/` — per-workflow isolated state; loaded on resume when `workflow_uuid` is known.
-  - Root-flat `.craftflow/v10/*.md` — backward-compatibility fallback; used when no `workflow_uuid` is available.
+  - Root-flat `.craftflow/state/*.md` — backward-compatibility fallback; used when no `workflow_uuid` is available.
 - The router loads and auto-heals memory files before routing or resume.
 - WRITE agents read memory, but do **not** edit memory markdown files directly.
 - WRITE agents emit structured `MEMORY_NOTES` in their Router Contract.
 - READ-ONLY agents emit `### Memory Notes (For Workflow-Final Persistence)`.
 - The router-owned memory-finalize task is the only final writer of memory markdown files.
-- Workflow artifacts under `.craftflow/v10/workflows/{wf}.json` remain the durable
+- Workflow artifacts under `.craftflow/state/workflows/{wf}.json` remain the durable
   execution truth; markdown memory is the stable index.
 - Required headings and anchors are a contract. Do not invent new file layouts or marker
   schemes.
@@ -77,13 +77,13 @@ Memory is organized in three tiers. Use the right tier for the right kind of inf
 - Non-blocking follow-ups that are relevant only to this workflow.
 - Isolated per-session; does not pollute parallel workflows on the same repo.
 
-**Root-flat fallback** (`.craftflow/v10/activeContext.md`, etc.):
+**Root-flat fallback** (`.craftflow/state/activeContext.md`, etc.):
 - Used when `workflow_uuid` is not yet available (first router turn before UUID generation).
 - Backward-compatible layer; populated automatically on first SessionStart.
 
 **External artifacts:**
 - `docs/plans/*` and `docs/research/*`: detailed artifacts; memory points to them.
-- `.craftflow/v10/workflows/{wf}.json` and `.events.jsonl`: the durable orchestration truth.
+- `.craftflow/state/workflows/{wf}.json` and `.events.jsonl`: the durable orchestration truth.
 
 Read `references/memory-model-and-ownership.md` if you need the full ownership model or the
 promotion ladder.
@@ -121,19 +121,19 @@ At workflow start, continuation, or resume, load in this order:
 
 ```text
 # Tier 1 — always (long-lived project state)
-.craftflow/v10/project/activeContext.md
-.craftflow/v10/project/patterns.md
-.craftflow/v10/project/progress.md
+.craftflow/state/project/activeContext.md
+.craftflow/state/project/patterns.md
+.craftflow/state/project/progress.md
 
 # Tier 2 — when workflow_uuid is known (per-workflow isolated state)
-.craftflow/v10/workflows/{workflow_uuid}/activeContext.md
-.craftflow/v10/workflows/{workflow_uuid}/patterns.md
-.craftflow/v10/workflows/{workflow_uuid}/progress.md
+.craftflow/state/workflows/{workflow_uuid}/activeContext.md
+.craftflow/state/workflows/{workflow_uuid}/patterns.md
+.craftflow/state/workflows/{workflow_uuid}/progress.md
 
 # Fallback — when project/ is empty or workflow_uuid is not yet available
-.craftflow/v10/activeContext.md
-.craftflow/v10/patterns.md
-.craftflow/v10/progress.md
+.craftflow/state/activeContext.md
+.craftflow/state/patterns.md
+.craftflow/state/progress.md
 ```
 
 Merge rule: workflow-scoped values override project-scoped for current-focus fields
@@ -267,7 +267,7 @@ Stop and correct course if you catch yourself:
 - making decisions without checking `## Decisions` or project patterns
 - writing long diary-style memory notes
 - claiming you will "remember later"
-- editing `.craftflow/v10/*.md`, `project/*.md`, or `workflows/{wf}/*.md` directly from a write agent
+- editing `.craftflow/state/*.md`, `project/*.md`, or `workflows/{wf}/*.md` directly from a write agent
 - inventing new headings, markers, or memory file shapes
 - treating stale conversation context as better than durable memory
 
@@ -287,7 +287,7 @@ Stop and correct course if you catch yourself:
 - [ ] Relevant decisions/patterns checked before new decisions
 - [ ] Notes distilled into `MEMORY_NOTES`
 - [ ] Verification truth captured in memory-worthy form
-- [ ] No direct write-agent edits to `.craftflow/v10/*.md`
+- [ ] No direct write-agent edits to `.craftflow/state/*.md`
 - [ ] Context-budget checkpointing considered if the session got heavy
 
 Cannot check these boxes? The memory cycle is incomplete.

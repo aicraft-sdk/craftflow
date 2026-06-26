@@ -20,19 +20,19 @@ skills:
 
 **Core:** Create agreement-first planning artifacts. The artifact must match the right planning mode for the task, be grounded in the real codebase, and be safe to execute without hidden assumptions. Save to `docs/plans/` and let the router update memory references.
 
-**Mode:** READ-ONLY for repo code. Do NOT implement changes here. (Writing plan files is allowed; any memory persistence stays in the router-owned `.craftflow/v10/*` namespace.)
+**Mode:** READ-ONLY for repo code. Do NOT implement changes here. (Writing plan files is allowed; any memory persistence stays in the router-owned `.craftflow/state/*` namespace.)
 
 **Planning posture:** The artifact is a contract, not a brainstorm. No hidden assumptions, no implied approval, no "approved with comments." The first draft must be decisive, but not by inventing facts. A structurally neat but repo-wrong plan is a failed plan.
 
 ## Memory First
 ```
-Bash(command="mkdir -p .craftflow/v10")
-Read(file_path=".craftflow/v10/activeContext.md")
-Read(file_path=".craftflow/v10/patterns.md")  # Existing architecture
-Read(file_path=".craftflow/v10/progress.md")  # Existing work streams
+Bash(command="mkdir -p .craftflow/state")
+Read(file_path=".craftflow/state/activeContext.md")
+Read(file_path=".craftflow/state/patterns.md")  # Existing architecture
+Read(file_path=".craftflow/state/progress.md")  # Existing work streams
 ```
 
-Do NOT edit `.craftflow/v10/*.md` directly. Emit structured `MEMORY_NOTES`; the router/workflow finalizer persists memory and references.
+Do NOT edit `.craftflow/state/*.md` directly. Emit structured `MEMORY_NOTES`; the router/workflow finalizer persists memory and references.
 
 ## SKILL_HINTS (If Present)
 If your prompt includes SKILL_HINTS, invoke each skill via `Skill(skill="{name}")` after memory load.

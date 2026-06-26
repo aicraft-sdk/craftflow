@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_context_migration.py\" --event SessionStart"
+      },
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_sessionstart_context.py\" --event SessionStart"
+      },
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_instructions_loaded_audit.py\" --event SessionStart"
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_pretooluse_guard.py\" --tool Edit,Write --event PreToolUse"
+      },
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_memory_protect_pre.py\" --tool Read --event PreToolUse"
+      },
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_sdd_cache_pre.py\" --tool WebFetch --event PreToolUse"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_posttooluse_artifact_guard.py\" --event PostToolUse"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_sdd_cache_post.py\" --tool WebFetch --event PostToolUse"
+      },
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_memory_protect_restore.py\" --tool Read --event PostToolUse"
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_task_completed_guard.py\" --event TaskCompleted"
+      },
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_subagent_stop_audit.py\" --event SubagentStop"
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_precompact_state.py\" --event PreCompact"
+      }
+    ],
+    "stop": [
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_stop_persist.py\" --event Stop"
+      }
+    ]
+  }
+}

@@ -36,6 +36,8 @@ SKIP_DIRS = {
 
 DEEP_BAKEOFF_TARGETS = {
     V7_REPO,
+    "cc10x",
+    "agent-skills",
     "claude-code-harness",
     "claude-harness",
     "everything-claude-code",
@@ -98,6 +100,12 @@ class DeltaRule:
 REF_REPOS: tuple[RefRepo, ...] = (
     RefRepo(V7_REPO, "A", "harness", notes="Pinned stable baseline"),
     RefRepo(
+        "cc10x",
+        "A",
+        "harness",
+        notes="Upstream predecessor to ai-craft/craftflow — romiluz13/cc10x",
+    ),
+    RefRepo(
         "claude-code-harness",
         "A",
         "harness",
@@ -115,6 +123,12 @@ REF_REPOS: tuple[RefRepo, ...] = (
     RefRepo("superpowers", "A", "harness"),
     RefRepo("wshobson-agents", "A", "harness"),
     RefRepo("get-shit-done", "A", "harness"),
+    RefRepo(
+        "agent-skills",
+        "A",
+        "harness",
+        notes="addyosmani/agent-skills — lifecycle commands + 24 skills + hooks + 4 agent personas",
+    ),
     RefRepo("agent-os", "B", "framework"),
     RefRepo("vercel-agent-skills", "B", "framework"),
     RefRepo("ralph-claude-code", "B", "framework"),
@@ -280,7 +294,7 @@ DELTA_RULES: tuple[DeltaRule, ...] = (
             ("workflow_uuid", "stable workflow identity independent of task ids"),
             ("phase_exit_gate", "sequential phase gating"),
             ("skill_precedence_gate", "explicit instruction precedence enforcement"),
-            (".craftflow/v10", "versioned v10 state root"),
+            (".craftflow/state", "state root is the shared memory namespace"),
         ),
     ),
     DeltaRule(
@@ -310,7 +324,7 @@ DELTA_RULES: tuple[DeltaRule, ...] = (
         (
             ("BLAST_RADIUS_SCAN", "blast-radius scan is mandatory"),
             ("Variant Coverage", "variant coverage is explicit"),
-            (".craftflow/v10", "debug memory reads are versioned"),
+            (".craftflow/state", "debug memory reads are versioned"),
         ),
     ),
     DeltaRule(
@@ -347,7 +361,7 @@ DELTA_RULES: tuple[DeltaRule, ...] = (
         "plugins/craftflow/agents/silent-failure-hunter.md",
         "hunter",
         (
-            (".craftflow/v10", "hunter reads only v10 memory state"),
+            (".craftflow/state", "hunter reads only state memory"),
             (
                 "Do not self-load internal CRAFTFLOW skills",
                 "hunter obeys router-owned internal skill precedence",
@@ -480,7 +494,7 @@ DELTA_RULES: tuple[DeltaRule, ...] = (
         "docs",
         (
             ("What 10.0 adds", "v10 contract is documented"),
-            (".craftflow/v10/workflows", "versioned state root is documented"),
+            (".craftflow/state/workflows", "versioned state root is documented"),
             ("Stable workflow UUIDs", "stable identity is documented"),
         ),
     ),
@@ -666,7 +680,10 @@ def detect_harness_signals(repo: Path) -> dict[str, bool]:
         for x in ("workflows/", "artifacts", "run artifacts", "transcript capture")
     )
     hits["versioned_state"] = (
-        ".craftflow/v10" in blob or "state_root" in lower or "runs-dir" in lower
+        ".craftflow/state" in blob
+        or ".cc10x/" in blob
+        or "state_root" in lower
+        or "runs-dir" in lower
     )
     hits["stable_workflow_identity"] = any(
         x in lower
@@ -737,9 +754,16 @@ def detect_harness_signals(repo: Path) -> dict[str, bool]:
             "harness_audit",
         )
     )
-    hits["test_suite"] = (repo / "tests").exists() or (
-        repo / "plugins" / "craftflow" / "tests"
-    ).exists()
+    hits["test_suite"] = (
+        (repo / "tests").exists()
+        or (repo / "plugins" / "craftflow" / "tests").exists()
+        or (repo / "plugins" / "cc10x" / "tests").exists()
+        or any(
+            p.name.endswith("-test.sh") or p.name.endswith(".spec.")
+            for p in repo.rglob("*")
+            if p.is_file()
+        )
+    )
     return hits
 
 
@@ -1119,6 +1143,8 @@ def evaluate_scenario(
 def build_bakeoff() -> tuple[Path, Path, list[dict[str, Any]]]:
     targets = [
         ("craftflow-current", ROOT, "A"),
+        ("cc10x", repo_path("cc10x"), "A"),
+        ("agent-skills", repo_path("agent-skills"), "A"),
         (V7_REPO, repo_path(V7_REPO), "A"),
         ("claude-code-harness", repo_path("claude-code-harness"), "A"),
         ("claude-harness", repo_path("claude-harness"), "A"),

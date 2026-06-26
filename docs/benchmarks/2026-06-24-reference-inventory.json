@@ -1,0 +1,202 @@
+{
+  "date": "2026-06-24",
+  "benchmark_root": "ref-(dont-read-unless-specificly-mentioned)",
+  "entries": [
+    {
+      "repo": "agent-skills",
+      "tier": "A",
+      "kind": "harness",
+      "benchmark_path": ".",
+      "notes": "addyosmani/agent-skills — lifecycle commands + 24 skills + hooks + 4 agent personas",
+      "present": true,
+      "refresh_status": "present",
+      "head": "e0d2e437477d",
+      "branch": "main",
+      "dirty": false,
+      "benchmark_target": ".",
+      "benchmark_status": "deep_bakeoff"
+    },
+    {
+      "repo": "babysitter",
+      "tier": "A",
+      "kind": "harness",
+      "benchmark_path": ".",
+      "notes": "",
+      "present": false,
+      "refresh_status": "missing",
+      "benchmark_status": "missing"
+    },
+    {
+      "repo": "cc10x",
+      "tier": "A",
+      "kind": "harness",
+      "benchmark_path": ".",
+      "notes": "Upstream predecessor to ai-craft/craftflow — romiluz13/cc10x",
+      "present": true,
+      "refresh_status": "present",
+      "head": "f8bb26183771",
+      "branch": "main",
+      "dirty": true,
+      "benchmark_target": ".",
+      "benchmark_status": "deep_bakeoff"
+    },
+    {
+      "repo": "claude-code-harness",
+      "tier": "A",
+      "kind": "harness",
+      "benchmark_path": ".",
+      "notes": "Live GitHub candidate added from benchmark discovery",
+      "present": false,
+      "refresh_status": "missing",
+      "benchmark_status": "missing"
+    },
+    {
+      "repo": "claude-harness",
+      "tier": "A",
+      "kind": "harness",
+      "benchmark_path": ".",
+      "notes": "Live GitHub candidate added from benchmark discovery",
+      "present": false,
+      "refresh_status": "missing",
+      "benchmark_status": "missing"
+    },
+    {
+      "repo": "craftflow-v7.7.0-stable",
+      "tier": "A",
+      "kind": "harness",
+      "benchmark_path": ".",
+      "notes": "Pinned stable baseline",
+      "present": false,
+      "refresh_status": "missing",
+      "benchmark_status": "missing"
+    },
+    {
+      "repo": "everything-claude-code",
+      "tier": "A",
+      "kind": "harness",
+      "benchmark_path": ".",
+      "notes": "",
+      "present": false,
+      "refresh_status": "missing",
+      "benchmark_status": "missing"
+    },
+    {
+      "repo": "get-shit-done",
+      "tier": "A",
+      "kind": "harness",
+      "benchmark_path": ".",
+      "notes": "",
+      "present": false,
+      "refresh_status": "missing",
+      "benchmark_status": "missing"
+    },
+    {
+      "repo": "metaswarm",
+      "tier": "A",
+      "kind": "harness",
+      "benchmark_path": ".",
+      "notes": "",
+      "present": false,
+      "refresh_status": "missing",
+      "benchmark_status": "missing"
+    },
+    {
+      "repo": "superpowers",
+      "tier": "A",
+      "kind": "harness",
+      "benchmark_path": ".",
+      "notes": "",
+      "present": true,
+      "refresh_status": "present",
+      "head": "896224c4b187",
+      "branch": "main",
+      "dirty": true,
+      "benchmark_target": ".",
+      "benchmark_status": "deep_bakeoff"
+    },
+    {
+      "repo": "wshobson-agents",
+      "tier": "A",
+      "kind": "harness",
+      "benchmark_path": ".",
+      "notes": "",
+      "present": false,
+      "refresh_status": "missing",
+      "benchmark_status": "missing"
+    },
+    {
+      "repo": "agent-os",
+      "tier": "B",
+      "kind": "framework",
+      "benchmark_path": ".",
+      "notes": "",
+      "present": false,
+      "refresh_status": "missing",
+      "benchmark_status": "missing"
+    },
+    {
+      "repo": "ralph-claude-code",
+      "tier": "B",
+      "kind": "framework",
+      "benchmark_path": ".",
+      "notes": "",
+      "present": false,
+      "refresh_status": "missing",
+      "benchmark_status": "missing"
+    },
+    {
+      "repo": "vercel-agent-skills",
+      "tier": "B",
+      "kind": "framework",
+      "benchmark_path": ".",
+      "notes": "",
+      "present": false,
+      "refresh_status": "missing",
+      "benchmark_status": "missing"
+    },
+    {
+      "repo": "design-log-methodology",
+      "tier": "C",
+      "kind": "methodology",
+      "benchmark_path": ".",
+      "notes": "",
+      "present": false,
+      "refresh_status": "missing",
+      "benchmark_status": "missing"
+    },
+    {
+      "repo": "symphony",
+      "tier": "C",
+      "kind": "methodology",
+      "benchmark_path": ".",
+      "notes": "",
+      "present": false,
+      "refresh_status": "missing",
+      "benchmark_status": "missing"
+    },
+    {
+      "repo": "system-prompts",
+      "tier": "C",
+      "kind": "prompt-library",
+      "benchmark_path": ".",
+      "notes": "",
+      "present": false,
+      "refresh_status": "missing",
+      "benchmark_status": "missing"
+    },
+    {
+      "repo": "anthropics-skills",
+      "tier": "S",
+      "kind": "skill-library",
+      "benchmark_path": "skills/skill-creator",
+      "notes": "",
+      "present": true,
+      "refresh_status": "present",
+      "head": "575462609294",
+      "branch": "main",
+      "dirty": false,
+      "benchmark_target": "skills/skill-creator",
+      "benchmark_status": "skill_benchmark"
+    }
+  ]
+}
