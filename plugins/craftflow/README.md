@@ -10,7 +10,7 @@ Every build, debug, review, and plan task routes through a single entry point th
 
 - **Routes all dev tasks** — one router (`craftflow-router`) classifies intent and dispatches to the right agent chain automatically
 - **Agent chain** — 11 specialized agents: planner, component-builder, bug-investigator, code-reviewer, silent-failure-hunter, integration-verifier, and more
-- **16 skills** — planning patterns, TDD, code generation, debugging, diff-driven docs, and others
+- **24 skills** — planning patterns, TDD, code generation, debugging, diff-driven docs, and others
 - **Hook system** — Python lifecycle hooks for memory protection, write guards, URL caching, and session continuity
 - **Shared state** — `.craftflow/state/` is readable by both Claude Code and Cursor
 - **Cursor support** — inline sequential execution with progress blocks in Cursor chat; no sub-agents required
@@ -42,15 +42,11 @@ Then add to `~/.claude/CLAUDE.md`:
 ## Install — Cursor AI
 
 ```bash
-# 1. Install the cursor-router skill (goes to ~/.cursor/skills/cursor-router/)
+# 1. Install the cursor-router skill
 npx skills add aicraft-sdk/craftflow --skill cursor-router
 
-# 2. Copy the MDC rules so Cursor auto-activates Craftflow on every dev request
-git clone https://github.com/aicraft-sdk/craftflow /tmp/craftflow
-mkdir -p ~/.cursor/rules/core
-cp /tmp/craftflow/rules/craftflow-router.mdc ~/.cursor/rules/core/
-cp /tmp/craftflow/rules/craftflow-state.mdc ~/.cursor/rules/core/
-rm -rf /tmp/craftflow
+# 2. Install MDC rules (auto-activates Craftflow on every dev request)
+curl -fsSL https://raw.githubusercontent.com/aicraft-sdk/craftflow/main/install-cursor.sh | bash
 ```
 
 Craftflow will activate automatically on every dev request via `alwaysApply: true`.

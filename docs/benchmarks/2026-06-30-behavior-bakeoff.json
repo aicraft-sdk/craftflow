@@ -1,0 +1,435 @@
+{
+  "date": "2026-06-30",
+  "repos": [
+    {
+      "repo": "craftflow-current",
+      "tier": "A",
+      "scenarios": [
+        {
+          "scenario": "Planner does not silently diverge from agreed requirements",
+          "expected": "The planning layer explicitly surfaces unresolved decisions or spec-compliance checks instead of silently choosing.",
+          "observed": "- `open_decisions_presented_as_settled`",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/agents/plan-gap-reviewer.md:61",
+          "evidence": {
+            "file": "plugins/craftflow/agents/plan-gap-reviewer.md",
+            "line": 61,
+            "needle": "open_decisions",
+            "snippet": "- `open_decisions_presented_as_settled`"
+          }
+        },
+        {
+          "scenario": "Unresolved plan decisions block execution",
+          "expected": "Execution should not start when high-impact planning decisions are unresolved.",
+          "observed": "| `COMPLETE` | All applicable layers evaluated; all triggered writes succeeded; no blocking failures |",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/agents/doc-syncer.md:116",
+          "evidence": {
+            "file": "plugins/craftflow/agents/doc-syncer.md",
+            "line": 116,
+            "needle": "blocking fail",
+            "snippet": "| `COMPLETE` | All applicable layers evaluated; all triggered writes succeeded; no blocking failures |"
+          }
+        },
+        {
+          "scenario": "Builder does not skip planned order",
+          "expected": "Execution runs the current approved phase only and does not opportunistically reorder work.",
+          "observed": "\"phase_cursor\",",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/scripts/craftflow_harness_audit.py:437",
+          "evidence": {
+            "file": "plugins/craftflow/scripts/craftflow_harness_audit.py",
+            "line": 437,
+            "needle": "phase_cursor",
+            "snippet": "\"phase_cursor\","
+          }
+        },
+        {
+          "scenario": "Failed phase does not continue silently",
+          "expected": "When proof is missing or a phase fails, the system blocks or stops instead of apologizing later.",
+          "observed": "| `COMPLETE` | All applicable layers evaluated; all triggered writes succeeded; no blocking failures |",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/agents/doc-syncer.md:116",
+          "evidence": {
+            "file": "plugins/craftflow/agents/doc-syncer.md",
+            "line": 116,
+            "needle": "blocking fail",
+            "snippet": "| `COMPLETE` | All applicable layers evaluated; all triggered writes succeeded; no blocking failures |"
+          }
+        },
+        {
+          "scenario": "Memory persists on blocking exit",
+          "expected": "Workflow state and memory should remain recoverable after interruption or blocking stops.",
+          "observed": "- Use `MEMORY_NOTES` for all learnings and deferred items. The router persists them into the workflow artifact and final memory update.",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/agents/bug-investigator.md:158",
+          "evidence": {
+            "file": "plugins/craftflow/agents/bug-investigator.md",
+            "line": 158,
+            "needle": "workflow artifact",
+            "snippet": "- Use `MEMORY_NOTES` for all learnings and deferred items. The router persists them into the workflow artifact and final memory update."
+          }
+        },
+        {
+          "scenario": "Internal pattern guidance does not override explicit user/project standards",
+          "expected": "Project or user standards must outrank reusable pattern packs or defaults.",
+          "observed": "\"Repos are scored against trust-critical harness properties: orchestration ownership, durable state, plan/build trust gates, skill precedence, debug generalization, fail-closed verification, and deterministic replay coverage.\"",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/scripts/craftflow_reference_benchmark.py:249",
+          "evidence": {
+            "file": "plugins/craftflow/scripts/craftflow_reference_benchmark.py",
+            "line": 249,
+            "needle": "skill precedence",
+            "snippet": "\"Repos are scored against trust-critical harness properties: orchestration ownership, durable state, plan/build trust gates, skill precedence, debug generalization, fail-closed verification, and deterministic replay coverage.\""
+          }
+        },
+        {
+          "scenario": "Debug fixes generalize beyond the reproducing case",
+          "expected": "The debug workflow searches for nearby duplicates or variants instead of stopping at a one-off patch.",
+          "observed": "| \"I fixed the repro — adjacent duplicates are deferred\" | Deferred duplicates must be named in BLAST_RADIUS_SCAN.result and MEMORY_NOTES.deferred. Silent omission is a false FIXED. |",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/agents/bug-investigator.md:215",
+          "evidence": {
+            "file": "plugins/craftflow/agents/bug-investigator.md",
+            "line": 215,
+            "needle": "blast_radius_scan",
+            "snippet": "| \"I fixed the repro — adjacent duplicates are deferred\" | Deferred duplicates must be named in BLAST_RADIUS_SCAN.result and MEMORY_NOTES.deferred. Silent omission is a false FIXED. |"
+          }
+        },
+        {
+          "scenario": "Verification fails closed on missing or contradictory evidence",
+          "expected": "Success claims require concrete evidence, and contradictory verification is rejected.",
+          "observed": "1. **Understand** - Expected vs actual behavior, when did it start?",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/agents/bug-investigator.md:124",
+          "evidence": {
+            "file": "plugins/craftflow/agents/bug-investigator.md",
+            "line": 124,
+            "needle": "expected vs actual",
+            "snippet": "1. **Understand** - Expected vs actual behavior, when did it start?"
+          }
+        }
+      ]
+    },
+    {
+      "repo": "cc10x",
+      "tier": "A",
+      "scenarios": [
+        {
+          "scenario": "Planner does not silently diverge from agreed requirements",
+          "expected": "The planning layer explicitly surfaces unresolved decisions or spec-compliance checks instead of silently choosing.",
+          "observed": "- `open_decisions_presented_as_settled`",
+          "verdict": "pass",
+          "evidence_source": "plugins/cc10x/agents/plan-gap-reviewer.md:61",
+          "evidence": {
+            "file": "plugins/cc10x/agents/plan-gap-reviewer.md",
+            "line": 61,
+            "needle": "open_decisions",
+            "snippet": "- `open_decisions_presented_as_settled`"
+          }
+        },
+        {
+          "scenario": "Unresolved plan decisions block execution",
+          "expected": "Execution should not start when high-impact planning decisions are unresolved.",
+          "observed": "| `COMPLETE` | All applicable layers evaluated; all triggered writes succeeded; no blocking failures |",
+          "verdict": "pass",
+          "evidence_source": "plugins/cc10x/agents/doc-syncer.md:117",
+          "evidence": {
+            "file": "plugins/cc10x/agents/doc-syncer.md",
+            "line": 117,
+            "needle": "blocking fail",
+            "snippet": "| `COMPLETE` | All applicable layers evaluated; all triggered writes succeeded; no blocking failures |"
+          }
+        },
+        {
+          "scenario": "Builder does not skip planned order",
+          "expected": "Execution runs the current approved phase only and does not opportunistically reorder work.",
+          "observed": "- CANNOT_VERIFY_CROSS_PHASE: [None | requirement(s) wired in this phase but consumed/satisfied outside this diff — router must reconcile against the workflow artifact's cross-phase context before phase_exit_gate passes]",
+          "verdict": "pass",
+          "evidence_source": "plugins/cc10x/agents/code-reviewer.md:238",
+          "evidence": {
+            "file": "plugins/cc10x/agents/code-reviewer.md",
+            "line": 238,
+            "needle": "phase_exit_gate",
+            "snippet": "- CANNOT_VERIFY_CROSS_PHASE: [None | requirement(s) wired in this phase but consumed/satisfied outside this diff — router must reconcile against the workflow artifact's cross-phase context before phase_exit_gate passes]"
+          }
+        },
+        {
+          "scenario": "Failed phase does not continue silently",
+          "expected": "When proof is missing or a phase fails, the system blocks or stops instead of apologizing later.",
+          "observed": "- Step 4b (Feedback Loop Gate) and Step 4c (Boundary Matrix, multi-component only) MUST complete before Step 6 (Hypothesis). No loop → fail closed at the No-Loop-No-Hypothesis Gate; do NOT reach H1.",
+          "verdict": "pass",
+          "evidence_source": "plugins/cc10x/agents/bug-investigator.md:175",
+          "evidence": {
+            "file": "plugins/cc10x/agents/bug-investigator.md",
+            "line": 175,
+            "needle": "fail closed",
+            "snippet": "- Step 4b (Feedback Loop Gate) and Step 4c (Boundary Matrix, multi-component only) MUST complete before Step 6 (Hypothesis). No loop → fail closed at the No-Loop-No-Hypothesis Gate; do NOT reach H1."
+          }
+        },
+        {
+          "scenario": "Memory persists on blocking exit",
+          "expected": "Workflow state and memory should remain recoverable after interruption or blocking stops.",
+          "observed": "- Use `MEMORY_NOTES` for all learnings and deferred items. The router persists them into the workflow artifact and final memory update.",
+          "verdict": "pass",
+          "evidence_source": "plugins/cc10x/agents/bug-investigator.md:222",
+          "evidence": {
+            "file": "plugins/cc10x/agents/bug-investigator.md",
+            "line": 222,
+            "needle": "workflow artifact",
+            "snippet": "- Use `MEMORY_NOTES` for all learnings and deferred items. The router persists them into the workflow artifact and final memory update."
+          }
+        },
+        {
+          "scenario": "Internal pattern guidance does not override explicit user/project standards",
+          "expected": "Project or user standards must outrank reusable pattern packs or defaults.",
+          "observed": "\"Repos are scored against trust-critical harness properties: orchestration ownership, durable state, plan/build trust gates, skill precedence, debug generalization, fail-closed verification, and deterministic replay coverage.\"",
+          "verdict": "pass",
+          "evidence_source": "plugins/cc10x/scripts/cc10x_reference_benchmark.py:249",
+          "evidence": {
+            "file": "plugins/cc10x/scripts/cc10x_reference_benchmark.py",
+            "line": 249,
+            "needle": "skill precedence",
+            "snippet": "\"Repos are scored against trust-critical harness properties: orchestration ownership, durable state, plan/build trust gates, skill precedence, debug generalization, fail-closed verification, and deterministic replay coverage.\""
+          }
+        },
+        {
+          "scenario": "Debug fixes generalize beyond the reproducing case",
+          "expected": "The debug workflow searches for nearby duplicates or variants instead of stopping at a one-off patch.",
+          "observed": "BLAST_RADIUS_SCAN:",
+          "verdict": "pass",
+          "evidence_source": "plugins/cc10x/agents/bug-investigator.md:426",
+          "evidence": {
+            "file": "plugins/cc10x/agents/bug-investigator.md",
+            "line": 426,
+            "needle": "blast_radius_scan",
+            "snippet": "BLAST_RADIUS_SCAN:"
+          }
+        },
+        {
+          "scenario": "Verification fails closed on missing or contradictory evidence",
+          "expected": "Success claims require concrete evidence, and contradictory verification is rejected.",
+          "observed": "1. **Understand** - Expected vs actual behavior, when did it start?",
+          "verdict": "pass",
+          "evidence_source": "plugins/cc10x/agents/bug-investigator.md:182",
+          "evidence": {
+            "file": "plugins/cc10x/agents/bug-investigator.md",
+            "line": 182,
+            "needle": "expected vs actual",
+            "snippet": "1. **Understand** - Expected vs actual behavior, when did it start?"
+          }
+        }
+      ]
+    },
+    {
+      "repo": "agent-skills",
+      "tier": "A",
+      "scenarios": [
+        {
+          "scenario": "Planner does not silently diverge from agreed requirements",
+          "expected": "The planning layer explicitly surfaces unresolved decisions or spec-compliance checks instead of silently choosing.",
+          "observed": "4. **Single checkpoint.** Present the full plan and wait for an unambiguous affirmative (e.g. \"approve\", \"go\", \"yes\"). Treat hedged responses (\"looks reasonable\", \"I guess\") as **not** approved. This is the only human gate — after approval, run autonomously. If you generated `tasks/plan.md`, commit it as a single preparatory commit now so it doesn't bleed into the first task's commit.",
+          "verdict": "partial",
+          "evidence_source": ".claude/commands/build.md:34",
+          "evidence": {
+            "file": ".claude/commands/build.md",
+            "line": 34,
+            "needle": "checkpoint",
+            "snippet": "4. **Single checkpoint.** Present the full plan and wait for an unambiguous affirmative (e.g. \"approve\", \"go\", \"yes\"). Treat hedged responses (\"looks reasonable\", \"I guess\") as **not** approved. This is the only human gate — after approval, run autonomously. If you generated `tasks/plan.md`, commit it as a single preparatory commit now so it doesn't bleed into the first task's commit."
+          }
+        },
+        {
+          "scenario": "Unresolved plan decisions block execution",
+          "expected": "Execution should not start when high-impact planning decisions are unresolved.",
+          "observed": "This is the recommended default. Teams using gitflow or long-lived branches can adapt the principles (atomic commits, small changes, descriptive messages) to their branching model — the commit discipline matters more than the specific branching strategy.",
+          "verdict": "partial",
+          "evidence_source": "skills/git-workflow-and-versioning/SKILL.md:28",
+          "evidence": {
+            "file": "skills/git-workflow-and-versioning/SKILL.md",
+            "line": 28,
+            "needle": "recommended default",
+            "snippet": "This is the recommended default. Teams using gitflow or long-lived branches can adapt the principles (atomic commits, small changes, descriptive messages) to their branching model — the commit discipline matters more than the specific branching strategy."
+          }
+        },
+        {
+          "scenario": "Builder does not skip planned order",
+          "expected": "Execution runs the current approved phase only and does not opportunistically reorder work.",
+          "observed": "6. RESUME only after verification passes",
+          "verdict": "pass",
+          "evidence_source": "skills/debugging-and-error-recovery/SKILL.md:31",
+          "evidence": {
+            "file": "skills/debugging-and-error-recovery/SKILL.md",
+            "line": 31,
+            "needle": "resume only after verification passes",
+            "snippet": "6. RESUME only after verification passes"
+          }
+        },
+        {
+          "scenario": "Failed phase does not continue silently",
+          "expected": "When proof is missing or a phase fails, the system blocks or stops instead of apologizing later.",
+          "observed": "The commands above are entry points. The pack includes 24 skills total — 23 lifecycle skills plus the `using-agent-skills` meta-skill. Each skill is a structured workflow with steps, verification gates, and anti-rationalization tables. You can also reference any skill directly.",
+          "verdict": "partial",
+          "evidence_source": "README.md:157",
+          "evidence": {
+            "file": "README.md",
+            "line": 157,
+            "needle": "verification gate",
+            "snippet": "The commands above are entry points. The pack includes 24 skills total — 23 lifecycle skills plus the `using-agent-skills` meta-skill. Each skill is a structured workflow with steps, verification gates, and anti-rationalization tables. You can also reference any skill directly."
+          }
+        },
+        {
+          "scenario": "Memory persists on blocking exit",
+          "expected": "Workflow state and memory should remain recoverable after interruption or blocking stops.",
+          "observed": "After the user resolves a blocker, they re-invoke `/build auto` — it resumes from the next pending task.",
+          "verdict": "partial",
+          "evidence_source": ".claude/commands/build.md:41",
+          "evidence": {
+            "file": ".claude/commands/build.md",
+            "line": 41,
+            "needle": "resume",
+            "snippet": "After the user resolves a blocker, they re-invoke `/build auto` — it resumes from the next pending task."
+          }
+        },
+        {
+          "scenario": "Internal pattern guidance does not override explicit user/project standards",
+          "expected": "Project or user standards must outrank reusable pattern packs or defaults.",
+          "observed": "**The adversarial prompt above takes precedence over the persona's default response shape.** Personas like `code-reviewer` are written to produce balanced verdicts with both strengths and weaknesses; doubt-driven needs issues-only output. Paste the adversarial prompt verbatim into the invocation so it overrides the persona's default. If a persona's response shape can't be overridden cleanly, fall back to a generic subagent with the adversarial prompt.",
+          "verdict": "partial",
+          "evidence_source": "skills/doubt-driven-development/SKILL.md:110",
+          "evidence": {
+            "file": "skills/doubt-driven-development/SKILL.md",
+            "line": 110,
+            "needle": "takes precedence",
+            "snippet": "**The adversarial prompt above takes precedence over the persona's default response shape.** Personas like `code-reviewer` are written to produce balanced verdicts with both strengths and weaknesses; doubt-driven needs issues-only output. Paste the adversarial prompt verbatim into the invocation so it overrides the persona's default. If a persona's response shape can't be overridden cleanly, fall back to a generic subagent with the adversarial prompt."
+          }
+        },
+        {
+          "scenario": "Debug fixes generalize beyond the reproducing case",
+          "expected": "The debug workflow searches for nearby duplicates or variants instead of stopping at a one-off patch.",
+          "observed": "5. **Skip the fan-out only if all of the following are true:** the change touches 2 files or fewer, the diff is under 50 lines, and it does not touch auth, payments, data access, or config/env. Otherwise, default to fan-out. `/ship` is designed for production-bound changes — when the blast radius is non-trivial, run the parallel review even if the diff looks small.",
+          "verdict": "pass",
+          "evidence_source": ".claude/commands/ship.md:72",
+          "evidence": {
+            "file": ".claude/commands/ship.md",
+            "line": 72,
+            "needle": "blast radius",
+            "snippet": "5. **Skip the fan-out only if all of the following are true:** the change touches 2 files or fewer, the diff is under 50 lines, and it does not touch auth, payments, data access, or config/env. Otherwise, default to fan-out. `/ship` is designed for production-bound changes — when the blast radius is non-trivial, run the parallel review even if the diff looks small."
+          }
+        },
+        {
+          "scenario": "Verification fails closed on missing or contradictory evidence",
+          "expected": "Success claims require concrete evidence, and contradictory verification is rejected.",
+          "observed": "No direct repository evidence found for this scenario.",
+          "verdict": "not-testable",
+          "evidence_source": null,
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "repo": "superpowers",
+      "tier": "A",
+      "scenarios": [
+        {
+          "scenario": "Planner does not silently diverge from agreed requirements",
+          "expected": "The planning layer explicitly surfaces unresolved decisions or spec-compliance checks instead of silently choosing.",
+          "observed": "description: Use when you have a written implementation plan to execute in a separate session with review checkpoints",
+          "verdict": "partial",
+          "evidence_source": "skills/executing-plans/SKILL.md:3",
+          "evidence": {
+            "file": "skills/executing-plans/SKILL.md",
+            "line": 3,
+            "needle": "checkpoint",
+            "snippet": "description: Use when you have a written implementation plan to execute in a separate session with review checkpoints"
+          }
+        },
+        {
+          "scenario": "Unresolved plan decisions block execution",
+          "expected": "Execution should not start when high-impact planning decisions are unresolved.",
+          "observed": "**Ask for clarification rather than guessing.**",
+          "verdict": "partial",
+          "evidence_source": "skills/executing-plans/SKILL.md:47",
+          "evidence": {
+            "file": "skills/executing-plans/SKILL.md",
+            "line": 47,
+            "needle": "clarification",
+            "snippet": "**Ask for clarification rather than guessing.**"
+          }
+        },
+        {
+          "scenario": "Builder does not skip planned order",
+          "expected": "Execution runs the current approved phase only and does not opportunistically reorder work.",
+          "observed": "Execute plan by dispatching a fresh implementer subagent per task, a task review (spec compliance + code quality) after each, and a broad whole-branch review at the end.",
+          "verdict": "partial",
+          "evidence_source": "skills/subagent-driven-development/SKILL.md:8",
+          "evidence": {
+            "file": "skills/subagent-driven-development/SKILL.md",
+            "line": 8,
+            "needle": "execute plan",
+            "snippet": "Execute plan by dispatching a fresh implementer subagent per task, a task review (spec compliance + code quality) after each, and a broad whole-branch review at the end."
+          }
+        },
+        {
+          "scenario": "Failed phase does not continue silently",
+          "expected": "When proof is missing or a phase fails, the system blocks or stops instead of apologizing later.",
+          "observed": "No direct repository evidence found for this scenario.",
+          "verdict": "not-testable",
+          "evidence_source": null,
+          "evidence": null
+        },
+        {
+          "scenario": "Memory persists on blocking exit",
+          "expected": "Workflow state and memory should remain recoverable after interruption or blocking stops.",
+          "observed": "\"matcher\": \"startup|resume|clear\",",
+          "verdict": "partial",
+          "evidence_source": "hooks/hooks-codex.json:5",
+          "evidence": {
+            "file": "hooks/hooks-codex.json",
+            "line": 5,
+            "needle": "resume",
+            "snippet": "\"matcher\": \"startup|resume|clear\","
+          }
+        },
+        {
+          "scenario": "Internal pattern guidance does not override explicit user/project standards",
+          "expected": "Project or user standards must outrank reusable pattern packs or defaults.",
+          "observed": "Superpowers skills override default system prompt behavior, but **user instructions always take precedence**:",
+          "verdict": "pass",
+          "evidence_source": "skills/using-superpowers/SKILL.md:20",
+          "evidence": {
+            "file": "skills/using-superpowers/SKILL.md",
+            "line": 20,
+            "needle": "user instructions always take precedence",
+            "snippet": "Superpowers skills override default system prompt behavior, but **user instructions always take precedence**:"
+          }
+        },
+        {
+          "scenario": "Debug fixes generalize beyond the reproducing case",
+          "expected": "The debug workflow searches for nearby duplicates or variants instead of stopping at a one-off patch.",
+          "observed": "- 3+ test files failing with different root causes",
+          "verdict": "partial",
+          "evidence_source": "skills/dispatching-parallel-agents/SKILL.md:37",
+          "evidence": {
+            "file": "skills/dispatching-parallel-agents/SKILL.md",
+            "line": 37,
+            "needle": "root cause",
+            "snippet": "- 3+ test files failing with different root causes"
+          }
+        },
+        {
+          "scenario": "Verification fails closed on missing or contradictory evidence",
+          "expected": "Success claims require concrete evidence, and contradictory verification is rejected.",
+          "observed": "Claiming work is complete without verification is dishonesty, not efficiency.",
+          "verdict": "pass",
+          "evidence_source": "skills/verification-before-completion/SKILL.md:10",
+          "evidence": {
+            "file": "skills/verification-before-completion/SKILL.md",
+            "line": 10,
+            "needle": "claiming work is complete without verification is dishonesty",
+            "snippet": "Claiming work is complete without verification is dishonesty, not efficiency."
+          }
+        }
+      ]
+    }
+  ]
+}
