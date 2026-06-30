@@ -29,7 +29,7 @@ Every build, debug, review, and plan task routes through a single entry point th
 ## Install — Claude Code
 
 ```bash
-claude plugin marketplace add volkz/craftflow
+claude plugin marketplace add aicraft-sdk/craftflow
 ```
 
 Then add to `~/.claude/CLAUDE.md`:
