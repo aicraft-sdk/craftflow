@@ -1,0 +1,138 @@
+{
+  "date": "2026-06-30",
+  "rubric": "tiered",
+  "notes": [
+    "Tier S uses a skill-authoring rubric, not the harness rubric.",
+    "Structural leads do not automatically imply product superiority."
+  ],
+  "claim_scoreboard": {
+    "stronger_by_evidence": [
+      "agent-skills",
+      "superpowers"
+    ],
+    "tied_or_not_differentiated": [
+      "cc10x"
+    ],
+    "unproven": [
+      "anthropics-skills"
+    ]
+  },
+  "rows": [
+    {
+      "repo": "cc10x",
+      "tier": "A",
+      "kind": "harness",
+      "head": "f8bb26183771",
+      "score": 33,
+      "max_score": 33,
+      "signals": {
+        "router_orchestrator": true,
+        "specialist_agents": true,
+        "skills_layer": true,
+        "plugin_hooks": true,
+        "workflow_artifacts": true,
+        "versioned_state": true,
+        "stable_workflow_identity": true,
+        "plan_trust_gate": true,
+        "phase_gating": true,
+        "failure_stop": true,
+        "skill_precedence": true,
+        "debug_generalization": true,
+        "fail_closed_verification": true,
+        "replay_harness": true,
+        "test_suite": true
+      }
+    },
+    {
+      "repo": "craftflow-current",
+      "tier": "A",
+      "kind": "harness",
+      "head": "60598ab8e3a8",
+      "score": 33,
+      "max_score": 33,
+      "signals": {
+        "router_orchestrator": true,
+        "specialist_agents": true,
+        "skills_layer": true,
+        "plugin_hooks": true,
+        "workflow_artifacts": true,
+        "versioned_state": true,
+        "stable_workflow_identity": true,
+        "plan_trust_gate": true,
+        "phase_gating": true,
+        "failure_stop": true,
+        "skill_precedence": true,
+        "debug_generalization": true,
+        "fail_closed_verification": true,
+        "replay_harness": true,
+        "test_suite": true
+      }
+    },
+    {
+      "repo": "superpowers",
+      "tier": "A",
+      "kind": "harness",
+      "head": "896224c4b187",
+      "score": 26,
+      "max_score": 33,
+      "signals": {
+        "router_orchestrator": true,
+        "specialist_agents": true,
+        "skills_layer": true,
+        "plugin_hooks": true,
+        "workflow_artifacts": true,
+        "versioned_state": false,
+        "stable_workflow_identity": false,
+        "plan_trust_gate": true,
+        "phase_gating": false,
+        "failure_stop": true,
+        "skill_precedence": true,
+        "debug_generalization": true,
+        "fail_closed_verification": true,
+        "replay_harness": true,
+        "test_suite": true
+      }
+    },
+    {
+      "repo": "agent-skills",
+      "tier": "A",
+      "kind": "harness",
+      "head": "e0d2e437477d",
+      "score": 24,
+      "max_score": 33,
+      "signals": {
+        "router_orchestrator": true,
+        "specialist_agents": true,
+        "skills_layer": true,
+        "plugin_hooks": true,
+        "workflow_artifacts": true,
+        "versioned_state": false,
+        "stable_workflow_identity": false,
+        "plan_trust_gate": true,
+        "phase_gating": true,
+        "failure_stop": false,
+        "skill_precedence": true,
+        "debug_generalization": true,
+        "fail_closed_verification": false,
+        "replay_harness": true,
+        "test_suite": true
+      }
+    },
+    {
+      "repo": "anthropics-skills",
+      "tier": "S",
+      "kind": "skill-library",
+      "head": "575462609294",
+      "score": 15,
+      "max_score": 15,
+      "signals": {
+        "intent_capture": true,
+        "trigger_design": true,
+        "eval_loop": true,
+        "quant_qual_review": true,
+        "benchmark_outputs": true,
+        "skill_packaging": true
+      }
+    }
+  ]
+}
