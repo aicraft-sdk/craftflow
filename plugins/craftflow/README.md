@@ -40,7 +40,11 @@ Then add to `~/.claude/CLAUDE.md`:
 
 ## Install — Cursor AI
 
-Copy the two MDC rules to your global Cursor rules directory:
+```bash
+npx skills add aicraft-sdk/craftflow
+```
+
+Or manually copy the two MDC rules to your global Cursor rules directory:
 
 ```bash
 mkdir -p ~/.cursor/rules/core
