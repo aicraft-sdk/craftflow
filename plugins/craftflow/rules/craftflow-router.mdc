@@ -5,11 +5,31 @@ alwaysApply: true
 
 # Craftflow Orchestration (Always On)
 
-**Rule:** On ANY development request, invoke the `craftflow-router` skill FIRST before doing anything else.
+**Rule:** On ANY development request, invoke the Craftflow router FIRST before doing anything else.
+
+## Cursor Platform Context
+
+CRAFTFLOW_PLATFORM: cursor
+
+You are running in Cursor AI agent mode. There is no `Skill()` tool, no `TaskCreate()`, and
+no `Agent()` tool. All Craftflow orchestration runs **inline** in this single Cursor agent turn.
+
+## Entry Point
+
+**Step 1:** Read the Cursor router skill file:
+```
+Read("tools/craftflow-plugin/plugins/craftflow/skills/cursor-router/SKILL.md")
+```
+
+**Step 2:** Follow the `## 1. Intent Routing` section to determine the workflow type.
+
+**Step 3:** Follow the `## 5. Cursor Inline Execution Loop` to execute all phases.
+
+Do not improvise. The router skill file is the complete orchestration contract.
 
 ## Trigger Keywords
 
-Invoke craftflow-router when the user's message contains ANY of these:
+Invoke the Craftflow router when the user's message contains ANY of these:
 
 - **Build / implement:** build, implement, create, write, add
 - **Review / audit:** review, audit, check
@@ -20,18 +40,13 @@ Invoke craftflow-router when the user's message contains ANY of these:
 - **Research:** research
 - **Craftflow itself:** craftflow
 
-## Entry Point
-
-Skills live under `skills/craftflow-router/SKILL.md` in the plugin.
-
-Invoke with: **`craftflow-router`** (the skill name).
-
 ## Non-Negotiable Rules
 
 1. The router is the FIRST action — before reading files, before writing code, before any analysis
 2. Never bypass the router
 3. The router IS the system — it owns routing, memory, verification, and workflow artifacts
 4. Do not improvise outside what the router approves
+5. Never use Cursor's native "plan mode" if it has one — Craftflow owns planning
 
 ## Opt-Out (Exact Match Only)
 
