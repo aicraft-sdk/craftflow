@@ -19,8 +19,8 @@
         "email": "delacruzd93@gmail.com",
         "url": "https://github.com/delacruzd93"
       },
-      "homepage": "https://github.com/volkz/craftflow",
-      "repository": "https://github.com/volkz/craftflow",
+      "homepage": "https://github.com/aicraft-sdk/craftflow",
+      "repository": "https://github.com/aicraft-sdk/craftflow",
       "license": "MIT",
       "keywords": [
         "workflow-routing",
