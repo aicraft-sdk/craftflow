@@ -30,6 +30,7 @@ Every build, debug, review, and plan task routes through a single entry point th
 
 ```bash
 claude plugin marketplace add aicraft-sdk/craftflow
+claude plugin install craftflow
 ```
 
 Then add to `~/.claude/CLAUDE.md`:
@@ -41,15 +42,15 @@ Then add to `~/.claude/CLAUDE.md`:
 ## Install — Cursor AI
 
 ```bash
-npx skills add aicraft-sdk/craftflow
-```
+# 1. Install the cursor-router skill (goes to ~/.cursor/skills/cursor-router/)
+npx skills add aicraft-sdk/craftflow --skill cursor-router
 
-Or manually copy the two MDC rules to your global Cursor rules directory:
-
-```bash
+# 2. Copy the MDC rules so Cursor auto-activates Craftflow on every dev request
+git clone https://github.com/aicraft-sdk/craftflow /tmp/craftflow
 mkdir -p ~/.cursor/rules/core
-cp rules/craftflow-router.mdc ~/.cursor/rules/core/
-cp rules/craftflow-state.mdc ~/.cursor/rules/core/
+cp /tmp/craftflow/rules/craftflow-router.mdc ~/.cursor/rules/core/
+cp /tmp/craftflow/rules/craftflow-state.mdc ~/.cursor/rules/core/
+rm -rf /tmp/craftflow
 ```
 
 Craftflow will activate automatically on every dev request via `alwaysApply: true`.
