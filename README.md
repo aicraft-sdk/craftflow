@@ -75,47 +75,6 @@ claude plugin update craftflow
 
 ---
 
-## Install (Cursor AI)
-
-Installs Craftflow into Cursor as the single team orchestrator, replacing AIDLC.
-
-### Prerequisites
-
-- Cursor AI with agent mode enabled
-- This repo cloned locally (any path)
-- Phase 1 of the Cursor integration plan complete:
-  `tools/craftflow-plugin/plugins/craftflow/skills/cursor-router/SKILL.md` must exist
-
-### One command
-
-```bash
-bash tools/craftflow-plugin/install-cursor.sh
-```
-
-### What it does
-
-1. Creates a symlink: `~/.cursor/skills/cursor-router → <repo>/tools/craftflow-plugin/plugins/craftflow/skills/cursor-router`
-2. Copies `craftflow-router.mdc` and `craftflow-state.mdc` to `~/.cursor/rules/core/`
-   (copied, not symlinked — MDC files reference local paths at copy time)
-3. Archives AIDLC: moves `~/.cursor/skills/aidlc/` to `~/.cursor/skills/aidlc.bak/`
-4. Removes `~/.cursor/rules/core/aidlc-routing.mdc`
-5. Prints a confirmation summary
-
-The script is **idempotent** — safe to re-run after `git pull` to refresh the copied MDC rules.
-
-### Verify
-
-Open Cursor on any project and send a development request (e.g., "add a helper function to…").
-The Cursor agent should read `cursor-router/SKILL.md` and route through the Craftflow workflow.
-
-### Notes
-
-- Zero Claude Code files are changed — only `~/.cursor/` is modified
-- To roll back AIDLC: `mv ~/.cursor/skills/aidlc.bak ~/.cursor/skills/aidlc` then restore `aidlc-routing.mdc` from the plugin's `rules/` directory
-- After `git pull` on this repo, re-run the script to refresh the MDC copies
-
----
-
 ## Plugin structure
 
 ```
