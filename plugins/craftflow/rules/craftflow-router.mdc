@@ -18,7 +18,7 @@ no `Agent()` tool. All Craftflow orchestration runs **inline** in this single Cu
 
 **Step 1:** Read the Cursor router skill file:
 ```
-Read("tools/craftflow-plugin/plugins/craftflow/skills/cursor-router/SKILL.md")
+Read("~/.cursor/skills/cursor-router/SKILL.md")
 ```
 
 **Step 2:** Follow the `## 1. Intent Routing` section to determine the workflow type.

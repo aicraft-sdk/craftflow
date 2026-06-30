@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "craftflow",
+  "description": "Router-first AI development orchestration for Claude Code and Cursor AI",
+  "owner": {
+    "name": "David de la Cruz Gracia",
+    "email": "delacruzd93@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "craftflow",
+      "description": "Craftflow — router-kernel orchestration with adversarial review, intent-interview gate, doubt-verifier, memory-protect hooks, TDD-first execution, and proof-of-work workflow artifacts.",
+      "author": {
+        "name": "David de la Cruz Gracia"
+      },
+      "category": "development-tools",
+      "source": ".",
+      "homepage": "https://github.com/aicraft-sdk/craftflow"
+    }
+  ]
+}
