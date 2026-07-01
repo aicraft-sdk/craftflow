@@ -85,16 +85,33 @@ def restore_all() -> int:
     if not cache.exists():
         return 0
     count = 0
-    for orig_path in cache.glob("*.orig"):
-        # The orig file's stem is the sha1 key of the target path.
-        # We stored the target path implicitly — we need to find files that
-        # currently contain CRAFTFLOW_BLOCK placeholders.
-        pass
 
-    # Scan .craftflow/state/ for any files with stale placeholders and restore them
+    # Pass 1: for each .orig backup, find the matching state/ file by sha1 key
+    # and restore it directly, then clean up the backup artifacts.
+    state_base = _project_dir() / ".craftflow" / "state"
+    if state_base.exists():
+        for orig_path in cache.glob("*.orig"):
+            key = orig_path.stem
+            for md_file in state_base.rglob("*.md"):
+                if _sha1_key(md_file) == key:
+                    try:
+                        orig_content = orig_path.read_text(encoding="utf-8")
+                        tmp = md_file.with_suffix(".tmp")
+                        tmp.write_text(orig_content, encoding="utf-8")
+                        tmp.replace(md_file)
+                        orig_path.unlink(missing_ok=True)
+                        (cache / f"{key}.blocks.json").unlink(missing_ok=True)
+                        (cache / f"{key}.lock").unlink(missing_ok=True)
+                        count += 1
+                    except Exception as e:
+                        print(f"CRAFTFLOW restore_all: failed to restore {md_file}: {e}", file=sys.stderr)
+                    break
+
+    # Pass 2: belt-and-suspenders scan for any remaining placeholder text
+    # (covers files whose .orig was already cleaned up or never written).
     state_root = _project_dir() / ".craftflow" / "state"
     if not state_root.exists():
-        return 0
+        return count
     for md_file in state_root.rglob("*.md"):
         if restore_file(md_file):
             count += 1
@@ -112,7 +129,7 @@ def main() -> int:
 
     hook_event = data.get("hook_event_name", "")
 
-    if hook_event in ("Stop", "StopFailure", "") or not hook_event:
+    if hook_event in ("Stop", "StopFailure", "SubagentStop", "") or not hook_event:
         # Full restore on session end or unknown context
         restore_all()
         return 0

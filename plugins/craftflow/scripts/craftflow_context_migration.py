@@ -182,6 +182,22 @@ def _schema_version_number(state_dir: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _v10_has_unsynced_md(craftflow_base: Path, state_dir: Path) -> bool:
+    """Return True if .craftflow/v10/ contains .md files absent from state/.
+
+    Used to trigger migration even when state/ already exists, preventing
+    v10/ content from being orphaned when both directories coexist.
+    """
+    v10 = craftflow_base / "v10"
+    if not v10.is_dir():
+        return False
+    for md_file in v10.rglob("*.md"):
+        rel = md_file.relative_to(v10)
+        if not (state_dir / rel).exists():
+            return True
+    return False
+
+
 def _migrate_legacy_dirs_to_state(craftflow_base: Path, state_dir: Path) -> List[str]:
     """Copy .craftflow/v10/ (and v10-from-cc10x-root/) into .craftflow/state/.
 
@@ -439,10 +455,8 @@ def run_migration() -> int:
     # _migrate_legacy_dirs_to_state writes the schema-version marker
     # atomically with the copy, so no separate call is needed here.
     # ------------------------------------------------------------------
-    newly_created = False
-    if not state_dir.exists():
+    if not state_dir.exists() or _v10_has_unsynced_md(craftflow_base, state_dir):
         _migrate_legacy_dirs_to_state(craftflow_base, state_dir)
-        newly_created = True
     else:
         # Sentinel: state/ exists but .schema-version is missing (partial
         # migration recovery — e.g. previous run crashed between copytree

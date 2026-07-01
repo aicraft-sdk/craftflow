@@ -1,8 +1,8 @@
 {
   "artifactIntegrity": "audit",
   "protectedWrites": "audit",
-  "memoryWrites": "audit",
-  "taskMetadata": "audit",
+  "memoryWrites": "block",
+  "taskMetadata": "block",
   "postcompactAudit": "audit",
   "subagentStopAudit": "audit",
   "precompactState": "audit",

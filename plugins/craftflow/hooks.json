@@ -17,9 +17,6 @@
         "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_pretooluse_guard.py\" --tool Edit,Write --event PreToolUse"
       },
       {
-        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_memory_protect_pre.py\" --tool Read --event PreToolUse"
-      },
-      {
         "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_sdd_cache_pre.py\" --tool WebFetch --event PreToolUse"
       }
     ],
