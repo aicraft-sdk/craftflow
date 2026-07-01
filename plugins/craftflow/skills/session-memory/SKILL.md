@@ -188,11 +188,25 @@ WRITE agents persist memory through the Router Contract:
 
 ```yaml
 MEMORY_NOTES:
-  learnings: ["Key causal insight"]
-  patterns: ["Reusable gotcha or convention"]
-  verification: ["`npm test` -> exit 0"]
-  deferred: ["Non-blocking follow-up or risk"]
+  learnings:
+    - text: "Root-cause insight"
+      confidence: 0.9        # 0.9+ explicit/proven; 0.7+ inferred; <0.7 dropped by finalizer
+  patterns:
+    - text: "Reusable convention"
+      confidence: 0.9
+  verification: ["`npm test` -> exit 0"]   # unchanged — evidence is binary
+  deferred: ["Non-blocking follow-up"]      # unchanged
+  retractions:
+    - "prior note text (or its normalized form) now contradicted"
 ```
+
+**Confidence Bands:**
+- `0.9+` — explicit, directly proven (test output, error message seen, decision confirmed)
+- `0.7–0.89` — inferred, strong contextual evidence
+- `< 0.7` — speculative; router finalizer drops without writing
+
+**Back-compat:** Plain string items in `learnings`/`patterns` (old form) default to `confidence: 0.8`.
+The finalizer accepts both forms. New agents should use the structured form.
 
 Rules:
 

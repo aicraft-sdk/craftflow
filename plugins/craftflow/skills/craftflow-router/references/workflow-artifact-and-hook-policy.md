@@ -107,6 +107,14 @@ Rules:
   - `hunter`
   - `verifier`
   - `planner`
+- `telemetry.effort` stores per-agent effort profile assigned at dispatch:
+  - `builder`
+  - `reviewer`
+  - `hunter`
+  - `verifier`
+  - `planner`
+  - `investigator`
+  - `doc_syncer`
 - `telemetry.loop_counts` stores:
   - `re_review`
   - `re_hunt`
@@ -153,6 +161,7 @@ Workflow event log:
   - `duration_seconds`
   - `work_category`
   - `details`
+  - `effort`
 - Event types:
   - `workflow_started`
   - `agent_started`
@@ -164,6 +173,8 @@ Workflow event log:
   - `memory_finalized`
   - `workflow_completed`
   - `workflow_failed`
+  - `contract_invalid`
+  - `learn_distilled`
 
 Hook policy:
 - CRAFTFLOW plugin hooks live in the plugin bundle under `hooks/hooks.json` and should stay minimal:

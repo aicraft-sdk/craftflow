@@ -34,14 +34,35 @@ Values:
 
 #### Agent Dispatch Table
 
-| Phase | Agent | Standard BUILD | Fast path | Escalated |
-|-------|-------|---------------|-----------|-----------|
-| `build-implement` | component-builder | ✓ | ✓ | ✓ (already done) |
-| `build-review` | code-reviewer | ✓ | ✗ skip | ✓ |
-| `build-hunt` | silent-failure-hunter | ✓ | ✗ skip | ✓ |
-| `build-verify` | integration-verifier | ✓ | ✓ | ✓ (re-verify) |
-| `build-doc-sync` | doc-syncer | ✓ | ✗ skip | ✗ skip |
-| `memory-finalize` | (inline) | ✓ | ✓ | ✓ |
+| Phase | Agent | Standard BUILD | Fast path | Escalated | Effort |
+|-------|-------|---------------|-----------|-----------|--------|
+| `build-implement` | component-builder | ✓ | ✓ | ✓ (already done) | low (fast) / medium (std) |
+| `build-review` | code-reviewer | ✓ | ✗ skip | ✓ | medium |
+| `build-hunt` | silent-failure-hunter | ✓ | ✗ skip | ✓ | medium |
+| `build-verify` | integration-verifier | ✓ | ✓ | ✓ (re-verify) | high |
+| `build-doc-sync` | doc-syncer | ✓ | ✗ skip | ✗ skip | low |
+| `learn-distill` | learn-distiller | ✓ (gated) | ✗ skip | ✗ skip | low |
+| `memory-finalize` | (inline) | ✓ | ✓ | ✓ | low |
+
+#### Effort Steering Directives
+
+The router appends a one-line steering directive to each dispatched agent prompt based on the phase's effort profile:
+
+| Effort | Directive appended to agent prompt |
+|--------|-----------------------------------|
+| low | `Note: Be terse. Skip exploratory narration. Output only required contract fields.` |
+| medium | `Note: Reason at medium depth. Surface key risks but keep prose tight.` |
+| high | `Note: Reason fully before concluding. Surface all edge cases and alternatives. Do not abbreviate.` |
+
+Steering is appended as a new line at the end of the `## Task Context` section in the agent scaffold.
+Steering is informational — it does not change which fields are required in the Router Contract.
+
+#### Learn-Distill Gate
+
+`learn-distill` is dispatched at the end of BUILD and DEBUG workflows ONLY when `remediation_history` in the workflow artifact is non-empty (i.e., at least one remediation cycle ran). This prevents per-build cost for clean workflows.
+
+When gated out (empty `remediation_history`): skip `learn-distill` entirely, proceed directly to `memory-finalize`.
+When gated in: run `craftflow_learn_scan.py` via Bash, pass output to learn-distiller, append `learn_distilled` to event log, then proceed to `memory-finalize`.
 
 #### Gate Table
 

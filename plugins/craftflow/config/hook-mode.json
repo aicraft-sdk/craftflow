@@ -8,5 +8,6 @@
   "precompactState": "audit",
   "stopPersist": "audit",
   "stopFailureLog": "audit",
-  "instructionsLoadedAudit": "audit"
+  "instructionsLoadedAudit": "audit",
+  "contractValidation": "audit"
 }

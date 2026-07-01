@@ -82,6 +82,10 @@ Do not anchor on:
 [timestamp]
 ```
 
+**Note:** Bullets in `## Learnings` and `## Common Gotchas` may carry an optional `(conf: x)` suffix
+written by the memory finalizer (e.g., `- Node 22 required (conf: 0.9)`). The parser tolerates
+absence of the suffix (back-compat). Do not rename these headings.
+
 ### patterns.md
 
 ```md
@@ -100,6 +104,10 @@ Do not anchor on:
 ## Last Updated
 [timestamp]
 ```
+
+**Note:** Bullets in `## Learnings` and `## Common Gotchas` may carry an optional `(conf: x)` suffix
+written by the memory finalizer (e.g., `- Node 22 required (conf: 0.9)`). The parser tolerates
+absence of the suffix (back-compat). Do not rename these headings.
 
 ### progress.md
 

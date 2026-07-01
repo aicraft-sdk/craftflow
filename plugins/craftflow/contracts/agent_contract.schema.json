@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Craftflow agent output contract schema. Enforced by craftflow_contract_validate.py. Per-kind overlays add required fields on top of the base.",
+  "definitions": {
+    "memory_note_item": {
+      "oneOf": [
+        {"type": "string"},
+        {
+          "type": "object",
+          "required": ["text"],
+          "properties": {
+            "text": {"type": "string"},
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+          }
+        }
+      ]
+    },
+    "memory_notes": {
+      "type": "object",
+      "properties": {
+        "learnings": {"type": "array", "items": {"$ref": "#/definitions/memory_note_item"}},
+        "patterns":  {"type": "array", "items": {"$ref": "#/definitions/memory_note_item"}},
+        "verification": {"type": "array", "items": {"type": "string"}},
+        "deferred":  {"type": "array", "items": {"type": "string"}},
+        "retractions": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "base_contract": {
+      "type": "object",
+      "required": ["STATUS"],
+      "properties": {
+        "STATUS": {"type": "string", "enum": ["COMPLETE","PASS","BLOCKED","SKIPPED","FAIL","FIXED"]},
+        "BLOCKING": {"type": "boolean"},
+        "USER_INPUT_NEEDED": {"type": "boolean"},
+        "MEMORY_NOTES": {"$ref": "#/definitions/memory_notes"}
+      }
+    }
+  },
+  "kind_overlays": {
+    "builder": {
+      "required_fields": ["STATUS","CONFIDENCE","PHASE_ID","PHASE_STATUS","PHASE_EXIT_READY","PROOF_STATUS","TDD_RED_EXIT","TDD_GREEN_EXIT","SCENARIOS","BLOCKING","REMEDIATION_NEEDED"]
+    },
+    "verifier": {
+      "required_fields": ["STATUS","SCENARIOS","BLOCKING","REMEDIATION_NEEDED"],
+      "required_evidence_fields": ["VERIFICATION"]
+    },
+    "reviewer": {
+      "required_fields": ["STATUS","BLOCKING","REMEDIATION_NEEDED"]
+    },
+    "planner": {
+      "required_fields": ["STATUS","PLAN_FILE","PLAN_MODE","CONFIDENCE","GATE_PASSED","OPEN_DECISIONS","SCENARIOS","BLOCKING","REMEDIATION_NEEDED"]
+    },
+    "investigator": {
+      "required_fields": ["STATUS","ROOT_CAUSE","TDD_RED_EXIT","TDD_GREEN_EXIT","BLOCKING","REMEDIATION_NEEDED"]
+    },
+    "doc_syncer": {
+      "required_fields": ["STATUS","IMPACT_LEVEL","DOC_LAYERS_EVALUATED","BLOCKING"]
+    },
+    "researcher": {
+      "required_fields": ["STATUS","FILE_PATH","QUALITY_LEVEL","BLOCKING"]
+    }
+  }
+}

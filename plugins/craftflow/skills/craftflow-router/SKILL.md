@@ -338,6 +338,7 @@ Only create child tasks after the v10 artifact and state directory exist.
 | `research-github` | `craftflow:github-researcher` |
 | `kind:remfix` + `origin:bug-investigator` | `craftflow:bug-investigator` |
 | `build-doc-sync` | `craftflow:doc-syncer` |
+| `learn-distill` | `craftflow:learn-distiller` |
 | `kind:remfix` + `origin:code-reviewer|silent-failure-hunter|integration-verifier|router` | `craftflow:component-builder` |
 
 ### Prompt scaffold for every agent
@@ -350,6 +351,7 @@ Only create child tasks after the v10 artifact and state directory exist.
 - Plan File: {plan_file or 'None'}
 - Workflow Scope: wf:{workflow_uuid}
 - Workflow Artifact: .craftflow/state/workflows/{workflow_uuid}.json
+- Effort Directive: {low|medium|high — from fast-path.md dispatch table; append one-line steering per §4 Effort Steering Directives}
 
 ## User Request
 {request}
@@ -386,6 +388,20 @@ Optional sections:
 - Every routed prompt must be self-contained from the workflow artifact, approved files, and the current task contract.
 - Do not rely on prior chat turns or completed-phase narrative when the same fact already exists in the workflow artifact, plan, design, or research files.
 - Include only the current-phase objective, live blockers, approved decisions, and directly relevant evidence. Omit unrelated completed-phase detail.
+
+### Effort Dispatch Rule
+
+Before dispatching each agent, look up the phase in the `references/fast-path.md → #### Agent Dispatch Table → Effort` column. Append the corresponding steering directive (from `#### Effort Steering Directives`) as the last line of the `## Task Context` section in the agent scaffold.
+
+- fast-path `build-implement` → `low`
+- standard/escalated `build-implement` → `medium`
+- `build-review`, `build-hunt` → `medium`
+- `build-verify`, all re-verify → `high`
+- `planner`, `plan-gap-reviewer`, `doubt-verifier`, `bug-investigator` → `high`
+- `build-doc-sync`, `memory-finalize`, `learn-distill` → `low`
+- All research tasks → `medium`
+
+Record the assigned effort in `telemetry.effort.{agent}` in the workflow artifact and in the `agent_started` event log entry.
 
 ### Deterministic skill hints
 
