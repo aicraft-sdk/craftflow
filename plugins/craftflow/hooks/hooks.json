@@ -13,17 +13,6 @@
         ]
       },
       {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_memory_protect_pre.py\"",
-            "timeout": 5,
-            "statusMessage": "CRAFTFLOW memory content masking"
-          }
-        ]
-      },
-      {
         "matcher": "WebFetch",
         "hooks": [
           {
@@ -121,6 +110,12 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_subagent_stop_audit.py\"",
             "timeout": 10,
             "statusMessage": "CRAFTFLOW subagent contract audit"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_memory_protect_restore.py\"",
+            "timeout": 5,
+            "statusMessage": "CRAFTFLOW memory placeholder restore"
           }
         ]
       }

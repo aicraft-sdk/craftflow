@@ -80,7 +80,8 @@ def load_mode() -> Dict[str, str]:
         }
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        print(f"CRAFTFLOW load_mode: failed to read {path}: {exc}; defaulting to audit mode", file=sys.stderr)
         return {
             "protectedWrites": "audit",
             "memoryWrites": "audit",

@@ -272,6 +272,42 @@ def test_sdd_cache_post_skips_entry_without_freshness_headers(tmp_dir: Path) -> 
 
 
 # ---------------------------------------------------------------------------
+# Memory protect restore tests
+# ---------------------------------------------------------------------------
+
+def test_memory_protect_restore_triggers_on_subagent_stop(tmp_dir: Path) -> None:
+    name = "memory-protect-restore/restores-on-subagent-stop"
+    import hashlib
+
+    resolved_tmp = tmp_dir.resolve()
+    state_dir = resolved_tmp / ".craftflow" / "state"
+    state_dir.mkdir(parents=True)
+
+    target = state_dir / "patterns.md"
+    original_content = "## Patterns\noriginal content here\n"
+    masked_content = "<!-- CRAFTFLOW_BLOCK_aabbccddeeff -->\n"
+    target.write_text(masked_content, encoding="utf-8")
+
+    key = hashlib.sha1(str(target).encode("utf-8")).hexdigest()[:12]
+    cache_dir = resolved_tmp / ".craftflow" / ".memory-protect-cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / f"{key}.orig").write_text(original_content, encoding="utf-8")
+
+    env = {"CLAUDE_PROJECT_DIR": str(resolved_tmp)}
+    payload = {"hook_event_name": "SubagentStop"}
+    code, _ = run_hook("craftflow_memory_protect_restore.py", payload, env)
+    if code != 0:
+        fail(name, f"exit code {code}; expected 0")
+        return
+
+    restored = target.read_text(encoding="utf-8")
+    if "CRAFTFLOW_BLOCK_" in restored:
+        fail(name, "CRAFTFLOW_BLOCK_ placeholder still present; restore_all() not triggered for SubagentStop")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # Anti-rationalization structural tests (verify tables are in all agents)
 # ---------------------------------------------------------------------------
 
@@ -373,10 +409,12 @@ def test_hooks_json_registers_new_hooks() -> None:
         for h in entry.get("hooks", []):
             hook_scripts.append(h.get("command", ""))
     all_scripts = " ".join(hook_scripts)
-    for expected in ("craftflow_memory_protect_pre", "craftflow_sdd_cache_pre"):
-        if expected not in all_scripts:
-            fail(name, f"hooks.json missing PreToolUse hook: {expected}")
-            return
+    if "craftflow_sdd_cache_pre" not in all_scripts:
+        fail(name, "hooks.json missing PreToolUse hook: craftflow_sdd_cache_pre")
+        return
+    if "craftflow_memory_protect_pre" in all_scripts:
+        fail(name, "hooks.json must not have craftflow_memory_protect_pre in PreToolUse (hook was removed)")
+        return
     ok(name)
 
 
@@ -408,6 +446,10 @@ def main() -> int:
         test_sdd_cache_post_ignores_non_webfetch(tmp / "p1")
         test_sdd_cache_post_writes_entry_with_etag(tmp / "p2")
         test_sdd_cache_post_skips_entry_without_freshness_headers(tmp / "p3")
+
+        print()
+        print("[ memory-protect-restore ]")
+        test_memory_protect_restore_triggers_on_subagent_stop(tmp / "r1")
 
     print()
     print("[ structural ]")

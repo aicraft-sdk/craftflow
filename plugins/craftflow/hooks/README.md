@@ -3,14 +3,14 @@
 This directory now serves two different purposes:
 
 1. **Plugin runtime hooks** via `hooks.json`
-   - `PreToolUse` — protected writes guard
+   - `PreToolUse` — protected writes guard (Edit and Write matchers only; Read events are not intercepted)
    - `SessionStart` — workflow resume context
-   - `PostToolUse` — workflow artifact integrity audit
-   - `TaskCompleted` — task metadata validation
+   - `PostToolUse` — workflow artifact integrity audit and memory placeholder restore (defensive, fires on Edit/Write)
+   - `TaskCompleted` — task metadata validation (enforced: block mode)
    - `PostCompact` — compaction event capture
-   - `SubagentStop` — agent contract presence audit
+   - `SubagentStop` — agent contract presence audit and memory placeholder restore
    - `PreCompact` — workflow state snapshot before compaction
-   - `Stop` — workflow state snapshot on session stop
+   - `Stop` — workflow state snapshot and memory placeholder restore on session stop
    - `StopFailure` — API error logging (async)
    - `InstructionsLoaded` — instruction file load audit (async)
 2. **Optional git pre-commit helper** via `pre-commit`
@@ -20,11 +20,12 @@ This directory now serves two different purposes:
 When CRAFTFLOW is installed as a Claude Code plugin, Claude Code reads `hooks/hooks.json`
 from the plugin bundle and runs the referenced scripts from `${CLAUDE_PLUGIN_ROOT}/scripts`.
 
-The shipped runtime hooks are intentionally minimal and audit-first:
-- protect direct memory markdown writes
+The shipped runtime hooks are intentionally minimal. Most hooks operate in audit mode; `memoryWrites` and `taskMetadata` are enforced in block mode:
+- protect and enforce direct memory markdown writes (block mode)
 - inject workflow resume context
 - audit workflow artifact integrity after writes
-- validate CRAFTFLOW task metadata on completion
+- validate and enforce CRAFTFLOW task metadata on completion (block mode)
+- restore memory placeholders after Edit/Write and on SubagentStop and Stop
 - snapshot workflow state before compaction and on session stop
 - log API failures and instruction file loads for telemetry
 
