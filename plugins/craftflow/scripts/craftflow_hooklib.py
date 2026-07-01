@@ -258,3 +258,47 @@ def normalize_bullet(line: str) -> str:
     if text.startswith("- "):
         text = text[2:]
     return re.sub(r"\s+", " ", text).strip().lower()
+
+
+# ---------------------------------------------------------------------------
+# Memory finalization permit
+# ---------------------------------------------------------------------------
+# The pretooluse guard blocks direct writes to protected memory .md files.
+# During router-owned memory finalization the router creates this permit so
+# the guard can distinguish its own legitimate writes from unauthorized ones.
+
+def memory_finalize_permit_path() -> Path:
+    """Non-protected sentinel: .craftflow/state/.memory-finalize"""
+    return state_root() / ".memory-finalize"
+
+
+def set_memory_finalize_permit(workflow_uuid: str) -> None:
+    """Write the permit token so the pretooluse guard allows memory writes."""
+    try:
+        memory_finalize_permit_path().write_text(workflow_uuid, encoding="utf-8")
+    except Exception:
+        pass
+
+
+def clear_memory_finalize_permit() -> None:
+    """Remove the permit token after memory finalization is done."""
+    try:
+        memory_finalize_permit_path().unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def has_memory_finalize_permit(workflow_uuid: str | None = None) -> bool:
+    """Return True if a valid permit exists for the given workflow UUID.
+
+    When workflow_uuid is None, presence of the file alone is accepted.
+    """
+    permit = memory_finalize_permit_path()
+    if not permit.exists():
+        return False
+    if workflow_uuid is None:
+        return True
+    try:
+        return permit.read_text(encoding="utf-8").strip() == workflow_uuid
+    except Exception:
+        return False

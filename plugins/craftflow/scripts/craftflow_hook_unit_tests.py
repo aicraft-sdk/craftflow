@@ -396,6 +396,54 @@ def test_router_dispatches_intent_interview() -> None:
     ok(name)
 
 
+def test_pretooluse_guard_blocks_memory_write_without_permit(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/blocks-memory-write-without-permit"
+    # Point CLAUDE_PLUGIN_ROOT to the real plugin so hook-mode.json (memoryWrites=block) is loaded
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    state = tmp_dir / ".craftflow" / "state"
+    state.mkdir(parents=True)
+    target = state / "project" / "activeContext.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# Active Context\n", encoding="utf-8")
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(target)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for unguarded memory write; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_memory_write_with_permit(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/allows-memory-write-with-permit"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir)}
+    state = tmp_dir / ".craftflow" / "state"
+    state.mkdir(parents=True)
+    wf_uuid = "wf-test-1234"
+    # Create the permit token
+    (state / ".memory-finalize").write_text(wf_uuid, encoding="utf-8")
+    # Create a minimal workflow artifact so latest_workflow_payload finds the uuid
+    wf_dir = state / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / f"{wf_uuid}.json").write_text(
+        f'{{"workflow_uuid":"{wf_uuid}"}}', encoding="utf-8"
+    )
+    target = state / "project" / "activeContext.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# Active Context\n", encoding="utf-8")
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(target)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"guard blocked write that had a valid permit; got: {out!r}")
+        return
+    ok(name)
+
+
 def test_hooks_json_registers_new_hooks() -> None:
     name = "hooks/new-hooks-registered"
     path = PLUGIN_ROOT / "hooks" / "hooks.json"
@@ -450,6 +498,11 @@ def main() -> int:
         print()
         print("[ memory-protect-restore ]")
         test_memory_protect_restore_triggers_on_subagent_stop(tmp / "r1")
+
+        print()
+        print("[ pretooluse-guard ]")
+        test_pretooluse_guard_blocks_memory_write_without_permit(tmp / "g1")
+        test_pretooluse_guard_allows_memory_write_with_permit(tmp / "g2")
 
     print()
     print("[ structural ]")

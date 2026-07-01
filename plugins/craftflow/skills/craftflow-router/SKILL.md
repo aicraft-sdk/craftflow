@@ -724,12 +724,24 @@ Cross-workflow promotion rule: If a `learnings` item is a project-wide constrain
 Use judgment: workflow-local observations stay in `workflows/{wf}/`; durable project
 truths belong in `project/`.
 
+Memory finalization permit (required before any `.md` memory write):
+- The `craftflow_pretooluse_guard.py` hook blocks direct writes to protected memory files.
+- Before writing the first memory file, create the permit token:
+  ```
+  Bash("printf '%s' '{workflow_uuid}' > .craftflow/state/.memory-finalize")
+  ```
+- After all memory files are written, clear the permit:
+  ```
+  Bash("rm -f .craftflow/state/.memory-finalize")
+  ```
+- If workflow_uuid is unavailable (fallback path), omit the permit steps — the guard will audit-log but not block in that case.
+
 The memory task also:
 - Replaces `workflows/{workflow_uuid}/progress.md ## Tasks` with the active workflow snapshot.
 - Keeps only the most recent 10 items in `workflows/{workflow_uuid}/progress.md ## Completed`.
 - Updates `project/progress.md ## Completed` with a one-line summary of the finished workflow.
 - Removes the matching `[craftflow-internal] memory_task_id` line from `project/activeContext.md ## References`.
-- If any artifact or memory write fails, stop immediately. Never advance the workflow after a failed persistence write.
+- If any artifact or memory write fails, stop immediately (clear the permit first). Never advance the workflow after a failed persistence write.
 
 Fallback: If `workflow_uuid` is unavailable, write to root-flat files
 (`.craftflow/state/activeContext.md`, `.craftflow/state/patterns.md`, `.craftflow/state/progress.md`)

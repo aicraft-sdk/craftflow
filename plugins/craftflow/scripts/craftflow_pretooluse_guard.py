@@ -2,6 +2,7 @@
 from pathlib import Path
 
 from craftflow_hooklib import (
+    has_memory_finalize_permit,
     latest_workflow_payload,
     load_input,
     load_mode,
@@ -18,9 +19,13 @@ PROTECTED_MEMORY_FILES = ("activeContext.md", "patterns.md", "progress.md")
 
 def _protected_memory_paths() -> set:
     """Return all active memory locations that should be write-guarded."""
-    paths = {state_root() / name for name in PROTECTED_MEMORY_FILES}
+    paths: set = set()
     try:
-        paths |= {project_state_dir() / name for name in PROTECTED_MEMORY_FILES}
+        paths |= {(state_root() / name).resolve() for name in PROTECTED_MEMORY_FILES}
+    except Exception:
+        pass
+    try:
+        paths |= {(project_state_dir() / name).resolve() for name in PROTECTED_MEMORY_FILES}
     except Exception:
         pass
     try:
@@ -53,11 +58,31 @@ def main() -> int:
         return 0
 
     workflow = latest_workflow_payload()
+    wf_uuid = workflow.get("workflow_uuid") or workflow.get("workflow_id")
+
+    # Router-owned memory finalization: permit token lifts the block for the
+    # active workflow so the router can write memory files inline.
+    if "memory-write" in violations and has_memory_finalize_permit(wf_uuid):
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "wf": wf_uuid,
+                "phase": workflow.get("pending_gate") or "memory-finalize",
+                "task_id": None,
+                "agent": "router",
+                "tool_name": data.get("tool_name"),
+                "path": str(path),
+                "event": "pretool_guard",
+                "decision": "permit",
+                "reason": "memory-write-permitted-by-finalize-token",
+            },
+        )
+        return 0
 
     log_event(
         "plugin_pretooluse_guard",
         {
-            "wf": workflow.get("workflow_uuid") or workflow.get("workflow_id"),
+            "wf": wf_uuid,
             "phase": workflow.get("pending_gate") or "unknown",
             "task_id": None,
             "agent": "router",
