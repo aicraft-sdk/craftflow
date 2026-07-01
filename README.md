@@ -14,6 +14,53 @@ Router-first AI development orchestration for Claude Code. Every build, debug, r
 
 ---
 
+## Benchmarks
+
+Craftflow ships three benchmark scripts that measure structural coverage, runtime cost, and behavior correctness. Pre-computed results live in [`docs/benchmarks/`](docs/benchmarks/).
+
+### Latest results (2026-06-30)
+
+**Signal coverage** — 15 trust-harness signals (orchestration ownership, durable state, plan/build trust gates, skill precedence, debug generalization, fail-closed verification, replay coverage):
+
+**33/33 signals passing**
+
+**Runtime metrics:**
+
+| Dimension | Score |
+|-----------|-------|
+| Enforcement gates | 9/9 |
+| Context management signals | 6/6 |
+| Parallelism signals | 4/4 |
+
+**Behavior bakeoff** — 8 critical orchestration scenarios (plan divergence, phase gating, memory persistence, fail-closed verification, etc.): all **pass**.
+
+**Real telemetry** from 46 production workflows (BUILD=38, DEBUG=2, PLAN=6):
+
+| Metric | Value |
+|--------|-------|
+| Mean events per workflow | 9.09 (median 8, max 35) |
+| Re-review triggered | 13% of runs |
+| Re-verify triggered | 2.2% of runs |
+
+### Run benchmarks yourself
+
+All scripts run from the plugin root (`tools/craftflow-plugin`):
+
+```bash
+# Signal benchmark — scores craftflow against any ref repos in ref-/
+python3 plugins/craftflow/scripts/craftflow_reference_benchmark.py
+
+# Runtime complexity — context load, chain depth, gates, parallelism + real telemetry
+python3 plugins/craftflow/scripts/craftflow_runtime_benchmark.py
+
+# Full suite — inventory, delta register, behavior bakeoff, roadmap (needs ref repos)
+python3 plugins/craftflow/scripts/craftflow_worldclass_benchmark.py
+```
+
+The first two scripts score craftflow on its own even without reference repos. The worldclass script produces the full comparative suite; see [`docs/benchmarks/`](docs/benchmarks/) for the last generated outputs.
+
+---
+
 ## Install (new machine)
 
 Requires Claude Code CLI and a GitHub account with access to `aicraft-sdk/ai-craft`.
