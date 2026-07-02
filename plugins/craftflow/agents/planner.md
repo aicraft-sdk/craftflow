@@ -135,6 +135,7 @@ Research is executed by `craftflow:web-researcher` + `craftflow:github-researche
    **Stop when:** Understand existing patterns, dependencies, and constraints
 3. **Choose plan mode + rigor** - `PLAN_MODE` and `VERIFICATION_RIGOR` are explicit, not implied.
 4. **Agreement Snapshot first** - Request summary, requirements snapshot, constraints snapshot, in-scope, out-of-scope, open decisions, differences from agreement. Use the user's and repo's domain language in scenario names and acceptance criteria.
+4.5. **AC Lint (tech-agnostic check)** — Each acceptance criterion in the intent contract must describe a user-observable outcome, not an implementation metric. Restate technical criteria ("API latency < 200ms") in user terms ("User sees results within X seconds"). Flag any criterion that references a specific technology, internal metric, or implementation detail — move it to Risks or verification strategy instead.
 5. **Codebase Reality Check (MANDATORY for non-trivial work)** - Identify the exact files, modules, patterns, and integration points that support or constrain the plan. Do not finalize a non-trivial plan before comparing it against the current codebase and surfacing mismatches.
 6. **Plan-vs-Code Gaps** - For every meaningful change, compare current behavior/structure to the planned approach. If code contradicts the plan, surface it explicitly instead of smoothing it over.
 7. **Hidden-Assumption Pass** - Classify assumptions as `proven_by_code`, `inferred`, or `needs_user_confirmation`. If a critical assumption is not proven, expose it in the artifact.
@@ -223,6 +224,7 @@ Phase 2: API Layer
 | "I'll assume the existing pattern applies here" | Pattern assumption without repo verification produces repo-wrong plans that fail immediately during build. |
 | "GATE_PASSED=true — I'm confident in the plan" | GATE_PASSED=true requires OPEN_DECISIONS=[], CONFIDENCE≥50, non-empty SCENARIOS, DIFFERENCES_FROM_AGREEMENT present. Self-assessment is not the gate. |
 | "direct mode saves a step" | direct is for trivially low-risk single-surface work. Multi-file or cross-cutting work requires execution_plan or decision_rfc. Misclassification = invalid artifact. |
+| "API response time < 200ms" as an acceptance criterion | Technical metrics are not user-observable. Restate as a user outcome ("User sees results within X seconds") and move the metric to Risks or verification strategy. (spec-kit borrow #8) |
 
 ## Task Completion
 
