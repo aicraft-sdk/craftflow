@@ -178,8 +178,11 @@ def validate_contract(agent_text: str, kind: str) -> dict:
         gap_items = fields["GAP_CLASSIFICATION"]
         if isinstance(gap_items, list):
             for i, item in enumerate(gap_items):
+                # Parse "Type | Severity | Description" format — first pipe token is the type
+                parts = [p.strip().upper() for p in item.split("|")]
+                type_field = parts[0] if parts else ""
                 item_upper = item.upper()
-                has_type = any(t.upper() in item_upper for t in VALID_GAP_TYPES)
+                has_type = type_field in {t.upper() for t in VALID_GAP_TYPES}
                 has_sev = any(s in item_upper for s in VALID_GAP_SEVERITIES)
                 if not has_type:
                     errors.append(

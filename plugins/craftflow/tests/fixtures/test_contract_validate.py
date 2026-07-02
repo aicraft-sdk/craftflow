@@ -352,6 +352,30 @@ check("valid=False when GAP_CLASSIFICATION item missing severity", result["valid
 check_contains("errors mention severity", result["errors"], "severity")
 
 # ---------------------------------------------------------------------------
+# test_gap_classification_no_false_positive_on_partial_word
+# ---------------------------------------------------------------------------
+print("\n[test_gap_classification_no_false_positive_on_partial_word]")
+
+# "partially done" must NOT match the "Partial" gap type — only exact first-token match counts
+VERIFIER_GAP_FALSE_POSITIVE = """\
+### Router Contract (MACHINE-READABLE)
+```yaml
+STATUS: PASS
+SCENARIOS:
+  - name: "test"
+BLOCKING: false
+REMEDIATION_NEEDED: false
+GAP_CLASSIFICATION:
+  - partially done | CRITICAL | FR-001 not fully implemented
+```
+"""
+
+result = validate_contract(VERIFIER_GAP_FALSE_POSITIVE, "verifier")
+check("valid=False when type is 'partially done' (substring match must not fire)",
+      result["valid"], False)
+check_contains("errors flag the bad type token", result["errors"], "GAP_CLASSIFICATION")
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 print(f"\n{'='*40}")
