@@ -40,15 +40,35 @@ You are NOT checking style for its own sake. You are looking for gaps that would
    - execution order assumptions
    - architecture claims
 5. Build findings only from evidence. Do not speculate when the repo does not support it.
-   Verification depth guide — check each before moving to step 6:
+   Verification depth guide — check each before moving to step 8:
    - Every file path the plan names exists in the repo (or the plan says "create")
    - Every import/dependency the plan assumes is present in package.json / requirements / go.mod
    - Every integration point the plan touches has at least one concrete step addressing it
    - Execution order does not assume output from a phase that runs later
    - No step requires a tool, permission, or API key the project does not have
    - Open decisions are labeled as such, not written as settled facts
-6. If no meaningful issues remain, return `PASS`.
-7. If issues exist, return `FINDINGS` with tight, machine-usable categories.
+   - No `[NEEDS CLARIFICATION]` markers remain unresolved in the plan or linked spec
+6. **Ambiguity Audit** — Rate each of the following 8 dimensions:
+   1. Functional Scope & Behavior — what the system must do
+   2. Domain & Data Model — entities, relationships, schemas
+   3. Interaction & UX Flow — user journeys, UI states (skip if no UI)
+   4. Non-Functional Quality Attributes — performance, reliability, scalability targets
+   5. Integration & External Dependencies — external APIs, services, third-party contracts
+   6. Edge Cases & Failure Handling — error states, boundary conditions, degraded modes
+   7. Constraints & Tradeoffs — budget, tech stack, non-goals
+   8. Terminology & Completion Signals — shared vocabulary, definition of done
+
+   Each dimension rated: **Clear** (explicit in plan) / **Partial** (hinted but unspecified) / **Missing** (absent).
+   Rank Partial + Missing findings by Impact × Uncertainty. Cap: report at most 5 findings from this pass.
+7. **Consistency Check** — Scan the plan across 4 passes:
+   1. **Duplication** — steps or phases that overlap in scope or repeat the same change
+   2. **Ambiguity** — terms or instructions that could be interpreted multiple ways
+   3. **Underspecification** — steps that lack sufficient detail to execute without guessing
+   4. **Inconsistency** — contradictions between different parts of the plan
+
+   Cap: 50 total findings across all 4 passes.
+8. If no meaningful issues remain, return `PASS`.
+9. If issues exist, return `FINDINGS` with tight, machine-usable categories.
 
 ## Finding Buckets
 
@@ -100,6 +120,24 @@ CONTRACT {"s":"PASS","b":false,"bf":0}
 - Evidence: [file:line or plan section]
 - Why it matters: [one sentence]
 - Plan section to fix: [exact plan section]
+
+### Ambiguity Audit
+| Category | Rating | Top Finding |
+|----------|--------|-------------|
+| Functional Scope & Behavior | Clear / Partial / Missing | [finding or "—"] |
+| Domain & Data Model | Clear / Partial / Missing | [finding or "—"] |
+| Interaction & UX Flow | Clear / Partial / Missing | [finding or "—"] |
+| Non-Functional Quality Attributes | Clear / Partial / Missing | [finding or "—"] |
+| Integration & External Dependencies | Clear / Partial / Missing | [finding or "—"] |
+| Edge Cases & Failure Handling | Clear / Partial / Missing | [finding or "—"] |
+| Constraints & Tradeoffs | Clear / Partial / Missing | [finding or "—"] |
+| Terminology & Completion Signals | Clear / Partial / Missing | [finding or "—"] |
+
+### Consistency Passes
+- Duplication: [count] findings — [top finding or "None"]
+- Ambiguity: [count] findings — [top finding or "None"]
+- Underspecification: [count] findings — [top finding or "None"]
+- Inconsistency: [count] findings — [top finding or "None"]
 
 ### Planner Action
 - PLANNING_REVIEW_STATUS: PASS | FINDINGS

@@ -142,6 +142,7 @@ Research is executed by `craftflow:web-researcher` + `craftflow:github-researche
    After listing alternatives, give an explicit recommendation with a one-sentence rationale. Do not leave the decision open when the evidence clearly favors one approach. Alternatives provide context, not cover.
 9. **Risks + proof posture** - Probability × Impact, mitigations, and whether testing or proof is required for each critical path.
 10. **Normalize phases** - Each phase must have `phase id`, `objective`, `inputs`, `files/surfaces`, `dependencies`, `allowed scope`, `out-of-scope drift`, `expected artifacts`, `required checks`, `checkpoint type`, and `exit criteria`.
+10.5. **Parallel task markers** - Within each phase, mark individual steps with `[P]` if they can run simultaneously (no shared file dependencies between them). Unmarked steps are sequential. Choose a delivery strategy for the phase: `mvp_first` (critical path only; defer non-essential work), `incremental` (layer by layer; each step builds on the last), or `parallel_team` (concurrent work streams for independent contributors). State the strategy in the Phase Plan header.
 11. **Classify autonomy** - For each phase, label `AFK` (checkpoint_type=none) or `HITL` (any other checkpoint). Prefer AFK where possible. Justify every HITL classification.
 12. **Two-layer artifact** - Write a short Human Layer first, then the Execution Contract Layer. The human layer explains what is being recommended; the execution layer makes it buildable without improvisation.
 13. **Fresh review resolution (when present)** - If the prompt includes fresh-review findings, add a `Fresh Review Resolution` section that records accepted findings and explicit rejections with reasons.
@@ -313,7 +314,9 @@ Phase 2: API Layer
 - [Phase ID]: depends on [inputs or prior phase outputs], creates [artifacts or state], enables [later phases]
 
 ### Phase Plan
-- [Phase ID]: objective, concrete repo surfaces, dependencies, allowed scope, out-of-scope drift, expected artifacts, required checks, checkpoint type, exit criteria
+- [Phase ID] (strategy: mvp_first | incremental | parallel_team): objective, concrete repo surfaces, dependencies, allowed scope, out-of-scope drift, expected artifacts, required checks, checkpoint type, exit criteria
+  - [step — sequential by default]
+  - [P] [step — can run in parallel with other [P] steps in this phase; no shared file deps]
 
 ### Phase Autonomy Classification
 | Phase | Checkpoint Type | Classification | Reason |

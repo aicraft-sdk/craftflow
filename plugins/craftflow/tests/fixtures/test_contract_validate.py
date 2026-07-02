@@ -15,6 +15,8 @@ from craftflow_contract_validate import (
     extract_yaml_block,
     parse_yaml_fields,
     validate_contract,
+    VALID_GAP_TYPES,
+    VALID_GAP_SEVERITIES,
 )
 
 PASS = 0
@@ -269,6 +271,85 @@ check("unknown kind: valid=True when STATUS present and valid",
 # unknown kind with missing STATUS
 result = validate_contract(BUILDER_TEXT_NO_STATUS, "unknown_kind")
 check("unknown kind: valid=False when STATUS missing", result["valid"], False)
+
+# ---------------------------------------------------------------------------
+# test_gap_classification_constants
+# ---------------------------------------------------------------------------
+print("\n[test_gap_classification_constants]")
+
+check("VALID_GAP_TYPES contains Missing", "Missing" in VALID_GAP_TYPES, True)
+check("VALID_GAP_TYPES contains Partial", "Partial" in VALID_GAP_TYPES, True)
+check("VALID_GAP_TYPES contains Contradicts", "Contradicts" in VALID_GAP_TYPES, True)
+check("VALID_GAP_TYPES contains Unrequested", "Unrequested" in VALID_GAP_TYPES, True)
+check("VALID_GAP_SEVERITIES contains CRITICAL", "CRITICAL" in VALID_GAP_SEVERITIES, True)
+check("VALID_GAP_SEVERITIES contains HIGH", "HIGH" in VALID_GAP_SEVERITIES, True)
+
+# ---------------------------------------------------------------------------
+# test_gap_classification_valid
+# ---------------------------------------------------------------------------
+print("\n[test_gap_classification_valid]")
+
+VERIFIER_WITH_GAPS = """\
+### Router Contract (MACHINE-READABLE)
+```yaml
+STATUS: PASS
+SCENARIOS:
+  - name: "verification test"
+BLOCKING: false
+REMEDIATION_NEEDED: false
+GAP_CLASSIFICATION:
+  - Missing | CRITICAL | FR-001 not implemented
+  - Unrequested | HIGH | extra /admin endpoint added without plan approval
+```
+"""
+
+result = validate_contract(VERIFIER_WITH_GAPS, "verifier")
+check("valid=True for verifier with valid GAP_CLASSIFICATION", result["valid"], True)
+check("errors=[] for verifier with valid GAP_CLASSIFICATION", result["errors"], [])
+
+# ---------------------------------------------------------------------------
+# test_gap_classification_missing_type
+# ---------------------------------------------------------------------------
+print("\n[test_gap_classification_missing_type]")
+
+VERIFIER_GAP_NO_TYPE = """\
+### Router Contract (MACHINE-READABLE)
+```yaml
+STATUS: PASS
+SCENARIOS:
+  - name: "test"
+BLOCKING: false
+REMEDIATION_NEEDED: false
+GAP_CLASSIFICATION:
+  - CRITICAL | FR-001 not implemented
+```
+"""
+
+result = validate_contract(VERIFIER_GAP_NO_TYPE, "verifier")
+check("valid=False when GAP_CLASSIFICATION item missing type", result["valid"], False)
+check_contains("errors mention GAP_CLASSIFICATION type", result["errors"], "GAP_CLASSIFICATION")
+
+# ---------------------------------------------------------------------------
+# test_gap_classification_missing_severity
+# ---------------------------------------------------------------------------
+print("\n[test_gap_classification_missing_severity]")
+
+VERIFIER_GAP_NO_SEVERITY = """\
+### Router Contract (MACHINE-READABLE)
+```yaml
+STATUS: PASS
+SCENARIOS:
+  - name: "test"
+BLOCKING: false
+REMEDIATION_NEEDED: false
+GAP_CLASSIFICATION:
+  - Missing | FR-001 not implemented
+```
+"""
+
+result = validate_contract(VERIFIER_GAP_NO_SEVERITY, "verifier")
+check("valid=False when GAP_CLASSIFICATION item missing severity", result["valid"], False)
+check_contains("errors mention severity", result["errors"], "severity")
 
 # ---------------------------------------------------------------------------
 # Summary

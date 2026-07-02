@@ -25,6 +25,15 @@
         "retractions": {"type": "array", "items": {"type": "string"}}
       }
     },
+    "gap_classification_item": {
+      "type": "object",
+      "required": ["type", "severity"],
+      "properties": {
+        "type": {"type": "string", "enum": ["Missing", "Partial", "Contradicts", "Unrequested"]},
+        "severity": {"type": "string", "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]},
+        "description": {"type": "string"}
+      }
+    },
     "base_contract": {
       "type": "object",
       "required": ["STATUS"],
@@ -42,7 +51,8 @@
     },
     "verifier": {
       "required_fields": ["STATUS","SCENARIOS","BLOCKING","REMEDIATION_NEEDED"],
-      "required_evidence_fields": ["VERIFICATION"]
+      "required_evidence_fields": ["VERIFICATION"],
+      "optional_fields": {"GAP_CLASSIFICATION": {"items": {"$ref": "#/definitions/gap_classification_item"}}}
     },
     "reviewer": {
       "required_fields": ["STATUS","BLOCKING","REMEDIATION_NEEDED"]

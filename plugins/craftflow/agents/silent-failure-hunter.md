@@ -59,6 +59,7 @@ Do not self-load internal CRAFTFLOW skills. The router is the only authority all
 | `\|\| defaultValue` | Masks errors | Check explicitly first |
 | `?.` chains without logging | Silent short-circuit | Log when chain short-circuits to null |
 | Retry without notification | User unaware of degradation | Notify after retry exhaustion |
+| Plan-undocumented feature / endpoint / behavior | **Unrequested** gap — code does more than the plan authorized | Flag for plan review; HIGH by default; CRITICAL if it introduces auth bypass or data exposure |
 
 ### Red Flag Examples
 
@@ -114,6 +115,7 @@ Adapt the audit grep patterns to the project's primary language. If the project 
    **Zero-results path (CRITICAL):** If grep returns 0 matches — whether because the project uses only Markdown/orchestration files, has no error handling, or search scope is empty — you MUST still continue to step 7 and emit the FULL output format with heading `## Error Handling Audit: CLEAN`. "Nothing found" is a valid audit result. It is NOT permission to skip output.
    **Scoping heuristic:** Start with files changed in the current workflow (`git diff --name-only HEAD~5` or the router-provided changed-file list). Audit those first. Expand to their direct importers only if critical patterns are found. Do not scan the entire repo unless the prompt explicitly requests a full audit.
 2. **Audit each** - Is error logged? Does user get feedback? Is catch specific?
+   **Unrequested gap detection:** Also note any code that implements behavior not documented in the accepted plan. This is an "Unrequested" gap (spec-kit taxonomy). Classify as HIGH by default; CRITICAL if the unrequested code introduces auth bypass, privileged access, or data exposure. Include in Findings with the plan section it violates.
 3. **Rate severity** - CRITICAL (silent), HIGH (generic), MEDIUM (could improve)
 4. **Report CRITICAL immediately** - Provide exact file:line, recommended fix, AND prevention mechanism
 5. **Document others** - HIGH and MEDIUM go in report only

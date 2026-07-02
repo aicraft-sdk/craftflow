@@ -43,14 +43,15 @@ Always run this before routing or resuming. Memory is organized in two tiers:
 2. Read(".craftflow/state/project/activeContext.md")
 3. Read(".craftflow/state/project/patterns.md")
 4. Read(".craftflow/state/project/progress.md")
-5. If workflow_uuid is known (resume path):
+5. Read(".craftflow/state/project/constitution.md") — skip gracefully if absent; when present, MUST constraints are active for this session
+6. If workflow_uuid is known (resume path):
    a. Bash("mkdir -p .craftflow/state/workflows/{workflow_uuid}")
    b. Read(".craftflow/state/workflows/{workflow_uuid}/activeContext.md")
    c. Read(".craftflow/state/workflows/{workflow_uuid}/patterns.md")
    d. Read(".craftflow/state/workflows/{workflow_uuid}/progress.md")
    Merge: workflow-scoped values override project-scoped for current-focus
    fields (## Current Focus, ## Next Steps, ## Tasks) only.
-6. Fallback: If project/ files are missing or empty, also read the root-flat
+7. Fallback: If project/ files are missing or empty, also read the root-flat
    files (.craftflow/state/activeContext.md etc.) and merge content into project/
    before proceeding. Root-flat files are the backward-compat layer.
 ```

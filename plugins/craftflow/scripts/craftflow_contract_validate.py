@@ -51,6 +51,10 @@ REQUIRED_FIELDS: dict = {
 
 VALID_STATUSES = {"COMPLETE", "PASS", "BLOCKED", "SKIPPED", "FAIL", "FIXED"}
 
+# spec-kit gap classification taxonomy (borrow #2)
+VALID_GAP_TYPES = {"Missing", "Partial", "Contradicts", "Unrequested"}
+VALID_GAP_SEVERITIES = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
+
 # Heading that introduces the YAML block
 _HEADING_PATTERN = re.compile(
     r"###\s+Router\s+Contract\s+\(MACHINE-READABLE\)", re.IGNORECASE
@@ -168,6 +172,25 @@ def validate_contract(agent_text: str, kind: str) -> dict:
                 f"STATUS value {status_value!r} is not one of "
                 f"{sorted(VALID_STATUSES)}"
             )
+
+    # 6. Validate GAP_CLASSIFICATION items when present (optional field)
+    if "GAP_CLASSIFICATION" in fields:
+        gap_items = fields["GAP_CLASSIFICATION"]
+        if isinstance(gap_items, list):
+            for i, item in enumerate(gap_items):
+                item_upper = item.upper()
+                has_type = any(t.upper() in item_upper for t in VALID_GAP_TYPES)
+                has_sev = any(s in item_upper for s in VALID_GAP_SEVERITIES)
+                if not has_type:
+                    errors.append(
+                        f"GAP_CLASSIFICATION[{i}] missing valid type "
+                        f"(one of {sorted(VALID_GAP_TYPES)}): {item!r}"
+                    )
+                if not has_sev:
+                    errors.append(
+                        f"GAP_CLASSIFICATION[{i}] missing valid severity "
+                        f"(one of {sorted(VALID_GAP_SEVERITIES)}): {item!r}"
+                    )
 
     return {"valid": len(errors) == 0, "errors": errors}
 

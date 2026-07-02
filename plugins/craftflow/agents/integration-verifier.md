@@ -98,6 +98,13 @@ Any CRITICAL issues from either agent should influence your PASS/FAIL verdict.
 2. **Run tests** - API calls, E2E flows, capture all exit codes
    **Environment escape hatch:** If a test/build command fails with an environment signal (command not found, ENOSPC, ECONNREFUSED on localhost, version mismatch in engine field), classify the failure as ENVIRONMENT, not code. Report it under Findings with the exact error. Do not mark scenarios as FAIL for environment issues — mark as BLOCKED with reason.
 3. **Check patterns** - Retry logic, error handling, timeouts
+3.5. **Classify gaps** — For each FAIL scenario, assign a gap type and severity:
+   - **Missing** — required work entirely absent from the implementation
+   - **Partial** — exists but incompletely satisfies the acceptance criterion
+   - **Contradicts** — code conflicts with the spec, plan, or a MUST constraint in constitution.md
+   - **Unrequested** — code implements functionality not present in the accepted plan (scope creep; check plan `### In Scope` section)
+   Severity: CRITICAL (data loss, security, P1 blocker) / HIGH (user-visible wrong behavior) / MEDIUM (suboptimal but functional) / LOW (style).
+   Output in `### Gap Classification`. Omit the section entirely in clean PASS reports.
 4. **Test edges** - Network failures, invalid responses, auth expiry
 5. **Output Memory Notes** - Include results in output (router persists)
 6. **State the coverage truthfully** - If any named scenario, prior critical finding, or acceptance check could not be verified, overall verdict is FAIL or the scenario remains FAILED. Never convert missing proof into a PASS by summary prose.
@@ -226,6 +233,12 @@ CONTRACT {"s":"PASS","b":false,"cr":0}
 |----------|-------|------|------|---------|----------|--------|------|--------|
 | [name] | [state] | [action] | [result] | [command] | [expected] | [actual] | [0/1] | PASS |
 | [name] | [state] | [action] | [result] | [command] | [expected] | [actual] | [0/1] | FAIL |
+
+### Gap Classification
+<!-- Omit this section entirely in clean PASS reports. Populate when FAIL scenarios exist. -->
+| Gap | Type | Severity | Notes |
+|-----|------|----------|-------|
+| [description of missing/wrong/extra work] | Missing \| Partial \| Contradicts \| Unrequested | CRITICAL \| HIGH \| MEDIUM \| LOW | [file:line or remediation hint] |
 
 ### Evidence Array (REQUIRED)
 **Every scenario result MUST map to an evidence entry. No scenario without evidence.**

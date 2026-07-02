@@ -1,5 +1,9 @@
 ### PLAN preparation
 
+0. Constitution Check (MANDATORY — runs before brainstorming or planner):
+   - Read `.craftflow/state/project/constitution.md` if it exists (it was loaded in § 2 Memory Load step 5 — reference the loaded copy; no second read needed).
+   - If absent, skip this step gracefully.
+   - Scan the user's intent for MUST constraint violations (MUST-1 through MUST-7). If a violation is detected, surface the specific principle to the user and halt before brainstorming begins. SHOULD violations are advisory — log in `approved_decisions` but do not block.
 1. Restore design enrichment:
    - Read `- Design:` from `activeContext.md ## References`.
    - If a design path exists, verify it with `Glob(...)` and hold it as fallback.
