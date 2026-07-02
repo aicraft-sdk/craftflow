@@ -44,22 +44,51 @@ def agent_files(plugin_root: Path) -> list[Path]:
     return [p for p in candidates if p.is_file()]
 
 
+def frontmatter_bytes(path: Path) -> int:
+    """Return the byte size of the YAML frontmatter block in *path*.
+
+    Claude Code / Cursor only inject frontmatter (name + description +
+    metadata) into the always-on context — agent bodies and skill bodies
+    are lazy-loaded on invocation.  If the file has no frontmatter
+    (e.g. a bare CLAUDE.md), the entire file is always-on, so we return
+    the full size.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return 0
+    if not text.startswith("---"):
+        return path.stat().st_size
+    # find the closing '---' delimiter (must be on its own line)
+    end = text.find("\n---", 3)
+    if end == -1:
+        return path.stat().st_size
+    fm_text = text[: end + 4]  # include the closing delimiter line
+    return len(fm_text.encode("utf-8"))
+
+
 def context_load(plugin_root: Path) -> dict[str, Any]:
     files = agent_files(plugin_root)
     sizes = {p.name: p.stat().st_size for p in files}
     total_bytes = sum(sizes.values())
-    # estimate tokens: ~4 bytes/token for English markdown
-    total_tokens = total_bytes // 4
+    # always-on = only frontmatter (name + description + metadata);
+    # agent / skill bodies are lazy-loaded and never in per-turn context.
+    always_on_bytes  = sum(frontmatter_bytes(p) for p in files)
+    always_on_tokens = always_on_bytes // 4
+    # on-disk total — kept for cross-repo size comparison, NOT per-turn cost
+    definition_tokens = total_bytes // 4
     agent_md = [p for p in files if "agents" in p.parts]
     skill_md  = [p for p in files if "skills" in p.parts]
     return {
-        "agent_files": len(agent_md),
-        "skill_files": len(skill_md),
-        "total_files": len(files),
-        "total_bytes": total_bytes,
-        "estimated_tokens": total_tokens,
-        "largest_file": max(sizes, key=lambda k: sizes[k]) if sizes else None,
-        "largest_bytes": max(sizes.values()) if sizes else 0,
+        "agent_files":      len(agent_md),
+        "skill_files":      len(skill_md),
+        "total_files":      len(files),
+        "always_on_bytes":  always_on_bytes,
+        "always_on_tokens": always_on_tokens,
+        "total_bytes":      total_bytes,
+        "definition_tokens": definition_tokens,
+        "largest_file":     max(sizes, key=lambda k: sizes[k]) if sizes else None,
+        "largest_bytes":    max(sizes.values()) if sizes else 0,
     }
 
 
@@ -306,16 +335,34 @@ def render_md(data: dict[str, Any]) -> str:
     repos = [r for r in data["repos"] if r.get("available")]
 
     # ---- Context load table ----
-    lines += ["## 1. Context Load (estimated tokens injected per turn)", ""]
-    lines += [f"| Repo | Agent files | Skill files | Total bytes | Est. tokens | Largest file |"]
-    lines += [f"|------|-------------|-------------|-------------|-------------|--------------|"]
+    lines += ["## 1. Context Load (always-on tokens & per-workflow cost)", ""]
+    lines += [
+        "| Repo | Agent files | Skill files | Always-on tokens | Est. tokens / workflow | Largest file |",
+        "|------|-------------|-------------|------------------|------------------------|--------------|",
+    ]
     for r in repos:
-        cl = r["context_load"]
+        cl  = r["context_load"]
+        tel = r.get("real_telemetry", {})
+        # use real median events when available; fall back to BUILD chain depth
+        if tel.get("available"):
+            events = tel.get("events_per_workflow", {}).get("median", 1)
+            events_label = f"{events} events (real)"
+        else:
+            events = r["chain_depth"].get("BUILD", 3)
+            events_label = f"{events} agents (BUILD proxy)"
+        per_wf_tokens = cl["always_on_tokens"] * events
         lines.append(
             f"| {r['repo']} | {cl['agent_files']} | {cl['skill_files']} | "
-            f"{cl['total_bytes']:,} | {cl['estimated_tokens']:,} | {cl['largest_file']} ({cl['largest_bytes']:,}B) |"
+            f"{cl['always_on_tokens']:,} | "
+            f"{per_wf_tokens:,} ({events_label}) | "
+            f"{cl['largest_file']} ({cl['largest_bytes']:,}B) |"
         )
-    lines.append("")
+    lines += [
+        "",
+        "> Agent/skill bodies are lazy-loaded; only frontmatter is always-on. "
+        "Per-workflow = always-on tokens × median events (craftflow: real telemetry; others: BUILD chain depth).",
+        "",
+    ]
 
     # ---- Chain depth ----
     lines += ["## 2. Orchestration Chain Depth (agents per workflow type)", ""]
