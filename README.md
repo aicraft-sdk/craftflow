@@ -11,6 +11,43 @@ Router-first AI development orchestration for Claude Code. Every build, debug, r
 - **24 skills** — planning, TDD, code-generation, debugging patterns, diff-driven docs, and others
 - **Hook system** — 24 Python lifecycle hooks for memory protection, write guards, URL caching, and session continuity
 - **Shared state** — `.craftflow/state/` is readable by both Claude Code and Cursor
+- **Quality layer** — gap classification (Missing/Partial/Contradicts/Unrequested × CRITICAL/HIGH/MEDIUM/LOW), constitution MUST/SHOULD checks, tech-agnostic AC lint, `[NEEDS CLARIFICATION]` blocking, `[P]` parallel plan markers, `FR-###`/`SC-###` traceability — all enforced by `craftflow_contract_validate.py`
+
+---
+
+## Quality layer
+
+All conventions are active on every workflow. Sources of truth: `AI_FIRST.md` rules 11–14, `plugins/craftflow/agents/`, `plugins/craftflow/scripts/craftflow_contract_validate.py`.
+
+### Spec traceability
+
+- `FR-###` / `SC-###` stable identifiers in `docs/ai/specs/` — plans and verifier scenarios cross-reference these IDs
+- `[NEEDS CLARIFICATION]` on any unresolved spec or plan item — `plan-gap-reviewer` blocks advancement until resolved
+- Success criteria must be user-observable, not technical: "User sees results in 3 s" not "API < 200 ms" (`AI_FIRST.md` rule 14)
+
+### Plan quality
+
+- `[P]` marks steps within a plan phase that can run concurrently (no shared file deps)
+- Each phase declares a delivery strategy: `mvp_first` | `incremental` | `parallel_team`
+
+### Gap classification
+
+Classifies every FAIL scenario before remediation:
+
+| Type | Meaning |
+|------|---------|
+| `Missing` | Required work entirely absent |
+| `Partial` | Incompletely satisfies the criterion |
+| `Contradicts` | Conflicts with spec, plan, or a MUST constitution constraint |
+| `Unrequested` | Implements behavior not in the accepted plan (scope creep) |
+
+Severity: `CRITICAL` / `HIGH` / `MEDIUM` / `LOW`
+
+Written by `integration-verifier` (step 3.5) and `silent-failure-hunter`. Machine-validated in the `GAP_CLASSIFICATION` YAML field by `craftflow_contract_validate.py`.
+
+### Constitution
+
+`.craftflow/state/project/constitution.md` holds project MUST/SHOULD principles. The PLAN workflow checks it before brainstorming; MUST violations are blockers, SHOULD violations are advisories.
 
 ---
 

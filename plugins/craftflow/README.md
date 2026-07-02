@@ -26,6 +26,40 @@ Every build, debug, review, and plan task routes through a single entry point th
 
 ---
 
+## Quality layer
+
+Craftflow enforces a quality contract from spec through verification. These conventions are active on every workflow:
+
+### Spec conventions (AI_FIRST rules 11–14)
+
+| Rule | Convention |
+|------|-----------|
+| `FR-###` / `SC-###` | Stable functional-requirement and success-criteria identifiers in `docs/ai/specs/`. Plans and verifier scenarios reference these IDs for traceability. |
+| `[NEEDS CLARIFICATION]` | Any unresolved spec or plan item is tagged. `plan-gap-reviewer` blocks advancement until all markers are resolved. |
+| `[P]` parallel markers | Steps within a plan phase are marked `[P]` when they can run concurrently. Each phase also declares a delivery strategy: `mvp_first`, `incremental`, or `parallel_team`. |
+| Tech-agnostic AC | Success criteria must describe user-observable outcomes, not implementation metrics. "User sees results in 3 s" is valid; "API response time < 200 ms" is not — restate it in user terms. |
+
+### Gap classification
+
+When verification fails, every FAIL scenario is classified before remediation begins:
+
+| Type | Meaning |
+|------|---------|
+| `Missing` | Required work is entirely absent from the implementation |
+| `Partial` | Exists but incompletely satisfies the acceptance criterion |
+| `Contradicts` | Code conflicts with the spec, plan, or a MUST constraint in the constitution |
+| `Unrequested` | Code implements behavior not present in the accepted plan (scope creep) |
+
+Severity: `CRITICAL` / `HIGH` / `MEDIUM` / `LOW`
+
+Classification is written by `integration-verifier` (step 3.5, `### Gap Classification` block) and by `silent-failure-hunter` (Unrequested gap detection). `craftflow_contract_validate.py` machine-validates the `GAP_CLASSIFICATION` field in every agent contract.
+
+### Constitution
+
+Project immutable principles live at `.craftflow/state/project/constitution.md`. The PLAN workflow reads this file before brainstorming and halts if the user's intent violates a MUST constraint. SHOULD violations are logged as advisories but do not block. Amendment requires explicit user approval and a version bump.
+
+---
+
 ## Install — Claude Code
 
 ```bash
