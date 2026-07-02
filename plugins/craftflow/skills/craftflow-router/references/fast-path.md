@@ -41,7 +41,7 @@ Values:
 | `build-hunt` | silent-failure-hunter | ✓ | ✗ skip | ✓ | medium |
 | `build-verify` | integration-verifier | ✓ | ✓ | ✓ (re-verify) | high |
 | `build-doc-sync` | doc-syncer | ✓ | ✗ skip | ✗ skip | low |
-| `learn-distill` | learn-distiller | ✓ (gated) | ✗ skip | ✗ skip | low |
+| `learn-distill` | learn-distiller | ✓ (gated) | ✓ (gated) | ✗ skip | low |
 | `memory-finalize` | (inline) | ✓ | ✓ | ✓ | low |
 
 #### Effort Steering Directives
@@ -59,10 +59,12 @@ Steering is informational — it does not change which fields are required in th
 
 #### Learn-Distill Gate
 
-`learn-distill` is dispatched at the end of BUILD and DEBUG workflows ONLY when `remediation_history` in the workflow artifact is non-empty (i.e., at least one remediation cycle ran). This prevents per-build cost for clean workflows.
+`learn-distill` is dispatched at the end of BUILD (standard and fast-path) and DEBUG workflows ONLY when `remediation_history` in the workflow artifact is non-empty (i.e., at least one remediation cycle ran). This prevents per-build cost for clean workflows.
 
 When gated out (empty `remediation_history`): skip `learn-distill` entirely, proceed directly to `memory-finalize`.
 When gated in: run `craftflow_learn_scan.py` via Bash, pass output to learn-distiller, append `learn_distilled` to event log, then proceed to `memory-finalize`.
+
+Fast-path note: fast-path BUILD with a clean verifier pass never enters the gate (empty `remediation_history`). Fast-path BUILD that escalated (verifier fail → escalation → re-verify) will have `remediation_history` populated and runs `learn-distill` exactly like standard BUILD.
 
 #### Gate Table
 

@@ -53,7 +53,7 @@ def normalize_reason(reason: str) -> str:
 # Failure signal detection
 # ---------------------------------------------------------------------------
 
-_FAILURE_EVENT_TYPES = frozenset({"remediation_created", "workflow_failed"})
+_FAILURE_EVENT_TYPES = frozenset({"remediation_created", "workflow_failed", "stop_failure"})
 _LOOP_DECISIONS = frozenset({"re_verify", "re_review", "re_hunt"})
 
 
@@ -132,7 +132,7 @@ def scan_state_dir(state_dir: Path) -> list:
 
             reason = event.get("reason", "")
             signature = normalize_reason(reason) if reason else ""
-            timestamp = event.get("timestamp", "")
+            timestamp = event.get("ts", event.get("timestamp", ""))
             event_type = event.get("event", "")
 
             if signature not in clusters:
