@@ -52,7 +52,7 @@ BUILD is sequential in v10:
 ```text
 TaskCreate({
   subject: "CRAFTFLOW component-builder: Execute phase {phase_id}",
-  description: "wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:build-implement\nplan:{plan_file or 'N/A'}\nscope:N/A\nreason:Execute approved phase\n\nExecute ONLY the phase at phase_cursor. Recover objective, inputs, expected artifacts, required checks, checkpoint type, and exit criteria from the approved phase. Stop if blocked, partial, or proof remains incomplete.",
+  description: "wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:build-implement\nplan:{plan_file or 'N/A'}\nscope:N/A\nreason:Execute approved phase\n\nExecute ONLY the phase at phase_cursor. Recover objective, inputs, expected artifacts, required checks, checkpoint type, and exit criteria from the approved phase. Stop if blocked, partial, or proof remains incomplete.\n\n## Worktree\nWORKTREE_PATH: {worktree_path | 'main tree'}\nWhen WORKTREE_PATH is a real path (not 'main tree'): all file reads, edits, and writes must use paths rooted at WORKTREE_PATH. Do not modify files outside WORKTREE_PATH during this phase.",
   activeForm: "Building components"
 }) -> builder_task_id
 
@@ -109,7 +109,7 @@ Gates/rules dropped: 1a-SCOPE rule (no reviewer/hunter findings to scope), doubt
 ```text
 TaskCreate({
   subject: "CRAFTFLOW component-builder: Execute phase {phase_id}",
-  description: "wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:build-implement\nplan:{plan_file or 'N/A'}\nscope:N/A\nreason:Execute approved phase (fast path)\n\nFAST-PATH BUILD: Execute ONLY the phase at phase_cursor. Recover objective, inputs, expected artifacts, required checks, checkpoint type, and exit criteria from the approved phase. Stop if blocked, partial, or proof remains incomplete.",
+  description: "wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:build-implement\nplan:{plan_file or 'N/A'}\nscope:N/A\nreason:Execute approved phase (fast path)\n\nFAST-PATH BUILD: Execute ONLY the phase at phase_cursor. Recover objective, inputs, expected artifacts, required checks, checkpoint type, and exit criteria from the approved phase. Stop if blocked, partial, or proof remains incomplete.\n\n## Worktree\nWORKTREE_PATH: {worktree_path | 'main tree'}\nWhen WORKTREE_PATH is a real path (not 'main tree'): all file reads, edits, and writes must use paths rooted at WORKTREE_PATH. Do not modify files outside WORKTREE_PATH during this phase.",
   activeForm: "Building components"
 }) -> builder_task_id
 

@@ -207,30 +207,43 @@ Perform `risk_keyword_scan`:
 
 Every new BUILD workflow attempts to isolate file writes in a dedicated git worktree:
 
-1. At BUILD start (before any child task creation), run:
-   ```
-   git worktree add ~/.claude/worktrees/wf-{short-id} -b worktree-wf-{short-id}
+1. At BUILD start (before any child task creation), resolve the project root and run:
+   ```bash
+   PROJECT_ROOT=$(git rev-parse --show-toplevel)
+   mkdir -p "$PROJECT_ROOT/.claude/worktrees"
+   git worktree add "$PROJECT_ROOT/.claude/worktrees/wf-{short-id}" -b worktree-wf-{short-id}
    ```
    where `short-id` = last 8 chars of `workflow_uuid`.
+   [EASY TO MISS: Use `git rev-parse --show-toplevel` for the absolute path — never a bare `~/.claude/worktrees/` because `~` may not expand correctly in all shell contexts, and a relative path resolves against cwd, not the project root.]
 
 2. On success:
    - Set `worktree_mode: "auto_created"` in the workflow artifact
-   - Set `worktree_path: "~/.claude/worktrees/wf-{short-id}"`
+   - Set `worktree_path: "{project_root}/.claude/worktrees/wf-{short-id}"` (absolute)
    - Set `worktree_branch: "worktree-wf-{short-id}"`
-   - Pass `worktree_path` to component-builder and integration-verifier scaffolds
+   - Add `## Worktree` section to every builder and verifier task description:
+     ```
+     ## Worktree
+     WORKTREE_PATH: {worktree_path}
+     All file reads, edits, and writes must use paths rooted at WORKTREE_PATH.
+     Do not modify files outside WORKTREE_PATH during this BUILD phase.
+     ```
 
 3. On failure (any git error — shallow clone, detached HEAD, path conflict):
    - Set `worktree_mode: null`
    - Append `{"event":"worktree_fallback","reason":"{error}"}` to the event log
    - Continue with main tree — never block a workflow over worktree failure
+   - Omit the `## Worktree` section from task descriptions when in fallback mode
 
-4. After `integration-verifier` returns PASS on the final phase:
-   - Merge worktree branch into main: `git -C {project_root} merge worktree-wf-{short-id}`
-   - Remove worktree: `git worktree remove ~/.claude/worktrees/wf-{short-id}`
-   - Remove branch: `git branch -d worktree-wf-{short-id}`
-   - If merge conflicts: stop, persist `pending_gate: "worktree_merge_conflict"`, ask user to resolve
+4. After `integration-verifier` returns PASS on the final phase and BEFORE memory-finalize:
+   - Read `worktree_path` and `worktree_branch` from the workflow artifact
+   - If `worktree_mode == "auto_created"`:
+     - Merge: `git merge worktree-wf-{short-id}` (run from project root)
+     - Remove worktree: `git worktree remove {worktree_path} --force`
+     - Delete branch: `git branch -d worktree-wf-{short-id}`
+     - Update artifact: `worktree_mode → "merged_and_removed"`
+     - If merge conflicts: stop, persist `pending_gate: "worktree_merge_conflict"`, ask user to resolve before memory-finalize
 
-Safety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: "auto_created"` already set, re-use the existing path rather than creating a new worktree.
+Safety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: "auto_created"` already set, re-use `worktree_path` from the artifact rather than creating a new worktree. If `worktree_path` is null despite `worktree_mode: "auto_created"`, treat as fallback and proceed with main tree.
 
 ### DEBUG preparation
 
@@ -275,7 +288,7 @@ TaskCreate({
 ```text
 Write(
   file_path=".craftflow/state/workflows/{workflow_uuid}.json",
-  content="{\"workflow_uuid\":\"{workflow_uuid}\",\"workflow_id\":\"{workflow_uuid}\",\"workflow_type\":\"{WORKFLOW}\",\"state_root\":\".craftflow/state\",\"user_request\":\"{request}\",\"plan_file\":null,\"design_file\":null,\"research_files\":[],\"approved_decisions\":[],\"plan_mode\":null,\"verification_rigor\":\"standard\",\"proof_status\":\"gaps_found\",\"traceability\":{\"requirements\":[],\"phases\":[],\"verification\":[],\"remediation\":[]},\"intent\":{\"goal\":null,\"non_goals\":[],\"constraints\":[],\"acceptance_criteria\":[],\"open_decisions\":[]},\"normalized_phases\":[],\"phase_cursor\":null,\"capabilities\":{\"brightdata_available\":\"unknown\",\"octocode_available\":\"unknown\",\"websearch_available\":\"unknown\",\"webfetch_available\":\"unknown\"},\"research_rounds\":[],\"research_backend_history\":[],\"research_quality\":{\"web\":\"none\",\"github\":\"none\",\"overall\":\"none\"},\"task_ids\":{\"planner_create\":null,\"planning_review_pass1\":null,\"planner_replan\":null,\"planning_review_pass2\":null,\"memory_finalize\":null},\"phase_status\":{},\"results\":{\"builder\":null,\"investigator\":null,\"reviewer\":null,\"hunter\":null,\"verifier\":null,\"planner\":null,\"planning_reviewer\":null,\"research\":{\"web\":null,\"github\":null,\"synthesis\":null}},\"evidence\":{\"builder\":[],\"investigator\":[],\"reviewer\":[],\"hunter\":[],\"verifier\":[],\"planning_reviewer\":[]},\"telemetry\":{\"task_metrics_available\":\"unknown\",\"workflow_wall_clock_seconds\":0,\"agent_wall_clock_seconds\":{\"builder\":0,\"investigator\":0,\"reviewer\":0,\"hunter\":0,\"verifier\":0,\"planner\":0},\"loop_counts\":{\"re_review\":0,\"re_hunt\":0,\"re_verify\":0},\"verifier\":{\"phase_exit_proof_runs\":0,\"extended_audit_runs\":0,\"workload_seconds\":{\"tests\":0,\"build\":0,\"scan\":0,\"reconcile\":0,\"reasoning\":0}}},\"quality\":{\"confidence\":null,\"evidence_complete\":false,\"scenario_coverage\":0,\"research_quality\":\"none\",\"convergence_state\":\"pending\"},\"planning_review_runs\":0,\"planning_review_findings\":[],\"planning_review_status\":\"not_started\",\"build_mode\":null,\"fast_path_risk_signals\":[],\"fast_path_escalated\":false,\"memory_notes\":[],\"pending_gate\":null,\"status_history\":[{\"event\":\"workflow_started\",\"ts\":\"{iso_timestamp}\",\"phase\":\"{build|debug|review|plan}\"}],\"remediation_history\":[],\"created_at\":\"{iso_timestamp}\",\"updated_at\":\"{iso_timestamp}\"}"
+  content="{\"workflow_uuid\":\"{workflow_uuid}\",\"workflow_id\":\"{workflow_uuid}\",\"workflow_type\":\"{WORKFLOW}\",\"state_root\":\".craftflow/state\",\"user_request\":\"{request}\",\"plan_file\":null,\"design_file\":null,\"research_files\":[],\"approved_decisions\":[],\"plan_mode\":null,\"verification_rigor\":\"standard\",\"proof_status\":\"gaps_found\",\"traceability\":{\"requirements\":[],\"phases\":[],\"verification\":[],\"remediation\":[]},\"intent\":{\"goal\":null,\"non_goals\":[],\"constraints\":[],\"acceptance_criteria\":[],\"open_decisions\":[]},\"normalized_phases\":[],\"phase_cursor\":null,\"capabilities\":{\"brightdata_available\":\"unknown\",\"octocode_available\":\"unknown\",\"websearch_available\":\"unknown\",\"webfetch_available\":\"unknown\"},\"research_rounds\":[],\"research_backend_history\":[],\"research_quality\":{\"web\":\"none\",\"github\":\"none\",\"overall\":\"none\"},\"task_ids\":{\"planner_create\":null,\"planning_review_pass1\":null,\"planner_replan\":null,\"planning_review_pass2\":null,\"memory_finalize\":null},\"phase_status\":{},\"results\":{\"builder\":null,\"investigator\":null,\"reviewer\":null,\"hunter\":null,\"verifier\":null,\"planner\":null,\"planning_reviewer\":null,\"research\":{\"web\":null,\"github\":null,\"synthesis\":null}},\"evidence\":{\"builder\":[],\"investigator\":[],\"reviewer\":[],\"hunter\":[],\"verifier\":[],\"planning_reviewer\":[]},\"telemetry\":{\"task_metrics_available\":\"unknown\",\"workflow_wall_clock_seconds\":0,\"agent_wall_clock_seconds\":{\"builder\":0,\"investigator\":0,\"reviewer\":0,\"hunter\":0,\"verifier\":0,\"planner\":0},\"loop_counts\":{\"re_review\":0,\"re_hunt\":0,\"re_verify\":0},\"verifier\":{\"phase_exit_proof_runs\":0,\"extended_audit_runs\":0,\"workload_seconds\":{\"tests\":0,\"build\":0,\"scan\":0,\"reconcile\":0,\"reasoning\":0}}},\"quality\":{\"confidence\":null,\"evidence_complete\":false,\"scenario_coverage\":0,\"research_quality\":\"none\",\"convergence_state\":\"pending\"},\"planning_review_runs\":0,\"planning_review_findings\":[],\"planning_review_status\":\"not_started\",\"build_mode\":null,\"fast_path_risk_signals\":[],\"fast_path_escalated\":false,\"worktree_mode\":null,\"worktree_path\":null,\"worktree_branch\":null,\"memory_notes\":[],\"pending_gate\":null,\"status_history\":[{\"event\":\"workflow_started\",\"ts\":\"{iso_timestamp}\",\"phase\":\"{build|debug|review|plan}\"}],\"remediation_history\":[],\"created_at\":\"{iso_timestamp}\",\"updated_at\":\"{iso_timestamp}\"}"
 )
 Write(
   file_path=".craftflow/state/workflows/{workflow_uuid}.events.jsonl",
