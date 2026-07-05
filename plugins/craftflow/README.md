@@ -60,6 +60,43 @@ Project immutable principles live at `.craftflow/state/project/constitution.md`.
 
 ---
 
+## Check workflow status — non-interrupting
+
+While a Craftflow agent is running, a second terminal can read live status from the
+shared `.craftflow/state/` directory at any time:
+
+```bash
+# Resolve the script path (run once):
+python3 -c "
+import json, pathlib
+try:
+    reg = json.loads(pathlib.Path('~/.claude/plugins/installed_plugins.json').expanduser().read_text())
+    ip  = reg['plugins']['craftflow@craftflow'][0]['installPath']
+    print(pathlib.Path(ip) / 'scripts' / 'craftflow_status_report.py')
+except Exception as e:
+    print(f'# {e}')
+"
+
+# Add a shell alias (replace PATH with the output above):
+alias cfstatus='python3 /path/to/craftflow_status_report.py'
+
+# Examples:
+cfstatus                              # current / last-active workflow
+cfstatus --all                        # one-line summary of every workflow
+cfstatus --verbose                    # phases + agent chain + event timeline + narrative
+cfstatus --feature "memory package"   # find by goal text
+cfstatus --worktree wf-d4e5f6a7      # find by worktree branch/suffix
+cfstatus --project /path/to/project  # explicit root (auto-detected otherwise)
+cfstatus --json                       # machine-readable JSON for tooling/statusline
+```
+
+You can also invoke it in-session (between agent turns) with:
+```
+craftflow status
+```
+
+---
+
 ## Install — Claude Code
 
 ```bash
