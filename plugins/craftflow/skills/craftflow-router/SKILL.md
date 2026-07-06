@@ -211,15 +211,18 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
    ```bash
    PROJECT_ROOT=$(git rev-parse --show-toplevel)
    mkdir -p "$PROJECT_ROOT/.claude/worktrees"
-   git worktree add "$PROJECT_ROOT/.claude/worktrees/wf-{short-id}" -b worktree-wf-{short-id}
+   git worktree add "$PROJECT_ROOT/.claude/worktrees/{worktree_dir}" -b {worktree_branch}
    ```
-   where `short-id` = last 8 chars of `workflow_uuid`.
+   where `worktree_dir` and `worktree_branch` come from the `craftflow_workflow_id.py` helper
+   output (see step 1 of **Parent workflow creation** above).
+   The trailing 8-hex suffix in both names ties the worktree back to the workflow id,
+   guaranteeing concurrent same-feature workflows always get distinct dirs/branches.
    [EASY TO MISS: Use `git rev-parse --show-toplevel` for the absolute path — never a bare `~/.claude/worktrees/` because `~` may not expand correctly in all shell contexts, and a relative path resolves against cwd, not the project root.]
 
 2. On success:
    - Set `worktree_mode: "auto_created"` in the workflow artifact
-   - Set `worktree_path: "{project_root}/.claude/worktrees/wf-{short-id}"` (absolute)
-   - Set `worktree_branch: "worktree-wf-{short-id}"`
+   - Set `worktree_path: "{project_root}/.claude/worktrees/{worktree_dir}"` (absolute; `worktree_dir` from the helper)
+   - Set `worktree_branch: "{worktree_branch}"` (from the helper)
    - Add `## Worktree` section to every builder and verifier task description:
      ```
      ## Worktree
@@ -237,9 +240,9 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
 4. After `integration-verifier` returns PASS on the final phase and BEFORE memory-finalize:
    - Read `worktree_path` and `worktree_branch` from the workflow artifact
    - If `worktree_mode == "auto_created"`:
-     - Merge: `git merge worktree-wf-{short-id}` (run from project root)
+     - Merge: `git merge {worktree_branch}` (read `worktree_branch` from the workflow artifact; run from project root)
      - Remove worktree: `git worktree remove {worktree_path} --force`
-     - Delete branch: `git branch -d worktree-wf-{short-id}`
+     - Delete branch: `git branch -d {worktree_branch}` (read from artifact)
      - Update artifact: `worktree_mode → "merged_and_removed"`
      - If merge conflicts: stop, persist `pending_gate: "worktree_merge_conflict"`, ask user to resolve before memory-finalize
 
@@ -267,11 +270,36 @@ Safety: Worktree creates are idempotent in the event log. If a resume finds `wor
 
 Use this pattern for every new workflow:
 
-1. Generate a stable workflow UUID before `TaskCreate()`:
+1. Generate a stable workflow UUID, worktree names, and `iso_timestamp` before `TaskCreate()` by running the minting helper:
 
-```text
-workflow_uuid = "wf-" + UTC timestamp + "-" + 8 hex chars
+```bash
+# Locate the helper via the plugin registry
+CRAFTFLOW_INSTALL=$(python3 -c "
+import json, pathlib
+reg = json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())
+print(reg['plugins']['craftflow@craftflow'][0]['installPath'])
+")
+
+# Mint the id — pass the user request; the helper auto-detects the current git branch
+WF_INFO=$(python3 "${CRAFTFLOW_INSTALL}/scripts/craftflow_workflow_id.py" \
+  --request "USER_REQUEST_SHELL_ESCAPED" \
+  --project "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" \
+  --json)
 ```
+
+Replace `USER_REQUEST_SHELL_ESCAPED` with the actual user request, properly shell-quoted.
+Then parse the JSON to bind: `workflow_uuid` · `iso_timestamp` · `worktree_dir` · `worktree_branch`.
+
+```bash
+workflow_uuid=$(printf '%s' "$WF_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['workflow_uuid'])")
+iso_timestamp=$(printf '%s' "$WF_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['iso_timestamp'])")
+worktree_dir=$(printf '%s' "$WF_INFO"  | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['worktree_dir'])")
+worktree_branch=$(printf '%s' "$WF_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['worktree_branch'])")
+```
+
+ID format: `wf-{slug}-{YYYYMMDD-HHMMSS}-{8hex}`.
+Slug = slugified git branch name (if a genuine feature branch, i.e. not main/master/develop/dev/trunk or a craftflow-generated `wf-`/`worktree-` branch) — otherwise slugified request text.
+The `iso_timestamp` from the helper is the authoritative creation timestamp — use it for **all** `{iso_timestamp}` placeholders in the artifact Write below (no separate time derivation needed).
 
 2. Create the parent workflow task with that UUID from the first write:
 

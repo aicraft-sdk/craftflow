@@ -13,6 +13,7 @@ Usage:
   python3 craftflow_status_report.py --feature "text"    # match goal/request
   python3 craftflow_status_report.py --worktree BRANCH   # by worktree branch/path
   python3 craftflow_status_report.py --json              # machine-readable output
+  python3 craftflow_status_report.py --statusline       # one-line statusline segment
   python3 craftflow_status_report.py --project /path    # explicit project root
 """
 
@@ -413,6 +414,113 @@ def _goal(payload: dict[str, Any], max_len: int = 120) -> str:
     return g[:max_len] + ("…" if len(g) > max_len else "")
 
 
+# Pattern for slug-style ids: wf-{slug}-{YYYYMMDD}-{HHMMSS}-{8hex}
+_SLUG_ID_RE = re.compile(r'^wf-(.+)-\d{8}-\d{6}-[0-9a-f]{8}$', re.IGNORECASE)
+
+
+def _display_label(wf_id: str, payload: dict[str, Any]) -> str:
+    """Return a short human-readable label for the workflow.
+
+    For slug-style ids (wf-{slug}-{YYYYMMDD}-{HHMMSS}-{8hex}): extract the slug.
+    For old-format ids (wf-{timestamp}-{8hex}): fall back to truncated goal or
+    the last 8 chars of the id.
+    """
+    m = _SLUG_ID_RE.match(wf_id)
+    if m:
+        return m.group(1)
+    goal = _goal(payload, max_len=24)
+    if goal:
+        return goal
+    return wf_id[-8:] if len(wf_id) >= 8 else wf_id
+
+
+# ---------------------------------------------------------------------------
+# Progress % computation
+# ---------------------------------------------------------------------------
+
+# Coarse stage-estimate %: used when phase lists are empty (common on real workflows)
+_STAGE_PCT: dict[str, int] = {
+    "workflow_started":        5,
+    "fast_path_selected":     15,
+    "planning":               25,
+    "plan_saved":             25,
+    "phase_started":          30,
+    "phase_exit_gate_passed": 80,
+    "integration_verified":   90,
+    "memory_finalized":      100,
+    "workflow_complete":      100,
+}
+
+
+def _compute_progress(payload: dict[str, Any], wf_id: str) -> dict[str, Any]:
+    """Return {pct, done, total, source} for the workflow's completion %.
+
+    Priority:
+    1. DONE (authoritative) → 100%
+    2. normalized_phases non-empty → count completed/skipped phases
+    3. phase_status non-empty (no normalized_phases) → same counting on the map
+    4. Coarse stage estimate from status_history tail event
+    """
+    # 1. Authoritative: workflow already completed
+    if _classify(payload, wf_id) == "DONE":
+        return {"pct": 100, "done": 1, "total": 1, "source": "done"}
+
+    norm: list[dict] = payload.get("normalized_phases") or []
+    pstatus: dict[str, str] = payload.get("phase_status") or {}
+
+    # 2. Full phase list available
+    if norm:
+        total = len(norm)
+        done = sum(
+            1 for ph in norm
+            if pstatus.get(ph.get("phase_id", "")) in {"completed", "skipped"}
+        )
+        pct = round(100 * done / total) if total else 0
+        return {"pct": pct, "done": done, "total": total, "source": "phases"}
+
+    # 3. phase_status map only (normalized_phases is empty — common on real workflows)
+    if pstatus:
+        total = len(pstatus)
+        done = sum(1 for v in pstatus.values() if v in {"completed", "skipped"})
+        pct = round(100 * done / total) if total else 0
+        return {"pct": pct, "done": done, "total": total, "source": "status"}
+
+    # 4. Coarse stage estimate
+    history = payload.get("status_history") or []
+    last_event = ""
+    if history and isinstance(history[-1], dict):
+        last_event = history[-1].get("event", "")
+    pct = _STAGE_PCT.get(last_event, 0)
+    if not pct and payload.get("phase_cursor"):
+        pct = 20  # cursor is set but no matching stage event
+    return {"pct": pct, "done": 0, "total": 0, "source": "stage"}
+
+
+# ---------------------------------------------------------------------------
+# Statusline segment (--statusline mode)
+# ---------------------------------------------------------------------------
+
+def _report_statusline(wf_id: str, payload: dict[str, Any]) -> str:
+    """Return a single compact line for embedding in the statusline, or ''.
+
+    Format: ⚡ {label} {pct}% · {state_icon} {phase_cursor} ({done}/{total})
+    The ({done}/{total}) tail is omitted when total==0 (stage-estimate source).
+    """
+    state = _classify(payload, wf_id)
+    icon = _STATE_ICONS[state].strip()  # strip table-padding spaces for inline use
+    label = _display_label(wf_id, payload)
+    prog = _compute_progress(payload, wf_id)
+    pct = prog["pct"]
+    done = prog["done"]
+    total = prog["total"]
+    cursor = payload.get("phase_cursor") or ""
+
+    tail = f" ({done}/{total})" if total > 0 else ""
+    phase_part = f"{icon} {cursor}{tail}" if cursor else f"{icon}{tail}"
+
+    return f"⚡ {label} {pct}% · {phase_part}"
+
+
 # ---------------------------------------------------------------------------
 # Single-workflow report lines
 # ---------------------------------------------------------------------------
@@ -536,6 +644,7 @@ def _resolve_target(args: argparse.Namespace) -> tuple[str | None, dict[str, Any
             searchable = " ".join([
                 intent.get("goal") or "",
                 payload.get("user_request") or "",
+                wf_id,  # also match by slug embedded in the id
             ]).lower()
             if needle in searchable:
                 matches.append((wf_id, payload))
@@ -554,8 +663,9 @@ def _resolve_target(args: argparse.Namespace) -> tuple[str | None, dict[str, Any
         for wf_id, payload in all_wfs:
             if payload.get("worktree_path") == wt or payload.get("worktree_branch") == wt:
                 return wf_id, payload
-        # Match the wf-XXXXXXXX 8-hex suffix
-        m = re.search(r'wf-([0-9a-f]{8})$', wt, re.IGNORECASE)
+        # Match the trailing 8-hex suffix (works for old worktree-wf-{hex} AND
+        # new slug-based wf-{slug}-{hex} / {slug}-{hex} forms)
+        m = re.search(r'-([0-9a-f]{8})$', wt, re.IGNORECASE)
         if m:
             suffix = m.group(1).lower()
             for wf_id, payload in all_wfs:
@@ -632,16 +742,18 @@ Examples:
   python3 craftflow_status_report.py --feature "parallel"   # by feature name (substring)
   python3 craftflow_status_report.py --worktree wf-d4e5f6a7 # by worktree branch/suffix
   python3 craftflow_status_report.py --json                  # machine-readable JSON
+  python3 craftflow_status_report.py --statusline            # one-line segment for the statusline
   python3 craftflow_status_report.py --project /path/to/proj # explicit project root
         """.strip(),
     )
-    parser.add_argument("--wf",       metavar="ID",          help="Explicit workflow UUID")
-    parser.add_argument("--feature",  metavar="TEXT",         help="Substring match on intent goal / user request")
-    parser.add_argument("--worktree", metavar="PATH|BRANCH",  help="Match by worktree path or branch")
-    parser.add_argument("--all",      action="store_true",    help="Show all workflows in a summary table")
-    parser.add_argument("--verbose",  "-v", action="store_true", help="Agent chain, event timeline, narrative")
-    parser.add_argument("--json",     action="store_true",    help="Emit structured JSON (for tooling / statusline)")
-    parser.add_argument("--project",  metavar="DIR",          help="Project root (auto-detected if omitted)")
+    parser.add_argument("--wf",         metavar="ID",          help="Explicit workflow UUID")
+    parser.add_argument("--feature",    metavar="TEXT",         help="Substring match on intent goal / user request / workflow id")
+    parser.add_argument("--worktree",   metavar="PATH|BRANCH",  help="Match by worktree path or branch")
+    parser.add_argument("--all",        action="store_true",    help="Show all workflows in a summary table")
+    parser.add_argument("--verbose",    "-v", action="store_true", help="Agent chain, event timeline, narrative")
+    parser.add_argument("--json",       action="store_true",    help="Emit structured JSON (for tooling / statusline)")
+    parser.add_argument("--statusline", action="store_true",    help="Single-line progress segment for the statusline (⚡ label pct% · state phase)")
+    parser.add_argument("--project",    metavar="DIR",          help="Project root (auto-detected if omitted)")
     args = parser.parse_args()
 
     # Wire project root into hooklib before any hl.* call
@@ -660,6 +772,17 @@ Examples:
             return 0
         for line in _report_all(all_wfs):
             print(line)
+        return 0
+
+    # --statusline: fast single-line segment for the statusline wrapper.
+    # Resolves via precompact-state → newest-by-mtime only; no --all.
+    # Prints nothing (exit 0) when there is no active workflow — the wrapper
+    # then shows only claude-hud output.
+    if args.statusline:
+        wf_id, payload = _resolve_target(args)
+        if not wf_id:
+            return 0  # silent exit — wrapper degrades to hud-only
+        print(_report_statusline(wf_id, payload))
         return 0
 
     # Single-workflow mode
