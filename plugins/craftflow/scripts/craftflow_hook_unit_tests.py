@@ -396,6 +396,50 @@ def test_router_dispatches_intent_interview() -> None:
     ok(name)
 
 
+def test_workflow_id_script_present() -> None:
+    name = "scripts/craftflow_workflow_id-present"
+    path = SCRIPTS / "craftflow_workflow_id.py"
+    if not path.exists():
+        fail(name, f"craftflow_workflow_id.py not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    for marker in ("mint_workflow_id", "slugify", "_is_feature_branch", "worktree_branch"):
+        if marker not in content:
+            fail(name, f"craftflow_workflow_id.py missing expected symbol: {marker!r}")
+            return
+    ok(name)
+
+
+def test_statusline_script_present() -> None:
+    name = "scripts/craftflow_statusline-present"
+    path = SCRIPTS / "craftflow_statusline.sh"
+    if not path.exists():
+        fail(name, f"craftflow_statusline.sh not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    for marker in ("craftflow_status_report.py", "--statusline", "claude-hud"):
+        if marker not in content:
+            fail(name, f"craftflow_statusline.sh missing expected reference: {marker!r}")
+            return
+    ok(name)
+
+
+def test_router_uses_workflow_id_helper() -> None:
+    name = "router/workflow-id-helper-wired"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    if "craftflow_workflow_id.py" not in content:
+        fail(name, "SKILL.md does not reference craftflow_workflow_id.py helper")
+        return
+    if "worktree_dir" not in content or "worktree_branch" not in content:
+        fail(name, "SKILL.md missing worktree_dir/worktree_branch bindings from helper")
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_blocks_memory_write_without_permit(tmp_dir: Path) -> None:
     name = "pretooluse-guard/blocks-memory-write-without-permit"
     # Point CLAUDE_PLUGIN_ROOT to the real plugin so hook-mode.json (memoryWrites=block) is loaded
@@ -512,6 +556,9 @@ def main() -> int:
     test_router_dispatches_doubt_verify()
     test_router_dispatches_intent_interview()
     test_hooks_json_registers_new_hooks()
+    test_workflow_id_script_present()
+    test_statusline_script_present()
+    test_router_uses_workflow_id_helper()
 
     print()
     if _errors:

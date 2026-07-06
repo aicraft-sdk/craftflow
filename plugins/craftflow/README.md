@@ -10,9 +10,11 @@ Every build, debug, review, and plan task routes through a single entry point th
 
 - **Routes all dev tasks** — one router (`craftflow-router`) classifies intent and dispatches to the right agent chain automatically
 - **Agent chain** — 11 specialized agents: planner, component-builder, bug-investigator, code-reviewer, silent-failure-hunter, integration-verifier, and more
-- **24 skills** — planning patterns, TDD, code generation, debugging, diff-driven docs, and others
+- **26 skills** — planning patterns, TDD, code generation, debugging, diff-driven docs, workflow status, and others
 - **Hook system** — Python lifecycle hooks for memory protection, write guards, URL caching, and session continuity
 - **Shared state** — `.craftflow/state/` is readable by both Claude Code and Cursor
+- **Feature-named workflows** — workflow folders, files, and worktrees are named after the feature (`wf-auth-refactor-20260706-d4e5f6a7`) so you can identify them at a glance
+- **Live statusline progress** — a `⚡ feature-name 60% · 🟢 phase_2` segment appended to claude-hud, updates every ~300ms without interrupting the running agent
 - **Cursor support** — inline sequential execution with progress blocks in Cursor chat; no sub-agents required
 
 ## Workflow types
@@ -60,6 +62,49 @@ Project immutable principles live at `.craftflow/state/project/constitution.md`.
 
 ---
 
+## Feature-named workflow folders
+
+Every new workflow gets an id that embeds a feature slug:
+
+```
+wf-{slug}-{YYYYMMDD-HHMMSS}-{8hex}
+e.g.  wf-auth-refactor-20260706-140312-d4e5f6a7
+```
+
+The slug comes from the current git branch name (if it's a genuine feature branch — not `main`/`master`/`develop`) or from the user request text. The timestamp + 8-hex suffix keeps ids unique, so two concurrent workflows for the same feature never collide.
+
+Worktrees follow the same pattern: `.claude/worktrees/{slug}-{hex}` and branch `wf-{slug}-{hex}`, so they're identifiable AND traceable back to their workflow.
+
+Old on-disk ids (pre-slug format) are fully backward-compatible — nothing changes for existing workflows.
+
+---
+
+## Live % progress in the statusline
+
+When Craftflow is active, the statusline shows a live progress segment:
+
+```
+⚡ auth-refactor 60% · 🟢 phase_2 (3/5)
+```
+
+Updated every ~300ms alongside claude-hud, derived from the workflow's `.craftflow/state/` data with no agent interruption. The segment disappears when no workflow is active.
+
+The progress % uses a 4-tier fallback: explicit phase list → phase-status map → coarse stage estimate (e.g. `fast_path_selected`→15%, `phase_exit_gate_passed`→80%) → 0%.
+
+**Setup** — wire the wrapper once in `~/.claude/settings.json`:
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "bash /path/to/craftflow-plugin/plugins/craftflow/scripts/craftflow_statusline.sh"
+  }
+}
+```
+
+**Revert** to plain claude-hud by restoring the original command (preserved as a comment in `craftflow_statusline.sh`).
+
+---
+
 ## Check workflow status — non-interrupting
 
 While a Craftflow agent is running, a second terminal can read live status from the
@@ -84,10 +129,11 @@ alias cfstatus='python3 /path/to/craftflow_status_report.py'
 cfstatus                              # current / last-active workflow
 cfstatus --all                        # one-line summary of every workflow
 cfstatus --verbose                    # phases + agent chain + event timeline + narrative
-cfstatus --feature "memory package"   # find by goal text
-cfstatus --worktree wf-d4e5f6a7      # find by worktree branch/suffix
+cfstatus --feature "auth-refactor"    # find by feature slug, goal text, or request
+cfstatus --worktree auth-refactor-d4e5f6a7  # find by worktree branch/slug suffix
+cfstatus --statusline                 # single-line % segment (used by the wrapper)
 cfstatus --project /path/to/project  # explicit root (auto-detected otherwise)
-cfstatus --json                       # machine-readable JSON for tooling/statusline
+cfstatus --json                       # machine-readable JSON for tooling
 ```
 
 You can also invoke it in-session (between agent turns) with:
@@ -173,7 +219,8 @@ Workflow state lives at `.craftflow/state/` in the project root:
 | `project/activeContext.md` | Current focus, decisions, learnings — persists across sessions |
 | `project/patterns.md` | Durable code patterns and gotchas |
 | `project/progress.md` | Completed workflows and verification evidence |
-| `workflows/{wf-id}.json` | Per-workflow artifact (plan file, phase status, evidence) |
+| `workflows/{wf-id}.json` | Per-workflow artifact (plan, phase status, evidence). New format: `wf-{slug}-{date}-{hex}.json` |
+| `precompact-state.json` | Per-turn pointer to the current active workflow (written by the `Stop` hook) |
 
 ---
 
