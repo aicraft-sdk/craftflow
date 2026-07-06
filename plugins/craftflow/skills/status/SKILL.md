@@ -64,10 +64,19 @@ Parse the user's words for these signals:
 | "all", "all workflows", "list all"           | `--all`                 |
 | "feature X", "for X", "on the X feature"    | `--feature "X"`         |
 | "worktree X", "branch X"                    | `--worktree X`          |
-| explicit wf-ID (`wf-20260702-…`)             | `--wf <ID>`             |
+| explicit wf-ID (`wf-auth-refactor-…`)        | `--wf <ID>`             |
+| "statusline", "% segment", "hud segment"    | `--statusline`          |
 | nothing specific / "current"                 | (no flags)              |
 
 Default (no flags) shows the most recently active workflow.
+
+**`--feature` / `--worktree` now match on feature slugs** embedded in the new
+`wf-{slug}-{date}-{hex}` id format, so `--feature auth-refactor` finds a
+workflow whose id is `wf-auth-refactor-20260706-d4e5f6a7`.
+
+`--statusline` emits the single-line statusline segment used by the wrapper
+(`⚡ auth-refactor 60% · 🟢 phase_2 (3/5)`) — useful for ad-hoc checking
+without the full report. Prints nothing and exits 0 when no workflow is active.
 
 ---
 
@@ -80,12 +89,13 @@ python3 "$SCRIPT" [FLAGS]
 Examples:
 
 ```bash
-python3 "$SCRIPT"                            # current/active workflow
-python3 "$SCRIPT" --verbose                  # + agent chain, event timeline, narrative
-python3 "$SCRIPT" --all                      # summary table of all workflows
-python3 "$SCRIPT" --feature "parallel"       # find by feature name
-python3 "$SCRIPT" --worktree wf-d4e5f6a7    # find by worktree branch/suffix
-python3 "$SCRIPT" --wf wf-20260702-140000-d4e5f6a7   # explicit ID
+python3 "$SCRIPT"                                       # current/active workflow
+python3 "$SCRIPT" --verbose                             # + agent chain, event timeline, narrative
+python3 "$SCRIPT" --all                                 # summary table of all workflows
+python3 "$SCRIPT" --feature "auth-refactor"             # find by feature slug or goal text
+python3 "$SCRIPT" --worktree auth-refactor-d4e5f6a7    # find by worktree slug suffix
+python3 "$SCRIPT" --wf wf-auth-refactor-20260706-140000-d4e5f6a7   # explicit ID
+python3 "$SCRIPT" --statusline                          # one-line ⚡ progress segment only
 ```
 
 ---
@@ -124,7 +134,8 @@ alias cfstatus='python3 /path/to/craftflow_status_report.py'
 cfstatus                             # current workflow
 cfstatus --all                       # all workflows
 cfstatus --verbose                   # full detail
-cfstatus --feature "parallel"        # by feature text
+cfstatus --feature "auth-refactor"   # by feature slug or goal text
+cfstatus --statusline                # one-line ⚡ segment (same as hud wrapper)
 cfstatus --project /path/to/project  # if run outside the project tree
 ```
 
