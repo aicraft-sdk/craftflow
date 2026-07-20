@@ -15,6 +15,8 @@ Usage:
   python3 craftflow_status_report.py --json              # machine-readable output
   python3 craftflow_status_report.py --statusline       # one-line statusline segment
   python3 craftflow_status_report.py --project /path    # explicit project root
+  python3 craftflow_status_report.py --specs             # living-spec portfolio index
+  python3 craftflow_status_report.py --specs --spec-dir docs/ai/specs  # override spec dir
 """
 
 import argparse
@@ -725,6 +727,136 @@ def _build_json_output(wf_id: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# --specs: living-spec portfolio roll-up (read-only)
+# ---------------------------------------------------------------------------
+# A project opts in via a `living-spec: {dir, map}` block under `## Doc Targets`
+# in its CLAUDE.md (see docs/ai/specs/ for this repo's own convention). This
+# mode never writes anything — Path.glob / Path.read_text only.
+
+# Spec filenames follow the NNNN-slug.md convention (docs/ai/specs/0001-sandbox.md,
+# 0002-tokentracker.md, ...). This excludes non-spec files like template.md.
+_SPEC_FILE_RE = re.compile(r'^\d{4}-.+\.md$')
+
+
+def _resolve_living_spec_dir(explicit: str | None) -> tuple[Path | None, str | None]:
+    """Resolve the living-spec directory. Returns (dir_path, error_message).
+
+    Priority: --spec-dir override, then `living-spec: {dir: ...}` under
+    `## Doc Targets` in the project's CLAUDE.md. error_message is None on
+    success.
+    """
+    if explicit:
+        return Path(explicit).resolve(), None
+
+    root = hl.project_dir()
+    claude_md = root / "CLAUDE.md"
+    no_target_msg = "No living-spec Doc Targets declared and no --spec-dir given."
+    if not claude_md.is_file():
+        return None, no_target_msg
+
+    try:
+        text = claude_md.read_text(encoding="utf-8")
+    except Exception:
+        return None, no_target_msg
+
+    doc_targets = hl.parse_markdown_sections(text).get("Doc Targets")
+    if not doc_targets:
+        return None, no_target_msg
+
+    m = re.search(r'living-spec:\s*\n\s*dir:\s*(\S+)', doc_targets)
+    if not m:
+        return None, no_target_msg
+
+    return (root / m.group(1)).resolve(), None
+
+
+def _parse_spec_front_matter(text: str) -> dict[str, str]:
+    """Parse the simple `id/title/owner/status/risk` YAML front matter.
+
+    Line-based, not a full YAML parser — matches this repo's actual spec
+    shape (docs/ai/specs/0001-sandbox.md, template.md): flat `key: value`
+    pairs between a leading and trailing `---` delimiter. Package
+    associations are NOT here — they live in a separate `## Impacted
+    Packages` markdown table (see _parse_impacted_packages).
+    """
+    m = re.match(r'^---\s*\n(.*?)\n---\s*\n', text, re.DOTALL)
+    if not m:
+        return {}
+    fm: dict[str, str] = {}
+    for line in m.group(1).splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        fm[key.strip()] = value.strip().strip('"').strip("'")
+    return fm
+
+
+def _parse_impacted_packages(text: str) -> list[str]:
+    """Parse the `## Impacted Packages` markdown table's Package column.
+
+    Returns [] if the section is absent — many specs in this repo's
+    docs/ai/specs/ don't have it (e.g. 0003-agent-llm.md), so callers must
+    degrade gracefully (show packages as empty/—) rather than error.
+    """
+    content = hl.parse_markdown_sections(text).get("Impacted Packages")
+    if not content:
+        return []
+    packages: list[str] = []
+    for line in content.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        inner = line.strip("|")
+        if set(inner.replace("|", "").strip()) <= {"-", " ", ":"}:
+            continue  # separator row (e.g. |---------|--------|)
+        cells = [c.strip() for c in inner.split("|")]
+        if not cells or not cells[0]:
+            continue
+        first = cells[0]
+        if first.lower() == "package":
+            continue  # header row
+        bt = re.search(r'`([^`]+)`', first)
+        packages.append(bt.group(1) if bt else first)
+    return packages
+
+
+def _load_specs(spec_dir: Path) -> list[dict[str, Any]]:
+    """Read-only scan of spec_dir. Never writes; Path.glob/read_text only."""
+    specs: list[dict[str, Any]] = []
+    for f in sorted(spec_dir.glob("*.md")):
+        if not _SPEC_FILE_RE.match(f.name):
+            continue
+        try:
+            text = f.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        fm = _parse_spec_front_matter(text)
+        specs.append({
+            "id":       fm.get("id") or f.stem,
+            "title":    fm.get("title") or "—",
+            "status":   fm.get("status") or "—",
+            "owner":    fm.get("owner") or "",
+            "packages": _parse_impacted_packages(text),
+            "path":     str(f),
+        })
+    return specs
+
+
+def _report_specs(specs: list[dict[str, Any]]) -> list[str]:
+    if not specs:
+        return ["No specs found."]
+    hdr = f"{'ID':<24}  {'TITLE':<45}  {'STATUS':<10}  PACKAGES"
+    sep = "─" * min(len(hdr) + 20, 140)
+    lines = [hdr, sep]
+    for s in specs:
+        title = str(s["title"])[:45]
+        pkgs = ", ".join(s["packages"]) if s["packages"] else "—"
+        lines.append(f"{s['id']:<24}  {title:<45}  {s['status']:<10}  {pkgs}")
+    return lines
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -744,6 +876,8 @@ Examples:
   python3 craftflow_status_report.py --json                  # machine-readable JSON
   python3 craftflow_status_report.py --statusline            # one-line segment for the statusline
   python3 craftflow_status_report.py --project /path/to/proj # explicit project root
+  python3 craftflow_status_report.py --specs                 # living-spec portfolio index
+  python3 craftflow_status_report.py --specs --spec-dir docs/ai/specs  # override spec dir
         """.strip(),
     )
     parser.add_argument("--wf",         metavar="ID",          help="Explicit workflow UUID")
@@ -754,12 +888,31 @@ Examples:
     parser.add_argument("--json",       action="store_true",    help="Emit structured JSON (for tooling / statusline)")
     parser.add_argument("--statusline", action="store_true",    help="Single-line progress segment for the statusline (⚡ label pct% · state phase)")
     parser.add_argument("--project",    metavar="DIR",          help="Project root (auto-detected if omitted)")
+    parser.add_argument("--specs",      action="store_true",    help="Read-only index of the project's living specs (portfolio roll-up)")
+    parser.add_argument("--spec-dir",   metavar="DIR",          help="Override the living-spec directory (bypasses CLAUDE.md Doc Targets lookup)")
     args = parser.parse_args()
 
     # Wire project root into hooklib before any hl.* call
     root = _resolve_project_root(args.project)
     if root is not None:
         os.environ["CLAUDE_PROJECT_DIR"] = str(root)
+
+    # --specs: read-only living-spec portfolio index (never writes anything)
+    if args.specs:
+        spec_dir, err = _resolve_living_spec_dir(args.spec_dir)
+        if err:
+            print(err, file=sys.stderr)
+            return 1
+        if not spec_dir.is_dir():
+            print(f"ERROR: spec directory not found: {spec_dir}", file=sys.stderr)
+            return 1
+        specs = _load_specs(spec_dir)
+        if args.json:
+            print(json.dumps(specs, indent=2, ensure_ascii=False))
+            return 0
+        for line in _report_specs(specs):
+            print(line)
+        return 0
 
     # --all: summary table over every workflow
     if args.all:

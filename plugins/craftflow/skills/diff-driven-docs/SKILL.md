@@ -46,7 +46,9 @@ Run this classifier before any doc work. Use it to determine which layers to eva
 
 If all three layers are SKIP, set `IMPACT_LEVEL: none` and emit a SKIPPED contract immediately without opening any doc files.
 
-## The Three Layers
+If the project's `## Doc Targets` overlay declares a `living-spec` key and the diff changes documented behavior or scope of an existing spec, also evaluate the Living Spec layer described below; otherwise skip it entirely. This does not add a column to the table above — non-opted projects see the same three-layer classification as before.
+
+## The Doc Layers
 
 ### Business Layer
 
@@ -71,6 +73,14 @@ Decision records capturing what changed, why, alternatives considered, and impac
 - Scope: docs/decisions/ (or project equivalent), compliance notes, migration guides for breaking changes
 - Update trigger: new architectural pattern, technology choice, non-obvious tradeoff, breaking change, security or compliance impact
 - What to write: structured record following the four-section format below
+
+### Living Spec Layer
+
+Targeted updates to a project's durable, source-of-truth spec(s) — e.g. this repo's `docs/ai/specs/NNNN-slug.md` — so specs stay current as code changes instead of rotting. This layer is strictly opt-in.
+
+- Scope: the project's declared source-of-truth spec(s), identified by the `living-spec` key in the project's `## Doc Targets` CLAUDE.md overlay
+- Update trigger: a diff changes behavior described by a spec's `FR-###`, `SC-###`, scope, or status — **only** when the project's `## Doc Targets` overlay declares a `living-spec` key. If no `living-spec` key is declared, this layer is always SKIP.
+- What to write: targeted updates to the spec's `FR-###`/`SC-###`/scope/`status` reflecting the diff; never duplicate code into the spec; never invent requirements the diff doesn't imply. Unlike the Audit layer, this layer never creates a new spec file — if zero or multiple specs match a changed file, skip that file for this layer entirely (see doc-syncer's Living Spec Sync for the exact zero/multi-match branching)
 
 ## Audit Doc Guidance
 
@@ -137,6 +147,16 @@ Run the Impact Classifier table against the diff. Determine `IMPACT_LEVEL` (none
 **Step 3 — Map changed files to doc targets**
 
 Use the project's `## Doc Targets` from `CLAUDE.md` if present. Otherwise apply the generic heuristics in `references/doc-target-heuristics.md`. For each changed file, identify zero or more target documentation files.
+
+The `## Doc Targets` overlay may also carry a `living-spec:` block, e.g.:
+
+```
+living-spec:
+  dir: docs/ai/specs
+  map: impacted-packages
+```
+
+`dir` is where the project's specs live; `map: impacted-packages` means resolving a changed file to its spec via the spec's `## Impacted Packages` markdown table (a `Package | Action` table — this is NOT front matter; real front matter is only `id/title/owner/status/risk`): extract the npm package name from a `packages/<name>/` path prefix in the changed file and match it (backtick-stripped) against the table's `Package` column. Absence of `living-spec:` in `## Doc Targets` means the Living Spec layer is always SKIP.
 
 **Step 4 — Read then write**
 

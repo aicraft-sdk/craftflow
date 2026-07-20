@@ -66,6 +66,7 @@ Parse the user's words for these signals:
 | "worktree X", "branch X"                    | `--worktree X`          |
 | explicit wf-ID (`wf-auth-refactor-…`)        | `--wf <ID>`             |
 | "statusline", "% segment", "hud segment"    | `--statusline`          |
+| "specs", "spec index", "living specs", "what specs exist" | `--specs` (add `--spec-dir DIR` to override the project's declared living-spec directory) |
 | nothing specific / "current"                 | (no flags)              |
 
 Default (no flags) shows the most recently active workflow.
@@ -77,6 +78,14 @@ workflow whose id is `wf-auth-refactor-20260706-d4e5f6a7`.
 `--statusline` emits the single-line statusline segment used by the wrapper
 (`⚡ auth-refactor 60% · 🟢 phase_2 (3/5)`) — useful for ad-hoc checking
 without the full report. Prints nothing and exits 0 when no workflow is active.
+
+`--specs` prints a read-only portfolio index of the project's living specs
+(id · title · status · packages) — the missing roll-up `--all` doesn't cover,
+since `--all` only lists per-workflow rows. It resolves the spec directory
+from a `living-spec: {dir: ...}` block under `## Doc Targets` in the
+project's `CLAUDE.md`; pass `--spec-dir DIR` to override that lookup. If no
+`living-spec` target is declared and no `--spec-dir` is given, it errors
+with a clear message rather than guessing. Never writes anything.
 
 ---
 
@@ -96,6 +105,8 @@ python3 "$SCRIPT" --feature "auth-refactor"             # find by feature slug o
 python3 "$SCRIPT" --worktree auth-refactor-d4e5f6a7    # find by worktree slug suffix
 python3 "$SCRIPT" --wf wf-auth-refactor-20260706-140000-d4e5f6a7   # explicit ID
 python3 "$SCRIPT" --statusline                          # one-line ⚡ progress segment only
+python3 "$SCRIPT" --specs                               # living-spec portfolio index
+python3 "$SCRIPT" --specs --spec-dir docs/ai/specs      # override the spec directory
 ```
 
 ---
@@ -137,6 +148,8 @@ cfstatus --verbose                   # full detail
 cfstatus --feature "auth-refactor"   # by feature slug or goal text
 cfstatus --statusline                # one-line ⚡ segment (same as hud wrapper)
 cfstatus --project /path/to/project  # if run outside the project tree
+cfstatus --specs                     # living-spec portfolio index (id · title · status · packages)
+cfstatus --specs --spec-dir docs/ai/specs  # override the spec directory
 ```
 
 The `--project` flag makes it work from any cwd (e.g. inside a worktree or

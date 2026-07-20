@@ -32,6 +32,8 @@ Read(file_path=".craftflow/state/progress.md")
 
 Also read `CLAUDE.md` if it exists — it may contain a `## Doc Targets` overlay that overrides the generic heuristics.
 
+That overlay may also carry a `living-spec: {dir, map}` declaration; see "Living Spec Sync" below.
+
 ## Diff Analysis
 
 Get the current diff using the appropriate command for the context:
@@ -100,6 +102,18 @@ When the audit layer is triggered:
 
 5. After creating or updating an audit doc, check whether `CLAUDE.md` has a `## Docs` or `## Decisions` index section. If yes, add a link to the new doc. Never paste doc content into CLAUDE.md — it is an index only.
 
+## Living Spec Sync
+
+Only evaluate this section when the diff may affect a project's durable source-of-truth spec(s):
+
+1. Gate: proceed only if BOTH halves hold — the project's `## Doc Targets` overlay declares a `living-spec` key **AND** the diff changes behavior documented in the impacted spec's `FR-###`/`SC-###`/scope, not just touches a matching package. If either half is false (no `living-spec` declared, or the diff doesn't change documented behavior), skip this section entirely and do not open any spec files.
+2. Resolve changed files → impacted spec: `Glob`/`Grep` over `living-spec.dir` for the spec whose `## Impacted Packages` markdown table (a `Package | Action` table — this is NOT front matter; real front matter is only `id/title/owner/status/risk`) lists a matching package, per the overlay's declared `map` strategy (currently only `impacted-packages`, resolved against the spec's `## Impacted Packages` table). Extract the npm package name from a `packages/<name>/` path prefix in the changed file and match it (backtick-stripped) against the table's `Package` column.
+   - **2a. Zero specs match:** skip Living Spec Sync for that file entirely — leave it out of `SPEC_DOCS_UPDATED`. Specs under `living-spec.dir` are pre-existing only in this section; `Write` is NOT authorized to create a new spec file here (unlike the Audit Doc Process above, which IS allowed to create new audit docs — this section is deliberately different).
+   - **2b. More than one spec matches:** skip — do not edit any of the matching specs. Note the ambiguity in `MEMORY_NOTES.deferred` rather than guessing which one to edit.
+3. `Read` the impacted spec, apply minimal `Edit`s reflecting the diff (status, affected `FR-###`/`SC-###` entries, scope) — never invent requirements not implied by the diff, never duplicate code into the spec.
+4. `Read` again after editing to verify the edit landed correctly.
+5. Record every touched spec path in `SPEC_DOCS_UPDATED`.
+
 ## Self-Review (Before Emitting Contract)
 
 Verify:
@@ -108,6 +122,7 @@ Verify:
 - If a new doc file was created, it is indexed in the relevant section of `CLAUDE.md`
 - No doc content was duplicated in `CLAUDE.md`
 - `DOC_FILES_UPDATED` and `AUDIT_DOCS_CREATED/UPDATED` lists are complete and accurate
+- living-spec edits (if any) reflect only the diff; no invented requirements; SPEC_DOCS_UPDATED is complete and accurate
 
 ## Completion State Rules
 
@@ -141,6 +156,7 @@ DOC_FILES_SKIPPED:
 SKIP_REASON: ""
 AUDIT_DOCS_CREATED: []
 AUDIT_DOCS_UPDATED: []
+SPEC_DOCS_UPDATED: []
 MEMORY_NOTES:
   learnings: []
   patterns: []

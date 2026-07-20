@@ -137,6 +137,7 @@ Research is executed by `craftflow:web-researcher` + `craftflow:github-researche
 4. **Agreement Snapshot first** - Request summary, requirements snapshot, constraints snapshot, in-scope, out-of-scope, open decisions, differences from agreement. Use the user's and repo's domain language in scenario names and acceptance criteria.
 4.5. **AC Lint (tech-agnostic check)** — Each acceptance criterion in the intent contract must describe a user-observable outcome, not an implementation metric. Restate technical criteria ("API latency < 200ms") in user terms ("User sees results within X seconds"). Flag any criterion that references a specific technology, internal metric, or implementation detail — move it to Risks or verification strategy instead.
 5. **Codebase Reality Check (MANDATORY for non-trivial work)** - Identify the exact files, modules, patterns, and integration points that support or constrain the plan. Do not finalize a non-trivial plan before comparing it against the current codebase and surfacing mismatches.
+   - **Living Spec Check:** If the project's `CLAUDE.md` `## Doc Targets` overlay declares a `living-spec: {dir, map}` key (same convention as `doc-syncer.md`'s "Living Spec Sync" section and `diff-driven-docs/SKILL.md`'s "Living Spec Layer" section — reuse that vocabulary verbatim, do not invent new field names), locate the single impacted spec the same way `doc-syncer` does: via the spec's `## Impacted Packages` markdown table (a `Package | Action` table — this is NOT front matter), matching it against the package(s) this plan touches. `Read` that one spec before finalizing the plan and treat it as a durable source of truth — do not propose an approach that contradicts it without flagging the contradiction under `Open Decisions`. Scope this to the single relevant spec, consistent with the "smallest relevant context" guidance above (this is not a broad `AGENTS.md`-style load); if zero or multiple specs match, note the ambiguity rather than guessing which one applies.
 6. **Plan-vs-Code Gaps** - For every meaningful change, compare current behavior/structure to the planned approach. If code contradicts the plan, surface it explicitly instead of smoothing it over.
 7. **Hidden-Assumption Pass** - Classify assumptions as `proven_by_code`, `inferred`, or `needs_user_confirmation`. If a critical assumption is not proven, expose it in the artifact.
 8. **Decision discipline** - For `decision_rfc`, research before recommendation, include at least 2 alternatives, and state drawbacks honestly.
@@ -281,6 +282,10 @@ Phase 2: API Layer
 - **Existing patterns / constraints:** [patterns confirmed from the repo]
 - **Pressure points / contradictions:** [where the codebase resists the naive approach]
 
+### Living Spec Reconciliation
+- [`None` if the project's `## Doc Targets` overlay has no `living-spec` declaration]
+- [otherwise: the impacted spec's path, and the specific `FR-###`/`SC-###`/scope/`status` updates this plan implies that spec will need once built — informational for BUILD's `doc-syncer`, which still does its own independent resolution]
+
 ### Plan-vs-Code Gaps
 | Current code / behavior | Planned change | Gap / risk | Plan response |
 |-------------------------|----------------|------------|---------------|
@@ -365,6 +370,7 @@ PLAN_MODE: direct | execution_plan | decision_rfc
 VERIFICATION_RIGOR: standard | critical_path
 CONFIDENCE: [0-100 from Confidence Score above]
 PLAN_FILE: "[path to saved plan, e.g., docs/plans/2026-02-05-feature-plan.md]"
+LIVING_SPEC_IMPACTED: "[path to the single impacted spec]" | null  # null when no living-spec Doc Targets declaration
 PHASES: [count of phases in plan]
 RISKS_IDENTIFIED: [count of risks identified]
 SCENARIOS:
