@@ -15,7 +15,7 @@ Every build, debug, review, and plan task routes through a single entry point th
 - **Shared state** — `.craftflow/state/` is readable by both Claude Code and Cursor
 - **Feature-named workflows** — workflow folders, files, and worktrees are named after the feature (`wf-auth-refactor-20260706-d4e5f6a7`) so you can identify them at a glance
 - **Live statusline progress** — a `⚡ feature-name 60% · 🟢 phase_2` segment appended to claude-hud, updates every ~300ms without interrupting the running agent
-- **Cursor support** — inline sequential execution with progress blocks in Cursor chat; no sub-agents required
+- **Cursor support** — each workflow phase dispatched via a real, isolated Cursor `Task` call (`subagent_type: generalPurpose`), with code-reviewer and silent-failure-hunter dispatched in parallel; progress blocks appear in Cursor chat at each phase transition
 
 ## Workflow types
 
@@ -158,6 +158,14 @@ Then add to `~/.claude/CLAUDE.md`:
 
 ## Install — Cursor AI
 
+If you have a local checkout of this plugin, run the script directly — it wires up the MDC rules **and** symlinks the `cursor-router` skill into `~/.cursor/skills/cursor-router` automatically (idempotent; backs up any stale content it finds there):
+
+```bash
+bash tools/craftflow-plugin/plugins/craftflow/install-cursor.sh
+```
+
+Without a local checkout (curl-piped), the script can only install the MDC rules — it has no local plugin directory to link the skill from, and prints a fallback note. In that case, install the skill separately first:
+
 ```bash
 # 1. Install the cursor-router skill
 npx skills add aicraft-sdk/craftflow --skill cursor-router
@@ -190,10 +198,13 @@ User request
 User request
   → craftflow-router.mdc (auto-injected)
     → Read("skills/cursor-router/SKILL.md")
-    → inline execution: Read agent .md → follow inline → progress block
+    → dispatches each phase via Task(subagent_type: generalPurpose, prompt: <agent role + overrides>)
+    → dispatches code-reviewer + silent-failure-hunter in parallel (two Task calls, same message)
     → writes .craftflow/state/cursor-wf.json
     → updates .craftflow/state/project/activeContext.md
 ```
+
+There is no real task-tracking system in Cursor (no `TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet`) — phase-state tracking is self-managed via `cursor-wf.json`.
 
 Progress blocks appear inline in Cursor chat at each phase transition:
 

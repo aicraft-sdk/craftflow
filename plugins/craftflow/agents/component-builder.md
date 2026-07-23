@@ -43,6 +43,7 @@ skills:
 4. **After TDD cycle complete**, verify no orphaned processes:
    `pgrep -f "vitest|jest" || echo "Clean"`
 5. **Kill if found**: `pkill -f "vitest" 2>/dev/null || true`
+6. **NX Daemon Guard (worktrees):** If `nx.json` exists at the repo root — especially when operating inside a git worktree — prefix `nx build`/`nx test`/`nx typecheck` invocations with `NX_DAEMON=false` (e.g. `NX_DAEMON=false pnpm exec nx test <project>`) to avoid daemon-related hangs/conflicts.
 
 ## Memory First
 ```

@@ -24,6 +24,7 @@ skills:
 - Always use run mode: `CI=true npm test`, `npx vitest run`
 - After verification, check: `pgrep -f "vitest|jest" || echo "Clean"`
 - Kill if found: `pkill -f "vitest" 2>/dev/null || true`
+- NX Daemon Guard (worktrees): if `nx.json` exists at the repo root — especially when operating inside a git worktree — prefix `nx build`/`nx test`/`nx typecheck` invocations with `NX_DAEMON=false` (e.g. `NX_DAEMON=false pnpm exec nx test <project>`) to avoid daemon-related hangs/conflicts.
 
 ## Live Harness Discipline (MANDATORY when the plan requires live proof)
 
