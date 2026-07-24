@@ -29,6 +29,15 @@
       "expected": "Replay checker exits 0"
     },
     {
+      "name": "Worktree merge guard scenarios pass",
+      "mode": "proof",
+      "given": "Real scratch git repos simulate every distinct outcome of craftflow_worktree_lock_staleness.py's decide() (self-reclaim gated on positive worktree-death proof, the still-live-worktree no-reclaim negative control, stale-worktree-gone, age-based stale-inactive including both the missing-metadata.json and corrupt-JSON variants, plain contention, the benign fresh-lock-no-metadata race, a lock-metadata read error, and both the launch-failure and non-zero-exit forms of a git-worktree-list failure) and of craftflow_worktree_copy_fallback.py's apply_copy_fallback() (a combined Added/Modified/Deleted/Renamed-with-space exercise, an AA conflict rejection, an RD missing-rename-source rejection, a preserved working symlink, a rewritten absolute symlink, a preserved chained symlink, and a brand-new untracked top-level directory), plus the broader dirty-tree and merge-conflict guard-sequence properties",
+      "when": "The harness subprocess-invokes the real craftflow_worktree_lock_staleness.py and craftflow_worktree_copy_fallback.py scripts (the exact files SKILL.md step 4 shells out to) against each scenario",
+      "then": "Each scenario resolves to the documented gate/outcome from skills/craftflow-router/SKILL.md step 4",
+      "command": "python3 plugins/craftflow/scripts/craftflow_worktree_merge_guard_check.py",
+      "expected": "Worktree merge guard check exits 0"
+    },
+    {
       "name": "Latency audit reads fixture telemetry",
       "mode": "stress",
       "given": "Fixture telemetry is present in the repo",

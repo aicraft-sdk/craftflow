@@ -237,16 +237,214 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
    - Continue with main tree — never block a workflow over worktree failure
    - Omit the `## Worktree` section from task descriptions when in fallback mode
 
-4. After `integration-verifier` returns PASS on the final phase and BEFORE memory-finalize:
-   - Read `worktree_path` and `worktree_branch` from the workflow artifact
-   - If `worktree_mode == "auto_created"`:
-     - Merge: `git merge {worktree_branch}` (read `worktree_branch` from the workflow artifact; run from project root)
-     - Remove worktree: `git worktree remove {worktree_path} --force`
-     - Delete branch: `git branch -d {worktree_branch}` (read from artifact)
-     - Update artifact: `worktree_mode → "merged_and_removed"`
-     - If merge conflicts: stop, persist `pending_gate: "worktree_merge_conflict"`, ask user to resolve before memory-finalize
+4. After `integration-verifier` returns PASS on the final phase and BEFORE memory-finalize, run
+   the pre-merge safety guard, then finalize. The guard applies identically whether finalize ends
+   up running a real `git merge` or falling back to the copy script (4e) — never skip it because a
+   fallback path is expected. If `worktree_mode != "auto_created"`, skip this entire step (nothing
+   to merge).
 
-Safety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: "auto_created"` already set, re-use `worktree_path` from the artifact rather than creating a new worktree. If `worktree_path` is null despite `worktree_mode: "auto_created"`, treat as fallback and proceed with main tree.
+   a. **Resolve project root, the plugin install path, and this workflow's own identity:**
+      ```bash
+      PROJECT_ROOT=$(git rev-parse --show-toplevel)
+      CRAFTFLOW_INSTALL=$(python3 -c "
+      import json, pathlib
+      reg = json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())
+      print(reg['plugins']['craftflow@craftflow'][0]['installPath'])
+      ")
+      LOCK_DIR="$PROJECT_ROOT/.claude/worktrees/.merge.lock"
+      ```
+      Read `workflow_uuid`, `worktree_path`, `worktree_branch` from the current workflow
+      artifact (already set in step 2).
+
+   b. **Acquire the merge lock.** The lock is a *directory*, not a plain file — `mkdir` is
+      atomic on POSIX filesystems, which a bare existence check is not. The staleness/contention
+      decision is delegated to a real script file, `craftflow_worktree_lock_staleness.py`
+      (installed alongside `craftflow_workflow_id.py`, invoked the same way) — never an inline
+      heredoc:
+      ```bash
+      ATTEMPT=0
+      MAX_ATTEMPTS=9   # ~45s total wait at 5s per attempt
+      LOCK_ACQUIRED=false
+
+      while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
+        if mkdir "$LOCK_DIR" 2>/dev/null; then
+          printf '{"workflow_uuid":"%s","worktree_path":"%s","acquired_at":"%s"}' \
+            "{workflow_uuid}" "{worktree_path}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            > "$LOCK_DIR/metadata.json"
+          LOCK_ACQUIRED=true
+          break
+        fi
+
+        METADATA_BEFORE=$(cat "$LOCK_DIR/metadata.json" 2>/dev/null)
+
+        DECISION=$(python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_worktree_lock_staleness.py" \
+          "$LOCK_DIR/metadata.json" "$PROJECT_ROOT" "{workflow_uuid}")
+
+        case "$DECISION" in
+          STALE_WORKTREE_GONE*|STALE_INACTIVE*|SELF_RECLAIM*)
+            # TOCTOU guard: `decide()` above is a pure snapshot read with no
+            # synchronization -- re-read the metadata NOW, immediately before
+            # deleting, and compare it byte-for-byte against what was
+            # captured immediately BEFORE `decide()` ran. Only delete if it
+            # is unchanged. If it changed (e.g. the original holder released
+            # and a third process won a fresh `mkdir` with its own live
+            # metadata in the window between the two reads), do NOT delete --
+            # a fresh, live lock must never be destroyed based on a stale
+            # decision about a DIFFERENT lock occupant. This does not need a
+            # separate `decide()` re-run: an unchanged byte-for-byte
+            # metadata.json between the two reads means nothing relevant to
+            # the decision could have changed either.
+            METADATA_AFTER=$(cat "$LOCK_DIR/metadata.json" 2>/dev/null)
+            if [ -n "$METADATA_AFTER" ] && [ "$METADATA_BEFORE" = "$METADATA_AFTER" ]; then
+              rm -rf "$LOCK_DIR"
+              continue   # reclaimed -- retry mkdir immediately, no sleep
+            fi
+            # Metadata changed underneath us -- fall through to the normal
+            # wait/retry path below, exactly like ordinary contention.
+            ;;
+        esac
+
+        ATTEMPT=$((ATTEMPT + 1))
+        sleep 5
+      done
+      ```
+      [EASY TO MISS: the `METADATA_BEFORE`/`METADATA_AFTER` byte-for-byte compare immediately
+      before `rm -rf "$LOCK_DIR"` closes a real TOCTOU window — without it, a stale-looking lock
+      could legitimately be released and re-acquired by a third process between the staleness
+      script's read and this loop's `rm -rf`, and the reclaiming process would delete that THIRD
+      process's brand-new, live lock instead of the one it actually evaluated. This is the
+      smallest correct fix: it reuses the same metadata content the staleness decision itself was
+      based on rather than re-invoking `decide()` a second time, and it still has one
+      irreducible-but-negligible window (between the second `cat` and the `rm -rf`) that a full
+      atomic compare-and-delete primitive would close — POSIX shell has no such primitive for
+      directories, so this is the practical minimum-diff mitigation, not a claim of perfect
+      atomicity.]
+      [EASY TO MISS: `craftflow_worktree_lock_staleness.py` never reclaims on unreadable/corrupt
+      lock metadata (`CONTENDED_UNKNOWN_HOLDER`) or on a genuine filesystem/permission read error
+      (`LOCK_READ_ERROR`, distinct from contention) — both fail closed, always waiting out the
+      budget rather than risk stealing a live lock. It DOES reclaim immediately, skipping the
+      age/inactivity window, when the lock's recorded `workflow_uuid` matches this workflow's own
+      `{workflow_uuid}` **AND** the lock's recorded `worktree_path` is positively confirmed gone
+      (`SELF_RECLAIM`) — a workflow resuming after crashing while it itself held the lock must
+      never wait out its own dead lock once that proof exists. If the same `workflow_uuid` resumes
+      while its own worktree still exists (e.g. two concurrent processes for the same workflow,
+      genuinely still mid-merge), it is NOT given this shortcut — it waits/gates exactly like a
+      stranger's lock would, because a `workflow_uuid` match alone is never treated as proof the
+      prior holder is dead. A `metadata.json` that exists but fails to parse as a JSON object
+      (corrupt/truncated, e.g. a crash mid-`printf`-write) is NOT a permanent
+      `CONTENDED_UNKNOWN_HOLDER` dead-end either — it falls back to the lock directory's own mtime
+      as a substitute `acquired_at` and can still reclaim via the age check, surfacing as
+      `STALE_INACTIVE unknown` (matches the `STALE_INACTIVE*` reclaim pattern above). A failure of
+      the `git worktree list --porcelain` subprocess call itself (e.g. `git` not on PATH) surfaces
+      as `GIT_WORKTREE_LIST_ERROR <exception_class_name>` — like `LOCK_READ_ERROR`, this
+      deliberately does NOT match any reclaim pattern above and fails closed, waiting out the
+      budget. This script is the single source of truth for this decision — `SKILL.md` and
+      `scripts/craftflow_worktree_merge_guard_check.py` both invoke the exact same file; there is
+      no separate copy to keep in sync.]
+
+   c. **If the lock was never acquired** (loop exhausted at `MAX_ATTEMPTS` while still contended):
+      - Persist `pending_gate: "worktree_merge_locked"` on the workflow artifact, naming the
+        last-known holder as follows, based on the final `$DECISION`'s outcome word:
+        - `CONTENDED <workflow_uuid>` → record that `workflow_uuid` as the holder.
+        - `CONTENDED_UNKNOWN_HOLDER` → record `"unknown"` as the holder.
+        - `LOCK_READ_ERROR <exception_class_name>` → record the exception class name itself
+          (e.g. `"PermissionError"`) as the holder value — **not** `"unknown"` and **not** a
+          `workflow_uuid` — since this outcome is not evidence of any other workflow at all, and
+          recording it as `"unknown"` would blur it back into ordinary contention.
+        - `GIT_WORKTREE_LIST_ERROR <exception_class_name>` → same treatment as `LOCK_READ_ERROR`:
+          record the exception class name itself as the holder value, never `"unknown"` — this
+          outcome means the local `git worktree list --porcelain` call itself failed to run (e.g.
+          `git` not on PATH), not that another workflow holds the lock.
+      - Do NOT touch the main tree, the worktree, or the branch.
+      - Stop before memory-finalize. If the final `$DECISION` started with `LOCK_READ_ERROR` or
+        `GIT_WORKTREE_LIST_ERROR`, use a distinct message template that makes clear this is a local
+        filesystem/permission/environment problem, not another workflow: "Failed to evaluate the
+        merge lock due to a local error (`{exception_class_name}`) — this is NOT evidence of
+        another live workflow. For `LOCK_READ_ERROR`, check filesystem permissions on
+        `.claude/worktrees/.merge.lock`; for `GIT_WORKTREE_LIST_ERROR`, confirm `git` is on `PATH`
+        and runnable. Then resume this workflow to retry." Otherwise (a `CONTENDED` or
+        `CONTENDED_UNKNOWN_HOLDER` outcome) tell the user: "Another BUILD workflow
+        ({holder_workflow_uuid_or_unknown}) currently holds the merge lock. Wait for it to finish,
+        then resume this workflow to retry. If that workflow is actually dead (not just slow), you
+        can manually delete `.claude/worktrees/.merge.lock` and resume — only after confirming it
+        isn't still running."
+      - Resuming this workflow re-enters this step from 4a.
+
+   d. **Clean-tree check** (only reached once the lock is held):
+      ```bash
+      DIRTY_STATUS=$(git -C "$PROJECT_ROOT" status --porcelain 2>&1)
+      DIRTY_EXIT=$?
+      ```
+      - If `DIRTY_EXIT != 0` (the `git status` command itself failed) OR `DIRTY_STATUS` is
+        non-empty (uncommitted changes exist):
+        - Release the lock: `rm -rf "$LOCK_DIR"`
+        - Persist `pending_gate: "worktree_dirty_main_tree"` (include `$DIRTY_STATUS` in the
+          event log for visibility).
+        - Do NOT run `git merge`, do NOT copy any files from the worktree, do NOT remove the
+          worktree or branch.
+        - Stop before memory-finalize. Tell the user: "The main tree has uncommitted changes
+          this BUILD did not make (likely a concurrent DEBUG/PLAN/REVIEW session, or an
+          unrelated manual edit). Commit, stash, or otherwise resolve those changes, then resume
+          this workflow to retry the merge."
+        - Resuming this workflow re-enters this step from 4a.
+      - If clean (empty output, exit 0): proceed to 4e.
+
+   e. **Finalize** (destination behavior unchanged from before this fix, now guarded — and now
+      covers the copy-fallback path explicitly and executably for the first time):
+      - Attempt: `git merge {worktree_branch}` (from `$PROJECT_ROOT`; read `worktree_branch`
+        from the workflow artifact).
+      - **If the merge output contains `"Already up to date"`**: this means the worktree's
+        builder edited files but never committed them on `{worktree_branch}` — a real,
+        frequently-observed gotcha in this repo, not a sign there's nothing to merge. Recover
+        the actual changes directly from the worktree's own uncommitted state via the real
+        copy-fallback script, never via free-form manual copying:
+        ```bash
+        python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_worktree_copy_fallback.py" \
+          "{worktree_path}" "$PROJECT_ROOT"
+        ```
+        This script parses `git status --porcelain=1 -z` in `{worktree_path}` (NUL-delimited,
+        unquoted paths — chosen to correctly handle renamed/copied entries and paths containing
+        spaces) and applies Added/Modified/untracked entries as copies, Deleted entries as
+        removals, and Renamed/Copied entries as an old-path removal plus new-path copy. It does
+        not `git add` or commit — the changes land in the main tree exactly as uncommitted
+        changes, matching this router's existing practice.
+        [EASY TO MISS: this fallback only ever runs after the clean-tree check in 4d has already
+        passed for `$PROJECT_ROOT` — it never bypasses that check, because it is reached only
+        from this already-guarded branch.]
+      - **If the copy-fallback script itself exits non-zero:** the script's own documented
+        guarantee is partial-apply-but-diagnosable, not atomic — earlier tokens in the same run
+        that already applied successfully remain applied in the main tree even if a later token
+        fails, so a non-zero exit does NOT mean nothing landed.
+        - Release the lock: `rm -rf "$LOCK_DIR"`
+        - Persist `pending_gate: "worktree_copy_fallback_failed"` (include the script's
+          stderr/error text in the event log for visibility).
+        - Do NOT remove the worktree, do NOT delete the branch — the worktree still holds the
+          uncommitted source of truth for whatever did not land.
+        - Stop before memory-finalize. Tell the user: "The copy-fallback script failed while
+          applying the worktree's uncommitted changes to the main tree: `{stderr_or_error_text}`.
+          This may be a partial apply — earlier files in this run may have already landed. Run
+          `git status --porcelain` in the main tree to see exactly what applied before resuming.
+          Resolve the underlying issue (e.g. a filesystem/permission problem, or a genuine
+          conflict/rename edge case the script refused to guess on), then resume this workflow to
+          retry."
+        - Resuming this workflow re-enters this step from 4a.
+      - **If the merge succeeds with real content merged** (not "Already up to date", no
+        conflicts): nothing further needed here.
+      - **If the merge reports conflicts** (existing, unchanged outcome):
+        - Release the lock: `rm -rf "$LOCK_DIR"`
+        - Persist `pending_gate: "worktree_merge_conflict"`, ask user to resolve before
+          memory-finalize.
+        - Do NOT remove the worktree or delete the branch while conflicts are unresolved.
+        - Resuming this workflow re-enters this step from 4a once the user has resolved the
+          conflict.
+      - On successful merge or successful copy-fallback:
+        - Remove worktree: `git worktree remove {worktree_path} --force`
+        - Delete branch: `git branch -d {worktree_branch}`
+        - Update artifact: `worktree_mode → "merged_and_removed"`
+        - Release the lock: `rm -rf "$LOCK_DIR"`
+        - Continue to doc-sync/memory-finalize as today.
+
+Safety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: "auto_created"` already set, re-use `worktree_path` from the artifact rather than creating a new worktree. If `worktree_path` is null despite `worktree_mode: "auto_created"`, treat as fallback and proceed with main tree. If a resume finds `pending_gate` set to `worktree_merge_locked`, `worktree_dirty_main_tree`, `worktree_merge_conflict`, or `worktree_copy_fallback_failed`, re-enter this step from 4a — none of these gates require any bespoke resume branch beyond the generic resume algorithm in `## 4. Resume And Hydration`.
 
 ### DEBUG preparation
 

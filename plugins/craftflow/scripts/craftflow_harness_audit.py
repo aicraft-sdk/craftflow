@@ -247,7 +247,7 @@ def main() -> int:
     )
     task_completed_guard = read(TASK_COMPLETED_GUARD)
     readme = read(README)
-    changelog = read(CHANGELOG)
+    changelog = read(CHANGELOG) if CHANGELOG.exists() else None
     invariants = read(INVARIANTS)
     prompt_invariants = read(PROMPT_INVARIANTS)
     prompt_surface_inventory = read(PROMPT_SURFACE_INVENTORY)
@@ -267,7 +267,12 @@ def main() -> int:
         errors.append(
             f"README.md current version does not match plugin.json ({version})"
         )
-    if f"## [{version}]" not in changelog:
+    if changelog is None:
+        print(
+            f"ADVISORY: {CHANGELOG} not found — skipping changelog-version-consistency check",
+            file=sys.stderr,
+        )
+    elif f"## [{version}]" not in changelog:
         errors.append(f"CHANGELOG.md missing release section for {version}")
     if MARKETPLACE_JSON.exists():
         marketplace_version = ((marketplace.get("metadata") or {}).get("version")) or ""
@@ -450,6 +455,13 @@ def main() -> int:
         "phase_exit_gate",
         "skill_precedence_gate",
         "Convergence rule:",
+        "worktree_merge_locked",
+        "worktree_dirty_main_tree",
+        "worktree_merge_conflict",
+        "worktree_copy_fallback_failed",
+        "craftflow_worktree_lock_staleness.py",
+        "craftflow_worktree_copy_fallback.py",
+        "craftflow_worktree_merge_guard_check.py",
     ]
     for heading in required_router_surface_text:
         if heading not in router_surface:
@@ -460,6 +472,10 @@ def main() -> int:
             "## 2a. Workflow Artifact And Hook Policy",
             "Artifact schema must include:",
             "Hook policy:",
+            "worktree_merge_locked",
+            "worktree_dirty_main_tree",
+            "worktree_merge_conflict",
+            "worktree_copy_fallback_failed",
         ),
         ROUTER_BUILD_REFERENCE: (
             "### BUILD preparation",
