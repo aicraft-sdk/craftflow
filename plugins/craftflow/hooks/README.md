@@ -4,7 +4,7 @@ This directory now serves two different purposes:
 
 1. **Plugin runtime hooks** via `hooks.json`
    - `PreToolUse` — protected writes guard (Edit and Write matchers only; Read events are not intercepted)
-   - `SessionStart` — workflow resume context
+   - `SessionStart` — workflow resume context; hook import self-check
    - `PostToolUse` — workflow artifact integrity audit and memory placeholder restore (defensive, fires on Edit/Write)
    - `TaskCompleted` — task metadata validation (enforced: block mode)
    - `PostCompact` — compaction event capture
@@ -23,6 +23,7 @@ from the plugin bundle and runs the referenced scripts from `${CLAUDE_PLUGIN_ROO
 The shipped runtime hooks are intentionally minimal. Most hooks operate in audit mode; `memoryWrites` and `taskMetadata` are enforced in block mode:
 - protect and enforce direct memory markdown writes (block mode)
 - inject workflow resume context
+- self-check that every sibling hook script still imports cleanly under python3, warning (not blocking) on failure
 - audit workflow artifact integrity after writes
 - validate and enforce CRAFTFLOW task metadata on completion (block mode)
 - restore memory placeholders after Edit/Write and on SubagentStop and Stop

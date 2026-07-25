@@ -10,6 +10,9 @@
       },
       {
         "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_instructions_loaded_audit.py\" --event SessionStart"
+      },
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_hook_selfcheck.py\" --event SessionStart"
       }
     ],
     "preToolUse": [

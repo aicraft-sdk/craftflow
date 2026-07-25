@@ -6,12 +6,18 @@ stdout, exit codes, and file side effects without running Claude Code.
 
 Run: python3 scripts/craftflow_hook_unit_tests.py
 """
+from __future__ import annotations
+
+import importlib.util
 import json
 import os
+import re
 import shutil
+import io
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
@@ -488,6 +494,626 @@ def test_pretooluse_guard_allows_memory_write_with_permit(tmp_dir: Path) -> None
     ok(name)
 
 
+# ---------------------------------------------------------------------------
+# Hook self-check tests
+# ---------------------------------------------------------------------------
+
+def _selfcheck_write_clean_script(path: Path, module_name: str) -> None:
+    path.write_text(
+        f"# {module_name}: trivially valid module, used only by the self-check scratch test\nVALUE = 1\n",
+        encoding="utf-8",
+    )
+
+
+def _selfcheck_write_broken_script(path: Path) -> None:
+    # Same defect class as the real craftflow_pretooluse_guard.py bug this
+    # feature exists to catch: a PEP604 `X | None` annotation with no
+    # `from __future__ import annotations`, which raises TypeError at
+    # import time on this machine's real python3 (3.9.6).
+    path.write_text(
+        "def helper(x: str | None) -> str | None:\n    return x\n",
+        encoding="utf-8",
+    )
+
+
+# Comfortably above the checker's own MIN_EXPECTED_SIBLING_SCRIPTS floor (5)
+# so ordinary RED/GREEN scratch tests never accidentally trip the "suspiciously
+# few sibling scripts" self-diagnostic (that failure mode has its own,
+# dedicated test with a deliberately tiny sibling count -- see
+# test_selfcheck_warns_on_suspiciously_low_sibling_count).
+_SELFCHECK_SCRATCH_CLEAN_COUNT = 6
+
+
+def _selfcheck_scratch_checker(tmp_dir: Path, n_clean: int = _SELFCHECK_SCRATCH_CLEAN_COUNT) -> Path:
+    """Copy the real checker's source into tmp_dir alongside n_clean trivially-valid
+    sibling scripts. Returns the path to the scratch copy of the checker."""
+    tmp_dir.mkdir(parents=True)
+    real_checker = SCRIPTS / "craftflow_hook_selfcheck.py"
+    scratch_checker = tmp_dir / "craftflow_hook_selfcheck.py"
+    scratch_checker.write_text(real_checker.read_text(encoding="utf-8"), encoding="utf-8")
+    for i in range(n_clean):
+        _selfcheck_write_clean_script(
+            tmp_dir / f"craftflow_scratch_clean_{i}.py", f"craftflow_scratch_clean_{i}"
+        )
+    return scratch_checker
+
+
+def _load_selfcheck_module():
+    """Dynamically load the real craftflow_hook_selfcheck.py as a module in
+    THIS test process, for direct white-box testing of its pure functions
+    (e.g. run_selfcheck's per-item isolation). This is a test-harness
+    convenience, not a violation of the checker's own "never import a checked
+    script directly" constraint -- that constraint governs what
+    craftflow_hook_selfcheck.py imports in its OWN runtime process; it says
+    nothing about how this separate test harness loads it for inspection."""
+    path = SCRIPTS / "craftflow_hook_selfcheck.py"
+    spec = importlib.util.spec_from_file_location("craftflow_hook_selfcheck_test_import", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_selfcheck_detects_broken_script_red(tmp_dir: Path) -> None:
+    name = "hook-selfcheck/detects-broken-script-RED"
+    scratch_checker = _selfcheck_scratch_checker(tmp_dir)
+    _selfcheck_write_broken_script(tmp_dir / "craftflow_scratch_broken.py")
+    result = subprocess.run(
+        [sys.executable, str(scratch_checker)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}; expected 0 even when a failure is detected")
+        return
+    if "craftflow_scratch_broken.py" not in result.stdout:
+        fail(name, f"expected broken script name in stdout warning; got: {result.stdout!r}")
+        return
+    if '"additionalContext"' not in result.stdout:
+        fail(name, f"expected hookSpecificOutput.additionalContext in stdout; got: {result.stdout!r}")
+        return
+    for i in range(_SELFCHECK_SCRATCH_CLEAN_COUNT):
+        clean_name = f"craftflow_scratch_clean_{i}.py"
+        if clean_name in result.stdout:
+            fail(name, f"clean script {clean_name} incorrectly reported as failing")
+            return
+    ok(name)
+
+
+def test_selfcheck_silent_on_clean_scripts_green(tmp_dir: Path) -> None:
+    name = "hook-selfcheck/silent-when-clean-GREEN"
+    scratch_checker = _selfcheck_scratch_checker(tmp_dir)
+    result = subprocess.run(
+        [sys.executable, str(scratch_checker)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}; expected 0")
+        return
+    if result.stdout.strip():
+        fail(name, f"expected silent stdout on a clean run; got: {result.stdout!r}")
+        return
+    ok(name)
+
+
+def test_selfcheck_warns_on_suspiciously_low_sibling_count(tmp_dir: Path) -> None:
+    # REM-FIX (doubt-verifier HIGH #1): discover_sibling_scripts() has no
+    # floor/sanity check -- Path.glob() on a misresolved or empty directory
+    # returns [] with no exception (this repo has direct history of exactly
+    # this class of bug: git show 76020c0). A near-empty result must not look
+    # identical to a genuinely clean run of all real sibling scripts.
+    name = "hook-selfcheck/warns-on-suspiciously-low-sibling-count"
+    tmp_dir.mkdir(parents=True)
+    real_checker = SCRIPTS / "craftflow_hook_selfcheck.py"
+    scratch_checker = tmp_dir / "craftflow_hook_selfcheck.py"
+    scratch_checker.write_text(real_checker.read_text(encoding="utf-8"), encoding="utf-8")
+    # Deliberately far below any reasonable floor: only 1 sibling script,
+    # simulating scripts_dir having resolved to the wrong (near-empty)
+    # directory.
+    _selfcheck_write_clean_script(tmp_dir / "craftflow_scratch_clean_0.py", "craftflow_scratch_clean_0")
+    result = subprocess.run(
+        [sys.executable, str(scratch_checker)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}; expected 0 even when the self-diagnostic fires")
+        return
+    if not result.stdout.strip():
+        fail(
+            name,
+            "expected a self-diagnostic warning when the discovered sibling count is "
+            "suspiciously low; stdout was silent (indistinguishable from a genuinely clean run)",
+        )
+        return
+    if '"additionalContext"' not in result.stdout:
+        fail(name, f"expected hookSpecificOutput.additionalContext in stdout; got: {result.stdout!r}")
+        return
+    if "1" not in result.stdout:
+        fail(name, f"expected the discovered count (1) to appear in the self-diagnostic warning; got: {result.stdout!r}")
+        return
+    ok(name)
+
+
+def test_selfcheck_isolates_per_script_subprocess_errors(tmp_dir: Path) -> None:
+    # REM-FIX (doubt-verifier HIGH #2): run_selfcheck's per-script loop had no
+    # per-item isolation -- a single subprocess.run() raising a plain OSError
+    # (e.g. real resource pressure from spawning ~35 sequential python3
+    # subprocesses) propagated out of the whole loop, discarding every
+    # already-collected result. This recreates, one layer down, the exact
+    # "silently failed for a month" failure mode this feature exists to close.
+    name = "hook-selfcheck/isolates-per-script-subprocess-errors"
+    tmp_dir.mkdir(parents=True)
+    for i in range(3):
+        _selfcheck_write_clean_script(
+            tmp_dir / f"craftflow_scratch_clean_{i}.py", f"craftflow_scratch_clean_{i}"
+        )
+    module = _load_selfcheck_module()
+    real_run = module.subprocess.run
+
+    def flaky_run(argv, **kwargs):
+        if len(argv) >= 3 and "craftflow_scratch_clean_1" in argv[2]:
+            raise OSError("simulated resource-pressure failure spawning subprocess")
+        return real_run(argv, **kwargs)
+
+    module.subprocess.run = flaky_run
+    try:
+        siblings, discovery_error = module.discover_sibling_scripts(
+            tmp_dir, tmp_dir / "craftflow_hook_selfcheck.py"
+        )
+        if discovery_error is not None:
+            fail(name, f"sibling discovery unexpectedly failed: {discovery_error}")
+            return
+        failures, checked, total = module.run_selfcheck(tmp_dir, siblings)
+    except OSError as exc:
+        fail(
+            name,
+            f"a single script's OSError propagated out of run_selfcheck and erased all "
+            f"other already-collected results: {exc}",
+        )
+        return
+    finally:
+        module.subprocess.run = real_run
+
+    failure_names = [n for n, _ in failures]
+    if failure_names != ["craftflow_scratch_clean_1.py"]:
+        fail(
+            name,
+            f"expected exactly one isolated failure entry for craftflow_scratch_clean_1.py "
+            f"(others unaffected); got {failures}",
+        )
+        return
+    if (checked, total) != (3, 3):
+        fail(name, f"expected all 3 scripts to be counted as checked (no deadline set); got checked={checked}, total={total}")
+        return
+    ok(name)
+
+
+def test_selfcheck_discovery_itself_bounded_by_timeout(tmp_dir: Path) -> None:
+    # REM-FIX (doubt-verifier cycle-2 BLOCKING #1): discover_sibling_scripts()
+    # (the scripts_dir.glob() call) was unbounded, and the internal deadline
+    # clock only starts AFTER it returns. A slow filesystem (NFS mount,
+    # unsynced iCloud path, etc.) would hang before the deadline mechanism
+    # ever engages, with nothing yet collected to flush -- worse than the
+    # original bug, since even the truncation-flush mitigation has nothing to
+    # flush at that point. Simulates a stalled directory listing (a plain,
+    # non-generator monkeypatch of Path.glob that blocks synchronously) and
+    # asserts discovery degrades with a distinct diagnosis within its own
+    # bounded timeout, instead of hanging.
+    name = "hook-selfcheck/discovery-itself-bounded"
+    tmp_dir.mkdir(parents=True)
+    module = _load_selfcheck_module()
+    real_glob = module.Path.glob
+
+    def hanging_glob(self, pattern):
+        time.sleep(30)  # simulate a stalled filesystem syscall
+        return real_glob(self, pattern)
+
+    module.Path.glob = hanging_glob
+    try:
+        start = time.monotonic()
+        siblings, error = module.discover_sibling_scripts(
+            tmp_dir, tmp_dir / "craftflow_hook_selfcheck.py", timeout=1
+        )
+        elapsed = time.monotonic() - start
+    finally:
+        module.Path.glob = real_glob
+
+    if elapsed >= 5:
+        fail(name, f"discover_sibling_scripts did not return promptly when the glob stalled; took {elapsed:.1f}s")
+        return
+    if siblings is not None:
+        fail(name, f"expected siblings=None when discovery times out; got {siblings}")
+        return
+    if not error or "timed out" not in error.lower():
+        fail(name, f"expected a distinct 'timed out' diagnosis; got: {error!r}")
+        return
+    ok(name)
+
+
+def test_selfcheck_main_emits_distinct_warning_when_discovery_times_out(tmp_dir: Path) -> None:
+    # Companion to the above: main()'s end-to-end behavior when discovery
+    # itself times out must still be silent-on-block (exit 0, per the
+    # design's always-exit-0 constraint) but NOT silent on stdout -- a hung
+    # discovery must not look identical to a genuinely clean run.
+    name = "hook-selfcheck/main-warns-when-discovery-times-out"
+    tmp_dir.mkdir(parents=True)
+    real_checker = SCRIPTS / "craftflow_hook_selfcheck.py"
+    scratch_checker = tmp_dir / "craftflow_hook_selfcheck.py"
+    scratch_checker.write_text(real_checker.read_text(encoding="utf-8"), encoding="utf-8")
+    module = _load_selfcheck_module()
+    real_glob = module.Path.glob
+
+    def hanging_glob(self, pattern):
+        time.sleep(30)
+        return real_glob(self, pattern)
+
+    module.Path.glob = hanging_glob
+    old_stdout = sys.stdout
+    captured = io.StringIO()
+    try:
+        # Call main()'s logic directly (in-process, via the loaded module) --
+        # a real subprocess run would need its own hung-glob simulation,
+        # which isn't reproducible across a process boundary. This still
+        # exercises main()'s real discovery-error branch end-to-end,
+        # including the print() it performs on that branch.
+        original_file = module.__file__
+        module.__file__ = str(scratch_checker)
+        sys.stdout = captured
+        try:
+            exit_code = module.main()
+        finally:
+            module.__file__ = original_file
+            sys.stdout = old_stdout
+    finally:
+        module.Path.glob = real_glob
+
+    stdout_text = captured.getvalue()
+    if exit_code != 0:
+        fail(name, f"expected main() to still return 0 when discovery times out; got {exit_code}")
+        return
+    if not stdout_text.strip():
+        fail(
+            name,
+            "expected a distinct warning when discovery itself times out; stdout was silent "
+            "(indistinguishable from a genuinely clean run)",
+        )
+        return
+    if '"additionalContext"' not in stdout_text:
+        fail(name, f"expected hookSpecificOutput.additionalContext in stdout; got: {stdout_text!r}")
+        return
+    if "timed out" not in stdout_text.lower():
+        fail(name, f"expected the discovery-timeout diagnosis to name itself distinctly; got: {stdout_text!r}")
+        return
+    ok(name)
+
+
+def _selfcheck_scratch_checker_with_constants(
+    tmp_dir: Path, per_script_timeout: float, time_budget: float
+) -> Path:
+    """Like _selfcheck_scratch_checker, but rewrites the real checker's own
+    PER_SCRIPT_TIMEOUT_SECONDS / SELFCHECK_TIME_BUDGET_SECONDS constants to
+    small values in the scratch copy, so timing-sensitive regression tests
+    run in a few seconds instead of minutes while still exercising the exact
+    same algorithm at proportionally the same scale. Does not add any sibling
+    scripts -- callers add their own."""
+    tmp_dir.mkdir(parents=True)
+    real_checker = SCRIPTS / "craftflow_hook_selfcheck.py"
+    content = real_checker.read_text(encoding="utf-8")
+    content, n_per_script = re.subn(
+        r"PER_SCRIPT_TIMEOUT_SECONDS = \d+(\.\d+)?",
+        f"PER_SCRIPT_TIMEOUT_SECONDS = {per_script_timeout}",
+        content,
+    )
+    content, n_budget = re.subn(
+        r"SELFCHECK_TIME_BUDGET_SECONDS = \d+(\.\d+)?",
+        f"SELFCHECK_TIME_BUDGET_SECONDS = {time_budget}",
+        content,
+    )
+    if n_per_script != 1 or n_budget != 1:
+        raise AssertionError(
+            f"expected exactly one PER_SCRIPT_TIMEOUT_SECONDS assignment (found {n_per_script}) "
+            f"and one SELFCHECK_TIME_BUDGET_SECONDS assignment (found {n_budget}) in "
+            f"craftflow_hook_selfcheck.py -- constant name likely changed without updating this helper"
+        )
+    scratch_checker = tmp_dir / "craftflow_hook_selfcheck.py"
+    scratch_checker.write_text(content, encoding="utf-8")
+    return scratch_checker
+
+
+def _selfcheck_write_slow_script(path: Path, module_name: str, sleep_seconds: float) -> None:
+    path.write_text(
+        f"# {module_name}: deliberately slow-but-valid import, used only by the "
+        f"self-check truncation regression test\n"
+        f"import time\n"
+        f"time.sleep({sleep_seconds})\n"
+        f"VALUE = 1\n",
+        encoding="utf-8",
+    )
+
+
+def test_selfcheck_flushes_before_external_kill_when_sweep_runs_long(tmp_dir: Path) -> None:
+    # REM-FIX (doubt-verifier BLOCKING): the checker's worst-case internal
+    # budget (PER_SCRIPT_TIMEOUT_SECONDS * ~33 real siblings) can exceed the
+    # registered SessionStart hook timeout (15s in hooks/hooks.json). With no
+    # internal deadline, run_selfcheck batches ALL results in memory and only
+    # emits a warning once, after the full loop returns -- so a handful of
+    # merely-slow (not even broken) sibling imports is enough for an external
+    # kill to silently discard already-detected real failures. Reproduces the
+    # doubt-verifier's own scenario: several slow-but-succeeding siblings + one
+    # genuinely broken sibling + an external kill shorter than the full
+    # (unmitigated) sweep would take.
+    name = "hook-selfcheck/flushes-before-external-kill"
+    per_script_timeout = 5  # unchanged hard cap; well above sleep_each below
+    time_budget = 3  # small, scaled-down internal soft deadline for this test
+    scratch_checker = _selfcheck_scratch_checker_with_constants(tmp_dir, per_script_timeout, time_budget)
+    # "a_broken" sorts alphabetically before the "b_slow_*" scripts, so its
+    # failure is captured near-instantly, before the slow scripts consume the
+    # time budget.
+    _selfcheck_write_broken_script(tmp_dir / "craftflow_scratch_a_broken.py")
+    n_slow = 6
+    sleep_each = 1.5
+    for i in range(n_slow):
+        _selfcheck_write_slow_script(
+            tmp_dir / f"craftflow_scratch_b_slow_{i}.py", f"craftflow_scratch_b_slow_{i}", sleep_each
+        )
+    # The full unmitigated sweep (pre-fix code, no internal deadline) would
+    # take roughly n_slow * sleep_each seconds (~9s) -- comfortably longer
+    # than the external kill below. The fixed code's internal time_budget (3s)
+    # stops the sweep after ~2-3 checks (~3-4.5s), comfortably shorter than the
+    # external kill. This gap between "fixed" and "unmitigated" wall time is
+    # what proves the internal deadline (not luck) is what saves the run.
+    external_kill_seconds = 6
+    result = subprocess.run(
+        ["timeout", str(external_kill_seconds), sys.executable, str(scratch_checker)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        fail(
+            name,
+            f"external kill (timeout {external_kill_seconds}s) fired before the checker's "
+            f"internal deadline could flush already-collected results; exit code "
+            f"{result.returncode}, stdout={result.stdout!r}",
+        )
+        return
+    if not result.stdout.strip():
+        fail(
+            name,
+            "expected a flushed warning naming the already-detected broken script and noting "
+            "the truncated sweep; stdout was empty",
+        )
+        return
+    if "craftflow_scratch_a_broken.py" not in result.stdout:
+        fail(name, f"expected the already-detected broken script in the flushed warning; got: {result.stdout!r}")
+        return
+    if '"additionalContext"' not in result.stdout:
+        fail(name, f"expected hookSpecificOutput.additionalContext in stdout; got: {result.stdout!r}")
+        return
+    if "truncat" not in result.stdout.lower():
+        fail(
+            name,
+            f"expected a note that the sweep was truncated (checked N of total siblings) in "
+            f"the flushed warning; got: {result.stdout!r}",
+        )
+        return
+    ok(name)
+
+
+def test_selfcheck_never_imports_hooklib_directly() -> None:
+    name = "hook-selfcheck/never-imports-hooklib"
+    path = SCRIPTS / "craftflow_hook_selfcheck.py"
+    if not path.exists():
+        fail(name, f"craftflow_hook_selfcheck.py not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    if "import craftflow_hooklib" in content or "from craftflow_hooklib" in content:
+        fail(name, "checker must not import craftflow_hooklib directly in its own process")
+        return
+    if "craftflow_hooklib" not in content:
+        # Not mentioned anywhere (not even in a docstring/comment) -- nothing
+        # left to check for dynamic-import indirection.
+        ok(name)
+        return
+    # craftflow_hooklib is mentioned but not via a direct "import"/"from" above --
+    # also guard against dynamic-import indirection, including an aliased
+    # `import importlib as X` binding (`X.import_module(...)`) and
+    # getattr-based attribute lookup (`getattr(importlib, "import_module")(...)`),
+    # both of which evade a bare "importlib.import_module" substring check.
+    #
+    # Deliberate scope choice (not full AST parsing): this is a structural
+    # guardrail over a single small, hand-authored Phase 2 file -- not
+    # adversarial user input -- and no other check in this test file uses
+    # `ast`. A regex-based check covering the two concretely-identified
+    # bypasses (aliased import, getattr indirection) is proportionate; a
+    # further indirection such as
+    # `from importlib import import_module as im; im("craftflow_hooklib")`
+    # would still evade this check. cf:shortcut: regex-based dynamic-import
+    # detection, not full AST; upgrade to `ast.walk` if a real bypass of this
+    # kind is ever found in a future Phase 2 implementation.
+    importlib_aliases = {"importlib"} | set(re.findall(r"import\s+importlib\s+as\s+(\w+)", content))
+    for alias in importlib_aliases:
+        if re.search(rf"\b{re.escape(alias)}\s*\.\s*import_module\b", content):
+            fail(name, f"checker must not dynamically import craftflow_hooklib via {alias}.import_module")
+            return
+    if "__import__" in content:
+        fail(name, "checker must not dynamically import craftflow_hooklib via __import__")
+        return
+    if re.search(r'getattr\(\s*\w+\s*,\s*["\']import_module["\']\s*\)', content):
+        fail(name, 'checker must not dynamically import craftflow_hooklib via getattr(..., "import_module")')
+        return
+    ok(name)
+
+
+def _subprocess_run_arg_lists(content: str) -> list[str]:
+    """Return the literal text of every argv list/tuple passed as
+    subprocess.run's first positional argument -- either inline
+    (subprocess.run(["python3", ...])) or via a bare-name variable that was
+    itself assigned a list/tuple literal earlier in the file
+    (CMD = ["python3", ...]; subprocess.run(CMD, ...)). Capture is
+    best-effort (not a real parser) but only the FIRST element of each
+    returned string is ever inspected by the caller, so imprecise capture of
+    later elements (e.g. across a nested call like str(x)) doesn't matter.
+    """
+    inline = re.findall(r"subprocess\.run\(\s*(\[[^\]]*\]|\([^)]*\))", content)
+    var_names = re.findall(r"subprocess\.run\(\s*(\w+)\s*[,)]", content)
+    via_var = []
+    for var in var_names:
+        m = re.search(rf"\b{re.escape(var)}\s*=\s*(\[[^\]]*\]|\([^)]*\))", content)
+        if m:
+            via_var.append(m.group(1))
+    return inline + via_var
+
+
+def _first_argv_element_matches(content: str, argv_lists: list[str], value_pattern: str) -> bool:
+    """True if any captured argv list/tuple's FIRST element matches
+    value_pattern -- either directly (a literal expression) or indirectly via
+    a bare identifier that was itself assigned a value matching value_pattern
+    elsewhere in the file (e.g. INTERPRETER = "python3")."""
+    for argv in argv_lists:
+        # NOTE: no trailing \b after value_pattern -- both patterns this is
+        # called with end in a non-word character (a closing quote for
+        # "python3", a dot-separated identifier for sys.executable's own
+        # \b already anchoring it internally), so a trailing \b would sit
+        # between two non-word characters and never match. The quotes (or
+        # the dotted-attribute pattern itself) already delimit the literal
+        # precisely enough without it.
+        if re.match(rf"[\[\(]\s*{value_pattern}", argv):
+            return True
+        ident_match = re.match(r"[\[\(]\s*(\w+)\s*[,\)\]]", argv)
+        if ident_match:
+            ident = ident_match.group(1)
+            if re.search(rf"\b{re.escape(ident)}\s*=\s*{value_pattern}", content):
+                return True
+    return False
+
+
+def test_selfcheck_resolves_bare_python3_not_sys_executable() -> None:
+    name = "hook-selfcheck/resolves-bare-python3"
+    path = SCRIPTS / "craftflow_hook_selfcheck.py"
+    if not path.exists():
+        fail(name, f"craftflow_hook_selfcheck.py not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    # Both the accept and reject checks require actual call-site usage as the
+    # first element of a real subprocess.run() argv list/tuple -- not just
+    # presence anywhere in the file. A bare content-substring check would
+    # false-FAIL on legitimate prose (e.g. this checker's own module
+    # docstring explaining "never sys.executable") and false-PASS on a stray
+    # comment or unused variable. Accepts either a direct literal or a
+    # same-file constant/variable assigned that value and then used as the
+    # argv list's first element (covers both `INTERPRETER = "python3"` and
+    # `CMD = ["python3", ...]; subprocess.run(CMD, ...)` idioms, plus the
+    # tuple form `subprocess.run(("python3", ...))`).
+    argv_lists = _subprocess_run_arg_lists(content)
+    if _first_argv_element_matches(content, argv_lists, r"sys\.executable"):
+        fail(name, "checker must resolve the interpreter as bare python3 on PATH, not sys.executable")
+        return
+    if not _first_argv_element_matches(content, argv_lists, r'"python3"'):
+        fail(
+            name,
+            "checker's subprocess.run call does not appear to pass a literal "
+            "'python3' (or a constant/variable assigned to it) as its first argument",
+        )
+        return
+    ok(name)
+
+
+def test_hooks_json_registers_selfcheck_sessionstart() -> None:
+    name = "hooks/selfcheck-sessionstart-registered"
+    path = PLUGIN_ROOT / "hooks" / "hooks.json"
+    if not path.exists():
+        fail(name, f"hooks.json not found at {path}")
+        return
+    hooks = json.loads(path.read_text(encoding="utf-8"))
+    session_start_hooks = hooks.get("hooks", {}).get("SessionStart", [])
+    all_scripts = []
+    for entry in session_start_hooks:
+        for h in entry.get("hooks", []):
+            all_scripts.append(h.get("command", ""))
+    joined = " ".join(all_scripts)
+    if "craftflow_hook_selfcheck" not in joined:
+        fail(name, "hooks.json missing SessionStart hook: craftflow_hook_selfcheck")
+        return
+    ok(name)
+
+
+def test_root_hooks_json_registers_selfcheck_sessionstart() -> None:
+    # Root hooks.json (distinct from hooks/hooks.json) wires Cursor sessions
+    # via craftflow_cursor_adapter.py -- see Codebase Reality Check for the
+    # verified shape and adapter contract.
+    name = "hooks/root-cursor-selfcheck-sessionstart-registered"
+    path = PLUGIN_ROOT / "hooks.json"
+    if not path.exists():
+        fail(name, f"root hooks.json not found at {path}")
+        return
+    hooks = json.loads(path.read_text(encoding="utf-8"))
+    session_start_entries = hooks.get("hooks", {}).get("sessionStart", [])
+    matching = [
+        entry.get("command", "")
+        for entry in session_start_entries
+        if "craftflow_hook_selfcheck" in entry.get("command", "")
+    ]
+    if not matching:
+        fail(name, "root hooks.json missing a sessionStart entry for craftflow_hook_selfcheck")
+        return
+    command = matching[0]
+    if "craftflow_cursor_adapter" not in command:
+        fail(name, f"expected the new entry to route through craftflow_cursor_adapter.py; got: {command!r}")
+        return
+    if "--event SessionStart" not in command:
+        fail(name, f"expected the new entry to pass --event SessionStart; got: {command!r}")
+        return
+    ok(name)
+
+
+def test_selfcheck_internal_budget_stays_under_registered_hook_timeout() -> None:
+    # REM-FIX (doubt-verifier cycle-2 BLOCKING #2): no test or shared constant
+    # tied the checker's own internal worst-case budget
+    # (DISCOVERY_TIMEOUT_SECONDS + SELFCHECK_TIME_BUDGET_SECONDS +
+    # PER_SCRIPT_TIMEOUT_SECONDS) to hooks/hooks.json's registered SessionStart
+    # timeout for craftflow_hook_selfcheck.py. If either side changes in the
+    # future without a matching edit to the other, the exact BLOCKING bug
+    # from doubt-verify cycle 1 (internal budget exceeding the registered
+    # kill) can silently reappear with zero test failure to catch it.
+    name = "hook-selfcheck/internal-budget-under-registered-timeout"
+    module = _load_selfcheck_module()
+    path = PLUGIN_ROOT / "hooks" / "hooks.json"
+    if not path.exists():
+        fail(name, f"hooks.json not found at {path}")
+        return
+    hooks = json.loads(path.read_text(encoding="utf-8"))
+    session_start_hooks = hooks.get("hooks", {}).get("SessionStart", [])
+    registered_timeout = None
+    for entry in session_start_hooks:
+        for h in entry.get("hooks", []):
+            if "craftflow_hook_selfcheck" in h.get("command", ""):
+                registered_timeout = h.get("timeout")
+    if registered_timeout is None:
+        fail(name, "could not find a registered timeout for craftflow_hook_selfcheck in hooks/hooks.json")
+        return
+    worst_case = (
+        module.DISCOVERY_TIMEOUT_SECONDS
+        + module.SELFCHECK_TIME_BUDGET_SECONDS
+        + module.PER_SCRIPT_TIMEOUT_SECONDS
+    )
+    min_margin_seconds = 1  # sane minimum buffer for process startup/shutdown overhead
+    if worst_case + min_margin_seconds > registered_timeout:
+        fail(
+            name,
+            f"internal worst-case budget ({worst_case}s = discovery "
+            f"{module.DISCOVERY_TIMEOUT_SECONDS}s + sweep {module.SELFCHECK_TIME_BUDGET_SECONDS}s + "
+            f"one script {module.PER_SCRIPT_TIMEOUT_SECONDS}s) leaves less than {min_margin_seconds}s "
+            f"margin under the registered hook timeout ({registered_timeout}s) in hooks/hooks.json",
+        )
+        return
+    ok(name)
+
+
 def test_hooks_json_registers_new_hooks() -> None:
     name = "hooks/new-hooks-registered"
     path = PLUGIN_ROOT / "hooks" / "hooks.json"
@@ -548,6 +1174,31 @@ def main() -> int:
         test_pretooluse_guard_blocks_memory_write_without_permit(tmp / "g1")
         test_pretooluse_guard_allows_memory_write_with_permit(tmp / "g2")
 
+        print()
+        print("[ hook-selfcheck ]")
+        # NOTE: wrapped in try/except (deviation from the plan's literal bare
+        # calls) because _selfcheck_scratch_checker() unconditionally
+        # read_text()s the not-yet-created craftflow_hook_selfcheck.py during
+        # Phase 1 (RED), raising an uncaught FileNotFoundError that would
+        # otherwise abort main() before the pre-existing structural tests
+        # below run. This converts that crash into a clean fail() line.
+        try:
+            test_selfcheck_detects_broken_script_red(tmp / "hc1")
+        except FileNotFoundError as exc:
+            fail("hook-selfcheck/detects-broken-script-RED", f"setup crashed: {exc}")
+        try:
+            test_selfcheck_silent_on_clean_scripts_green(tmp / "hc2")
+        except FileNotFoundError as exc:
+            fail("hook-selfcheck/silent-when-clean-GREEN", f"setup crashed: {exc}")
+        try:
+            test_selfcheck_warns_on_suspiciously_low_sibling_count(tmp / "hc3")
+        except FileNotFoundError as exc:
+            fail("hook-selfcheck/warns-on-suspiciously-low-sibling-count", f"setup crashed: {exc}")
+        test_selfcheck_isolates_per_script_subprocess_errors(tmp / "hc4")
+        test_selfcheck_flushes_before_external_kill_when_sweep_runs_long(tmp / "hc5")
+        test_selfcheck_discovery_itself_bounded_by_timeout(tmp / "hc6")
+        test_selfcheck_main_emits_distinct_warning_when_discovery_times_out(tmp / "hc7")
+
     print()
     print("[ structural ]")
     test_anti_rationalization_tables_present()
@@ -556,6 +1207,11 @@ def main() -> int:
     test_router_dispatches_doubt_verify()
     test_router_dispatches_intent_interview()
     test_hooks_json_registers_new_hooks()
+    test_selfcheck_never_imports_hooklib_directly()
+    test_selfcheck_resolves_bare_python3_not_sys_executable()
+    test_hooks_json_registers_selfcheck_sessionstart()
+    test_root_hooks_json_registers_selfcheck_sessionstart()
+    test_selfcheck_internal_budget_stays_under_registered_hook_timeout()
     test_workflow_id_script_present()
     test_statusline_script_present()
     test_router_uses_workflow_id_helper()
