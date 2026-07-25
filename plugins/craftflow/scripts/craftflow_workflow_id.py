@@ -48,6 +48,8 @@ Slug source precedence:
   deliberately checked out a real feature branch before invoking craftflow.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os

@@ -18,6 +18,8 @@ Because writes to memory files are already blocked by craftflow_pretooluse_guard
 this hook adds read-level protection: the model sees masked content and is less
 likely to attempt structural edits that would then be blocked.
 """
+from __future__ import annotations
+
 import hashlib
 import json
 import os

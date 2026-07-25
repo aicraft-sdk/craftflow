@@ -19,6 +19,8 @@ Usage:
   python3 craftflow_status_report.py --specs --spec-dir docs/ai/specs  # override spec dir
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os

@@ -27,6 +27,8 @@ Design mirrors addyosmani/agent-skills SDD cache pattern:
 - Uses HTTP conditional requests for freshness validation
 - Entries without freshness validators are never cached
 """
+from __future__ import annotations
+
 import hashlib
 import json
 import os

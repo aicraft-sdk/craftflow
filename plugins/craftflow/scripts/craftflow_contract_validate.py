@@ -19,6 +19,8 @@ When called as library:
     # result: {"valid": bool, "errors": list[str]}
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import re

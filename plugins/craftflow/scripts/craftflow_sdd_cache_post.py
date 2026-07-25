@@ -24,6 +24,8 @@ Cache entry shape:
 We skip caching if the response headers do not include ETag or Last-Modified —
 without those, we cannot validate freshness on the next request.
 """
+from __future__ import annotations
+
 import hashlib
 import json
 import os
