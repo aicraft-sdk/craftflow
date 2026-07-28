@@ -613,6 +613,405 @@ def test_bash_guard_ignores_non_bash_tool(tmp_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# --- widened vocabulary + in-cwd tests ---
+# ---------------------------------------------------------------------------
+# Phase 2 of docs/plans/2026-07-28-craftflow-guardrail-hardening-plan.md:
+# widens DESTRUCTIVE_COMMANDS shape-matching (rm/rmdir/mv/shred/truncate/
+# chmod positional targets, git clean/reset/push subcommand+flag shapes,
+# dd's of= key=value target, find -exec rm/-delete) and adds an in-cwd
+# critical-target check (bare cwd, "*", ".", or a CRITICAL_TOP_LEVEL_CHILDREN
+# entry) so destructive commands that never leave cwd are no longer a blind
+# spot.
+
+def test_bash_guard_blocks_rm_rf_dot_in_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-rm-rf-dot-in-cwd"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ."},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf .' in cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_star_in_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-rm-rf-star-in-cwd"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf *"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf *' in cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_dotgit_in_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-rm-rf-dotgit-in-cwd"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf .git"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf .git' in cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_critical_child_packages(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-rm-rf-critical-child-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./packages"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./packages' (critical top-level child); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_rm_in_noncritical_subdir(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/allows-rm-in-noncritical-subdir"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./scratch"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'rm -rf ./scratch' (non-critical subdir); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_git_clean_force(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-git-clean-force"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "git clean -fdx"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'git clean -fdx'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_git_clean_without_force_flag(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/allows-git-clean-without-force-flag"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "git clean"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'git clean' with no -f flag; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_git_reset_hard(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-git-reset-hard"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "git reset --hard HEAD~1"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'git reset --hard'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_git_reset_without_hard(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/allows-git-reset-without-hard"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "git reset HEAD~1"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'git reset' without --hard; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_git_push_force(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-git-push-force"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "git push --force"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'git push --force'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_git_push_without_force(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/allows-git-push-without-force"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "git push"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'git push' without --force; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_git_push_force_with_lease(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/allows-git-push-force-with-lease"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "git push --force-with-lease"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(
+            name,
+            "expected allow for 'git push --force-with-lease' -- this plan "
+            f"matches only the literal --force flag by design; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_mv_escaping_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-mv-escaping-cwd"
+    cwd_dir = tmp_dir / "cwd"
+    outside_dir = tmp_dir / "outside"
+    cwd_dir.mkdir(parents=True)
+    outside_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": f"mv secret.txt {outside_dir.resolve()}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'mv' targeting outside cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_dd_of_traversal(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-dd-of-traversal"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "dd if=/dev/zero of=../../../etc/passwd"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'dd ... of=' traversal target; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_dd_of_in_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/allows-dd-of-in-cwd"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "dd if=/dev/zero of=./scratch.img"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'dd ... of=' target within cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_chmod_escaping_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-chmod-escaping-cwd"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "chmod -R 777 /etc"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'chmod' targeting an absolute path outside cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_find_exec_rm(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-find-exec-rm"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "find /etc -exec rm {} \\;"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'find -exec rm' targeting an escaping search path; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_find_delete_in_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/allows-find-delete-in-cwd"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "find ./scratch -delete"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'find -delete' within cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_shred_escaping_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-shred-escaping-cwd"
+    cwd_dir = tmp_dir / "cwd"
+    outside_file = tmp_dir / "outside" / "secret.txt"
+    cwd_dir.mkdir(parents=True)
+    outside_file.parent.mkdir(parents=True)
+    outside_file.write_text("x", encoding="utf-8")
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": f"shred -u {outside_file.resolve()}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'shred' targeting outside cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_truncate_escaping_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-truncate-escaping-cwd"
+    cwd_dir = tmp_dir / "cwd"
+    outside_file = tmp_dir / "outside" / "secret.txt"
+    cwd_dir.mkdir(parents=True)
+    outside_file.parent.mkdir(parents=True)
+    outside_file.write_text("x", encoding="utf-8")
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": f"truncate -s 0 {outside_file.resolve()}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'truncate' targeting outside cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_regression_lock_release_still_allowed(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/regression-lock-release-still-allowed"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": 'rm -rf "$LOCK_DIR"'},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"regression flow 1 (lock release) must stay allowed; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_regression_memory_finalize_clear_still_allowed(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/regression-memory-finalize-clear-still-allowed"
+    cwd_dir = tmp_dir / "cwd"
+    state_dir = cwd_dir / ".craftflow" / "state"
+    state_dir.mkdir(parents=True)
+    (state_dir / ".memory-finalize").write_text("wf-test-1234", encoding="utf-8")
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -f .craftflow/state/.memory-finalize"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"regression flow 3 (memory-finalize clear) must stay allowed; got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # --- hooklib shared-helper tests (white-box) ---
 # ---------------------------------------------------------------------------
 
@@ -1498,6 +1897,31 @@ def main() -> int:
         test_bash_guard_allows_non_destructive_command(tmp / "b4")
         test_bash_guard_allows_unverifiable_dynamic_path(tmp / "b5")
         test_bash_guard_ignores_non_bash_tool(tmp / "b6")
+
+        print()
+        print("[ pretooluse-bash-guard: widened vocabulary + in-cwd ]")
+        test_bash_guard_blocks_rm_rf_dot_in_cwd(tmp / "b7")
+        test_bash_guard_blocks_rm_rf_star_in_cwd(tmp / "b8")
+        test_bash_guard_blocks_rm_rf_dotgit_in_cwd(tmp / "b9")
+        test_bash_guard_blocks_rm_rf_critical_child_packages(tmp / "b10")
+        test_bash_guard_allows_rm_in_noncritical_subdir(tmp / "b11")
+        test_bash_guard_blocks_git_clean_force(tmp / "b12")
+        test_bash_guard_allows_git_clean_without_force_flag(tmp / "b13")
+        test_bash_guard_blocks_git_reset_hard(tmp / "b14")
+        test_bash_guard_allows_git_reset_without_hard(tmp / "b15")
+        test_bash_guard_blocks_git_push_force(tmp / "b16")
+        test_bash_guard_allows_git_push_without_force(tmp / "b17")
+        test_bash_guard_allows_git_push_force_with_lease(tmp / "b18")
+        test_bash_guard_blocks_mv_escaping_cwd(tmp / "b19")
+        test_bash_guard_blocks_dd_of_traversal(tmp / "b20")
+        test_bash_guard_allows_dd_of_in_cwd(tmp / "b21")
+        test_bash_guard_blocks_chmod_escaping_cwd(tmp / "b22")
+        test_bash_guard_blocks_find_exec_rm(tmp / "b23")
+        test_bash_guard_allows_find_delete_in_cwd(tmp / "b24")
+        test_bash_guard_blocks_shred_escaping_cwd(tmp / "b25")
+        test_bash_guard_blocks_truncate_escaping_cwd(tmp / "b26")
+        test_bash_guard_regression_lock_release_still_allowed(tmp / "b27")
+        test_bash_guard_regression_memory_finalize_clear_still_allowed(tmp / "b28")
 
         print()
         print("[ hooklib shared-helper (white-box) ]")
