@@ -495,6 +495,140 @@ def test_pretooluse_guard_allows_memory_write_with_permit(tmp_dir: Path) -> None
 
 
 # ---------------------------------------------------------------------------
+# Bash destructive-command traversal guard tests
+# ---------------------------------------------------------------------------
+# REM-FIX (docs/incidents/2026-07-25-phase3-verifier-rm-attempt.md): a
+# dispatched subagent issued an rm command that, via relative-path
+# traversal from its worktree, resolved to the project root -- caught only
+# by the harness's own built-in destructive-command detector, not by
+# anything craftflow shipped. These tests cover craftflow's own
+# deterministic PreToolUse layer for the same failure mode.
+
+def test_bash_guard_blocks_relative_traversal_escaping_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-relative-traversal-escaping-cwd"
+    project = tmp_dir / "project"
+    worktree = project / ".claude" / "worktrees" / "wf-test"
+    worktree.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(worktree.resolve()),
+        "tool_input": {"command": "rm -f ../../.."},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a traversal escaping the worktree cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_absolute_path_outside_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-absolute-path-outside-cwd"
+    cwd_dir = tmp_dir / "cwd"
+    outside_dir = tmp_dir / "outside"
+    cwd_dir.mkdir(parents=True)
+    outside_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": f"rm -rf {outside_dir.resolve()}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for an absolute path outside cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_command_within_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/allows-command-within-cwd"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -f ./scratch/tmp.txt"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected silent allow for an rm target within cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_non_destructive_command(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/allows-non-destructive-command"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "git status"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected silent allow for a non-destructive command; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_unverifiable_dynamic_path(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/allows-unverifiable-dynamic-path"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": 'rm -rf "$TMPDIR/scratch"'},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"expected an unverifiable dynamic path to fall through without a hard block; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_ignores_non_bash_tool(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/ignores-non-bash-tool"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Edit",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"file_path": str(cwd_dir / "x.md")},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected silent allow for a non-Bash tool; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_hooks_json_registers_bash_guard() -> None:
+    name = "hooks/bash-guard-registered"
+    path = PLUGIN_ROOT / "hooks" / "hooks.json"
+    if not path.exists():
+        fail(name, f"hooks.json not found at {path}")
+        return
+    hooks = json.loads(path.read_text(encoding="utf-8"))
+    pre_hooks = hooks.get("hooks", {}).get("PreToolUse", [])
+    bash_entries = [entry for entry in pre_hooks if entry.get("matcher") == "Bash"]
+    if not bash_entries:
+        fail(name, "hooks.json has no PreToolUse entry with matcher 'Bash'")
+        return
+    commands = " ".join(h.get("command", "") for entry in bash_entries for h in entry.get("hooks", []))
+    if "craftflow_pretooluse_bash_guard" not in commands:
+        fail(name, "PreToolUse Bash matcher does not invoke craftflow_pretooluse_bash_guard.py")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # Hook self-check tests
 # ---------------------------------------------------------------------------
 
@@ -1175,6 +1309,15 @@ def main() -> int:
         test_pretooluse_guard_allows_memory_write_with_permit(tmp / "g2")
 
         print()
+        print("[ pretooluse-bash-guard ]")
+        test_bash_guard_blocks_relative_traversal_escaping_cwd(tmp / "b1")
+        test_bash_guard_blocks_absolute_path_outside_cwd(tmp / "b2")
+        test_bash_guard_allows_command_within_cwd(tmp / "b3")
+        test_bash_guard_allows_non_destructive_command(tmp / "b4")
+        test_bash_guard_allows_unverifiable_dynamic_path(tmp / "b5")
+        test_bash_guard_ignores_non_bash_tool(tmp / "b6")
+
+        print()
         print("[ hook-selfcheck ]")
         # NOTE: wrapped in try/except (deviation from the plan's literal bare
         # calls) because _selfcheck_scratch_checker() unconditionally
@@ -1207,6 +1350,7 @@ def main() -> int:
     test_router_dispatches_doubt_verify()
     test_router_dispatches_intent_interview()
     test_hooks_json_registers_new_hooks()
+    test_hooks_json_registers_bash_guard()
     test_selfcheck_never_imports_hooklib_directly()
     test_selfcheck_resolves_bare_python3_not_sys_executable()
     test_hooks_json_registers_selfcheck_sessionstart()

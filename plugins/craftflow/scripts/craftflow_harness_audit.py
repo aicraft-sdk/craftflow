@@ -297,6 +297,7 @@ def main() -> int:
     hook_commands = json.dumps(hooks)
     for script in (
         "craftflow_pretooluse_guard.py",
+        "craftflow_pretooluse_bash_guard.py",
         "craftflow_posttooluse_artifact_guard.py",
         "craftflow_sessionstart_context.py",
         "craftflow_task_completed_guard.py",

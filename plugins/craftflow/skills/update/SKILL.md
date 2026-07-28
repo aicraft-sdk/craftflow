@@ -222,8 +222,10 @@ Extract `NEW_VERSION` from `.metadata.version`.
 ```bash
 NEW_CACHE_PATH="$CACHE_ROOT/$NEW_VERSION"
 mkdir -p "$NEW_CACHE_PATH"
-cp -r "$MARKETPLACE_SOURCE/"* "$NEW_CACHE_PATH/"
+cp -r "$MARKETPLACE_SOURCE/." "$NEW_CACHE_PATH/"
 ```
+
+**Use `"$MARKETPLACE_SOURCE/."`, never `"$MARKETPLACE_SOURCE/"*`.** A bare `*` glob does not match dot-prefixed entries (`.claude-plugin/`, `.cursor-plugin/`) — `cp -r src/* dst/` silently drops them, leaving `skills/`/`agents`/`hooks/` copied but no `plugin.json`, which breaks skill/agent discovery for the installed plugin while hooks (a non-dot path) keep working — a hard-to-notice partial failure. Trailing `/.` copies the directory's contents including dotfiles.
 
 Verify the copy:
 
@@ -231,7 +233,10 @@ Verify the copy:
 echo "Skills: $(ls "$NEW_CACHE_PATH/skills/" 2>/dev/null | wc -l | tr -d ' ')"
 echo "Agents: $(ls "$NEW_CACHE_PATH/agents/" 2>/dev/null | wc -l | tr -d ' ')"
 echo "Hooks:  $(ls "$NEW_CACHE_PATH/hooks/" 2>/dev/null | wc -l | tr -d ' ')"
+echo "Plugin manifest: $([ -f "$NEW_CACHE_PATH/.claude-plugin/plugin.json" ] && echo present || echo MISSING)"
 ```
+
+If `Plugin manifest: MISSING` → STOP: the copy dropped dot-prefixed files; do not update the registry (3.4) until this is fixed, or the plugin's skills/agents will silently stop registering exactly like the incident this check exists to catch.
 
 ### 3.4 Update registry
 
@@ -427,7 +432,7 @@ If something went wrong, your backup is at:
   $BACKUP_DIR
 
 To restore from backup:
-  cp -r $BACKUP_DIR/originals/* $NEW_CACHE_PATH/
+  cp -r $BACKUP_DIR/originals/. $NEW_CACHE_PATH/
 ```
 
 ---

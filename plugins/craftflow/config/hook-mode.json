@@ -9,5 +9,6 @@
   "stopPersist": "audit",
   "stopFailureLog": "audit",
   "instructionsLoadedAudit": "audit",
-  "contractValidation": "audit"
+  "contractValidation": "audit",
+  "bashDestructiveTraversal": "block"
 }
