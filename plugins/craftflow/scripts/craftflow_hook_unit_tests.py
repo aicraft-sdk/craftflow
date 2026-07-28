@@ -1674,6 +1674,119 @@ def test_pretooluse_guard_unrecognized_protected_writes_value_still_allows_but_l
     ok(name)
 
 
+# ---------------------------------------------------------------------------
+# REM-FIX (build-craftflow-guardrail-harden, doubt-verify cycle 1): the
+# `mode.get("memoryWrites") == "block"` check governing the pre-existing
+# Edit/Write memory-path decision had the identical unvalidated-typo problem
+# `protectedWrites` was just fixed for above -- a typo'd value (e.g. "Block",
+# capital B) silently collapsed to the exact same log_event `decision:
+# "audit"` as an intentional audit choice, with zero distinguishing signal.
+# Live-verified before this fix: {"memoryWrites": "Block"} allowed an
+# Edit/Write to a protected memory .md file with no warning at all. Extends
+# the SAME enum-validation + distinguishing-log-decision pattern (shared via
+# `_resolve_write_gate_decision()`) to `memoryWrites` -- gating BEHAVIOR is
+# unchanged (still degrades to audit/allow on an unrecognized value; the
+# fallback default in load_mode() for memoryWrites stays "audit", untouched).
+# ---------------------------------------------------------------------------
+
+def test_pretooluse_guard_memory_writes_unrecognized_value_still_allows_but_logs_distinct_decision(
+    tmp_dir: Path,
+) -> None:
+    name = "pretooluse-guard/memory-writes-unrecognized-value-logs-distinct-decision"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text(
+        json.dumps({"memoryWrites": "Block"}), encoding="utf-8"
+    )
+    project_root = tmp_dir / "project"
+    target = project_root / ".craftflow" / "state" / "project" / "activeContext.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# Active Context\n", encoding="utf-8")
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(target)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(
+            name,
+            "expected allow (an unrecognized memoryWrites value must still "
+            f"degrade to audit/allow, not fail-closed); got: {out!r}",
+        )
+        return
+    log_path = project_root / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, f"expected log file {log_path} to exist after hook run")
+        return
+    log_lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+    matching = [line for line in log_lines if "audit-unrecognized-config-value" in line]
+    if not matching:
+        fail(
+            name,
+            "expected a log_event entry with decision 'audit-unrecognized-config-value' "
+            "for a typo'd memoryWrites value, distinct from an intentional 'audit' choice",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_memory_write_audited_not_denied_when_memory_writes_audit(tmp_dir: Path) -> None:
+    # Regression check: explicit memoryWrites="audit" must still degrade to
+    # allow (audit-only, logged not blocked) exactly as before this fix.
+    name = "pretooluse-guard/memory-write-audited-not-denied-when-memory-writes-audit"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text(
+        json.dumps({"memoryWrites": "audit"}), encoding="utf-8"
+    )
+    project_root = tmp_dir / "project"
+    target = project_root / ".craftflow" / "state" / "project" / "activeContext.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# Active Context\n", encoding="utf-8")
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(target)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"expected allow (audit-only, logged not blocked) when memoryWrites=audit; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_protected_writes_toggle_independent_of_memory_writes(tmp_dir: Path) -> None:
+    # Reverse-direction toggle-independence check (mirrors
+    # test_pretooluse_guard_memory_writes_toggle_independent_of_protected_writes
+    # above): memoryWrites="block" (governs the pre-existing Edit/Write
+    # memory-path check) must have zero effect on protectedWrites="audit"'s
+    # own gating of the NEW Bash-write-protected-path decision.
+    name = "pretooluse-guard/protected-writes-toggle-independent-of-memory-writes"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text(
+        json.dumps({"memoryWrites": "block", "protectedWrites": "audit"}), encoding="utf-8"
+    )
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo x | tee .craftflow/state/project/patterns.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(
+            name,
+            "expected protectedWrites=audit to allow the Bash-write-protected-path "
+            f"check regardless of memoryWrites=block; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_learn_distiller_uses_tools_key_not_allowed_tools() -> None:
     name = "learn-distiller/uses-tools-key-not-allowed-tools"
     path = PLUGIN_ROOT / "agents" / "learn-distiller.md"
@@ -4739,6 +4852,12 @@ def main() -> int:
         test_load_mode_fallback_defaults_protected_writes_to_block_when_file_missing(tmp / "g44")
         test_load_mode_fallback_defaults_protected_writes_to_block_when_file_corrupt(tmp / "g45")
         test_pretooluse_guard_unrecognized_protected_writes_value_still_allows_but_logs_distinct_decision(tmp / "g46")
+
+        print()
+        print("[ pretooluse-guard: REM-FIX (extend enum validation + distinguishing log decision to memoryWrites) ]")
+        test_pretooluse_guard_memory_writes_unrecognized_value_still_allows_but_logs_distinct_decision(tmp / "g47")
+        test_pretooluse_guard_memory_write_audited_not_denied_when_memory_writes_audit(tmp / "g48")
+        test_pretooluse_guard_protected_writes_toggle_independent_of_memory_writes(tmp / "g49")
 
         print()
         print("[ pretooluse-bash-guard ]")

@@ -205,6 +205,33 @@ def _python_suspicious_call_bindings(code_text: str) -> set:
     return patterns
 
 
+def _resolve_write_gate_decision(toggle_value):
+    """Enum-validate a `block`/`audit` config toggle value and compute both
+    the blocking decision and the log_event `decision` string. Shared by
+    BOTH the `memoryWrites` (Edit/Write memory-path check) and
+    `protectedWrites` (Bash-write protected-path check) toggles -- gating
+    BEHAVIOR stays entirely per-caller (each caller decides what
+    "should_block" means for its own violation type; this helper never
+    inspects `violations`), only the enum-validation + decision-string logic
+    is shared.
+
+    REM-FIX: a typo'd/unrecognized toggle value (e.g. "Block" capital-B,
+    "blocked", a boolean) must never be silently indistinguishable from an
+    intentional "audit" choice in craftflow-hook-events.log. Recognized
+    values ("block"/"audit") map to `should_block` True/False and decision
+    "deny"/"audit". Any other value degrades to `should_block=False` (fail
+    open, same gating outcome as "audit") but logs a DISTINCT
+    "audit-unrecognized-config-value" decision so the misconfiguration is
+    greppable instead of silently collapsing into the exact same log signal
+    as a deliberate "audit" choice."""
+    should_block = toggle_value == "block"
+    if toggle_value in ("block", "audit"):
+        decision = "deny" if should_block else "audit"
+    else:
+        decision = "audit-unrecognized-config-value"
+    return should_block, decision
+
+
 def _protected_memory_paths() -> set:
     """Return all active memory locations that should be write-guarded via
     the Edit/Write `file_path` check: the 3 memory .md files, plus the
@@ -494,6 +521,21 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
         )
         return 0
 
+    # REM-FIX: reuses the same `_resolve_write_gate_decision()` helper the
+    # sibling `protectedWrites` toggle uses (see its own docstring) --
+    # extends enum-validation + a distinguishing "audit-unrecognized-config-
+    # value" log decision to `memoryWrites` too. Gating behavior is
+    # unchanged: a typo'd value still degrades to audit/allow, only the
+    # logged `decision` differs. `should_block_raw`/`decision` are computed
+    # unconditionally from the toggle value alone; `should_block` still
+    # additionally requires "memory-write" in violations (mirrors the
+    # pre-existing `and` condition -- at this point in the function it is
+    # always true, since "worktree-confinement" already returned above and
+    # "memory-write" is the only remaining violation type, but the explicit
+    # check is kept for defensive clarity).
+    should_block_raw, memory_writes_decision = _resolve_write_gate_decision(mode.get("memoryWrites"))
+    should_block = "memory-write" in violations and should_block_raw
+
     log_event(
         "plugin_pretooluse_guard",
         {
@@ -504,16 +546,11 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
             "tool_name": data.get("tool_name"),
             "path": str(path),
             "event": "pretool_guard",
-            "decision": (
-                "deny"
-                if "memory-write" in violations and mode.get("memoryWrites") == "block"
-                else "audit"
-            ),
+            "decision": memory_writes_decision if "memory-write" in violations else "audit",
             "reason": ",".join(violations),
         },
     )
 
-    should_block = "memory-write" in violations and mode.get("memoryWrites") == "block"
     if should_block:
         pretool_deny(
             "CRAFTFLOW plugin hook blocked a direct state memory markdown write. Use the router-owned memory finalization path."
@@ -663,18 +700,15 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     # `memoryWrites` == "block" pattern used for the Edit/Write memory-write
     # check above -- the memoryWrites-gated logic itself is untouched.
     reason = f"bash-write-protected-path:{','.join(protected_write_violations)}"
-    protected_writes_value = mode.get("protectedWrites")
-    should_block = protected_writes_value == "block"
-
     # REM-FIX (HIGH): a typo'd/unrecognized protectedWrites value (e.g.
     # "Block", "blocked", a boolean) must never be silently indistinguishable
     # from an intentional "audit" choice in craftflow-hook-events.log. The
     # gating behavior itself is unchanged (still degrades to audit/allow) --
     # only the logged decision differs, so misconfiguration is greppable.
-    if protected_writes_value in ("block", "audit"):
-        decision = "deny" if should_block else "audit"
-    else:
-        decision = "audit-unrecognized-config-value"
+    # Uses the shared `_resolve_write_gate_decision()` helper (extracted once
+    # `memoryWrites` became a second caller of this exact enum-validation +
+    # distinguishing-log-decision pattern -- see its own docstring).
+    should_block, decision = _resolve_write_gate_decision(mode.get("protectedWrites"))
 
     log_event(
         "plugin_pretooluse_guard",
