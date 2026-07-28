@@ -1097,6 +1097,141 @@ def test_pretooluse_guard_handles_workflow_payload_race_in_wf_uuid_lookup(tmp_di
     ok(name)
 
 
+def test_pretooluse_guard_denies_bash_python_os_system_write_to_memory_md(tmp_dir: Path) -> None:
+    # REM-FIX (doubt-verify cycle 1): the prior python-write detection only
+    # recognized open(...)/Path(...).write_text(...) call shapes -- an
+    # UNBOUNDED set of other python write-adjacent mechanisms inside the
+    # exact same `python3 -c "..."` shape bypassed it completely. Live-
+    # verified before this fix: os.system('printf x > <protected path>')
+    # silently wrote the protected file.
+    name = "pretooluse-guard/denies-bash-python-os-system-write-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"import os; os.system('printf x > "
+                ".craftflow/state/project/patterns.md')\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash python os.system() write to a memory .md file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_python_subprocess_run_write_to_workflow_json(tmp_dir: Path) -> None:
+    # REM-FIX (doubt-verify cycle 1): also confirmed bypassing --
+    # subprocess.run(['bash', '-c', 'printf x > <protected path>']).
+    name = "pretooluse-guard/denies-bash-python-subprocess-run-write-to-workflow-json"
+    project_root = tmp_dir / "project"
+    wf_dir = project_root / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "wf-test.json").write_text('{"workflow_uuid":"wf-test"}', encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"import subprocess; subprocess.run(['bash', '-c', "
+                "'printf x > .craftflow/state/workflows/wf-test.json'])\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash python subprocess.run() write to a workflow JSON artifact; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_python_shutil_copy_write_to_memory_md(tmp_dir: Path) -> None:
+    # REM-FIX (doubt-verify cycle 1): also confirmed bypassing --
+    # shutil.copy(src, dest) with dest a protected path.
+    name = "pretooluse-guard/denies-bash-python-shutil-copy-write-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"import shutil; shutil.copy('/tmp/injected.txt', "
+                "'.craftflow/state/project/patterns.md')\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash python shutil.copy() write to a memory .md file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_python_os_rename_write_to_memory_md(tmp_dir: Path) -> None:
+    # REM-FIX (doubt-verify cycle 1): also confirmed bypassing --
+    # os.rename(src, dest) with dest a protected path.
+    name = "pretooluse-guard/denies-bash-python-os-rename-write-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"import os; os.rename('/tmp/injected.txt', "
+                "'.craftflow/state/project/patterns.md')\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash python os.rename() write to a memory .md file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_bash_python_dynamic_dispatch_write_to_memory_md(tmp_dir: Path) -> None:
+    # DISCLOSED, ACCEPTED GAP (not fixed by this REM-FIX): this guard's
+    # python-write detection is pattern-matching against literal text
+    # shapes (`os.system(`, `subprocess.run(`, `open(`, etc.) -- it cannot
+    # and does not attempt to catch a write reached via dynamic attribute
+    # dispatch (getattr(os, 'sys' + 'tem')(...)), string concatenation,
+    # exec()/eval()-wrapped code, ctypes, ftplib, or any of the countless
+    # other ways arbitrary Python can execute a shell command or write a
+    # file. This test asserts the CURRENT (allow) behavior deliberately, so
+    # a future reader sees this boundary was a conscious choice, not an
+    # oversight -- see the module-level LIMITATIONS disclosure in
+    # craftflow_pretooluse_guard.py.
+    name = "pretooluse-guard/allows-bash-python-dynamic-dispatch-write-to-memory-md-disclosed-gap"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"import os; getattr(os, 'sys' + 'tem')"
+                "('printf x > .craftflow/state/project/patterns.md')\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"expected ALLOW (disclosed gap: dynamic dispatch bypasses text-pattern detection); got deny: {out!r}")
+        return
+    ok(name)
+
+
 def test_hooks_json_registers_pretooluse_guard_on_bash() -> None:
     name = "hooks/pretooluse-guard-registered-on-bash"
     path = PLUGIN_ROOT / "hooks" / "hooks.json"
@@ -4134,6 +4269,14 @@ def main() -> int:
         test_pretooluse_guard_denies_bash_python_path_write_text_to_memory_md(tmp / "g25")
         test_pretooluse_guard_denies_bash_python_oneliner_via_env_prefix_write_to_memory_md(tmp / "g26")
         test_pretooluse_guard_handles_workflow_payload_race_in_wf_uuid_lookup(tmp / "g27")
+
+        print()
+        print("[ pretooluse-guard: REM-FIX (broadened python write-mechanism detection) ]")
+        test_pretooluse_guard_denies_bash_python_os_system_write_to_memory_md(tmp / "g28")
+        test_pretooluse_guard_denies_bash_python_subprocess_run_write_to_workflow_json(tmp / "g29")
+        test_pretooluse_guard_denies_bash_python_shutil_copy_write_to_memory_md(tmp / "g30")
+        test_pretooluse_guard_denies_bash_python_os_rename_write_to_memory_md(tmp / "g31")
+        test_pretooluse_guard_allows_bash_python_dynamic_dispatch_write_to_memory_md(tmp / "g32")
 
         print()
         print("[ pretooluse-bash-guard ]")

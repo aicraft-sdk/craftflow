@@ -50,6 +50,26 @@ _PATH_WRITE_TEXT_RE = re.compile(r"Path\(\s*['\"]([^'\"]+)['\"]\s*\)\s*\.\s*writ
 # per-subcommand, per-token scan can never see it).
 _PYTHON_INVOCATION_RE = re.compile(r"\bpython3?\b")
 
+# REM-FIX (doubt-verify cycle 1): the open(...)/Path(...).write_text(...)
+# checks above only recognize TWO of an unbounded set of python write-
+# adjacent mechanisms that can appear inside the exact same
+# `python3 -c "..."`/heredoc shape. Live-verified bypasses before this fix:
+# os.system('printf x > <protected path>'),
+# subprocess.run(['bash', '-c', 'printf x > <protected path>']),
+# shutil.copy(src, '<protected path>'), os.rename(src, '<protected path>').
+# This regex flags the most common shell-exec / file-copy-or-move call
+# shapes as SUSPICIOUS when combined with a protected-path literal
+# elsewhere in the same command text (see
+# `_python_suspicious_mechanism_targets()` below).
+_PYTHON_SUSPICIOUS_MECHANISM_RE = re.compile(
+    r"\b(?:"
+    r"os\.system"
+    r"|subprocess\.(?:run|call|Popen|check_call)"
+    r"|shutil\.(?:copy|copyfile|move)"
+    r"|os\.(?:rename|replace)"
+    r")\s*\("
+)
+
 
 def _protected_memory_paths() -> set:
     """Return all active memory locations that should be write-guarded via
@@ -142,12 +162,69 @@ def _python_script_write_targets(command: str) -> list:
     `Path('...').write_text(...)`. Does NOT resolve a variable-held path
     (`open(path, 'w')`) or a kwarg-first call (`open(mode='w',
     file='...')`) from static text -- a disclosed, narrow residual gap
-    (HIGH 1), not closed by this plan."""
+    (HIGH 1), not closed by this plan.
+
+    LIMITATIONS (disclosed, not fixed -- this and the sibling
+    `_python_suspicious_mechanism_targets()` below are the ENTIRE set of
+    python-write detection this hook performs): this is defense-in-depth
+    pattern-matching against the most common python file-write / shell-exec
+    mechanisms observed in real bypass attempts, NOT an exhaustive or
+    complete detector. It is fundamentally impossible to enumerate every way
+    arbitrary Python code can write a file or execute a shell command from
+    static text alone -- `ctypes`, `ftplib`, `ftplib.storbinary`, dynamically
+    -constructed strings/attribute names (`getattr(os, 'sys'+'tem')`),
+    `exec()`/`eval()`-wrapped code, and countless other APIs all route
+    around a fixed vocabulary of regexes. This module makes no attempt to
+    close that gap and does not claim to. Treat this as one layer of
+    defense-in-depth against the common/naive cases, never as a hard
+    security boundary for genuinely untrusted Python execution."""
     if not _PYTHON_INVOCATION_RE.search(command):
         return []
     targets = list(_OPEN_CALL_RE.findall(command))
     targets.extend(_PATH_WRITE_TEXT_RE.findall(command))
     return targets
+
+
+def _python_suspicious_mechanism_targets(command: str, protected_paths: set, cwd: Path) -> list:
+    """Broaden python-write detection (REM-FIX, doubt-verify cycle 1) to
+    also flag `os.system(`, `subprocess.run/call/Popen/check_call(`,
+    `shutil.copy/copyfile/move(`, and `os.rename/replace(` as suspicious
+    constructs. Unlike `_python_script_write_targets()`, these mechanisms
+    don't have a single reliable "target argument" position to extract --
+    the write may be embedded in a shell string (`os.system`), an argv list
+    (`subprocess.run([...])`), or a two-argument call whose destination
+    position varies (`shutil.copy(src, dest)`, `os.rename(src, dest)`).
+    Deliberately fail-closed instead: when the command contains a python
+    invocation AND one of these suspicious-mechanism markers, ANY protected
+    path (memory .md files, `.memory-finalize`, workflow JSON) that also
+    appears as a literal substring anywhere in the same command text is
+    treated as a violation, matching this codebase's own established
+    pattern of failing closed on dynamic/unresolvable content elsewhere
+    (see `command_has_traversal_or_wildcard()` in hooklib). This is coarser
+    than exact-target resolution but correct for a defense-in-depth layer:
+    over-flagging a construct that merely mentions a protected path's
+    spelling is an acceptable false-positive rate for a security guard,
+    silent bypass is not.
+
+    See the LIMITATIONS note on `_python_script_write_targets()` above --
+    this function does not attempt, and does not claim, to be exhaustive
+    either. Dynamically-dispatched calls (`getattr(os, 'sys'+'tem')(...)`),
+    string-concatenated method names, and exec()/eval()-wrapped code are a
+    disclosed, accepted gap, not covered here."""
+    if not _PYTHON_INVOCATION_RE.search(command):
+        return []
+    if not _PYTHON_SUSPICIOUS_MECHANISM_RE.search(command):
+        return []
+    hits = []
+    for candidate in protected_paths:
+        abs_spelling = str(candidate)
+        try:
+            rel_spelling = str(candidate.relative_to(cwd))
+        except ValueError:
+            rel_spelling = None
+        if abs_spelling in command or (rel_spelling and rel_spelling in command):
+            hits.append(abs_spelling)
+    return hits
 
 
 def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
@@ -337,6 +414,15 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
             if resolved not in protected_paths:
                 continue
             protected_write_violations.append(str(resolved))
+
+        # REM-FIX (doubt-verify cycle 1): broadened python write-mechanism
+        # detection -- os.system/subprocess.*/shutil.*/os.rename(replace)
+        # all bypassed the open()/Path().write_text()-only checks above.
+        # See _python_suspicious_mechanism_targets()'s own docstring for the
+        # disclosed, deliberately non-exhaustive scope of this check.
+        protected_write_violations.extend(
+            _python_suspicious_mechanism_targets(command, protected_paths, cwd)
+        )
     except Exception as exc:
         log_event(
             "plugin_pretooluse_guard",
