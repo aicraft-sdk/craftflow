@@ -1841,6 +1841,131 @@ def test_bash_guard_allows_git_dynamic_dir_override_without_traversal_elsewhere(
     ok(name)
 
 
+def test_bash_guard_blocks_git_dash_capital_c_unquoted_fragmented_substitution_with_traversal(
+    tmp_dir: Path,
+) -> None:
+    # REM-FIX continuation (router-reported, exact reproduction): shlex
+    # FRAGMENTS an UNQUOTED `$(...)` substitution into separate tokens
+    # (`$`, `(`, `echo`, `$x`, `)`) -- unlike the quoted form
+    # (`"$(echo YDYNAMIC)"`, already covered above), which shlex keeps as
+    # one token. `_find_git_subcommand()`'s `-C`-value-skip previously
+    # advanced past exactly ONE token after `-C` (assuming a single-token
+    # value), so the fragmented span's OWN tokens (starting with `(`) were
+    # then scanned as if `(` were the git subcommand itself -- `(` matches
+    # neither clean/reset/push, so `_is_destructive_git()` returned False
+    # and the whole command was silently ALLOWED (live-reproduced pre-fix:
+    # empty stdout, exit 0). Must deny once the fragmented span is
+    # correctly consumed as a single dynamic value and subcommand-scanning
+    # resumes at "reset" AFTER it, combined with `x=../../etc` supplying a
+    # real traversal literal earlier in the same command text.
+    name = "pretooluse-bash-guard/blocks-git-dash-c-unquoted-fragmented-substitution-with-traversal"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "x=../../etc; git -C $(echo $x) reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for 'x=../../etc; git -C $(echo $x) reset --hard' "
+            f"(unquoted, fragmented $(...) substitution); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_git_dash_capital_c_unquoted_fragmented_substitution_without_traversal(
+    tmp_dir: Path,
+) -> None:
+    # Behavior Contract rule 3 + no-over-blocking regression check for the
+    # fix above: a legitimate unquoted, fragmented `$(...)` -C override with
+    # NO traversal literal or wildcard anywhere in the command must still be
+    # allowed -- the subcommand ("reset --hard") is correctly identified as
+    # destructive by the fix, but with no traversal present the dynamic
+    # target stays in the existing fail-open "unverifiable" path, not denied.
+    name = "pretooluse-bash-guard/allows-git-dash-c-unquoted-fragmented-substitution-without-traversal"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "x=/some/safe/path; git -C $(echo $x) reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(
+            name,
+            "expected allow for an unquoted, fragmented dynamic git -C "
+            f"override with no traversal literal or wildcard anywhere; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_git_dash_capital_c_unquoted_dynamic_var_no_traversal(
+    tmp_dir: Path,
+) -> None:
+    # Router's own 3rd independent-re-verification scenario, verbatim: a
+    # legitimate unquoted dynamic -C usage (single-token `$x`, not a
+    # fragmented `$(...)` substitution) with no traversal anywhere must
+    # still allow -- must not regress via over-blocking.
+    name = "pretooluse-bash-guard/allows-git-dash-c-unquoted-dynamic-var-no-traversal"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "x=/some/safe/path; git -C $x status"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(
+            name,
+            "expected allow for 'git -C $x status' (non-destructive "
+            f"subcommand, no traversal anywhere); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_find_unquoted_nested_substitution_with_traversal_elsewhere(
+    tmp_dir: Path,
+) -> None:
+    # Router-requested double-check: does the SAME fragmentation gap affect
+    # `find`'s search-path handling? Confirmed NOT exploitable in the same
+    # way -- `_is_destructive_find()` detects destructiveness via `-delete`/
+    # `-exec ... rm` token PRESENCE anywhere in `rest`, independent of
+    # correctly parsing what precedes it, so an unquoted fragmented `$(...)`
+    # search path does not hide the `-delete` flag the way it hid git's
+    # subcommand token. This test proves that non-regression explicitly
+    # (unquoted, nested substitution form, not just the quoted single-token
+    # form already covered above) rather than leaving it merely inferred.
+    name = "pretooluse-bash-guard/blocks-find-unquoted-nested-substitution-with-traversal-elsewhere"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "y=../../etc; find $(echo $y) -delete"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for 'y=../../etc; find $(echo $y) -delete' "
+            f"(unquoted, nested substitution); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_bash_guard_blocks_dd_bare_redirect_dynamic_target_with_traversal_elsewhere(tmp_dir: Path) -> None:
     # Doubt-verify generalization gap, a THIRD instance found by explicitly
     # auditing every branch rather than assuming only find/git had it:
@@ -2968,6 +3093,13 @@ def main() -> int:
         test_bash_guard_allows_git_dynamic_dir_override_without_traversal_elsewhere(tmp / "b60")
         test_bash_guard_blocks_dd_bare_redirect_dynamic_target_with_traversal_elsewhere(tmp / "b61")
         test_bash_guard_allows_dd_bare_redirect_dynamic_target_without_traversal_elsewhere(tmp / "b62")
+
+        print()
+        print("[ pretooluse-bash-guard: REM-FIX continuation (fragmented unquoted $(...) substitutions) ]")
+        test_bash_guard_blocks_git_dash_capital_c_unquoted_fragmented_substitution_with_traversal(tmp / "b63")
+        test_bash_guard_allows_git_dash_capital_c_unquoted_fragmented_substitution_without_traversal(tmp / "b64")
+        test_bash_guard_allows_git_dash_capital_c_unquoted_dynamic_var_no_traversal(tmp / "b65")
+        test_bash_guard_blocks_find_unquoted_nested_substitution_with_traversal_elsewhere(tmp / "b66")
 
         print()
         print("[ hooklib shared-helper (white-box) ]")

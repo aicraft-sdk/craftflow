@@ -123,6 +123,53 @@ def _positional_targets(rest: list) -> tuple:
     return paths, unresolvable
 
 
+def _dynamic_span_end(rest: list, start_idx: int) -> int:
+    """Return the index of the LAST token belonging to a possibly-FRAGMENTED
+    dynamic value beginning at rest[start_idx].
+
+    `split_subcommands()` (posix shlex) keeps a QUOTED substitution
+    (`"$(echo x)"`) as one single token, but shlex FRAGMENTS an UNQUOTED
+    substitution into separate tokens -- `$(echo $x)` becomes `["$", "(",
+    "echo", "$x", ")"]`, five tokens, not one. A caller that only skips
+    exactly one token past a flag (e.g. `-C`) to consume that flag's value
+    will then scan the fragment's OWN inner tokens (starting with `"("`) as
+    if they were what comes next in the command -- for `git -C <value>
+    <subcommand>`, that means `"("` gets treated as the subcommand itself,
+    which matches neither clean/reset/push, silently defeating destructive-
+    command detection entirely (router-reported live bypass:
+    `x=../../etc; git -C $(echo $x) reset --hard` was fully ALLOWED).
+
+    Tracks paren depth so a nested `$(...)` inside the span doesn't
+    terminate the scan early. Also handles a fragmented, UNQUOTED backtick
+    substitution the same way (`` `echo $x` `` splits into `["`echo",
+    "$x`"]` when it contains whitespace). If rest[start_idx] does not begin
+    a fragmented substitution (already a complete single token -- the
+    quoted case, or an ordinary non-dynamic value), returns start_idx
+    unchanged so callers advance past exactly one token, exactly as before.
+    """
+    token = rest[start_idx]
+    if token == "$" and start_idx + 1 < len(rest) and rest[start_idx + 1] == "(":
+        depth = 0
+        idx = start_idx + 1
+        while idx < len(rest):
+            if rest[idx] == "(":
+                depth += 1
+            elif rest[idx] == ")":
+                depth -= 1
+                if depth == 0:
+                    return idx
+            idx += 1
+        return len(rest) - 1  # unterminated -- consume to the end, conservative
+    if token.startswith("`") and not (len(token) > 1 and token.endswith("`")):
+        idx = start_idx + 1
+        while idx < len(rest):
+            if rest[idx].endswith("`"):
+                return idx
+            idx += 1
+        return len(rest) - 1  # unterminated -- consume to the end, conservative
+    return start_idx
+
+
 def _find_git_subcommand(rest: list) -> tuple:
     """Scan past git's global options (anything starting with `-` before the
     real subcommand) to find the actual subcommand token, instead of
@@ -133,7 +180,15 @@ def _find_git_subcommand(rest: list) -> tuple:
     --git-dir <path>/--work-tree <path> (separate-arg form). Returns
     (subcommand_or_none, later_tokens, dir_override_or_none) -- dir_override
     is the -C/--work-tree directory the destructive target should resolve
-    against, if one was given."""
+    against, if one was given.
+
+    Every separate-arg value (-C/-c's value, --git-dir/--work-tree's value)
+    is skipped via `_dynamic_span_end()` rather than a hardcoded single-token
+    advance, so a FRAGMENTED unquoted `$(...)`/backtick substitution used as
+    that value is consumed as one whole span before subcommand-scanning
+    resumes -- otherwise the span's own inner tokens (`"("`, `"echo"`, ...)
+    get mistaken for the subcommand token itself (see `_dynamic_span_end()`
+    docstring)."""
     dir_override = None
     idx = 0
     while idx < len(rest):
@@ -141,17 +196,24 @@ def _find_git_subcommand(rest: list) -> tuple:
         if not token.startswith("-"):
             return token, rest[idx + 1 :], dir_override
         if token in _GIT_ARG_FLAGS:
-            if token == "-C" and idx + 1 < len(rest):
-                dir_override = rest[idx + 1]
-            idx += 2
+            if idx + 1 < len(rest):
+                value_idx = idx + 1
+                span_end = _dynamic_span_end(rest, value_idx)
+                if token == "-C":
+                    dir_override = rest[value_idx]
+                idx = span_end + 1
+            else:
+                idx += 1
             continue
         if token.startswith("--git-dir=") or token.startswith("--work-tree="):
             dir_override = token.split("=", 1)[1]
             idx += 1
             continue
         if token in ("--git-dir", "--work-tree") and idx + 1 < len(rest):
-            dir_override = rest[idx + 1]
-            idx += 2
+            value_idx = idx + 1
+            span_end = _dynamic_span_end(rest, value_idx)
+            dir_override = rest[value_idx]
+            idx = span_end + 1
             continue
         idx += 1
     return None, [], dir_override
