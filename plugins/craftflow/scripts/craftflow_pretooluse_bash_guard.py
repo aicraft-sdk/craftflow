@@ -123,7 +123,35 @@ def _positional_targets(rest: list) -> tuple:
     return paths, unresolvable
 
 
-def _dynamic_span_end(rest: list, start_idx: int) -> int:
+def _scan_paren_depth(rest: list, start_idx: int) -> "int | None":
+    """Scan tokens from start_idx (inclusive) counting `(`/`)` CHARACTERS
+    within each token -- NOT exact-token equality against a bare `"("`/
+    `")"` -- so a fused multi-char token like `"))"` (produced by shlex for
+    a doubly-nested substitution, `$(echo $(echo $x))`) correctly closes
+    TWO levels of depth within that ONE token, instead of never being
+    recognized as a closing paren at all (REM-FIX doubt-verify cycle 2, Bug
+    2: the old exact-token-equality check left depth permanently non-zero
+    for any fused closing-paren token, so the "unterminated" fallback fired
+    and silently swallowed the rest of the command's tokens -- including
+    the real subcommand -- into the span).
+
+    Returns the index of the token in which depth first returns to 0, or
+    None if depth never returns to 0 across every remaining token (a
+    malformed/unbalanced span -- callers MUST fail CLOSED on None, not
+    treat it as "consume to the end, conservative")."""
+    depth = 0
+    for idx in range(start_idx, len(rest)):
+        for ch in rest[idx]:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    return idx
+    return None
+
+
+def _dynamic_span_end(rest: list, start_idx: int) -> "int | None":
     """Return the index of the LAST token belonging to a possibly-FRAGMENTED
     dynamic value beginning at rest[start_idx].
 
@@ -139,35 +167,67 @@ def _dynamic_span_end(rest: list, start_idx: int) -> int:
     command detection entirely (router-reported live bypass:
     `x=../../etc; git -C $(echo $x) reset --hard` was fully ALLOWED).
 
-    Tracks paren depth so a nested `$(...)` inside the span doesn't
-    terminate the scan early. Also handles a fragmented, UNQUOTED backtick
+    Tracks paren depth (via `_scan_paren_depth()`, character-level so
+    fused multi-char tokens like `"))"` from a doubly-nested substitution
+    correctly close) so a nested `$(...)` inside the span doesn't terminate
+    the scan early. Also handles a fragmented, UNQUOTED backtick
     substitution the same way (`` `echo $x` `` splits into `["`echo",
     "$x`"]` when it contains whitespace). If rest[start_idx] does not begin
     a fragmented substitution (already a complete single token -- the
     quoted case, or an ordinary non-dynamic value), returns start_idx
     unchanged so callers advance past exactly one token, exactly as before.
-    """
+
+    Returns None (rather than swallowing to the end) when a span never
+    closes -- callers MUST treat None as a parse failure requiring a fail-
+    CLOSED fallback (Behavior Contract rule 9), never as "no more tokens to
+    consume" and never as "silently non-destructive" (REM-FIX doubt-verify
+    cycle 2, Bug 2 continuation: this also covers genuinely malformed/
+    unbalanced-paren input, e.g. a missing closing paren)."""
     token = rest[start_idx]
     if token == "$" and start_idx + 1 < len(rest) and rest[start_idx + 1] == "(":
-        depth = 0
-        idx = start_idx + 1
-        while idx < len(rest):
-            if rest[idx] == "(":
-                depth += 1
-            elif rest[idx] == ")":
-                depth -= 1
-                if depth == 0:
-                    return idx
-            idx += 1
-        return len(rest) - 1  # unterminated -- consume to the end, conservative
+        return _scan_paren_depth(rest, start_idx + 1)
     if token.startswith("`") and not (len(token) > 1 and token.endswith("`")):
         idx = start_idx + 1
         while idx < len(rest):
-            if rest[idx].endswith("`"):
+            if "`" in rest[idx]:
                 return idx
             idx += 1
-        return len(rest) - 1  # unterminated -- consume to the end, conservative
+        return None  # unterminated -- caller must fail CLOSED
     return start_idx
+
+
+def _value_fragment_span_end(rest: list, idx: int, value: str) -> "int | None":
+    """Given the value portion of an ASSIGNMENT-style flag fused into the
+    SAME token at rest[idx] (e.g. `"--work-tree=$"`'s value `"$"`, or
+    `` "--work-tree=`echo" ``'s value `` "`echo" ``), determine whether it
+    begins an UNQUOTED substitution that continues across SUBSEQUENT
+    tokens rather than being a complete, self-contained value already.
+
+    REM-FIX doubt-verify cycle 2, Bug 1: assignment-style flags
+    (`--git-dir=<value>`/`--work-tree=<value>`) never routed their value
+    through fragmented-span detection at all -- unlike separate-arg flags
+    (`-C <value>`), whose value is its own token and already went through
+    `_dynamic_span_end()`. shlex keeps the `=` fused to the flag name AND
+    the start of the value in ONE token (`--work-tree=$(echo $x)` tokenizes
+    to `["--work-tree=$", "(", "echo", "$x", ")"]`), but an UNQUOTED
+    `$(...)`/backtick substitution used as that value still fragments
+    across LATER tokens exactly like the separate-arg case, just starting
+    one token later (right after the fused flag+value token, not at it).
+
+    Returns `idx` unchanged (no additional tokens consumed) if `value` is
+    already complete. Returns the index of the last token belonging to the
+    fragmented span if one is found. Returns None if the span never closes
+    (malformed/unterminated -- caller must fail CLOSED)."""
+    if value == "$" and idx + 1 < len(rest) and rest[idx + 1] == "(":
+        return _scan_paren_depth(rest, idx + 1)
+    if value.startswith("`") and not (len(value) > 1 and value.endswith("`")):
+        scan_idx = idx + 1
+        while scan_idx < len(rest):
+            if "`" in rest[scan_idx]:
+                return scan_idx
+            scan_idx += 1
+        return None  # unterminated -- caller must fail CLOSED
+    return idx
 
 
 def _find_git_subcommand(rest: list) -> tuple:
@@ -178,45 +238,66 @@ def _find_git_subcommand(rest: list) -> tuple:
     (CRITICAL 1). Handles -C <dir>/-c <k=v> (separate-arg flags) and
     --git-dir=<path>/--work-tree=<path> (assignment-style) or
     --git-dir <path>/--work-tree <path> (separate-arg form). Returns
-    (subcommand_or_none, later_tokens, dir_override_or_none) -- dir_override
-    is the -C/--work-tree directory the destructive target should resolve
-    against, if one was given.
+    (subcommand_or_none, later_tokens, dir_override_or_none, malformed) --
+    dir_override is the -C/--work-tree directory the destructive target
+    should resolve against, if one was given; malformed is True when a
+    fragmented dynamic span (either form) never closed within the
+    remaining tokens.
 
     Every separate-arg value (-C/-c's value, --git-dir/--work-tree's value)
-    is skipped via `_dynamic_span_end()` rather than a hardcoded single-token
-    advance, so a FRAGMENTED unquoted `$(...)`/backtick substitution used as
-    that value is consumed as one whole span before subcommand-scanning
-    resumes -- otherwise the span's own inner tokens (`"("`, `"echo"`, ...)
-    get mistaken for the subcommand token itself (see `_dynamic_span_end()`
-    docstring)."""
+    is skipped via `_dynamic_span_end()`, and every ASSIGNMENT-style value
+    (--git-dir=<value>/--work-tree=<value>) is skipped via
+    `_value_fragment_span_end()` -- REM-FIX doubt-verify cycle 2, Bug 1:
+    the assignment branch previously did a flat
+    `token.split("=", 1)` / `idx += 1` unconditionally, never routing
+    through fragmented-span detection at all, so an UNQUOTED fragmented
+    `$(...)` assignment value (`--work-tree=$(echo $x)` tokenizes to
+    `["--work-tree=$", "(", "echo", "$x", ")"]`) left `idx` pointing at the
+    span's own inner "(" token on the next iteration -- "(" matches neither
+    clean/reset/push, so the whole command was NOT EVEN RECOGNIZED as
+    destructive at all (live-verified pre-fix: `x=../../etc; git
+    --work-tree=$(echo $x) reset --hard` was fully ALLOWED).
+
+    A fragmented span that never closes (`malformed=True`) is NOT treated
+    as "no subcommand found = non-destructive" -- callers must fail CLOSED
+    (Behavior Contract rule 9; see `_match_destructive_shape()`'s git
+    branch)."""
     dir_override = None
     idx = 0
     while idx < len(rest):
         token = rest[idx]
         if not token.startswith("-"):
-            return token, rest[idx + 1 :], dir_override
+            return token, rest[idx + 1 :], dir_override, False
         if token in _GIT_ARG_FLAGS:
             if idx + 1 < len(rest):
                 value_idx = idx + 1
                 span_end = _dynamic_span_end(rest, value_idx)
                 if token == "-C":
                     dir_override = rest[value_idx]
+                if span_end is None:
+                    return None, [], dir_override, True
                 idx = span_end + 1
             else:
                 idx += 1
             continue
         if token.startswith("--git-dir=") or token.startswith("--work-tree="):
-            dir_override = token.split("=", 1)[1]
-            idx += 1
+            value = token.split("=", 1)[1]
+            dir_override = value
+            span_end = _value_fragment_span_end(rest, idx, value)
+            if span_end is None:
+                return None, [], dir_override, True
+            idx = span_end + 1
             continue
         if token in ("--git-dir", "--work-tree") and idx + 1 < len(rest):
             value_idx = idx + 1
-            span_end = _dynamic_span_end(rest, value_idx)
             dir_override = rest[value_idx]
+            span_end = _dynamic_span_end(rest, value_idx)
+            if span_end is None:
+                return None, [], dir_override, True
             idx = span_end + 1
             continue
         idx += 1
-    return None, [], dir_override
+    return None, [], dir_override, False
 
 
 def _has_force_flag(tokens: list) -> bool:
@@ -234,17 +315,24 @@ def _has_force_flag(tokens: list) -> bool:
 def _is_destructive_git(rest: list) -> tuple:
     """git clean -f*/--force, git reset --hard, git push --force (literal
     flag only -- -f/--force-with-lease are a disclosed, deliberate scope
-    boundary, not covered here). Returns (is_destructive, dir_override)."""
-    subcommand, later, dir_override = _find_git_subcommand(rest)
+    boundary, not covered here). Returns (is_destructive, dir_override,
+    malformed) -- malformed=True forces is_destructive=True regardless of
+    which subcommand (if any) was found: an unterminated/malformed
+    fragmented dynamic span must not silently un-recognize an otherwise-
+    destructive git invocation (REM-FIX doubt-verify cycle 2, Bug 2
+    continuation; Behavior Contract rule 9)."""
+    subcommand, later, dir_override, malformed = _find_git_subcommand(rest)
+    if malformed:
+        return True, dir_override, True
     if subcommand is None:
-        return False, dir_override
+        return False, dir_override, False
     if subcommand == "clean":
-        return _has_force_flag(later), dir_override
+        return _has_force_flag(later), dir_override, False
     if subcommand == "reset":
-        return "--hard" in later, dir_override
+        return "--hard" in later, dir_override, False
     if subcommand == "push":
-        return "--force" in later, dir_override
-    return False, dir_override
+        return "--force" in later, dir_override, False
+    return False, dir_override, False
 
 
 def _dd_target(tokens: list) -> tuple:
@@ -394,7 +482,20 @@ def _match_destructive_shape(command_name: str, rest: list) -> tuple:
         return command_name, paths, unresolvable
 
     if command_name == "git":
-        is_destructive, dir_override = _is_destructive_git(rest)
+        is_destructive, dir_override, malformed = _is_destructive_git(rest)
+        if malformed:
+            # Fail CLOSED (Behavior Contract rule 9; REM-FIX doubt-verify
+            # cycle 2, Bug 2 continuation): an unterminated/malformed
+            # fragmented dynamic span (assignment-style
+            # --git-dir=/--work-tree= or separate-arg -C/-c/--git-dir/
+            # --work-tree) must not silently un-recognize an otherwise-
+            # destructive git invocation just because span-detection itself
+            # failed to parse it -- force the same conservative in-cwd-
+            # critical "." target every other parse failure in this module
+            # already falls back to (see `_destructive_targets()`'s own
+            # except-Exception fallback), rather than treating "couldn't
+            # find the subcommand" as "not destructive."
+            return command_name, ["."], False
         if is_destructive:
             # git clean/reset --hard/push --force act on the repository at
             # cwd by default, but -C <dir>/--work-tree=<dir> retargets the

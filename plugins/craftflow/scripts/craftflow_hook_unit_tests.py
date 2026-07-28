@@ -1966,6 +1966,210 @@ def test_bash_guard_blocks_find_unquoted_nested_substitution_with_traversal_else
     ok(name)
 
 
+def test_bash_guard_blocks_git_work_tree_assignment_fragmented_substitution_with_traversal(
+    tmp_dir: Path,
+) -> None:
+    # REM-FIX doubt-verify cycle 2, Bug 1: `--work-tree=<value>`
+    # (assignment-style) never routed its value through fragmented-span
+    # detection at all -- the assignment branch did a flat
+    # `token.split("=", 1)` / `idx += 1` unconditionally, so an UNQUOTED
+    # fragmented `$(...)` value (shlex splits `--work-tree=$(echo $x)` into
+    # `["--work-tree=$", "(", "echo", "$x", ")"]`, five tokens fused/split
+    # around the "=") left `idx` pointing at the span's own inner "(" token
+    # on the NEXT loop iteration -- "(" matches neither clean/reset/push,
+    # so `_is_destructive_git()` returned False and the whole command was
+    # NOT EVEN RECOGNIZED as a destructive git command at all (live-verified
+    # pre-fix: `x=../../etc; git --work-tree=$(echo $x) reset --hard` was
+    # fully ALLOWED, empty stdout, exit 0).
+    name = "pretooluse-bash-guard/blocks-git-work-tree-assignment-fragmented-substitution-with-traversal"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "x=../../etc; git --work-tree=$(echo $x) reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for 'x=../../etc; git --work-tree=$(echo $x) reset "
+            f"--hard' (assignment-form, unquoted, fragmented); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_git_git_dir_assignment_fragmented_substitution_with_traversal(
+    tmp_dir: Path,
+) -> None:
+    # Same Bug 1 shape, `--git-dir=` sibling flag.
+    name = "pretooluse-bash-guard/blocks-git-git-dir-assignment-fragmented-substitution-with-traversal"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "x=../../etc; git --git-dir=$(echo $x) reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for 'x=../../etc; git --git-dir=$(echo $x) reset "
+            f"--hard' (assignment-form, unquoted, fragmented); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_git_work_tree_assignment_fragmented_substitution_without_traversal(
+    tmp_dir: Path,
+) -> None:
+    # No-over-blocking regression check for the Bug 1 fix: a legitimate
+    # unquoted, fragmented `--work-tree=$(...)` assignment-form value with
+    # NO traversal literal or wildcard anywhere in the command must stay
+    # allowed -- the subcommand ("reset --hard") is correctly identified as
+    # destructive by the fix, but with no traversal present the dynamic
+    # target stays in the existing fail-open "unverifiable" path.
+    name = "pretooluse-bash-guard/allows-git-work-tree-assignment-fragmented-substitution-without-traversal"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "x=/some/safe/path; git --work-tree=$(echo $x) reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(
+            name,
+            "expected allow for an unquoted, fragmented --work-tree=$(...) "
+            f"assignment value with no traversal literal or wildcard anywhere; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_git_dash_capital_c_doubly_nested_substitution_with_traversal(
+    tmp_dir: Path,
+) -> None:
+    # REM-FIX doubt-verify cycle 2, Bug 2: `_dynamic_span_end()`'s paren-
+    # depth counter did EXACT TOKEN EQUALITY against a bare `"("`/`")"`, but
+    # shlex can FUSE adjacent punctuation into ONE multi-char token -- a
+    # doubly-nested `$(echo $(echo $x))` tokenizes its two closing parens
+    # into a single `"))"` token, which the old exact-equality check never
+    # recognized as closing anything. Depth never returned to 0, so the
+    # "unterminated" fallback fired and SWALLOWED THE REST OF THE COMMAND'S
+    # TOKENS (including the real subcommand "reset --hard") into the span --
+    # the whole command was no longer recognized as destructive at all
+    # (live-verified pre-fix: `x=../../etc; git -C $(echo $(echo $x)) reset
+    # --hard` was fully ALLOWED, empty stdout, exit 0).
+    name = "pretooluse-bash-guard/blocks-git-dash-c-doubly-nested-substitution-with-traversal"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "x=../../etc; git -C $(echo $(echo $x)) reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for 'x=../../etc; git -C $(echo $(echo $x)) reset "
+            f"--hard' (doubly-nested substitution); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_git_dash_capital_c_doubly_nested_substitution_without_traversal(
+    tmp_dir: Path,
+) -> None:
+    # No-over-blocking regression check for the Bug 2 fix: a legitimate
+    # doubly-nested `$(echo $(echo $x))` -C override with NO traversal
+    # literal or wildcard anywhere in the command must stay allowed.
+    name = "pretooluse-bash-guard/allows-git-dash-c-doubly-nested-substitution-without-traversal"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "x=/some/safe/path; git -C $(echo $(echo $x)) reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(
+            name,
+            "expected allow for a doubly-nested $(echo $(echo $x)) -C "
+            f"override with no traversal literal or wildcard anywhere; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_git_dash_capital_c_malformed_unterminated_substitution(
+    tmp_dir: Path,
+) -> None:
+    # REM-FIX doubt-verify cycle 2, Bug 2 continuation: the same root cause
+    # (paren-depth counter never reaching 0) also affects genuinely
+    # malformed/unbalanced-paren input -- a missing closing paren means
+    # depth never returns to 0 across the rest of the command's tokens,
+    # which previously "consumed to the end, conservative" and silently
+    # swallowed the real subcommand, failing OPEN (allowed). Must now fail
+    # CLOSED: an unterminated span forces the command to be treated as
+    # containing a genuinely destructive, unresolvable target requiring
+    # denial, rather than un-recognizing an otherwise-destructive git
+    # invocation just because span-detection itself could not parse it.
+    name = "pretooluse-bash-guard/blocks-git-dash-c-malformed-unterminated-substitution"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "git -C $(echo $x reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny (fail CLOSED) for 'git -C $(echo $x reset --hard' "
+            f"(missing closing paren, malformed/unterminated span); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_regression_lock_release_still_allowed_cycle2(tmp_dir: Path) -> None:
+    # Re-verification (doubt-verify cycle 2): the non-negotiable regression
+    # flow 1 (`rm -rf "$LOCK_DIR"`) must still be allowed after the
+    # assignment-form-routing + paren-depth-scan changes above -- this
+    # command shape doesn't touch git's dir-override parsing at all, but is
+    # re-verified explicitly at this phase per the plan's own convention of
+    # re-checking non-negotiable flows at every phase that touches the file.
+    name = "pretooluse-bash-guard/regression-lock-release-still-allowed-cycle2"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": 'rm -rf "$LOCK_DIR"'},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'rm -rf \"$LOCK_DIR\"'; got: {out!r}")
+        return
+    ok(name)
+
+
 def test_bash_guard_blocks_dd_bare_redirect_dynamic_target_with_traversal_elsewhere(tmp_dir: Path) -> None:
     # Doubt-verify generalization gap, a THIRD instance found by explicitly
     # auditing every branch rather than assuming only find/git had it:
@@ -3100,6 +3304,16 @@ def main() -> int:
         test_bash_guard_allows_git_dash_capital_c_unquoted_fragmented_substitution_without_traversal(tmp / "b64")
         test_bash_guard_allows_git_dash_capital_c_unquoted_dynamic_var_no_traversal(tmp / "b65")
         test_bash_guard_blocks_find_unquoted_nested_substitution_with_traversal_elsewhere(tmp / "b66")
+
+        print()
+        print("[ pretooluse-bash-guard: REM-FIX doubt-verify cycle 2 (assignment-form bypass + nested-paren depth) ]")
+        test_bash_guard_blocks_git_work_tree_assignment_fragmented_substitution_with_traversal(tmp / "b67")
+        test_bash_guard_blocks_git_git_dir_assignment_fragmented_substitution_with_traversal(tmp / "b68")
+        test_bash_guard_allows_git_work_tree_assignment_fragmented_substitution_without_traversal(tmp / "b69")
+        test_bash_guard_blocks_git_dash_capital_c_doubly_nested_substitution_with_traversal(tmp / "b70")
+        test_bash_guard_allows_git_dash_capital_c_doubly_nested_substitution_without_traversal(tmp / "b71")
+        test_bash_guard_blocks_git_dash_capital_c_malformed_unterminated_substitution(tmp / "b72")
+        test_bash_guard_regression_lock_release_still_allowed_cycle2(tmp / "b73")
 
         print()
         print("[ hooklib shared-helper (white-box) ]")
