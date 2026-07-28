@@ -1387,6 +1387,286 @@ def test_bash_guard_dd_falls_back_to_cwd_target_on_parse_exception(tmp_dir: Path
 
 
 # ---------------------------------------------------------------------------
+# --- Phase 3: dynamic-target traversal fail-closed + worktree confinement ---
+# ---------------------------------------------------------------------------
+# docs/plans/2026-07-28-craftflow-guardrail-hardening-plan.md Phase 3: a
+# dynamic ($/backtick) destructive target is denied only when a traversal
+# literal or wildcard also appears in the command's construction (including
+# inside $(...)); a bare dynamic target with neither is allowed. Worktree
+# confinement denies any Bash destructive/redirect target outside
+# {cwd} u {worktree_path} when worktree_path is set, degrading to cwd-only
+# when absent/null. This is a TRUE union -- worktree_path only ever widens
+# what cwd alone permits, it never narrows cwd's own coverage (fresh review
+# pass 1, BLOCKING correction; see the plan's Fresh Review Resolution).
+
+def _write_workflow_json_fixture(
+    project_root: Path, worktree_path: str | None, wf_uuid: str = "wf-phase3-test"
+) -> None:
+    """Write a minimal workflow JSON artifact under project_root's own
+    .craftflow/state/workflows/ -- hooklib.latest_workflow_payload() reads
+    via CLAUDE_PROJECT_DIR (env), not the Bash payload's own "cwd" field, so
+    the fixture must live at the project_root the test's env points at."""
+    wf_dir = project_root / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True, exist_ok=True)
+    (wf_dir / f"{wf_uuid}.json").write_text(
+        json.dumps({"workflow_uuid": wf_uuid, "worktree_path": worktree_path}),
+        encoding="utf-8",
+    )
+
+
+def test_bash_guard_blocks_dynamic_target_with_traversal_substitution(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-dynamic-target-with-traversal-substitution"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(cwd_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": 'rm -rf "$(echo ../../..)"'},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a dynamic target with a traversal literal inside $(...); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_dynamic_target_with_bare_wildcard(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-dynamic-target-with-bare-wildcard"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(cwd_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf $TARGET *"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a dynamic target alongside a bare wildcard; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_regression_lock_release_still_allowed_phase3(tmp_dir: Path) -> None:
+    # Regression flow 1, third confirmation at the exact phase that touches
+    # this dynamic-target logic most directly.
+    name = "pretooluse-bash-guard/regression-lock-release-still-allowed-phase3"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(cwd_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": 'rm -rf "$LOCK_DIR"'},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"regression flow 1 (lock release) must stay allowed, re-verified at Phase 3; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_worktree_confinement_denies_outside_worktree(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/worktree-confinement-denies-outside-worktree"
+    project_root = tmp_dir / "project"
+    worktree = tmp_dir / "worktree-sibling"
+    outside = tmp_dir / "outside"
+    project_root.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, str(worktree.resolve()))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"rm -f {(outside / 'secret.txt').resolve()}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a target outside both cwd and worktree_path; got: {out!r}")
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"expected a distinct 'worktree-confinement' deny reason; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_worktree_confinement_allows_inside_worktree_outside_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/worktree-confinement-allows-inside-worktree-outside-cwd"
+    project_root = tmp_dir / "project"
+    worktree = tmp_dir / "worktree-sibling"
+    project_root.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, str(worktree.resolve()))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"rm -f {(worktree / 'scratch.txt').resolve()}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for a target inside worktree_path though outside cwd (proves the union, not cwd-only); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_worktree_confinement_degrades_when_no_workflow_json(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/worktree-confinement-degrades-when-no-workflow-json"
+    project_root = tmp_dir / "project"
+    outside = tmp_dir / "outside"
+    project_root.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"rm -f {(outside / 'secret.txt').resolve()}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected the existing cwd-only escape-cwd deny to still fire with no workflow JSON present, no exception; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_worktree_confinement_degrades_when_worktree_path_null(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/worktree-confinement-degrades-when-worktree-path-null"
+    project_root = tmp_dir / "project"
+    outside = tmp_dir / "outside"
+    project_root.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, None)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"rm -f {(outside / 'secret.txt').resolve()}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected cwd-only degradation (still deny) when worktree_path is null, no exception; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_worktree_confinement_allows_within_cwd_despite_different_set_worktree(tmp_dir: Path) -> None:
+    # Fresh review pass 1, BLOCKING correction: this test previously asserted
+    # deny; Behavior Contract rules 2 & 7's TRUE union means a target within
+    # cwd alone is always allowed, regardless of a stale/different
+    # worktree_path -- worktree_path only ever widens, never narrows.
+    name = "pretooluse-bash-guard/worktree-confinement-allows-within-cwd-despite-different-set-worktree"
+    project_root = tmp_dir / "project"
+    worktree = tmp_dir / "worktree-sibling"
+    project_root.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, str(worktree.resolve()))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "rm -f ./scratch.txt"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for a within-cwd target despite a different set worktree_path (true union); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_worktree_confinement_allows_memory_finalize_clear_when_worktree_path_stale(tmp_dir: Path) -> None:
+    # Regression flow 3, exact realistic condition (fresh review pass 1
+    # BLOCKING): worktree_path SET to a real-looking-but-nonexistent sibling
+    # path -- proves the check never requires the worktree dir to exist.
+    name = "pretooluse-bash-guard/worktree-confinement-allows-memory-finalize-clear-when-worktree-path-stale"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    stale_worktree = tmp_dir / ".claude" / "worktrees" / "wf-stale-test"
+    state = project_root / ".craftflow" / "state"
+    state.mkdir(parents=True)
+    (state / ".memory-finalize").write_text("wf-phase3-test", encoding="utf-8")
+    _write_workflow_json_fixture(project_root, str(stale_worktree))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "rm -f .craftflow/state/.memory-finalize"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"regression flow 3 must stay allowed even with a stale/different worktree_path set; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_worktree_confinement_allows_memory_finalize_permit_write_when_worktree_path_stale(tmp_dir: Path) -> None:
+    # Regression flow 2, exact realistic condition (fresh review pass 1
+    # BLOCKING). This is bash_guard.py's own redirect-target confinement
+    # check -- independent of, and in addition to, pretooluse_guard.py's own
+    # permit-shape check added in Phase 4.
+    name = "pretooluse-bash-guard/worktree-confinement-allows-memory-finalize-permit-write-when-worktree-path-stale"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    stale_worktree = tmp_dir / ".claude" / "worktrees" / "wf-stale-test"
+    _write_workflow_json_fixture(project_root, str(stale_worktree))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "printf '%s' 'wf-test-1234' > .craftflow/state/.memory-finalize"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"regression flow 2 must stay allowed from bash_guard.py's own redirect-confinement check even with a stale/different worktree_path set; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_benign_redirect_to_dev_null(tmp_dir: Path) -> None:
+    # Fresh review pass 2, BLOCKING: proves the redirect-confinement check is
+    # scoped to protected paths only -- /dev/null is not a protected path, so
+    # no confinement check ever runs against it, regardless of worktree_path.
+    # Real documented shape: skills/ai-first-setup/SKILL.md:292.
+    name = "pretooluse-bash-guard/allows-benign-redirect-to-dev-null"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    stale_worktree = tmp_dir / ".claude" / "worktrees" / "wf-stale-test"
+    _write_workflow_json_fixture(project_root, str(stale_worktree))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "python3 -m json.tool feature_list.json > /dev/null && echo done"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for a benign '> /dev/null' redirect; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_benign_stderr_redirect_to_dev_null(tmp_dir: Path) -> None:
+    # Real documented shape: skills/craftflow-router/SKILL.md:270.
+    name = "pretooluse-bash-guard/allows-benign-stderr-redirect-to-dev-null"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    stale_worktree = tmp_dir / ".claude" / "worktrees" / "wf-stale-test"
+    _write_workflow_json_fixture(project_root, str(stale_worktree))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": 'mkdir "$LOCK_DIR" 2>/dev/null'},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for a benign '2>/dev/null' redirect; got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # --- hooklib shared-helper tests (white-box) ---
 # ---------------------------------------------------------------------------
 
@@ -2311,6 +2591,21 @@ def main() -> int:
         test_bash_guard_dd_falls_back_to_cwd_target_on_parse_exception(tmp / "b37")
         test_bash_guard_mv_falls_back_to_cwd_target_when_positional_targets_itself_raises(tmp / "b38")
         test_bash_guard_chmod_falls_back_to_cwd_target_when_positional_targets_itself_raises(tmp / "b39")
+
+        print()
+        print("[ pretooluse-bash-guard: Phase 3 dynamic-traversal + worktree confinement ]")
+        test_bash_guard_blocks_dynamic_target_with_traversal_substitution(tmp / "b40")
+        test_bash_guard_blocks_dynamic_target_with_bare_wildcard(tmp / "b41")
+        test_bash_guard_regression_lock_release_still_allowed_phase3(tmp / "b42")
+        test_bash_guard_worktree_confinement_denies_outside_worktree(tmp / "b43")
+        test_bash_guard_worktree_confinement_allows_inside_worktree_outside_cwd(tmp / "b44")
+        test_bash_guard_worktree_confinement_degrades_when_no_workflow_json(tmp / "b45")
+        test_bash_guard_worktree_confinement_degrades_when_worktree_path_null(tmp / "b46")
+        test_bash_guard_worktree_confinement_allows_within_cwd_despite_different_set_worktree(tmp / "b47")
+        test_bash_guard_worktree_confinement_allows_memory_finalize_clear_when_worktree_path_stale(tmp / "b48")
+        test_bash_guard_worktree_confinement_allows_memory_finalize_permit_write_when_worktree_path_stale(tmp / "b49")
+        test_bash_guard_allows_benign_redirect_to_dev_null(tmp / "b50")
+        test_bash_guard_allows_benign_stderr_redirect_to_dev_null(tmp / "b51")
 
         print()
         print("[ hooklib shared-helper (white-box) ]")

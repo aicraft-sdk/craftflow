@@ -22,13 +22,18 @@ from craftflow_hooklib import (
     command_has_traversal_or_wildcard,
     extract_redirect_targets,
     is_env_assignment,
+    latest_workflow_payload,
     load_input,
     load_mode,
     log_event,
     looks_dynamic,
+    memory_finalize_permit_path,
     pretool_deny,
+    project_state_dir,
     resolve_confinement,
     split_subcommands,
+    state_root,
+    workflows_dir,
 )
 
 # Plain command-name match: positional-token target model applies unchanged
@@ -42,6 +47,13 @@ SIMPLE_DESTRUCTIVE = {"rm", "rmdir", "mv", "shred", "truncate"}
 # editable-in-source, not a new hook-mode.json schema key (Durable Decision,
 # plan line 17).
 CRITICAL_TOP_LEVEL_CHILDREN = (".git", "packages", "tools")
+
+# The 3 memory .md files -- duplicated-by-design from
+# craftflow_pretooluse_guard.py's identically-named constant/helper (Task
+# 3.2 step 2): bash_guard.py and pretooluse_guard.py are separate scripts
+# with no import dependency between them, each independently defining its
+# own protected-path membership.
+PROTECTED_MEMORY_FILES = ("activeContext.md", "patterns.md", "progress.md")
 
 _DD_OF_RE = re.compile(r"^of=(.+)$")
 
@@ -292,12 +304,53 @@ def _match_destructive_shape(command_name: str, rest: list) -> tuple:
     return None, [], False
 
 
-def _resolve_within(path_token: str, cwd: Path) -> bool:
-    candidate = Path(os.path.expanduser(path_token))
-    if not candidate.is_absolute():
-        candidate = cwd / candidate
-    resolved = candidate.resolve()
-    return resolved == cwd or cwd in resolved.parents, resolved
+def _protected_redirect_paths() -> set:
+    """Return the redirect/tee-target protected-path set: the 3 memory .md
+    files (under state_root(), project_state_dir(), and every
+    workflows/*/), .memory-finalize, and every workflow JSON artifact
+    (workflows_dir().glob('*.json')). This is the SAME protected-path
+    membership Phase 4's pretooluse_guard.py independently defines for its
+    own Bash-write-inspection layer (Task 3.2 step 2) -- kept as an
+    independent, duplicated-by-design check here since bash_guard.py and
+    pretooluse_guard.py are separate scripts with no import dependency
+    between them."""
+    paths: set = set()
+    try:
+        paths |= {(state_root() / name).resolve() for name in PROTECTED_MEMORY_FILES}
+    except Exception:
+        pass
+    try:
+        paths |= {(project_state_dir() / name).resolve() for name in PROTECTED_MEMORY_FILES}
+    except Exception:
+        pass
+    try:
+        wf_dir = workflows_dir()
+        for name in PROTECTED_MEMORY_FILES:
+            for candidate in wf_dir.glob(f"*/{name}"):
+                paths.add(candidate.resolve())
+    except Exception:
+        pass
+    try:
+        paths.add(memory_finalize_permit_path().resolve())
+    except Exception:
+        pass
+    try:
+        for candidate in workflows_dir().glob("*.json"):
+            paths.add(candidate.resolve())
+    except Exception:
+        pass
+    return paths
+
+
+def _is_protected_redirect_target(resolved: Path) -> bool:
+    """True only when a redirect/tee target resolves to one of this plan's
+    protected paths. Ordinary, benign redirects (`> /dev/null`,
+    `2>/dev/null`) are common, legitimate shell idioms already present in
+    this plugin's own documented flows and must never be denied just
+    because they resolve outside {cwd} u {worktree_path} -- this predicate
+    is the gate that keeps the redirect-confinement check (Task 3.2 step 2)
+    from ever running against them at all."""
+    return resolved in _protected_redirect_paths()
 
 
 def _is_in_cwd_critical(resolved: Path, cwd: Path) -> bool:
@@ -334,28 +387,113 @@ def main() -> int:
     mode = load_mode()
     block_mode = mode.get("bashDestructiveTraversal", "block") == "block"
 
+    # Worktree confinement (Task 3.2 step 2): read worktree_path from the
+    # active workflow JSON via the shared hooklib helper, never raising --
+    # absence of a workflow JSON, or worktree_path: null, degrades every
+    # confinement check below to cwd-only (Behavior Contract rule 8).
+    try:
+        worktree_path = latest_workflow_payload().get("worktree_path")
+    except Exception:
+        worktree_path = None
+
+    # Dynamic-target traversal fail-closed (Task 3.2 step 1): a dynamic
+    # ($/backtick) destructive target is denied only when a traversal
+    # literal or wildcard ALSO appears anywhere in the command's
+    # construction (including inside $(...)); a bare dynamic target with
+    # neither stays allowed (regression flow 1). Any internal parsing
+    # exception here falls back to the conservative "traversal present"
+    # verdict -- fail-closed for dynamic targets, not a blanket allow
+    # (Behavior Contract rule 9) -- and does not re-invoke
+    # command_has_traversal_or_wildcard itself.
+    try:
+        has_traversal_or_wildcard = command_has_traversal_or_wildcard(command)
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_bash_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "command_has_traversal_or_wildcard",
+                "error": repr(exc),
+                "reason": "fell_back_to_conservative_traversal_present",
+            },
+        )
+        has_traversal_or_wildcard = True
+
     escapes = []
     in_cwd_critical = []
     unverifiable = []
+    denied_dynamic = []
     for tokens in split_subcommands(command):
         command_name, path_tokens, has_unresolvable = _destructive_targets(tokens)
         if command_name is None:
             continue
         if has_unresolvable:
-            unverifiable.append(command_name)
+            if has_traversal_or_wildcard:
+                denied_dynamic.append(command_name)
+            else:
+                unverifiable.append(command_name)
         for path_token in path_tokens:
-            within, resolved = _resolve_within(path_token, cwd)
-            if not within:
+            confined, resolved = resolve_confinement(path_token, cwd, worktree_path)
+            if not confined:
                 escapes.append(str(resolved))
             elif _is_in_cwd_critical(resolved, cwd):
                 in_cwd_critical.append(str(resolved))
 
-    if not escapes and not in_cwd_critical and not unverifiable:
+    # Redirect/tee-target confinement (Task 3.2 step 2), scoped ONLY to
+    # targets that also resolve to a protected path -- ordinary benign
+    # redirects (`> /dev/null`, `2>/dev/null`) are common, legitimate shell
+    # idioms already present in this plugin's own documented flows and must
+    # never be denied just because they resolve outside
+    # {cwd} u {worktree_path}. Any internal parsing exception here skips
+    # only this newly-added check (Behavior Contract rule 9), leaving the
+    # destructive-target checks above unaffected.
+    protected_redirect_escapes = []
+    try:
+        for target in extract_redirect_targets(command):
+            confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            if not confined and _is_protected_redirect_target(resolved):
+                protected_redirect_escapes.append(str(resolved))
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_bash_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "extract_redirect_targets",
+                "error": repr(exc),
+                "reason": "skipped_redirect_confinement_check",
+            },
+        )
+
+    if not (
+        escapes
+        or in_cwd_critical
+        or unverifiable
+        or denied_dynamic
+        or protected_redirect_escapes
+    ):
         return 0
 
-    deny_now = bool(escapes or in_cwd_critical) and block_mode
-    if escapes:
-        reason = f"escapes-cwd:{','.join(escapes)}"
+    deny_now = bool(
+        escapes or in_cwd_critical or denied_dynamic or protected_redirect_escapes
+    ) and block_mode
+
+    # Reason priority: a dynamic target with traversal/wildcard is the most
+    # specific bypass concern; then a confinement escape (worktree-
+    # confinement when worktree_path is set, escapes-cwd when cwd-only);
+    # then a protected redirect target escaping confinement; then an
+    # in-cwd-critical hit; then a merely-unverifiable (allowed) dynamic
+    # target. Each reason names which specific rule fired (design's
+    # Observability requirement).
+    if denied_dynamic:
+        reason = f"dynamic-target-with-traversal:{','.join(denied_dynamic)}"
+    elif escapes:
+        reason = (
+            f"worktree-confinement:{','.join(escapes)}"
+            if worktree_path
+            else f"escapes-cwd:{','.join(escapes)}"
+        )
+    elif protected_redirect_escapes:
+        reason = f"worktree-confinement:{','.join(protected_redirect_escapes)}"
     elif in_cwd_critical:
         reason = f"in-cwd-critical:{','.join(in_cwd_critical)}"
     else:
@@ -374,12 +512,9 @@ def main() -> int:
     )
 
     if deny_now:
-        blocked = escapes or in_cwd_critical
         pretool_deny(
-            "CRAFTFLOW plugin hook blocked a destructive command "
-            f"({', '.join(blocked)}) resolving outside the current working "
-            f"directory ({cwd}) or targeting a critical in-cwd path. If "
-            "this is intentional, run it manually outside the agent "
+            f"CRAFTFLOW plugin hook blocked a Bash command (reason: {reason}). "
+            "If this is intentional, run it manually outside the agent "
             "session."
         )
     return 0
