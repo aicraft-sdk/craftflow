@@ -27,6 +27,7 @@ from craftflow_hooklib import (
     load_mode,
     log_event,
     looks_dynamic,
+    matches_memory_finalize_permit_shape,
     memory_finalize_permit_path,
     pretool_deny,
     project_state_dir,
@@ -184,18 +185,37 @@ def _is_destructive_git(rest: list) -> tuple:
     return False, dir_override
 
 
-def _dd_target(tokens: list) -> list:
-    """Scan tokens for an `of=<path>` argument and return the captured
-    path(s) -- dd's overwrite target is key=value, not a positional token,
-    so the generic positional-token extractor cannot see it. When no `of=`
-    token is present (e.g. a bare `dd if=... > file` stdout redirect with no
-    `of=` at all), fall back to this dd invocation's own >/>> redirect
-    target via hooklib.extract_redirect_targets() -- otherwise the whole
-    subcommand is invisible to this guard (CRITICAL 3)."""
-    of_targets = [match.group(1) for token in tokens for match in [_DD_OF_RE.match(token)] if match]
-    if of_targets:
-        return of_targets
-    return extract_redirect_targets(" ".join(tokens))
+def _dd_target(tokens: list) -> tuple:
+    """Scan tokens for an `of=<path>` argument and return
+    (path_tokens, has_unresolvable_token) -- dd's overwrite target is
+    key=value, not a positional token, so the generic positional-token
+    extractor cannot see it. When no `of=` token is present (e.g. a bare
+    `dd if=... > file` stdout redirect with no `of=` at all), fall back to
+    this dd invocation's own >/>> redirect target via
+    hooklib.extract_redirect_targets() -- otherwise the whole subcommand is
+    invisible to this guard (CRITICAL 3, Phase 2).
+
+    A dynamic ($/backtick) captured `of=` value is excluded from the
+    returned path tokens and flags has_unresolvable=True, exactly like the
+    generic positional-target path (`_positional_targets`) already does for
+    every other command shape (CRITICAL 2, REM-FIX Phase 3 review+hunt):
+    this branch previously hardcoded has_unresolvable=False unconditionally,
+    never calling looks_dynamic() on the captured value, so
+    `dd if=/dev/zero of=$(echo ../../etc/passwd) bs=1 count=1` silently
+    resolved the still-unexpanded substitution text as a harmless-looking
+    in-cwd path instead of being flagged as an opaque dynamic target subject
+    to the traversal-fail-closed logic in main()."""
+    of_values = [match.group(1) for token in tokens for match in [_DD_OF_RE.match(token)] if match]
+    if of_values:
+        paths = []
+        unresolvable = False
+        for value in of_values:
+            if looks_dynamic(value):
+                unresolvable = True
+            else:
+                paths.append(value)
+        return paths, unresolvable
+    return extract_redirect_targets(" ".join(tokens)), False
 
 
 def _is_destructive_find(rest: list) -> bool:
@@ -291,9 +311,9 @@ def _match_destructive_shape(command_name: str, rest: list) -> tuple:
         return None, [], False
 
     if command_name == "dd":
-        targets = _dd_target(rest)
-        if targets:
-            return command_name, targets, False
+        paths, unresolvable = _dd_target(rest)
+        if paths or unresolvable:
+            return command_name, paths, unresolvable
         return None, [], False
 
     if command_name == "find":
@@ -353,6 +373,23 @@ def _is_protected_redirect_target(resolved: Path) -> bool:
     return resolved in _protected_redirect_paths()
 
 
+def _redirect_targets_in_tokens(tokens: list) -> list:
+    """Same target-extraction logic as hooklib.extract_redirect_targets(),
+    but operating directly on an already-split subcommand's own token list
+    instead of re-parsing joined token text -- keeps the subcommand's
+    tokens available for matches_memory_finalize_permit_shape() shape-
+    matching (CRITICAL 1, REM-FIX Phase 3 review+hunt)."""
+    targets = []
+    for idx, token in enumerate(tokens):
+        if token in (">", ">>") and idx + 1 < len(tokens):
+            targets.append(tokens[idx + 1])
+        elif token == "tee":
+            for t in tokens[idx + 1 :]:
+                if not t.startswith("-"):
+                    targets.append(t)
+    return targets
+
+
 def _is_in_cwd_critical(resolved: Path, cwd: Path) -> bool:
     """True if a within-cwd destructive target is cwd itself, a literal
     `*`/`.` (checked via the resolved name, since resolving away the
@@ -396,6 +433,15 @@ def main() -> int:
     except Exception:
         worktree_path = None
 
+    # CRITICAL 3 (REM-FIX Phase 3 review+hunt): worktree_path is an untyped
+    # read from JSON -- coerce any value that isn't str/None to None
+    # immediately, so a malformed shape (e.g. an int) can never reach
+    # resolve_confinement() at all (Path(<int>) raises TypeError). This is
+    # in addition to, not instead of, wrapping the resolve_confinement()
+    # call sites themselves below.
+    if worktree_path is not None and not isinstance(worktree_path, str):
+        worktree_path = None
+
     # Dynamic-target traversal fail-closed (Task 3.2 step 1): a dynamic
     # ($/backtick) destructive target is denied only when a traversal
     # literal or wildcard ALSO appears anywhere in the command's
@@ -433,7 +479,27 @@ def main() -> int:
             else:
                 unverifiable.append(command_name)
         for path_token in path_tokens:
-            confined, resolved = resolve_confinement(path_token, cwd, worktree_path)
+            # CRITICAL 3 (REM-FIX Phase 3 review+hunt): this call site had no
+            # try/except, unlike its sibling in the redirect-confinement
+            # block below -- an uncaught exception here (e.g. a malformed
+            # path_token) would crash main() entirely, which fails OPEN (a
+            # non-zero/non-JSON-deny exit doesn't block the tool call). Fall
+            # back to a fail-CLOSED "not confined" verdict so the escape/
+            # critical checks below still apply, instead of propagating.
+            try:
+                confined, resolved = resolve_confinement(path_token, cwd, worktree_path)
+            except Exception as exc:
+                log_event(
+                    "plugin_pretooluse_bash_guard",
+                    {
+                        "event": "pretool_guard_parse_error",
+                        "command_name": "resolve_confinement",
+                        "error": repr(exc),
+                        "reason": "fell_back_to_not_confined",
+                    },
+                )
+                escapes.append(str(path_token))
+                continue
             if not confined:
                 escapes.append(str(resolved))
             elif _is_in_cwd_critical(resolved, cwd):
@@ -447,18 +513,35 @@ def main() -> int:
     # {cwd} u {worktree_path}. Any internal parsing exception here skips
     # only this newly-added check (Behavior Contract rule 9), leaving the
     # destructive-target checks above unaffected.
+    #
+    # CRITICAL 1 (REM-FIX Phase 3 review+hunt): protected-path-ness and
+    # confinement are two SEPARATE reasons to deny, not one subordinate to
+    # the other. The previous `not confined and _is_protected_redirect_target`
+    # gate meant the protected-path check never even ran whenever the target
+    # was confined to cwd -- which is always true when cwd is the project
+    # root (the common case), since .craftflow/state/... lives inside it.
+    # Now checked unconditionally, with the one documented, load-bearing
+    # exception: the router's own memory-finalize permit-write shape must
+    # stay allowed even though it targets a protected path.
     protected_redirect_escapes = []
     try:
-        for target in extract_redirect_targets(command):
-            confined, resolved = resolve_confinement(target, cwd, worktree_path)
-            if not confined and _is_protected_redirect_target(resolved):
+        for tokens in split_subcommands(command):
+            for target in _redirect_targets_in_tokens(tokens):
+                _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+                if not _is_protected_redirect_target(resolved):
+                    continue
+                if (
+                    resolved == memory_finalize_permit_path().resolve()
+                    and matches_memory_finalize_permit_shape(tokens, target)
+                ):
+                    continue
                 protected_redirect_escapes.append(str(resolved))
     except Exception as exc:
         log_event(
             "plugin_pretooluse_bash_guard",
             {
                 "event": "pretool_guard_parse_error",
-                "command_name": "extract_redirect_targets",
+                "command_name": "redirect_confinement_check",
                 "error": repr(exc),
                 "reason": "skipped_redirect_confinement_check",
             },
@@ -477,27 +560,32 @@ def main() -> int:
         escapes or in_cwd_critical or denied_dynamic or protected_redirect_escapes
     ) and block_mode
 
-    # Reason priority: a dynamic target with traversal/wildcard is the most
-    # specific bypass concern; then a confinement escape (worktree-
-    # confinement when worktree_path is set, escapes-cwd when cwd-only);
-    # then a protected redirect target escaping confinement; then an
-    # in-cwd-critical hit; then a merely-unverifiable (allowed) dynamic
-    # target. Each reason names which specific rule fired (design's
-    # Observability requirement).
+    # HIGH (REM-FIX Phase 3 review+hunt): every triggered category names its
+    # own reason -- previously only the highest-priority reason string was
+    # logged/returned when multiple categories fired for different targets
+    # in the same command, silently dropping the other rule(s)' detail. This
+    # doesn't change the allow/deny outcome (still gated by deny_now above),
+    # only what's disclosed in the log/denial message (Observability
+    # requirement: each denial reason should name every rule that fired).
+    # `unverifiable-path` is intentionally exclusive to the other four --
+    # it is itself never a deny reason (see deny_now above), only ever
+    # relevant when nothing else triggered.
+    reason_parts = []
     if denied_dynamic:
-        reason = f"dynamic-target-with-traversal:{','.join(denied_dynamic)}"
-    elif escapes:
-        reason = (
+        reason_parts.append(f"dynamic-target-with-traversal:{','.join(denied_dynamic)}")
+    if escapes:
+        reason_parts.append(
             f"worktree-confinement:{','.join(escapes)}"
             if worktree_path
             else f"escapes-cwd:{','.join(escapes)}"
         )
-    elif protected_redirect_escapes:
-        reason = f"worktree-confinement:{','.join(protected_redirect_escapes)}"
-    elif in_cwd_critical:
-        reason = f"in-cwd-critical:{','.join(in_cwd_critical)}"
-    else:
-        reason = f"unverifiable-path:{','.join(unverifiable)}"
+    if protected_redirect_escapes:
+        reason_parts.append(f"worktree-confinement:{','.join(protected_redirect_escapes)}")
+    if in_cwd_critical:
+        reason_parts.append(f"in-cwd-critical:{','.join(in_cwd_critical)}")
+    if not reason_parts and unverifiable:
+        reason_parts.append(f"unverifiable-path:{','.join(unverifiable)}")
+    reason = "; ".join(reason_parts)
 
     log_event(
         "plugin_pretooluse_bash_guard",

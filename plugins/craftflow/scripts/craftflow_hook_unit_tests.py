@@ -1667,6 +1667,185 @@ def test_bash_guard_allows_benign_stderr_redirect_to_dev_null(tmp_dir: Path) -> 
 
 
 # ---------------------------------------------------------------------------
+# --- REM-FIX: Phase 3 review+hunt findings (4 real live-verified bugs) ---
+# ---------------------------------------------------------------------------
+
+def test_bash_guard_blocks_protected_redirect_overwrite_when_confined_to_cwd(tmp_dir: Path) -> None:
+    # CRITICAL 1: the protected-redirect check was gated behind `not
+    # confined`, so it never even ran whenever cwd was the project root (the
+    # common case) -- .craftflow/state/... always lives inside cwd there.
+    # Live-verified: `echo PWNED > .craftflow/state/project/patterns.md`
+    # (cwd=project root, no worktree) silently succeeded with zero log
+    # entry. Confinement and protected-path-ness are two SEPARATE reasons to
+    # deny -- a protected path must be denied regardless of whether it also
+    # happens to be inside cwd.
+    name = "pretooluse-bash-guard/blocks-protected-redirect-overwrite-when-confined-to-cwd"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo PWNED > .craftflow/state/project/patterns.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for a protected-path redirect overwrite confined "
+            f"to cwd with no worktree (the common case); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_dd_of_dynamic_traversal_substitution(tmp_dir: Path) -> None:
+    # CRITICAL 2: dd's branch hardcoded has_unresolvable=False for its `of=`
+    # target, never calling looks_dynamic() on the captured value (unlike
+    # the generic positional-target path, which calls looks_dynamic() on
+    # every token). Live-verified:
+    # `dd if=/dev/zero of=$(echo ../../etc/passwd) bs=1 count=1` was
+    # silently allowed -- the captured `of=` value is unexpanded
+    # substitution text that resolves as a harmless-looking in-cwd path
+    # once shlex splits it.
+    name = "pretooluse-bash-guard/blocks-dd-of-dynamic-traversal-substitution"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "dd if=/dev/zero of=$(echo ../../etc/passwd) bs=1 count=1"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for 'dd ... of=$(...)' capturing a traversal "
+            f"literal via command substitution; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_worktree_path_non_string_type_does_not_crash(tmp_dir: Path) -> None:
+    # CRITICAL 3: worktree_path is an untyped read from the workflow JSON --
+    # if it's present but not str/None (e.g. an int), Path(worktree_path)
+    # previously raised TypeError uncaught inside main()'s destructive-
+    # target confinement loop, crashing the hook process (a non-zero/
+    # non-JSON-deny exit fails OPEN, silently allowing the tool call). Must
+    # coerce any non-str/non-None value to None immediately after reading
+    # it so this malformed shape can't reach resolve_confinement() at all.
+    name = "pretooluse-bash-guard/worktree-path-non-string-type-does-not-crash"
+    project_root = tmp_dir / "project"
+    outside = tmp_dir / "outside"
+    project_root.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    wf_dir = project_root / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "wf-malformed-test.json").write_text(
+        json.dumps({"workflow_uuid": "wf-malformed-test", "worktree_path": 12345}),
+        encoding="utf-8",
+    )
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"rm -f {(outside / 'secret.txt').resolve()}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected a genuine deny (not a crash) for an escaping target "
+            f"when worktree_path is a malformed non-string type; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_main_denies_not_crashes_when_resolve_confinement_raises(tmp_dir: Path) -> None:
+    # CRITICAL 3 continued: the main destructive-target confinement loop's
+    # own resolve_confinement() call had no try/except at all, unlike its
+    # sibling in the redirect-confinement block a few lines below. Forces
+    # the exact exception directly (independent of the JSON-type coercion
+    # covered by the sibling test above) and proves main() falls back to a
+    # fail-CLOSED (not-confined -> deny) verdict instead of propagating the
+    # exception uncaught (an uncaught crash fails OPEN).
+    name = "pretooluse-bash-guard/main-denies-not-crashes-when-resolve-confinement-raises"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+
+    original = bash_guard.resolve_confinement
+
+    def _boom(path, cwd, worktree_path):
+        raise ValueError("synthetic parse failure for CRITICAL 3 regression test")
+
+    bash_guard.resolve_confinement = _boom
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -f ./scratch.txt"},
+    }
+    original_stdin = sys.stdin
+    original_stdout = sys.stdout
+    sys.stdin = io.StringIO(json.dumps(payload))
+    captured = io.StringIO()
+    sys.stdout = captured
+    try:
+        exit_code = bash_guard.main()
+    except Exception as exc:
+        fail(name, f"expected main() to catch the resolve_confinement exception, not propagate it; got: {exc!r}")
+        return
+    finally:
+        bash_guard.resolve_confinement = original
+        sys.stdin = original_stdin
+        sys.stdout = original_stdout
+
+    out = captured.getvalue().strip()
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected a genuine end-to-end DENY (fail-closed) from main() "
+            f"when resolve_confinement() itself raises; got exit={exit_code} stdout={out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_denial_reason_includes_all_triggered_categories(tmp_dir: Path) -> None:
+    # HIGH: when both `escapes` and `in_cwd_critical` fire for DIFFERENT
+    # targets in the same command, only the highest-priority reason string
+    # was previously logged/returned, silently dropping the other rule's
+    # detail. Doesn't change the allow/deny outcome, but each denial reason
+    # should name every rule that fired (Observability requirement).
+    name = "pretooluse-bash-guard/denial-reason-includes-all-triggered-categories"
+    project_root = tmp_dir / "project"
+    outside_file = tmp_dir / "outside" / "secret.txt"
+    project_root.mkdir(parents=True)
+    outside_file.parent.mkdir(parents=True)
+    outside_file.write_text("x", encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"rm -f {outside_file.resolve()} && rm -rf .git"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a compound command with both an escape and an in-cwd-critical target; got: {out!r}")
+        return
+    if "escapes-cwd" not in out or "in-cwd-critical" not in out:
+        fail(
+            name,
+            "expected BOTH 'escapes-cwd' and 'in-cwd-critical' reasons "
+            f"present (not just the highest-priority one); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # --- hooklib shared-helper tests (white-box) ---
 # ---------------------------------------------------------------------------
 
@@ -2606,6 +2785,14 @@ def main() -> int:
         test_bash_guard_worktree_confinement_allows_memory_finalize_permit_write_when_worktree_path_stale(tmp / "b49")
         test_bash_guard_allows_benign_redirect_to_dev_null(tmp / "b50")
         test_bash_guard_allows_benign_stderr_redirect_to_dev_null(tmp / "b51")
+
+        print()
+        print("[ pretooluse-bash-guard: REM-FIX Phase 3 review+hunt findings ]")
+        test_bash_guard_blocks_protected_redirect_overwrite_when_confined_to_cwd(tmp / "b52")
+        test_bash_guard_blocks_dd_of_dynamic_traversal_substitution(tmp / "b53")
+        test_bash_guard_worktree_path_non_string_type_does_not_crash(tmp / "b54")
+        test_bash_guard_main_denies_not_crashes_when_resolve_confinement_raises(tmp / "b55")
+        test_bash_guard_denial_reason_includes_all_triggered_categories(tmp / "b56")
 
         print()
         print("[ hooklib shared-helper (white-box) ]")
