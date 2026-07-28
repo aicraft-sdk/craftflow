@@ -1232,6 +1232,119 @@ def test_pretooluse_guard_allows_bash_python_dynamic_dispatch_write_to_memory_md
     ok(name)
 
 
+def test_pretooluse_guard_allows_bash_python_subprocess_run_harmless_mention_of_protected_path(tmp_dir: Path) -> None:
+    # REM-FIX (doubt-verify cycle 2, Problem 1 -- over-blocking false
+    # positive): live-verified before this fix -- a suspicious-mechanism
+    # marker (subprocess.run() calling `ls`, nothing destructive) combined
+    # with a protected-path string that only appears inside an UNRELATED
+    # print() statement was denied, even though no write to the path ever
+    # occurs. The marker and the path literal must co-occur within the SAME
+    # python statement to count as a violation -- they're in different
+    # statements here (separated by `;`), so this must now ALLOW.
+    name = "pretooluse-guard/allows-bash-python-subprocess-run-harmless-mention-of-protected-path"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"import subprocess; subprocess.run(['ls']); "
+                "print('.craftflow/state/project/patterns.md is a cool file')\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"expected ALLOW (marker and protected-path mention are in different statements, no actual write); got deny: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_python_import_alias_os_system_write_to_memory_md(tmp_dir: Path) -> None:
+    # REM-FIX (doubt-verify cycle 2, Problem 2 -- import-alias bypass):
+    # live-verified before this fix -- `import os as o; o.system(...)`
+    # defeated the literal `os.system(` marker regex entirely and ALLOWED
+    # the write. Alias bindings from `import X as Y` must also be matched.
+    name = "pretooluse-guard/denies-bash-python-import-alias-os-system-write-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"import os as o; o.system('printf x > "
+                ".craftflow/state/project/patterns.md')\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for an import-aliased `o.system()` write to a memory .md file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_python_from_import_system_write_to_memory_md(tmp_dir: Path) -> None:
+    # REM-FIX (doubt-verify cycle 2, Problem 2 -- from-import bypass):
+    # live-verified before this fix -- `from os import system;
+    # system(...)` also defeated the literal marker regex and ALLOWED the
+    # write. Bindings from `from X import Y` must also be matched.
+    name = "pretooluse-guard/denies-bash-python-from-import-system-write-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"from os import system; system('printf x > "
+                ".craftflow/state/project/patterns.md')\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a `from os import system` write to a memory .md file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_bash_python_variable_reference_then_call_write_to_memory_md_disclosed_gap(tmp_dir: Path) -> None:
+    # DISCLOSED, ACCEPTED GAP (explicitly OUT OF SCOPE this round, per the
+    # user's own direction -- "one more targeted round, not a full
+    # rewrite"): storing a function reference in an arbitrary variable and
+    # calling it later (`func = os.system; func(...)`) requires real AST
+    # analysis to trace the binding, not regex/statement-proximity
+    # matching -- this is NOT fixed here. This test asserts the CURRENT
+    # (allow) behavior deliberately, so a future reader sees this boundary
+    # was a conscious choice, not an oversight -- see the module-level
+    # LIMITATIONS disclosure in craftflow_pretooluse_guard.py.
+    name = "pretooluse-guard/allows-bash-python-variable-reference-then-call-write-to-memory-md-disclosed-gap"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"import os; func = os.system; "
+                "func('printf x > .craftflow/state/project/patterns.md')\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"expected ALLOW (disclosed gap: function-reference-then-call-via-variable requires AST analysis); got deny: {out!r}")
+        return
+    ok(name)
+
+
 def test_hooks_json_registers_pretooluse_guard_on_bash() -> None:
     name = "hooks/pretooluse-guard-registered-on-bash"
     path = PLUGIN_ROOT / "hooks" / "hooks.json"
@@ -4277,6 +4390,13 @@ def main() -> int:
         test_pretooluse_guard_denies_bash_python_shutil_copy_write_to_memory_md(tmp / "g30")
         test_pretooluse_guard_denies_bash_python_os_rename_write_to_memory_md(tmp / "g31")
         test_pretooluse_guard_allows_bash_python_dynamic_dispatch_write_to_memory_md(tmp / "g32")
+
+        print()
+        print("[ pretooluse-guard: REM-FIX (doubt-verify cycle 2: statement-proximity + import-alias coverage) ]")
+        test_pretooluse_guard_allows_bash_python_subprocess_run_harmless_mention_of_protected_path(tmp / "g33")
+        test_pretooluse_guard_denies_bash_python_import_alias_os_system_write_to_memory_md(tmp / "g34")
+        test_pretooluse_guard_denies_bash_python_from_import_system_write_to_memory_md(tmp / "g35")
+        test_pretooluse_guard_allows_bash_python_variable_reference_then_call_write_to_memory_md_disclosed_gap(tmp / "g36")
 
         print()
         print("[ pretooluse-bash-guard ]")

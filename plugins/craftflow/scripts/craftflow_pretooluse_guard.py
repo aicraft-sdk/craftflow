@@ -58,9 +58,10 @@ _PYTHON_INVOCATION_RE = re.compile(r"\bpython3?\b")
 # subprocess.run(['bash', '-c', 'printf x > <protected path>']),
 # shutil.copy(src, '<protected path>'), os.rename(src, '<protected path>').
 # This regex flags the most common shell-exec / file-copy-or-move call
-# shapes as SUSPICIOUS when combined with a protected-path literal
-# elsewhere in the same command text (see
-# `_python_suspicious_mechanism_targets()` below).
+# shapes as SUSPICIOUS when combined with a protected-path literal in the
+# SAME python statement (see `_python_suspicious_mechanism_targets()`
+# below -- cycle 2 tightened this from "elsewhere in the whole command
+# text" to statement-level co-occurrence).
 _PYTHON_SUSPICIOUS_MECHANISM_RE = re.compile(
     r"\b(?:"
     r"os\.system"
@@ -69,6 +70,104 @@ _PYTHON_SUSPICIOUS_MECHANISM_RE = re.compile(
     r"|os\.(?:rename|replace)"
     r")\s*\("
 )
+
+# REM-FIX (doubt-verify cycle 2, Problem 2): `import X as Y` / `from X
+# import Y` forms bind an alias/name to one of the suspicious attrs above
+# without ever spelling out `os.system(`/`subprocess.run(` literally --
+# `import os as o; o.system(...)` and `from os import system; system(...)`
+# both bypassed `_PYTHON_SUSPICIOUS_MECHANISM_RE` entirely before this fix.
+_SUSPICIOUS_ATTRS_BY_MODULE = {
+    "os": ("system", "rename", "replace"),
+    "subprocess": ("run", "call", "Popen", "check_call"),
+    "shutil": ("copy", "copyfile", "move"),
+}
+
+_IMPORT_AS_RE = re.compile(r"\bimport\s+(os|subprocess|shutil)\s+as\s+(\w+)")
+_FROM_IMPORT_RE = re.compile(r"\bfrom\s+(os|subprocess|shutil)\s+import\s+([^\n;]+)")
+
+# Best-effort extraction of the actual python source text a `-c '...'`/
+# `-c "..."` invocation is passing. Needed so statement-splitting (below)
+# operates on the real python code rather than getting "stuck" treating the
+# single OUTER shell-quoting character as an unclosed string for the whole
+# remaining command (the outer quote is shell-level framing, not a python
+# string literal). Falls back to the raw command text when no such shape is
+# found (e.g. a heredoc-fed script) -- heredocs are handled separately by
+# `_python_script_write_targets()`'s own whole-text scan and have no
+# analogous outer-quote-swallows-everything problem since there is no
+# enclosing shell-quote character around the heredoc body.
+_PYTHON_DASH_C_RE = re.compile(r"-c\s*(['\"])(.*)\1", re.DOTALL)
+
+
+def _extract_python_code_text(command: str) -> str:
+    match = _PYTHON_DASH_C_RE.search(command)
+    return match.group(2) if match else command
+
+
+def _split_statement_like_chunks(text: str) -> list:
+    """Best-effort split of python source text into statement-like chunks
+    on `;` and newline, treating an active `'...'`/`"..."` string literal
+    as a single unit so a `;`/newline inside a quoted string argument is
+    never treated as a statement boundary. Not a full python parser --
+    matching this guard family's deterministic-but-imperfect scope."""
+    chunks = []
+    current = []
+    quote_char = None
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if quote_char:
+            current.append(ch)
+            if ch == "\\" and i + 1 < n:
+                current.append(text[i + 1])
+                i += 2
+                continue
+            if ch == quote_char:
+                quote_char = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote_char = ch
+            current.append(ch)
+            i += 1
+            continue
+        if ch in (";", "\n"):
+            chunks.append("".join(current))
+            current = []
+            i += 1
+            continue
+        current.append(ch)
+        i += 1
+    chunks.append("".join(current))
+    return chunks
+
+
+def _python_suspicious_call_bindings(code_text: str) -> set:
+    """Scan python source text for `import X as Y` / `from X import Y`
+    forms of os/subprocess/shutil and return the set of alias/bound-name
+    call-open substrings (e.g. `"o.system("`, `"system("`) that should be
+    treated as equivalent to the literal marker regex above. Does NOT
+    trace a name through further re-assignment (`func = os.system`) --
+    that requires real AST analysis and is a disclosed, out-of-scope gap
+    (see LIMITATIONS on `_python_suspicious_mechanism_targets` below)."""
+    patterns: set = set()
+    for module, alias in _IMPORT_AS_RE.findall(code_text):
+        for attr in _SUSPICIOUS_ATTRS_BY_MODULE[module]:
+            patterns.add(f"{alias}.{attr}(")
+    for module, names_blob in _FROM_IMPORT_RE.findall(code_text):
+        for name_part in names_blob.split(","):
+            name_part = name_part.strip()
+            if not name_part:
+                continue
+            if " as " in name_part:
+                orig, _, bound = name_part.partition(" as ")
+                orig = orig.strip()
+                bound = bound.strip()
+            else:
+                orig = bound = name_part
+            if orig in _SUSPICIOUS_ATTRS_BY_MODULE[module]:
+                patterns.add(f"{bound}(")
+    return patterns
 
 
 def _protected_memory_paths() -> set:
@@ -189,42 +288,74 @@ def _python_suspicious_mechanism_targets(command: str, protected_paths: set, cwd
     """Broaden python-write detection (REM-FIX, doubt-verify cycle 1) to
     also flag `os.system(`, `subprocess.run/call/Popen/check_call(`,
     `shutil.copy/copyfile/move(`, and `os.rename/replace(` as suspicious
-    constructs. Unlike `_python_script_write_targets()`, these mechanisms
-    don't have a single reliable "target argument" position to extract --
-    the write may be embedded in a shell string (`os.system`), an argv list
+    constructs -- including via `import X as Y` / `from X import Y`
+    aliasing (cycle 2; see `_python_suspicious_call_bindings()`). Unlike
+    `_python_script_write_targets()`, these mechanisms don't have a single
+    reliable "target argument" position to extract -- the write may be
+    embedded in a shell string (`os.system`), an argv list
     (`subprocess.run([...])`), or a two-argument call whose destination
     position varies (`shutil.copy(src, dest)`, `os.rename(src, dest)`).
-    Deliberately fail-closed instead: when the command contains a python
-    invocation AND one of these suspicious-mechanism markers, ANY protected
-    path (memory .md files, `.memory-finalize`, workflow JSON) that also
-    appears as a literal substring anywhere in the same command text is
-    treated as a violation, matching this codebase's own established
-    pattern of failing closed on dynamic/unresolvable content elsewhere
-    (see `command_has_traversal_or_wildcard()` in hooklib). This is coarser
-    than exact-target resolution but correct for a defense-in-depth layer:
-    over-flagging a construct that merely mentions a protected path's
-    spelling is an acceptable false-positive rate for a security guard,
-    silent bypass is not.
+
+    Deliberately fail-closed instead: when a suspicious-mechanism marker
+    (literal or alias-bound) and a protected path's literal spelling BOTH
+    appear within the SAME python statement, it is treated as a violation,
+    matching this codebase's own established pattern of failing closed on
+    dynamic/unresolvable content elsewhere (see
+    `command_has_traversal_or_wildcard()` in hooklib).
+
+    REM-FIX (doubt-verify cycle 2, Problem 1): this used to match a marker
+    ANYWHERE in the whole command text combined with a protected-path
+    literal ANYWHERE in the whole command text, with no requirement that
+    they were related -- live-verified false positive:
+    `subprocess.run(['ls']); print('<protected-path> is a cool file')`
+    denied a command that never actually writes anywhere, just because a
+    harmless call and an unrelated string both happened to appear in the
+    same command. Tightened to require the marker and the protected-path
+    literal to co-occur within the SAME statement (split on `;`/newline,
+    respecting basic string-literal boundaries via
+    `_split_statement_like_chunks()`) -- over-flagging a construct that
+    merely MENTIONS a protected path's spelling in an unrelated statement
+    is no longer treated as a violation, closing the false-positive gap
+    while keeping the fail-closed posture for genuine same-statement
+    co-occurrence.
 
     See the LIMITATIONS note on `_python_script_write_targets()` above --
     this function does not attempt, and does not claim, to be exhaustive
     either. Dynamically-dispatched calls (`getattr(os, 'sys'+'tem')(...)`),
-    string-concatenated method names, and exec()/eval()-wrapped code are a
-    disclosed, accepted gap, not covered here."""
+    string-concatenated method names, exec()/eval()-wrapped code, ctypes,
+    and ftplib are a disclosed, accepted gap, not covered here. ALSO
+    disclosed and explicitly out of scope (cycle 2): storing a function
+    reference in an arbitrary variable and calling it later
+    (`func = os.system; func(...)`) -- tracing that binding through
+    reassignment requires real AST analysis, not regex/statement-proximity
+    matching, and is not attempted here."""
     if not _PYTHON_INVOCATION_RE.search(command):
         return []
-    if not _PYTHON_SUSPICIOUS_MECHANISM_RE.search(command):
+    code_text = _extract_python_code_text(command)
+    alias_call_patterns = _python_suspicious_call_bindings(code_text)
+    if not _PYTHON_SUSPICIOUS_MECHANISM_RE.search(code_text) and not alias_call_patterns:
         return []
-    hits = []
+
+    path_spellings = []
     for candidate in protected_paths:
         abs_spelling = str(candidate)
         try:
             rel_spelling = str(candidate.relative_to(cwd))
         except ValueError:
             rel_spelling = None
-        if abs_spelling in command or (rel_spelling and rel_spelling in command):
-            hits.append(abs_spelling)
-    return hits
+        path_spellings.append((abs_spelling, rel_spelling))
+
+    hits: set = set()
+    for statement in _split_statement_like_chunks(code_text):
+        has_marker = bool(_PYTHON_SUSPICIOUS_MECHANISM_RE.search(statement)) or any(
+            pattern in statement for pattern in alias_call_patterns
+        )
+        if not has_marker:
+            continue
+        for abs_spelling, rel_spelling in path_spellings:
+            if abs_spelling in statement or (rel_spelling and rel_spelling in statement):
+                hits.add(abs_spelling)
+    return list(hits)
 
 
 def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
