@@ -215,7 +215,24 @@ def _dd_target(tokens: list) -> tuple:
             else:
                 paths.append(value)
         return paths, unresolvable
-    return extract_redirect_targets(" ".join(tokens)), False
+
+    # No `of=` token present (a bare `dd ... > file` stdout redirect) --
+    # fall back to this dd invocation's own >/>> redirect target. A dynamic
+    # ($/backtick) redirect target is excluded from the returned path
+    # tokens and flags has_unresolvable=True, exactly like the `of=` branch
+    # immediately above already does (doubt-verify generalization gap: this
+    # fallback previously hardcoded has_unresolvable=False unconditionally,
+    # never calling looks_dynamic() on the extracted redirect target, so a
+    # dynamic bare-redirect target combined with a traversal literal
+    # elsewhere in the command was silently allowed).
+    redirect_paths = []
+    redirect_unresolvable = False
+    for value in extract_redirect_targets(" ".join(tokens)):
+        if looks_dynamic(value):
+            redirect_unresolvable = True
+        else:
+            redirect_paths.append(value)
+    return redirect_paths, redirect_unresolvable
 
 
 def _is_destructive_find(rest: list) -> bool:
@@ -237,16 +254,31 @@ def _is_destructive_find(rest: list) -> bool:
     return False
 
 
-def _find_search_paths(rest: list) -> list:
+def _find_search_paths(rest: list) -> tuple:
     """find's own leading positional (non-flag) arguments are its search
     path(s); the first flag-like token starts the expression, not a
-    target -- same escape/in-cwd logic as rm's own target."""
+    target -- same escape/in-cwd logic as rm's own target.
+
+    A dynamic ($/backtick) search-path token is excluded from the returned
+    path tokens and flags has_unresolvable=True, exactly like
+    `_positional_targets()` already does for every other command shape and
+    `_dd_target()` does for dd's `of=` value -- this generalizes the same
+    fix to find's own captured tokens (doubt-verify generalization gap:
+    this branch previously hardcoded has_unresolvable=False unconditionally,
+    never calling looks_dynamic() on the captured search path, so a dynamic
+    search path combined with a traversal literal elsewhere in the command
+    was silently allowed instead of being flagged as an opaque dynamic
+    target subject to the traversal-fail-closed logic in main())."""
     paths = []
+    unresolvable = False
     for token in rest:
         if token.startswith("-"):
             break
-        paths.append(token)
-    return paths
+        if looks_dynamic(token):
+            unresolvable = True
+        else:
+            paths.append(token)
+    return paths, unresolvable
 
 
 def _destructive_targets(tokens: list) -> tuple:
@@ -306,6 +338,20 @@ def _match_destructive_shape(command_name: str, rest: list) -> tuple:
             # cwd by default, but -C <dir>/--work-tree=<dir> retargets the
             # whole invocation -- resolve against that directory instead of
             # assuming "." (CRITICAL 1).
+            #
+            # A dynamic ($/backtick) dir_override is excluded from the
+            # returned path tokens and flags has_unresolvable=True, exactly
+            # like _positional_targets()/_dd_target() already do for every
+            # other command shape's captured target (doubt-verify
+            # generalization gap: this branch previously hardcoded
+            # has_unresolvable=False unconditionally regardless of
+            # dir_override, never calling looks_dynamic() on it, so
+            # `git -C $(dynamic) reset --hard` combined with a traversal
+            # literal elsewhere in the command was silently allowed instead
+            # of being flagged as an opaque dynamic target subject to the
+            # traversal-fail-closed logic in main()).
+            if dir_override and looks_dynamic(dir_override):
+                return command_name, [], True
             target = dir_override if dir_override else "."
             return command_name, [target], False
         return None, [], False
@@ -318,7 +364,8 @@ def _match_destructive_shape(command_name: str, rest: list) -> tuple:
 
     if command_name == "find":
         if _is_destructive_find(rest):
-            return command_name, _find_search_paths(rest), False
+            paths, unresolvable = _find_search_paths(rest)
+            return command_name, paths, unresolvable
         return None, [], False
 
     return None, [], False

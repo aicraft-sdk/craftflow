@@ -1728,6 +1728,172 @@ def test_bash_guard_blocks_dd_of_dynamic_traversal_substitution(tmp_dir: Path) -
     ok(name)
 
 
+def test_bash_guard_blocks_find_dynamic_search_path_with_traversal_elsewhere(tmp_dir: Path) -> None:
+    # Doubt-verify generalization gap: the prior REM-FIX fixed dd's `of=`
+    # value to route through looks_dynamic() (CRITICAL 2 above), but never
+    # generalized this to find's own captured search-path tokens --
+    # `_find_search_paths()` hardcoded has_unresolvable=False unconditionally,
+    # exactly the same bug shape dd had. Live-verified pre-fix: this exact
+    # command was silently ALLOWED even though command_has_traversal_or_
+    # wildcard() independently confirms the command contains a traversal
+    # literal (in the unrelated `echo ../../etc` subcommand) -- the dynamic
+    # search-path token itself has no embedded slashes, so it never escapes
+    # cwd via the ordinary resolve_confinement() path either; only the
+    # has_unresolvable+has_traversal_or_wildcard combination (Behavior
+    # Contract rule 4) can catch it.
+    name = "pretooluse-bash-guard/blocks-find-dynamic-search-path-with-traversal-elsewhere"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": 'find "$(echo XDYNAMIC)" -delete; echo ../../etc'},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for 'find $(...) -delete' with a traversal literal "
+            f"elsewhere in the same command; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_find_dynamic_search_path_without_traversal_elsewhere(tmp_dir: Path) -> None:
+    # Behavior Contract rule 3: a bare dynamic target with NEITHER a
+    # traversal literal nor a wildcard anywhere in the command's
+    # construction stays allowed (fail-open on genuinely opaque-but-
+    # unsuspicious dynamic paths) -- must not over-correct into denying
+    # every dynamic find search path outright.
+    name = "pretooluse-bash-guard/allows-find-dynamic-search-path-without-traversal-elsewhere"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": 'find "$(echo XDYNAMIC)" -delete'},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(
+            name,
+            "expected allow for a bare dynamic find search path with no "
+            f"traversal literal or wildcard anywhere in the command; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_git_dynamic_dir_override_with_traversal_elsewhere(tmp_dir: Path) -> None:
+    # Doubt-verify generalization gap: `_is_destructive_git()`'s dir_override
+    # (captured from `git -C <dir>`/`--work-tree=<dir>`) is used as the
+    # confinement target but the git branch of `_match_destructive_shape()`
+    # hardcoded has_unresolvable=False unconditionally, never calling
+    # looks_dynamic() on it -- the same bug shape dd had before its own
+    # REM-FIX. Live-verified pre-fix:
+    # `git -C $(echo ../../etc) reset --hard` was silently ALLOWED despite
+    # command_has_traversal_or_wildcard() independently confirming a
+    # traversal literal in the command's construction.
+    name = "pretooluse-bash-guard/blocks-git-dynamic-dir-override-with-traversal-elsewhere"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": 'git -C "$(echo YDYNAMIC)" reset --hard; echo ../../etc'},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for 'git -C $(...) reset --hard' with a traversal "
+            f"literal elsewhere in the same command; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_git_dynamic_dir_override_without_traversal_elsewhere(tmp_dir: Path) -> None:
+    # Behavior Contract rule 3, git side: a bare dynamic -C/--work-tree
+    # override with neither a traversal literal nor a wildcard anywhere in
+    # the command's construction stays allowed.
+    name = "pretooluse-bash-guard/allows-git-dynamic-dir-override-without-traversal-elsewhere"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": 'git -C "$(echo YDYNAMIC)" reset --hard'},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(
+            name,
+            "expected allow for a bare dynamic git -C override with no "
+            f"traversal literal or wildcard anywhere in the command; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_dd_bare_redirect_dynamic_target_with_traversal_elsewhere(tmp_dir: Path) -> None:
+    # Doubt-verify generalization gap, a THIRD instance found by explicitly
+    # auditing every branch rather than assuming only find/git had it:
+    # `_dd_target()`'s own FALLBACK path (no `of=` token present -- a bare
+    # `dd ... > target` stdout redirect) hardcoded has_unresolvable=False
+    # unconditionally, never calling looks_dynamic() on the extracted
+    # redirect target -- the exact same bug shape as the already-fixed
+    # `of=` path, just in dd's OTHER sub-branch. Live-verified pre-fix:
+    # `dd if=/dev/zero > $VAR; echo ../../etc` was silently ALLOWED.
+    name = "pretooluse-bash-guard/blocks-dd-bare-redirect-dynamic-target-with-traversal-elsewhere"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "dd if=/dev/zero > $VAR; echo ../../etc"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for a bare 'dd ... > $VAR' redirect target with a "
+            f"traversal literal elsewhere in the same command; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_dd_bare_redirect_dynamic_target_without_traversal_elsewhere(tmp_dir: Path) -> None:
+    # Behavior Contract rule 3, dd's bare-redirect side: a bare dynamic
+    # redirect target with neither a traversal literal nor a wildcard
+    # anywhere in the command's construction stays allowed.
+    name = "pretooluse-bash-guard/allows-dd-bare-redirect-dynamic-target-without-traversal-elsewhere"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "dd if=/dev/zero > $VAR"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(
+            name,
+            "expected allow for a bare dynamic dd redirect target with no "
+            f"traversal literal or wildcard anywhere in the command; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_bash_guard_worktree_path_non_string_type_does_not_crash(tmp_dir: Path) -> None:
     # CRITICAL 3: worktree_path is an untyped read from the workflow JSON --
     # if it's present but not str/None (e.g. an int), Path(worktree_path)
@@ -2793,6 +2959,15 @@ def main() -> int:
         test_bash_guard_worktree_path_non_string_type_does_not_crash(tmp / "b54")
         test_bash_guard_main_denies_not_crashes_when_resolve_confinement_raises(tmp / "b55")
         test_bash_guard_denial_reason_includes_all_triggered_categories(tmp / "b56")
+
+        print()
+        print("[ pretooluse-bash-guard: doubt-verify generalization gap (find/git dynamic targets) ]")
+        test_bash_guard_blocks_find_dynamic_search_path_with_traversal_elsewhere(tmp / "b57")
+        test_bash_guard_allows_find_dynamic_search_path_without_traversal_elsewhere(tmp / "b58")
+        test_bash_guard_blocks_git_dynamic_dir_override_with_traversal_elsewhere(tmp / "b59")
+        test_bash_guard_allows_git_dynamic_dir_override_without_traversal_elsewhere(tmp / "b60")
+        test_bash_guard_blocks_dd_bare_redirect_dynamic_target_with_traversal_elsewhere(tmp / "b61")
+        test_bash_guard_allows_dd_bare_redirect_dynamic_target_without_traversal_elsewhere(tmp / "b62")
 
         print()
         print("[ hooklib shared-helper (white-box) ]")
