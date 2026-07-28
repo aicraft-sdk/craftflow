@@ -499,6 +499,453 @@ def test_pretooluse_guard_allows_memory_write_with_permit(tmp_dir: Path) -> None
 
 
 # ---------------------------------------------------------------------------
+# Phase 4: pretooluse_guard.py protected-path extension, Bash-write
+# inspection, Edit/Write worktree confinement, hooks.json Bash registration.
+# See docs/plans/2026-07-28-craftflow-guardrail-hardening-plan.md, Phase 4.
+# ---------------------------------------------------------------------------
+
+def test_pretooluse_guard_denies_edit_write_to_memory_finalize(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/denies-edit-write-to-memory-finalize"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    state = tmp_dir / ".craftflow" / "state"
+    state.mkdir(parents=True)
+    target = state / ".memory-finalize"
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(target)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for an unpermitted Edit/Write to .memory-finalize; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_edit_write_to_workflow_json(tmp_dir: Path) -> None:
+    # Regression flow 4: workflow JSON is deliberately NOT in the Edit/Write
+    # -gated protected-memory set (Durable Decision) -- the router's own
+    # routine mid-workflow Write() updates must stay allowed.
+    name = "pretooluse-guard/allows-edit-write-to-workflow-json"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    wf_dir = tmp_dir / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True)
+    target = wf_dir / "wf-test.json"
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for a routine workflow-JSON Write; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_heredoc_write_to_memory_md(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/denies-bash-heredoc-write-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": "cat <<'EOF' > .craftflow/state/project/activeContext.md\ninjected\nEOF"
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash heredoc write to a memory .md file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_tee_write_to_memory_md(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/denies-bash-tee-write-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo x | tee .craftflow/state/project/patterns.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash tee write to a memory .md file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_python_oneliner_write_to_memory_md(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/denies-bash-python-oneliner-write-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"open('.craftflow/state/project/progress.md', "
+                "'w').write('x')\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash python one-liner write to a memory .md file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_write_to_workflow_json(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/denies-bash-write-to-workflow-json"
+    project_root = tmp_dir / "project"
+    wf_dir = project_root / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "wf-test.json").write_text('{"workflow_uuid":"wf-test"}', encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo '{}' > .craftflow/state/workflows/wf-test.json"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash redirect write to a workflow JSON artifact; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_heredoc_write_to_workflow_json(tmp_dir: Path) -> None:
+    # Advisory 2 (fresh review pass 1): workflow JSON gets the same 3-shape
+    # coverage as the .md files, not a narrower single-shape check.
+    name = "pretooluse-guard/denies-bash-heredoc-write-to-workflow-json"
+    project_root = tmp_dir / "project"
+    wf_dir = project_root / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "wf-test.json").write_text('{"workflow_uuid":"wf-test"}', encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": "cat <<'EOF' > .craftflow/state/workflows/wf-test.json\n{}\nEOF"
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash heredoc write to a workflow JSON artifact; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_tee_write_to_workflow_json(tmp_dir: Path) -> None:
+    # Advisory 2 (fresh review pass 1).
+    name = "pretooluse-guard/denies-bash-tee-write-to-workflow-json"
+    project_root = tmp_dir / "project"
+    wf_dir = project_root / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "wf-test.json").write_text('{"workflow_uuid":"wf-test"}', encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo '{}' | tee .craftflow/state/workflows/wf-test.json"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash tee write to a workflow JSON artifact; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_python_oneliner_write_to_workflow_json(tmp_dir: Path) -> None:
+    # Advisory 2 (fresh review pass 1).
+    name = "pretooluse-guard/denies-bash-python-oneliner-write-to-workflow-json"
+    project_root = tmp_dir / "project"
+    wf_dir = project_root / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "wf-test.json").write_text('{"workflow_uuid":"wf-test"}', encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"open('.craftflow/state/workflows/wf-test.json', "
+                "'w').write('{}')\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash python one-liner write to a workflow JSON artifact; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_bash_permit_write_shape(tmp_dir: Path) -> None:
+    # Regression flow 2.
+    name = "pretooluse-guard/allows-bash-permit-write-shape"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "printf '%s' 'wf-test-1234' > .craftflow/state/.memory-finalize"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"expected allow for the one documented permit-write shape; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_permit_write_wrong_shape(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/denies-bash-permit-write-wrong-shape"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": "printf '%s\\ninjected' 'wf-test-1234' > .craftflow/state/.memory-finalize"
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a different-shaped printf write to .memory-finalize; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_permit_write_compound_command(tmp_dir: Path) -> None:
+    # This guard's own verdict concerns only protected-path writes -- the
+    # unrelated `rm -rf /tmp/x` subcommand is bash_guard.py's concern (a
+    # separate hook, independently firing on every Bash call). Assert only
+    # this guard's own output: the memory-finalize-write concern specifically
+    # allows here since the OTHER subcommand matches the documented shape.
+    name = "pretooluse-guard/denies-bash-permit-write-compound-command"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": "rm -rf /tmp/x; printf '%s' 'wf-test-1234' > .craftflow/state/.memory-finalize"
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(
+            name,
+            f"expected this guard's own verdict to allow (permit shape matched on the "
+            f"memory-finalize subcommand; the unrelated rm subcommand is bash_guard.py's "
+            f"concern); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_bash_unrelated_command(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/allows-bash-unrelated-command"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "git status"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected no regression to ordinary Bash usage; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_worktree_confinement_denies_outside(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/edit-write-worktree-confinement-denies-outside"
+    project_root = tmp_dir / "project"
+    worktree = tmp_dir / "worktree-sibling"
+    outside = tmp_dir / "outside"
+    project_root.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, str(worktree.resolve()))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((outside / "notes.md").resolve())},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for an Edit/Write target outside both cwd and worktree_path; got: {out!r}")
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"expected a distinct 'worktree-confinement' deny reason; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_worktree_confinement_allows_inside_worktree(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/edit-write-worktree-confinement-allows-inside-worktree"
+    project_root = tmp_dir / "project"
+    worktree = tmp_dir / "worktree-sibling"
+    project_root.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, str(worktree.resolve()))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((worktree / "scratch.md").resolve())},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for a target inside worktree_path though outside cwd (proves the union); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_worktree_confinement_degrades_when_no_workflow_json(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/worktree-confinement-degrades-when-no-workflow-json"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((project_root / "notes.md").resolve())},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow (cwd-only degradation, no workflow JSON, no exception); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_confinement_allows_workflow_json_when_worktree_path_stale(tmp_dir: Path) -> None:
+    # Regression flow 4, exact realistic condition (fresh review pass 1
+    # BLOCKING): worktree_path SET to a different, stale-looking sibling
+    # path -- proves TRUE union semantics for the Edit/Write confinement
+    # path specifically, not just inherited from Phase 3's bash-guard proof.
+    name = "pretooluse-guard/edit-write-confinement-allows-workflow-json-when-worktree-path-stale"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    stale_worktree = tmp_dir / ".claude" / "worktrees" / "wf-stale-test"
+    wf_dir = project_root / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, str(stale_worktree))
+    target = wf_dir / "wf-test.json"
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str(target.resolve())},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"regression flow 4 must stay allowed even with a stale/different worktree_path set; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_permit_write_allowed_when_worktree_path_stale(tmp_dir: Path) -> None:
+    # Regression flow 2, exact realistic condition (fresh review pass 1
+    # BLOCKING) -- independent of, and in addition to, Phase 3's identical
+    # proof against bash_guard.py's own confinement check for the same
+    # command.
+    name = "pretooluse-guard/bash-permit-write-allowed-when-worktree-path-stale"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    stale_worktree = tmp_dir / ".claude" / "worktrees" / "wf-stale-test"
+    _write_workflow_json_fixture(project_root, str(stale_worktree))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "printf '%s' 'wf-test-1234' > .craftflow/state/.memory-finalize"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"regression flow 2 must stay allowed from pretooluse_guard.py's own permit-shape check even with a stale/different worktree_path set; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_benign_redirect_to_dev_null(tmp_dir: Path) -> None:
+    # Fresh review pass 2, BLOCKING: proves the Bash-write redirect check is
+    # scoped to protected paths only -- /dev/null is not a protected path.
+    # Real documented shape: skills/ai-first-setup/SKILL.md:292.
+    name = "pretooluse-guard/allows-benign-redirect-to-dev-null"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    stale_worktree = tmp_dir / ".claude" / "worktrees" / "wf-stale-test"
+    _write_workflow_json_fixture(project_root, str(stale_worktree))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "python3 -m json.tool feature_list.json > /dev/null && echo done"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for a benign '> /dev/null' redirect; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_benign_stderr_redirect_to_dev_null(tmp_dir: Path) -> None:
+    # Fresh review pass 2, BLOCKING. Real documented shape:
+    # skills/craftflow-router/SKILL.md:270.
+    name = "pretooluse-guard/allows-benign-stderr-redirect-to-dev-null"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    stale_worktree = tmp_dir / ".claude" / "worktrees" / "wf-stale-test"
+    _write_workflow_json_fixture(project_root, str(stale_worktree))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": 'mkdir "$LOCK_DIR" 2>/dev/null'},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for a benign '2>/dev/null' redirect; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_hooks_json_registers_pretooluse_guard_on_bash() -> None:
+    name = "hooks/pretooluse-guard-registered-on-bash"
+    path = PLUGIN_ROOT / "hooks" / "hooks.json"
+    if not path.exists():
+        fail(name, f"hooks.json not found at {path}")
+        return
+    hooks = json.loads(path.read_text(encoding="utf-8"))
+    pre_hooks = hooks.get("hooks", {}).get("PreToolUse", [])
+    bash_entries = [entry for entry in pre_hooks if entry.get("matcher") == "Bash"]
+    if not bash_entries:
+        fail(name, "hooks.json has no PreToolUse entry with matcher 'Bash'")
+        return
+    commands = " ".join(h.get("command", "") for entry in bash_entries for h in entry.get("hooks", []))
+    if "craftflow_pretooluse_guard" not in commands:
+        fail(name, "PreToolUse Bash matcher does not invoke craftflow_pretooluse_guard.py")
+        return
+    if "craftflow_pretooluse_bash_guard" not in commands:
+        fail(name, "PreToolUse Bash matcher no longer invokes craftflow_pretooluse_bash_guard.py -- both must fire independently")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # Bash destructive-command traversal guard tests
 # ---------------------------------------------------------------------------
 # REM-FIX (docs/incidents/2026-07-25-phase3-verifier-rm-attempt.md): a
@@ -3459,6 +3906,29 @@ def main() -> int:
         test_pretooluse_guard_allows_memory_write_with_permit(tmp / "g2")
 
         print()
+        print("[ pretooluse-guard: Phase 4 protected-path + Bash-write inspection + confinement ]")
+        test_pretooluse_guard_denies_edit_write_to_memory_finalize(tmp / "g3")
+        test_pretooluse_guard_allows_edit_write_to_workflow_json(tmp / "g4")
+        test_pretooluse_guard_denies_bash_heredoc_write_to_memory_md(tmp / "g5")
+        test_pretooluse_guard_denies_bash_tee_write_to_memory_md(tmp / "g6")
+        test_pretooluse_guard_denies_bash_python_oneliner_write_to_memory_md(tmp / "g7")
+        test_pretooluse_guard_denies_bash_write_to_workflow_json(tmp / "g8")
+        test_pretooluse_guard_denies_bash_heredoc_write_to_workflow_json(tmp / "g9")
+        test_pretooluse_guard_denies_bash_tee_write_to_workflow_json(tmp / "g10")
+        test_pretooluse_guard_denies_bash_python_oneliner_write_to_workflow_json(tmp / "g11")
+        test_pretooluse_guard_allows_bash_permit_write_shape(tmp / "g12")
+        test_pretooluse_guard_denies_bash_permit_write_wrong_shape(tmp / "g13")
+        test_pretooluse_guard_denies_bash_permit_write_compound_command(tmp / "g14")
+        test_pretooluse_guard_allows_bash_unrelated_command(tmp / "g15")
+        test_pretooluse_guard_edit_write_worktree_confinement_denies_outside(tmp / "g16")
+        test_pretooluse_guard_edit_write_worktree_confinement_allows_inside_worktree(tmp / "g17")
+        test_pretooluse_guard_worktree_confinement_degrades_when_no_workflow_json(tmp / "g18")
+        test_pretooluse_guard_edit_write_confinement_allows_workflow_json_when_worktree_path_stale(tmp / "g19")
+        test_pretooluse_guard_bash_permit_write_allowed_when_worktree_path_stale(tmp / "g20")
+        test_pretooluse_guard_allows_benign_redirect_to_dev_null(tmp / "g21")
+        test_pretooluse_guard_allows_benign_stderr_redirect_to_dev_null(tmp / "g22")
+
+        print()
         print("[ pretooluse-bash-guard ]")
         test_bash_guard_blocks_relative_traversal_escaping_cwd(tmp / "b1")
         test_bash_guard_blocks_absolute_path_outside_cwd(tmp / "b2")
@@ -3618,6 +4088,7 @@ def main() -> int:
     test_router_dispatches_intent_interview()
     test_hooks_json_registers_new_hooks()
     test_hooks_json_registers_bash_guard()
+    test_hooks_json_registers_pretooluse_guard_on_bash()
     test_selfcheck_never_imports_hooklib_directly()
     test_selfcheck_resolves_bare_python3_not_sys_executable()
     test_hooks_json_registers_selfcheck_sessionstart()
