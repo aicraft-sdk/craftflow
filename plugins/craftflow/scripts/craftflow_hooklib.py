@@ -416,6 +416,19 @@ def extract_redirect_targets(command: str) -> list:
     return targets
 
 
+# The one documented literal spelling of the permit sentinel path. Callers
+# of matches_memory_finalize_permit_shape() below MUST pass this constant
+# (never a target string extracted from the command being checked) as the
+# `permit_path_str` argument -- passing the extracted target back at the
+# call site makes the function's 4th AND-condition (`target ==
+# permit_path_str`) tautologically true for ANY spelling that resolves to
+# the same file (e.g. an absolute-path spelling), silently defeating the
+# intended literal-spelling narrowing (CRITICAL 1, guardrail-hardening
+# REM-FIX -- live-verified in both craftflow_pretooluse_guard.py and
+# craftflow_pretooluse_bash_guard.py).
+MEMORY_FINALIZE_PERMIT_LITERAL = ".craftflow/state/.memory-finalize"
+
+
 def matches_memory_finalize_permit_shape(subcommand_tokens: list, permit_path_str: str) -> bool:
     """Narrow, exact TOKEN-SHAPE match for the ONE documented permit-write
     shape: printf '%s' '<value>' > .craftflow/state/.memory-finalize
@@ -427,6 +440,11 @@ def matches_memory_finalize_permit_shape(subcommand_tokens: list, permit_path_st
     re-derive original text spans. Any other shape must be denied by the
     caller. Exact expected shape once tokenized:
     ["printf", "%s", "<any-single-value-token>", ">", "<permit-path>"]
+
+    `permit_path_str` MUST be the literal documented constant
+    (MEMORY_FINALIZE_PERMIT_LITERAL above), not a target string derived
+    from the command under test -- see the constant's own docstring for
+    why (CRITICAL 1).
     """
     if len(subcommand_tokens) != 5:
         return False

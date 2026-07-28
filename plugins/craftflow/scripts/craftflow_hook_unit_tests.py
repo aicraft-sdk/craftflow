@@ -26,6 +26,7 @@ SCRIPTS = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import craftflow_hooklib as hooklib  # noqa: E402
 import craftflow_pretooluse_bash_guard as bash_guard  # noqa: E402
+import craftflow_pretooluse_guard as pretooluse_guard  # noqa: E402
 
 _errors: list[str] = []
 _passes: int = 0
@@ -919,6 +920,179 @@ def test_pretooluse_guard_allows_benign_stderr_redirect_to_dev_null(tmp_dir: Pat
     _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
     if out:
         fail(name, f"expected allow for a benign '2>/dev/null' redirect; got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# REM-FIX (guardrail-hardening plan, Phase 3+4 doubt-verify): 5 live-verified
+# bugs across craftflow_pretooluse_guard.py and craftflow_pretooluse_bash_guard.py.
+# ---------------------------------------------------------------------------
+
+def test_pretooluse_guard_denies_bash_permit_write_noncanonical_absolute_spelling(tmp_dir: Path) -> None:
+    # CRITICAL 1: matches_memory_finalize_permit_shape() was called with the
+    # EXTRACTED redirect target as `permit_path_str`, instead of the literal
+    # documented constant -- making the 4th AND-condition (target ==
+    # permit_path_str) tautologically true for ANY spelling that resolves to
+    # the file. An absolute-path spelling (not the documented literal
+    # ".craftflow/state/.memory-finalize") must be DENIED, not permit-shape-
+    # matched.
+    name = "pretooluse-guard/denies-bash-permit-write-noncanonical-absolute-spelling"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    abs_target = str((project_root / ".craftflow" / "state" / ".memory-finalize").resolve())
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"printf '%s' 'wf-test-1234' > {abs_target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a non-canonical absolute-path spelling of .memory-finalize (permit-shape must not tautologically match any spelling); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_python_heredoc_write_to_memory_md(tmp_dir: Path) -> None:
+    # CRITICAL 2: a heredoc-fed python script (`python3 - <<'EOF' ...
+    # open(...).write(...) ... EOF`) never contains a `-c` token, and the
+    # heredoc BODY is a separate newline-delimited subcommand chunk (once
+    # split_subcommands() splits on "\n") from the invoking `python3 -
+    # <<'EOF'` line -- so the old `"-c" in tokens`-gated, per-subcommand scan
+    # could never see it. Zero targets detected, zero deny, previously.
+    name = "pretooluse-guard/denies-bash-python-heredoc-write-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 - <<'EOF'\n"
+                "open('.craftflow/state/project/patterns.md', 'w').write('injected')\n"
+                "EOF"
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a heredoc-fed python script writing to a memory .md file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_python_path_write_text_to_memory_md(tmp_dir: Path) -> None:
+    # HIGH 1: _OPEN_CALL_RE only matched a literal quoted string as open()'s
+    # first positional arg -- pathlib.Path(...).write_text(...), a different
+    # API for the same file-write effect, evaded detection entirely.
+    name = "pretooluse-guard/denies-bash-python-path-write-text-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"from pathlib import Path; "
+                "Path('.craftflow/state/project/patterns.md').write_text('injected')\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Path(...).write_text(...) write to a memory .md file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_python_oneliner_via_env_prefix_write_to_memory_md(tmp_dir: Path) -> None:
+    # HIGH 2: command_name = os.path.basename(tokens[0]) only inspected the
+    # FIRST token -- `env python3 -c "..."` or `sudo python3 -c "..."`
+    # resolved command_name to "env"/"sudo", silently bypassing the
+    # python-oneliner check even though "-c" is present in tokens.
+    name = "pretooluse-guard/denies-bash-python-oneliner-via-env-prefix-write-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "env python3 -c \"open('.craftflow/state/project/patterns.md', "
+                "'w').write('injected')\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for an env-prefixed python one-liner write to a memory .md file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_handles_workflow_payload_race_in_wf_uuid_lookup(tmp_dir: Path) -> None:
+    # HIGH 3: of the two structurally identical latest_workflow_payload()
+    # calls in _handle_edit_write, the confinement-check call (inside
+    # _edit_write_escapes_confinement) is wrapped in try/except by its
+    # caller, but the SECOND call (populating wf_uuid for the deny/log
+    # payload on the worktree-confinement deny path) had none.
+    # latest_workflow_payload() can raise FileNotFoundError on a stat-race
+    # (workflow JSON file deleted between glob() and .stat()), crashing
+    # main() before the deny is ever emitted -- an uncaught crash fails OPEN.
+    name = "pretooluse-guard/handles-workflow-payload-race-in-wf-uuid-lookup"
+    project_root = tmp_dir / "project"
+    outside = tmp_dir / "outside"
+    project_root.mkdir(parents=True)
+    outside.mkdir(parents=True)
+
+    call_count = {"n": 0}
+
+    def _fake_latest_workflow_payload():
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return {}
+        raise FileNotFoundError("workflow json vanished mid-stat")
+
+    original = pretooluse_guard.latest_workflow_payload
+    old_env = {k: os.environ.get(k) for k in ("CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT")}
+    os.environ["CLAUDE_PROJECT_DIR"] = str(project_root)
+    os.environ["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
+    pretooluse_guard.latest_workflow_payload = _fake_latest_workflow_payload
+    buf = io.StringIO()
+    old_stdout = sys.stdout
+    crashed_exc = None
+    result = None
+    try:
+        sys.stdout = buf
+        try:
+            data = {"cwd": str(project_root.resolve())}
+            mode = {"memoryWrites": "block"}
+            tool_input = {"file_path": str(outside / "escape.txt")}
+            result = pretooluse_guard._handle_edit_write(data, mode, tool_input)
+        except Exception as exc:  # the exact crash HIGH 3 warns about
+            crashed_exc = exc
+    finally:
+        sys.stdout = old_stdout
+        pretooluse_guard.latest_workflow_payload = original
+        for key, value in old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    if crashed_exc is not None:
+        fail(name, f"_handle_edit_write crashed instead of degrading wf_uuid to None: {crashed_exc!r}")
+        return
+    out = buf.getvalue().strip()
+    if result != 0:
+        fail(name, f"expected _handle_edit_write to return 0; got {result!r}")
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected the worktree-confinement deny to still fire despite the wf_uuid lookup raising; got: {out!r}")
         return
     ok(name)
 
@@ -2066,6 +2240,31 @@ def test_bash_guard_worktree_confinement_allows_memory_finalize_permit_write_whe
     _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
     if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
         fail(name, f"regression flow 2 must stay allowed from bash_guard.py's own redirect-confinement check even with a stale/different worktree_path set; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_denies_permit_write_noncanonical_absolute_spelling(tmp_dir: Path) -> None:
+    # CRITICAL 1 (fix in BOTH files): matches_memory_finalize_permit_shape()
+    # was called with the EXTRACTED redirect target as `permit_path_str`,
+    # instead of the literal documented constant -- making the 4th
+    # AND-condition (target == permit_path_str) tautologically true for ANY
+    # spelling that resolves to the file. An absolute-path spelling must be
+    # DENIED here too, not permit-shape-matched.
+    name = "pretooluse-bash-guard/denies-permit-write-noncanonical-absolute-spelling"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    abs_target = str((project_root / ".craftflow" / "state" / ".memory-finalize").resolve())
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"printf '%s' 'wf-test-1234' > {abs_target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a non-canonical absolute-path spelling of .memory-finalize (permit-shape must not tautologically match any spelling); got: {out!r}")
         return
     ok(name)
 
@@ -3929,6 +4128,14 @@ def main() -> int:
         test_pretooluse_guard_allows_benign_stderr_redirect_to_dev_null(tmp / "g22")
 
         print()
+        print("[ pretooluse-guard: REM-FIX (5 live-verified bugs) ]")
+        test_pretooluse_guard_denies_bash_permit_write_noncanonical_absolute_spelling(tmp / "g23")
+        test_pretooluse_guard_denies_bash_python_heredoc_write_to_memory_md(tmp / "g24")
+        test_pretooluse_guard_denies_bash_python_path_write_text_to_memory_md(tmp / "g25")
+        test_pretooluse_guard_denies_bash_python_oneliner_via_env_prefix_write_to_memory_md(tmp / "g26")
+        test_pretooluse_guard_handles_workflow_payload_race_in_wf_uuid_lookup(tmp / "g27")
+
+        print()
         print("[ pretooluse-bash-guard ]")
         test_bash_guard_blocks_relative_traversal_escaping_cwd(tmp / "b1")
         test_bash_guard_blocks_absolute_path_outside_cwd(tmp / "b2")
@@ -3988,6 +4195,7 @@ def main() -> int:
         test_bash_guard_worktree_confinement_allows_within_cwd_despite_different_set_worktree(tmp / "b47")
         test_bash_guard_worktree_confinement_allows_memory_finalize_clear_when_worktree_path_stale(tmp / "b48")
         test_bash_guard_worktree_confinement_allows_memory_finalize_permit_write_when_worktree_path_stale(tmp / "b49")
+        test_bash_guard_denies_permit_write_noncanonical_absolute_spelling(tmp / "b49b")
         test_bash_guard_allows_benign_redirect_to_dev_null(tmp / "b50")
         test_bash_guard_allows_benign_stderr_redirect_to_dev_null(tmp / "b51")
 

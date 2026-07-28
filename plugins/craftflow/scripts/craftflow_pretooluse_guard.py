@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
 from craftflow_hooklib import (
+    MEMORY_FINALIZE_PERMIT_LITERAL,
     extract_redirect_targets,
     has_memory_finalize_permit,
     latest_workflow_payload,
@@ -28,7 +28,27 @@ PROTECTED_MEMORY_FILES = ("activeContext.md", "patterns.md", "progress.md")
 # Narrow extension for the documented `python3 -c "...open(path, 'w')..."`
 # one-liner shape (Plan-vs-Code Gaps: "closes this exact gap") -- neither a
 # redirect nor a `tee`, so invisible to the generic `>`/`>>`/`tee` scan.
+# HIGH 1 (REM-FIX): this only matches a literal quoted string as open()'s
+# FIRST positional arg -- open(path, 'w') (variable-held path) and
+# open(mode='w', file='...') (kwarg-first) remain undetected; both are a
+# disclosed, narrow residual gap, not closed by this plan.
 _OPEN_CALL_RE = re.compile(r"open\(\s*['\"]([^'\"]+)['\"]")
+
+# HIGH 1 (REM-FIX): a second write-call shape for the same file-write
+# effect -- pathlib.Path('...').write_text(...) -- that _OPEN_CALL_RE never
+# recognized since it's a different API entirely.
+_PATH_WRITE_TEXT_RE = re.compile(r"Path\(\s*['\"]([^'\"]+)['\"]\s*\)\s*\.\s*write_text\(")
+
+# CRITICAL 2 / HIGH 2 (REM-FIX): a bare textual match for a python(3)?
+# invocation ANYWHERE in the raw command text -- deliberately NOT tied to
+# tokens[0] (HIGH 2: `env python3 -c "..."`/`sudo python3 -c "..."` resolve
+# tokens[0] to "env"/"sudo", not "python") and NOT gated on a "-c" token
+# being present in the SAME subcommand (CRITICAL 2: a heredoc-fed script,
+# `python3 - <<'EOF' ... open(...).write(...) ... EOF`, never contains
+# "-c" at all, and its heredoc BODY is a separate newline-delimited
+# subcommand chunk once split_subcommands() splits on "\n" too -- a
+# per-subcommand, per-token scan can never see it).
+_PYTHON_INVOCATION_RE = re.compile(r"\bpython3?\b")
 
 
 def _protected_memory_paths() -> set:
@@ -95,8 +115,12 @@ def _edit_write_escapes_confinement(data: dict, path: Path) -> bool:
 def _bash_write_targets_in_tokens(tokens: list) -> list:
     """Same shape as hooklib.extract_redirect_targets(), but operating on an
     already-split subcommand's own tokens (keeps the tokens available for
-    matches_memory_finalize_permit_shape()'s shape-matching), PLUS the
-    python-one-liner `open(...)` extension above."""
+    matches_memory_finalize_permit_shape()'s shape-matching). Python-script
+    write detection (one-liner AND heredoc/stdin-fed) is handled separately
+    by `_python_script_write_targets()` against the WHOLE raw command text
+    (CRITICAL 2 / HIGH 2, REM-FIX) -- a per-subcommand, per-token scan can
+    never see a heredoc body fed to python's stdin, since
+    split_subcommands() splits subcommands on "\\n" too."""
     targets = []
     for idx, token in enumerate(tokens):
         if token in (">", ">>") and idx + 1 < len(tokens):
@@ -105,10 +129,24 @@ def _bash_write_targets_in_tokens(tokens: list) -> list:
             for t in tokens[idx + 1 :]:
                 if not t.startswith("-"):
                     targets.append(t)
-    command_name = os.path.basename(tokens[0]) if tokens else ""
-    if command_name.startswith("python") and "-c" in tokens:
-        for token in tokens:
-            targets.extend(_OPEN_CALL_RE.findall(token))
+    return targets
+
+
+def _python_script_write_targets(command: str) -> list:
+    """Detect file-write targets from ANY python(3) invocation shape --
+    `-c` one-liners AND heredoc/stdin-fed scripts
+    (`python3 - <<'EOF' ... open(...) ... EOF`) -- by scanning the ENTIRE
+    raw command text, rather than a single subcommand's own tokens
+    (CRITICAL 2, HIGH 2). Covers `open(<literal-string>, ...)` (any
+    argument order/count after the literal first positional arg) and
+    `Path('...').write_text(...)`. Does NOT resolve a variable-held path
+    (`open(path, 'w')`) or a kwarg-first call (`open(mode='w',
+    file='...')`) from static text -- a disclosed, narrow residual gap
+    (HIGH 1), not closed by this plan."""
+    if not _PYTHON_INVOCATION_RE.search(command):
+        return []
+    targets = list(_OPEN_CALL_RE.findall(command))
+    targets.extend(_PATH_WRITE_TEXT_RE.findall(command))
     return targets
 
 
@@ -146,7 +184,27 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     if not violations:
         return 0
 
-    workflow = latest_workflow_payload()
+    # HIGH 3 (REM-FIX): this call is structurally identical to the one
+    # inside _edit_write_escapes_confinement above, but that one is wrapped
+    # in try/except by ITS caller -- this one previously was not.
+    # latest_workflow_payload() can raise (e.g. FileNotFoundError on a
+    # stat-race, workflow JSON deleted between glob() and .stat()), which
+    # would crash main() before the deny below is ever emitted. Degrade
+    # wf_uuid to None on failure -- the deny must still fire; only the
+    # logged wf_uuid metadata degrades (Behavior Contract rule 9).
+    try:
+        workflow = latest_workflow_payload()
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "latest_workflow_payload",
+                "error": repr(exc),
+                "reason": "skipped_wf_uuid_lookup",
+            },
+        )
+        workflow = {}
     wf_uuid = workflow.get("workflow_uuid") or workflow.get("workflow_id")
 
     # Worktree-confinement is denied unconditionally -- it is an independent
@@ -259,9 +317,26 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 if resolved not in protected_paths:
                     continue
                 if permit_path is not None and resolved == permit_path:
-                    if matches_memory_finalize_permit_shape(tokens, target):
+                    # CRITICAL 1 (REM-FIX): pass the literal documented
+                    # constant, never the extracted `target` -- passing
+                    # `target` back here made the shape-match's `target ==
+                    # permit_path_str` condition tautologically true for
+                    # ANY spelling that resolves to the permit file.
+                    if matches_memory_finalize_permit_shape(tokens, MEMORY_FINALIZE_PERMIT_LITERAL):
                         continue
                 protected_write_violations.append(str(resolved))
+
+        # CRITICAL 2 / HIGH 1 / HIGH 2 (REM-FIX): python-script write
+        # detection against the WHOLE raw command text -- catches
+        # heredoc/stdin-fed scripts and env/sudo-prefixed invocations that
+        # the per-subcommand, `-c`-gated, tokens[0]-only scan above could
+        # never see. Never permit-shape-matched: a python write is never
+        # the documented printf permit shape.
+        for target in _python_script_write_targets(command):
+            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            if resolved not in protected_paths:
+                continue
+            protected_write_violations.append(str(resolved))
     except Exception as exc:
         log_event(
             "plugin_pretooluse_guard",
