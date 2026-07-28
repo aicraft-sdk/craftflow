@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -304,3 +305,135 @@ def has_memory_finalize_permit(workflow_uuid: str | None = None) -> bool:
         return permit.read_text(encoding="utf-8").strip() == workflow_uuid
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Confinement & command-parsing helpers
+# ---------------------------------------------------------------------------
+# Shared by craftflow_pretooluse_bash_guard.py (Bash-tool targets) and
+# craftflow_pretooluse_guard.py (Edit/Write + Bash-write-inspection targets).
+# See docs/plans/2026-07-28-craftflow-guardrail-hardening-plan.md for the
+# behavior contract these functions implement.
+
+CONTROL_OPERATORS = {";", "&&", "||", "|", "&", "\n"}
+
+
+def resolve_confinement(
+    path, cwd: Path, worktree_path: str | None
+) -> tuple[bool, Path]:
+    """Return (is_confined, resolved_path). Confined if resolved_path == cwd,
+    is a descendant of cwd, or (when worktree_path is set) is cwd/worktree_path
+    itself or a descendant of worktree_path."""
+    candidate = Path(os.path.expanduser(str(path)))
+    if not candidate.is_absolute():
+        candidate = cwd / candidate
+    resolved = candidate.resolve()
+    within_cwd = resolved == cwd or cwd in resolved.parents
+    if within_cwd:
+        return True, resolved
+    if worktree_path:
+        wt = Path(worktree_path).resolve()
+        within_wt = resolved == wt or wt in resolved.parents
+        if within_wt:
+            return True, resolved
+    return False, resolved
+
+
+def split_subcommands(command: str) -> list:
+    """Split a shell command string on control operators (;, &&, ||, |, &).
+
+    Best-effort tokenization (not a full shell parser) -- intentionally
+    blunt, matching the rest of this guard family's deterministic-but-
+    imperfect scope.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return []
+
+    subcommands = []
+    current: list = []
+    for token in tokens:
+        if token in CONTROL_OPERATORS:
+            if current:
+                subcommands.append(current)
+            current = []
+        else:
+            current.append(token)
+    if current:
+        subcommands.append(current)
+    return subcommands
+
+
+def is_env_assignment(token: str) -> bool:
+    if "=" not in token:
+        return False
+    name = token.split("=", 1)[0]
+    return name.isidentifier()
+
+
+def looks_dynamic(token: str) -> bool:
+    return "$" in token or "`" in token
+
+
+_SUBSTITUTION_RE = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
+
+
+def command_has_traversal_or_wildcard(command: str) -> bool:
+    """True if a `..` path-traversal literal or a `*`/bare `.` wildcard
+    token appears anywhere in the command text OR inside any $(...) /
+    backtick substitution it contains. Text-level heuristic only --
+    guards see static command strings, never shell-expanded values."""
+    extra = " ".join(m.group(1) or m.group(2) for m in _SUBSTITUTION_RE.finditer(command))
+    combined = f"{command} {extra}"
+    for tokens in split_subcommands(combined):
+        for token in tokens:
+            stripped = token.strip("'\"")
+            if stripped in ("..", "*", "."):
+                return True
+            if "/../" in stripped or stripped.startswith("../") or stripped.endswith("/.."):
+                return True
+            if "*" in stripped:
+                return True
+    return False
+
+
+def extract_redirect_targets(command: str) -> list:
+    """Best-effort: return file targets of >, >>, and `tee` invocations
+    across every subcommand. Heuristic only, matching this guard
+    family's documented deterministic-but-imperfect scope."""
+    targets = []
+    for tokens in split_subcommands(command):
+        for idx, token in enumerate(tokens):
+            if token in (">", ">>") and idx + 1 < len(tokens):
+                targets.append(tokens[idx + 1])
+            elif token == "tee":
+                for t in tokens[idx + 1:]:
+                    if not t.startswith("-"):
+                        targets.append(t)
+    return targets
+
+
+def matches_memory_finalize_permit_shape(subcommand_tokens: list, permit_path_str: str) -> bool:
+    """Narrow, exact TOKEN-SHAPE match for the ONE documented permit-write
+    shape: printf '%s' '<value>' > .craftflow/state/.memory-finalize
+
+    Deliberately token-based, not a raw-text regex: split_subcommands()
+    (posix shlex) already strips quotes, so the original quoted substring
+    is not recoverable from a tokenized subcommand -- matching on the
+    post-tokenization shape is both correct and simpler than trying to
+    re-derive original text spans. Any other shape must be denied by the
+    caller. Exact expected shape once tokenized:
+    ["printf", "%s", "<any-single-value-token>", ">", "<permit-path>"]
+    """
+    if len(subcommand_tokens) != 5:
+        return False
+    cmd, fmt, _value, redirect, target = subcommand_tokens
+    return (
+        cmd == "printf"
+        and fmt == "%s"
+        and redirect == ">"
+        and target == permit_path_str
+    )

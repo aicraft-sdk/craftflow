@@ -15,58 +15,27 @@ the same failure mode.
 from __future__ import annotations
 
 import os
-import shlex
 from pathlib import Path
 
-from craftflow_hooklib import load_input, load_mode, log_event, pretool_deny
+from craftflow_hooklib import (
+    command_has_traversal_or_wildcard,
+    is_env_assignment,
+    load_input,
+    load_mode,
+    log_event,
+    looks_dynamic,
+    pretool_deny,
+    resolve_confinement,
+    split_subcommands,
+)
 
 DESTRUCTIVE_COMMANDS = {"rm", "rmdir"}
-CONTROL_OPERATORS = {";", "&&", "||", "|", "&", "\n"}
-
-
-def _split_subcommands(command: str) -> list:
-    """Split a shell command string on control operators (;, &&, ||, |, &).
-
-    Best-effort tokenization (not a full shell parser) -- intentionally
-    blunt, matching the rest of this guard's deterministic-but-imperfect
-    scope.
-    """
-    try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-    except ValueError:
-        return []
-
-    subcommands = []
-    current: list = []
-    for token in tokens:
-        if token in CONTROL_OPERATORS:
-            if current:
-                subcommands.append(current)
-            current = []
-        else:
-            current.append(token)
-    if current:
-        subcommands.append(current)
-    return subcommands
-
-
-def _is_env_assignment(token: str) -> bool:
-    if "=" not in token:
-        return False
-    name = token.split("=", 1)[0]
-    return name.isidentifier()
-
-
-def _looks_dynamic(token: str) -> bool:
-    return "$" in token or "`" in token
 
 
 def _target_paths(tokens: list) -> tuple:
     """Return (command_name, path_tokens, has_unresolvable_token) for one subcommand."""
     idx = 0
-    while idx < len(tokens) and _is_env_assignment(tokens[idx]):
+    while idx < len(tokens) and is_env_assignment(tokens[idx]):
         idx += 1
     if idx >= len(tokens):
         return None, [], False
@@ -83,7 +52,7 @@ def _target_paths(tokens: list) -> tuple:
             continue
         if not past_flag_terminator and token.startswith("-") and token != "-":
             continue
-        if _looks_dynamic(token):
+        if looks_dynamic(token):
             unresolvable = True
             continue
         paths.append(token)
@@ -117,7 +86,7 @@ def main() -> int:
 
     escapes = []
     unverifiable = []
-    for tokens in _split_subcommands(command):
+    for tokens in split_subcommands(command):
         command_name, path_tokens, has_unresolvable = _target_paths(tokens)
         if command_name not in DESTRUCTIVE_COMMANDS:
             continue

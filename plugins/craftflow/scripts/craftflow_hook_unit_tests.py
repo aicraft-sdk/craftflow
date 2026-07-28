@@ -23,6 +23,9 @@ from pathlib import Path
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = PLUGIN_ROOT / "scripts"
 
+sys.path.insert(0, str(SCRIPTS))
+import craftflow_hooklib as hooklib  # noqa: E402
+
 _errors: list[str] = []
 _passes: int = 0
 
@@ -605,6 +608,168 @@ def test_bash_guard_ignores_non_bash_tool(tmp_dir: Path) -> None:
     _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
     if out:
         fail(name, f"expected silent allow for a non-Bash tool; got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# --- hooklib shared-helper tests (white-box) ---
+# ---------------------------------------------------------------------------
+
+def test_hooklib_resolve_confinement_allows_within_cwd(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-confinement-allows-within-cwd"
+    cwd = (tmp_dir / "cwd")
+    cwd.mkdir(parents=True)
+    cwd = cwd.resolve()
+    target = cwd / "file.txt"
+    confined, _resolved = hooklib.resolve_confinement(target, cwd, None)
+    if not confined:
+        fail(name, f"expected confined=True for a path within cwd; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_denies_outside_cwd_no_worktree(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-confinement-denies-outside-cwd-no-worktree"
+    cwd = (tmp_dir / "cwd")
+    outside = (tmp_dir / "outside")
+    cwd.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    cwd = cwd.resolve()
+    outside = outside.resolve()
+    target = outside / "file.txt"
+    confined, _resolved = hooklib.resolve_confinement(target, cwd, None)
+    if confined:
+        fail(name, f"expected confined=False for a path outside cwd with no worktree; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_allows_within_worktree_outside_cwd(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-confinement-allows-within-worktree-outside-cwd"
+    cwd = (tmp_dir / "project")
+    worktree = (tmp_dir / "worktree-sibling")
+    cwd.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    cwd = cwd.resolve()
+    worktree = worktree.resolve()
+    target = worktree / "file.txt"
+    confined, _resolved = hooklib.resolve_confinement(target, cwd, str(worktree))
+    if not confined:
+        fail(name, f"expected confined=True for a path within worktree_path though outside cwd; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_denies_outside_both(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-confinement-denies-outside-both"
+    cwd = (tmp_dir / "project")
+    worktree = (tmp_dir / "worktree-sibling")
+    outside = (tmp_dir / "outside")
+    cwd.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    cwd = cwd.resolve()
+    worktree = worktree.resolve()
+    outside = outside.resolve()
+    target = outside / "file.txt"
+    confined, _resolved = hooklib.resolve_confinement(target, cwd, str(worktree))
+    if confined:
+        fail(name, f"expected confined=False for a path outside both cwd and worktree_path; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_command_has_traversal_true_for_dotdot_substitution() -> None:
+    name = "hooklib/command-has-traversal-true-for-dotdot-substitution"
+    if not hooklib.command_has_traversal_or_wildcard('rm -rf "$(echo ../../..)"'):
+        fail(name, "expected True for a traversal literal inside a $() substitution")
+        return
+    ok(name)
+
+
+def test_hooklib_command_has_traversal_false_for_lock_dir_var() -> None:
+    # Regression-flow-1 groundwork: `rm -rf "$LOCK_DIR"` must NOT be flagged --
+    # it's a plain dynamic variable reference, no traversal/wildcard literal.
+    name = "hooklib/command-has-traversal-false-for-lock-dir-var"
+    if hooklib.command_has_traversal_or_wildcard('rm -rf "$LOCK_DIR"'):
+        fail(name, "expected False for a plain $LOCK_DIR variable reference")
+        return
+    ok(name)
+
+
+def test_hooklib_command_has_traversal_true_for_bare_wildcard() -> None:
+    name = "hooklib/command-has-traversal-true-for-bare-wildcard"
+    if not hooklib.command_has_traversal_or_wildcard("rm -rf *"):
+        fail(name, "expected True for a bare wildcard token")
+        return
+    ok(name)
+
+
+def test_hooklib_extract_redirect_targets_finds_simple_redirect() -> None:
+    name = "hooklib/extract-redirect-targets-finds-simple-redirect"
+    targets = hooklib.extract_redirect_targets("echo x > foo.txt")
+    if targets != ["foo.txt"]:
+        fail(name, f"expected ['foo.txt']; got {targets!r}")
+        return
+    ok(name)
+
+
+def test_hooklib_extract_redirect_targets_finds_tee_target() -> None:
+    name = "hooklib/extract-redirect-targets-finds-tee-target"
+    targets = hooklib.extract_redirect_targets("echo x | tee foo.txt")
+    if "foo.txt" not in targets:
+        fail(name, f"expected 'foo.txt' in {targets!r}")
+        return
+    ok(name)
+
+
+def test_hooklib_extract_redirect_targets_empty_for_no_redirect() -> None:
+    name = "hooklib/extract-redirect-targets-empty-for-no-redirect"
+    targets = hooklib.extract_redirect_targets("git status")
+    if targets != []:
+        fail(name, f"expected []; got {targets!r}")
+        return
+    ok(name)
+
+
+def test_hooklib_matches_permit_shape_true_for_exact_documented_command() -> None:
+    # Regression-flow-2 groundwork: the one documented memory-finalize
+    # permit-write shape must match exactly.
+    name = "hooklib/matches-permit-shape-true-for-exact-documented-command"
+    tokens = hooklib.split_subcommands(
+        "printf '%s' 'wf-1234' > .craftflow/state/.memory-finalize"
+    )[0]
+    if not hooklib.matches_memory_finalize_permit_shape(
+        tokens, ".craftflow/state/.memory-finalize"
+    ):
+        fail(name, "expected True for the exact documented permit-write shape")
+        return
+    ok(name)
+
+
+def test_hooklib_matches_permit_shape_false_for_different_printf_args() -> None:
+    name = "hooklib/matches-permit-shape-false-for-different-printf-args"
+    tokens = hooklib.split_subcommands(
+        "printf '%s\\ninjected' 'wf-1234' > .craftflow/state/.memory-finalize"
+    )[0]
+    if hooklib.matches_memory_finalize_permit_shape(
+        tokens, ".craftflow/state/.memory-finalize"
+    ):
+        fail(name, "expected False for a printf with a different format string")
+        return
+    ok(name)
+
+
+def test_hooklib_matches_permit_shape_false_for_heredoc() -> None:
+    name = "hooklib/matches-permit-shape-false-for-heredoc"
+    tokens = hooklib.split_subcommands(
+        "cat << EOF > .craftflow/state/.memory-finalize"
+    )[0]
+    if hooklib.matches_memory_finalize_permit_shape(
+        tokens, ".craftflow/state/.memory-finalize"
+    ):
+        fail(name, "expected False for a heredoc-shaped subcommand")
         return
     ok(name)
 
@@ -1316,6 +1481,22 @@ def main() -> int:
         test_bash_guard_allows_non_destructive_command(tmp / "b4")
         test_bash_guard_allows_unverifiable_dynamic_path(tmp / "b5")
         test_bash_guard_ignores_non_bash_tool(tmp / "b6")
+
+        print()
+        print("[ hooklib shared-helper (white-box) ]")
+        test_hooklib_resolve_confinement_allows_within_cwd(tmp / "h1")
+        test_hooklib_resolve_confinement_denies_outside_cwd_no_worktree(tmp / "h2")
+        test_hooklib_resolve_confinement_allows_within_worktree_outside_cwd(tmp / "h3")
+        test_hooklib_resolve_confinement_denies_outside_both(tmp / "h4")
+        test_hooklib_command_has_traversal_true_for_dotdot_substitution()
+        test_hooklib_command_has_traversal_false_for_lock_dir_var()
+        test_hooklib_command_has_traversal_true_for_bare_wildcard()
+        test_hooklib_extract_redirect_targets_finds_simple_redirect()
+        test_hooklib_extract_redirect_targets_finds_tee_target()
+        test_hooklib_extract_redirect_targets_empty_for_no_redirect()
+        test_hooklib_matches_permit_shape_true_for_exact_documented_command()
+        test_hooklib_matches_permit_shape_false_for_different_printf_args()
+        test_hooklib_matches_permit_shape_false_for_heredoc()
 
         print()
         print("[ hook-selfcheck ]")
