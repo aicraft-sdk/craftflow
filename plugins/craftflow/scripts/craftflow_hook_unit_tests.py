@@ -2170,6 +2170,246 @@ def test_bash_guard_regression_lock_release_still_allowed_cycle2(tmp_dir: Path) 
     ok(name)
 
 
+# ---------------------------------------------------------------------------
+# --- REM-FIX round 4 (3rd adversarial doubt-verify pass, live-verified) ---
+# `-c key=value` fragment detection, fused-suffix handling after a closing
+# paren/backtick, and multi-flag dynamic-taint accumulation.
+# ---------------------------------------------------------------------------
+
+def test_bash_guard_blocks_git_dash_c_key_equals_dynamic_value_with_traversal(tmp_dir: Path) -> None:
+    # Bug 1 (full silent bypass, live-verified): shlex tokenizes
+    # `foo=$(echo $x)` as ["foo=$", "(", "echo", "$x", ")"] -- the value
+    # token is "foo=$" (a static "key=" prefix FUSED to the dynamic
+    # fragment's start), never exactly "$" or backtick-prefixed. The old
+    # `_dynamic_span_end()` only recognized a bare "$"/backtick-prefixed
+    # token, so this value was never routed through fragment detection at
+    # all -- the scanner then misread the literal "(" token immediately
+    # after as the git subcommand itself, which matches neither
+    # clean/reset/push, so the whole command was silently ALLOWED
+    # (live-verified pre-fix: exit=0, empty stdout).
+    name = "pretooluse-bash-guard/blocks-git-dash-c-key-equals-dynamic-value-with-traversal"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "x=../../etc; git -c foo=$(echo $x) reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for 'x=../../etc; git -c foo=$(echo $x) reset --hard' "
+            f"(key=dynamic-value fragment); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_git_dash_c_key_equals_dynamic_value_without_traversal(tmp_dir: Path) -> None:
+    # Still DENY even with no traversal literal anywhere -- unlike -C/
+    # --git-dir/--work-tree, `-c` never sets `dir_override` (it does not
+    # retarget which repository git operates on), so once the subcommand
+    # is correctly identified as "reset --hard" the destructive target is
+    # always the concrete, already-known cwd itself ("."), independent of
+    # whether `-c`'s OWN value happens to be dynamic. There is no
+    # "unresolvable dynamic target" ambiguity to fail open on here -- the
+    # in-cwd-critical rule applies unconditionally, exactly as it would
+    # for a plain `git reset --hard` with no `-c` at all.
+    name = "pretooluse-bash-guard/blocks-git-dash-c-key-equals-dynamic-value-without-traversal"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "x=/some/safe/path; git -c foo=$(echo $x) reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for a key=dynamic-value -c fragment with no "
+            f"traversal literal (destructive target is cwd itself, "
+            f"unconditionally); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_git_dash_c_dynamic_key_equals_static_value_with_traversal(tmp_dir: Path) -> None:
+    # Bug 2 (full silent bypass, opposite side of the same root cause,
+    # live-verified): the dynamic span DOES close correctly here, but a
+    # fused non-whitespace suffix immediately after the closing paren
+    # (e.g. "=bar" in `$(echo foo)=bar`, no space) becomes its OWN token
+    # -- the old scanner had no concept of "a suffix fused directly onto
+    # the closing token is still part of the same shell word," so that
+    # suffix token ("=bar") was misread as the subcommand next, matching
+    # neither clean/reset/push (live-verified pre-fix: exit=0, empty
+    # stdout).
+    name = "pretooluse-bash-guard/blocks-git-dash-c-dynamic-key-equals-static-value-with-traversal"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "x=../../etc; git -c $(echo $x)=bar reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for 'x=../../etc; git -c $(echo $x)=bar reset "
+            f"--hard' (dynamic-key=static-value, fused suffix); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_git_dash_c_dynamic_key_equals_static_value_without_traversal(tmp_dir: Path) -> None:
+    # Same reasoning as the Bug 1 companion above: `-c` never sets
+    # `dir_override`, so the destructive target is always the concrete,
+    # already-known cwd itself, independent of whether `-c`'s own value
+    # (or its fused suffix) is dynamic. Still DENY even with no traversal
+    # literal anywhere.
+    name = "pretooluse-bash-guard/blocks-git-dash-c-dynamic-key-equals-static-value-without-traversal"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "x=/some/safe/path; git -c $(echo $x)=bar reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for a dynamic-key=static-value -c fragment "
+            f"with no traversal literal (destructive target is cwd itself, "
+            f"unconditionally); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_git_multi_dash_capital_c_earlier_dynamic_taint_not_lost(tmp_dir: Path) -> None:
+    # Bug 3 (full silent bypass, live-verified): `dir_override` was a
+    # single mutable variable unconditionally OVERWRITTEN by the
+    # last-processed -C/-c/--git-dir/--work-tree flag. If an EARLIER
+    # flag's value was dynamic/unresolvable but a LATER flag's value
+    # looks like a plain static string, the whole command was treated as
+    # fully resolved and static -- the earlier dynamic taint was lost
+    # entirely (live-verified pre-fix: exit=0, empty stdout).
+    name = "pretooluse-bash-guard/blocks-git-multi-dash-capital-c-earlier-dynamic-taint-not-lost"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "x=../../etc; git -C $(echo $x) -C docs reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for 'x=../../etc; git -C $(echo $x) -C docs reset "
+            f"--hard' (earlier -C dynamic, later -C static -- taint must "
+            f"not be lost); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_git_multi_dash_capital_c_earlier_dynamic_no_traversal(tmp_dir: Path) -> None:
+    # No-over-blocking regression check for the Bug 3 fix: the same
+    # multi -C shape (earlier dynamic, later static) with NO traversal
+    # literal or wildcard anywhere in the command must stay allowed.
+    name = "pretooluse-bash-guard/allows-git-multi-dash-capital-c-earlier-dynamic-no-traversal"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "x=/some/safe/path; git -C $(echo $x) -C docs reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(
+            name,
+            "expected allow for the same multi -C shape (earlier dynamic, "
+            f"later static) with no traversal literal or wildcard anywhere; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_git_dash_c_static_key_value_non_destructive_status(tmp_dir: Path) -> None:
+    # Legitimate version of the Bug 1/2 shape (static-only, no over-
+    # blocking): a plain static `-c key=value` with a NON-destructive
+    # subcommand must stay allowed.
+    name = "pretooluse-bash-guard/allows-git-dash-c-static-key-value-non-destructive-status"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "git -c foo=bar status"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'git -c foo=bar status' (static, non-destructive); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_git_dash_c_static_key_value_reset_hard_in_cwd(tmp_dir: Path) -> None:
+    # Legitimate version of the Bug 1/2 shape (static-only): a plain
+    # static `-c key=value` combined with a genuinely destructive
+    # subcommand must still correctly resolve to "reset --hard" and deny
+    # -- proves the fix didn't regress plain static -c parsing while
+    # closing the dynamic bypasses above.
+    name = "pretooluse-bash-guard/blocks-git-dash-c-static-key-value-reset-hard-in-cwd"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "git -c foo=bar reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'git -c foo=bar reset --hard' (static, in-cwd); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_git_multi_dash_capital_c_static_values_non_destructive(tmp_dir: Path) -> None:
+    # Legitimate version of the Bug 3 shape (static-only, no over-
+    # blocking): two static -C flags with a NON-destructive subcommand
+    # must stay allowed.
+    name = "pretooluse-bash-guard/allows-git-multi-dash-capital-c-static-values-non-destructive"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "git -C /tmp -C docs status"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'git -C /tmp -C docs status' (static, non-destructive); got: {out!r}")
+        return
+    ok(name)
+
+
 def test_bash_guard_blocks_dd_bare_redirect_dynamic_target_with_traversal_elsewhere(tmp_dir: Path) -> None:
     # Doubt-verify generalization gap, a THIRD instance found by explicitly
     # auditing every branch rather than assuming only find/git had it:
@@ -3314,6 +3554,18 @@ def main() -> int:
         test_bash_guard_allows_git_dash_capital_c_doubly_nested_substitution_without_traversal(tmp / "b71")
         test_bash_guard_blocks_git_dash_capital_c_malformed_unterminated_substitution(tmp / "b72")
         test_bash_guard_regression_lock_release_still_allowed_cycle2(tmp / "b73")
+
+        print()
+        print("[ pretooluse-bash-guard: REM-FIX round 4 (git -c key=value fragment + fused-suffix + multi-flag taint) ]")
+        test_bash_guard_blocks_git_dash_c_key_equals_dynamic_value_with_traversal(tmp / "b74")
+        test_bash_guard_blocks_git_dash_c_key_equals_dynamic_value_without_traversal(tmp / "b75")
+        test_bash_guard_blocks_git_dash_c_dynamic_key_equals_static_value_with_traversal(tmp / "b76")
+        test_bash_guard_blocks_git_dash_c_dynamic_key_equals_static_value_without_traversal(tmp / "b77")
+        test_bash_guard_blocks_git_multi_dash_capital_c_earlier_dynamic_taint_not_lost(tmp / "b78")
+        test_bash_guard_allows_git_multi_dash_capital_c_earlier_dynamic_no_traversal(tmp / "b79")
+        test_bash_guard_allows_git_dash_c_static_key_value_non_destructive_status(tmp / "b80")
+        test_bash_guard_blocks_git_dash_c_static_key_value_reset_hard_in_cwd(tmp / "b81")
+        test_bash_guard_allows_git_multi_dash_capital_c_static_values_non_destructive(tmp / "b82")
 
         print()
         print("[ hooklib shared-helper (white-box) ]")

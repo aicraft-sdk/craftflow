@@ -151,83 +151,100 @@ def _scan_paren_depth(rest: list, start_idx: int) -> "int | None":
     return None
 
 
-def _dynamic_span_end(rest: list, start_idx: int) -> "int | None":
-    """Return the index of the LAST token belonging to a possibly-FRAGMENTED
-    dynamic value beginning at rest[start_idx].
-
-    `split_subcommands()` (posix shlex) keeps a QUOTED substitution
-    (`"$(echo x)"`) as one single token, but shlex FRAGMENTS an UNQUOTED
-    substitution into separate tokens -- `$(echo $x)` becomes `["$", "(",
-    "echo", "$x", ")"]`, five tokens, not one. A caller that only skips
-    exactly one token past a flag (e.g. `-C`) to consume that flag's value
-    will then scan the fragment's OWN inner tokens (starting with `"("`) as
-    if they were what comes next in the command -- for `git -C <value>
-    <subcommand>`, that means `"("` gets treated as the subcommand itself,
-    which matches neither clean/reset/push, silently defeating destructive-
-    command detection entirely (router-reported live bypass:
-    `x=../../etc; git -C $(echo $x) reset --hard` was fully ALLOWED).
-
-    Tracks paren depth (via `_scan_paren_depth()`, character-level so
-    fused multi-char tokens like `"))"` from a doubly-nested substitution
-    correctly close) so a nested `$(...)` inside the span doesn't terminate
-    the scan early. Also handles a fragmented, UNQUOTED backtick
-    substitution the same way (`` `echo $x` `` splits into `["`echo",
-    "$x`"]` when it contains whitespace). If rest[start_idx] does not begin
-    a fragmented substitution (already a complete single token -- the
-    quoted case, or an ordinary non-dynamic value), returns start_idx
-    unchanged so callers advance past exactly one token, exactly as before.
-
-    Returns None (rather than swallowing to the end) when a span never
-    closes -- callers MUST treat None as a parse failure requiring a fail-
-    CLOSED fallback (Behavior Contract rule 9), never as "no more tokens to
-    consume" and never as "silently non-destructive" (REM-FIX doubt-verify
-    cycle 2, Bug 2 continuation: this also covers genuinely malformed/
-    unbalanced-paren input, e.g. a missing closing paren)."""
-    token = rest[start_idx]
-    if token == "$" and start_idx + 1 < len(rest) and rest[start_idx + 1] == "(":
-        return _scan_paren_depth(rest, start_idx + 1)
-    if token.startswith("`") and not (len(token) > 1 and token.endswith("`")):
-        idx = start_idx + 1
-        while idx < len(rest):
-            if "`" in rest[idx]:
-                return idx
-            idx += 1
-        return None  # unterminated -- caller must fail CLOSED
-    return start_idx
+_GIT_TOKEN_SHAPE_RE = re.compile(r"^[a-zA-Z][a-zA-Z-]*$")
 
 
-def _value_fragment_span_end(rest: list, idx: int, value: str) -> "int | None":
-    """Given the value portion of an ASSIGNMENT-style flag fused into the
-    SAME token at rest[idx] (e.g. `"--work-tree=$"`'s value `"$"`, or
-    `` "--work-tree=`echo" ``'s value `` "`echo" ``), determine whether it
-    begins an UNQUOTED substitution that continues across SUBSEQUENT
-    tokens rather than being a complete, self-contained value already.
+def _looks_like_subcommand_or_flag(token: str) -> bool:
+    """True for a token that could plausibly be the NEXT git global flag or
+    the actual subcommand -- a bare alphabetic identifier (e.g. "reset",
+    "push", "clean", "status") or anything starting with "-". Used ONLY to
+    decide when to STOP folding tokens into a git global flag's value that
+    is known to contain a dynamic ($/backtick) component (see
+    `_consume_git_flag_value()`): a fused non-whitespace suffix left over
+    from an under-consumed `$(...)`/backtick span (e.g. a bare "(" or
+    "=bar") never has this shape, so it keeps getting folded into the same
+    value instead of being misread as the subcommand."""
+    return bool(token) and (token.startswith("-") or bool(_GIT_TOKEN_SHAPE_RE.match(token)))
 
-    REM-FIX doubt-verify cycle 2, Bug 1: assignment-style flags
-    (`--git-dir=<value>`/`--work-tree=<value>`) never routed their value
-    through fragmented-span detection at all -- unlike separate-arg flags
-    (`-C <value>`), whose value is its own token and already went through
-    `_dynamic_span_end()`. shlex keeps the `=` fused to the flag name AND
-    the start of the value in ONE token (`--work-tree=$(echo $x)` tokenizes
-    to `["--work-tree=$", "(", "echo", "$x", ")"]`), but an UNQUOTED
-    `$(...)`/backtick substitution used as that value still fragments
-    across LATER tokens exactly like the separate-arg case, just starting
-    one token later (right after the fused flag+value token, not at it).
 
-    Returns `idx` unchanged (no additional tokens consumed) if `value` is
-    already complete. Returns the index of the last token belonging to the
-    fragmented span if one is found. Returns None if the span never closes
-    (malformed/unterminated -- caller must fail CLOSED)."""
-    if value == "$" and idx + 1 < len(rest) and rest[idx + 1] == "(":
-        return _scan_paren_depth(rest, idx + 1)
-    if value.startswith("`") and not (len(value) > 1 and value.endswith("`")):
-        scan_idx = idx + 1
+def _consume_git_flag_value(rest: list, pos: int) -> tuple:
+    """Consume the full span of tokens making up ONE git global flag's
+    value, where rest[pos] is either the value's own (possibly fragmented)
+    token in full -- separate-arg form: `-C <value>`, `-c <value>`,
+    `--git-dir <value>`, `--work-tree <value>` -- or the flag+value token
+    itself for the ASSIGNMENT form (`--git-dir=<value>`,
+    `--work-tree=<value>`), where a dynamic fragment's start is fused onto
+    the END of that same token (e.g. `"--work-tree=$"`). Both shapes
+    reduce to the identical detection: does rest[pos] END in a bare "$"
+    immediately followed by "(" in the NEXT token, or does it OPEN an
+    unterminated backtick?
+
+    ROUND 4 (bugs 1 & 2, live-verified full bypasses): `-c`'s value is
+    itself a `key=value` shell word, so a dynamic fragment can begin AFTER
+    a static "key=" prefix fused into the SAME token -- `"foo=$"` for
+    `-c foo=$(echo $x)` -- rather than the token being exactly `"$"`. The
+    prior `_dynamic_span_end()` only ever recognized a bare
+    `"$"`/backtick-prefixed token, so this value was never routed through
+    fragment detection at all: the literal `"("` token immediately after
+    was then misread as the git subcommand itself, silently defeating
+    destructive-command detection entirely (bug 1). Symmetrically, once a
+    dynamic span DOES close, a fused non-whitespace suffix immediately
+    after the closing paren/backtick (e.g. `"=bar"` in
+    `-c $(echo foo)=bar`) is ALWAYS emitted by shlex as its own separate
+    token, indistinguishable at the token level from a genuinely separate
+    next shell word -- verified directly: `"$(echo foo)=bar"` and
+    `"$(echo foo) =bar"` (real whitespace before `=bar`) tokenize
+    IDENTICALLY, because `punctuation_chars=True` shlex always splits a
+    punctuation character like `)` into its own token regardless of
+    whether real whitespace follows it. Given that unavoidable token-level
+    ambiguity, once a value is known to be dynamic, every token
+    immediately following the fragment's close that does NOT look like a
+    plausible next git flag/subcommand (`_looks_like_subcommand_or_flag`)
+    is folded into the same value span instead of being risked as the
+    real subcommand -- fail-closed toward "still part of the untrusted
+    value" (bug 2 was exactly the fused `"=bar"` token being misread as
+    the subcommand next).
+
+    Returns (value_is_dynamic, span_end_idx, malformed). span_end_idx is
+    the index of the LAST token belonging to this value (the caller
+    resumes scanning at span_end_idx + 1). malformed=True when a fragment
+    opens but never closes -- caller MUST fail CLOSED (Behavior Contract
+    rule 9), never treat malformed as "value ends here."
+    """
+    token = rest[pos]
+    is_dynamic = looks_dynamic(token)
+    span_end = pos
+
+    if token == "$" or token.endswith("=$"):
+        if pos + 1 < len(rest) and rest[pos + 1] == "(":
+            found = _scan_paren_depth(rest, pos + 1)
+            if found is None:
+                return True, None, True
+            span_end = found
+        # else: a bare trailing "$"/"=$" with no following "(" -- dynamic
+        # (e.g. a plain $VAR) but not a $(...) fragment; nothing more to
+        # consume structurally.
+    elif token.count("`") % 2 == 1:
+        # An odd number of backticks means THIS token OPENS a backtick
+        # substitution it does not itself close (e.g. "foo=`echo", or a
+        # bare "`echo" for -C's own value) -- scan forward for the token
+        # that closes it.
+        scan_idx = pos + 1
+        closed = False
         while scan_idx < len(rest):
             if "`" in rest[scan_idx]:
-                return scan_idx
+                span_end = scan_idx
+                closed = True
+                break
             scan_idx += 1
-        return None  # unterminated -- caller must fail CLOSED
-    return idx
+        if not closed:
+            return True, None, True
+
+    if is_dynamic:
+        while span_end + 1 < len(rest) and not _looks_like_subcommand_or_flag(rest[span_end + 1]):
+            span_end += 1
+
+    return is_dynamic, span_end, False
 
 
 def _find_git_subcommand(rest: list) -> tuple:
@@ -238,66 +255,83 @@ def _find_git_subcommand(rest: list) -> tuple:
     (CRITICAL 1). Handles -C <dir>/-c <k=v> (separate-arg flags) and
     --git-dir=<path>/--work-tree=<path> (assignment-style) or
     --git-dir <path>/--work-tree <path> (separate-arg form). Returns
-    (subcommand_or_none, later_tokens, dir_override_or_none, malformed) --
-    dir_override is the -C/--work-tree directory the destructive target
-    should resolve against, if one was given; malformed is True when a
-    fragmented dynamic span (either form) never closed within the
-    remaining tokens.
+    (subcommand_or_none, later_tokens, dir_override_or_none, malformed,
+    dir_override_dynamic) -- dir_override is the -C/--git-dir/--work-tree
+    directory the destructive target should resolve against, if the LAST
+    such flag's value was static; malformed is True when a fragmented
+    dynamic span (either form) never closed within the remaining tokens.
 
-    Every separate-arg value (-C/-c's value, --git-dir/--work-tree's value)
-    is skipped via `_dynamic_span_end()`, and every ASSIGNMENT-style value
-    (--git-dir=<value>/--work-tree=<value>) is skipped via
-    `_value_fragment_span_end()` -- REM-FIX doubt-verify cycle 2, Bug 1:
-    the assignment branch previously did a flat
-    `token.split("=", 1)` / `idx += 1` unconditionally, never routing
-    through fragmented-span detection at all, so an UNQUOTED fragmented
-    `$(...)` assignment value (`--work-tree=$(echo $x)` tokenizes to
-    `["--work-tree=$", "(", "echo", "$x", ")"]`) left `idx` pointing at the
-    span's own inner "(" token on the next iteration -- "(" matches neither
-    clean/reset/push, so the whole command was NOT EVEN RECOGNIZED as
-    destructive at all (live-verified pre-fix: `x=../../etc; git
-    --work-tree=$(echo $x) reset --hard` was fully ALLOWED).
+    Every occurrence of a value-taking global flag (-C/-c/--git-dir/
+    --work-tree, either separate-arg or assignment form) is routed through
+    the single shared `_consume_git_flag_value()` (ROUND 4 consolidation --
+    covers both plain single-token values and fragmented `$(...)`/backtick
+    substitutions, including a value fragment beginning mid-token after a
+    static `key=` prefix, and a fused non-whitespace suffix immediately
+    after the fragment's close).
+
+    dir_override_dynamic is an ACCUMULATOR, not a last-write-wins scalar
+    (ROUND 4, bug 3): True if ANY occurrence of -C/--git-dir/--work-tree
+    across the WHOLE command had a dynamic/unresolvable value, even if a
+    LATER occurrence of the same or a different one of these flags looks
+    fully static -- it never resets back to False once set, so an earlier
+    dynamic flag's taint cannot be silently overwritten by a later static
+    one (live-verified pre-fix bypass: `git -C $(dynamic) -C docs reset
+    --hard` lost the first flag's taint entirely once the second, static-
+    looking `-C docs` overwrote `dir_override`).
 
     A fragmented span that never closes (`malformed=True`) is NOT treated
     as "no subcommand found = non-destructive" -- callers must fail CLOSED
     (Behavior Contract rule 9; see `_match_destructive_shape()`'s git
     branch)."""
     dir_override = None
+    dir_override_dynamic = False
     idx = 0
     while idx < len(rest):
         token = rest[idx]
         if not token.startswith("-"):
-            return token, rest[idx + 1 :], dir_override, False
+            return token, rest[idx + 1 :], dir_override, False, dir_override_dynamic
         if token in _GIT_ARG_FLAGS:
             if idx + 1 < len(rest):
                 value_idx = idx + 1
-                span_end = _dynamic_span_end(rest, value_idx)
+                is_dynamic, span_end, malformed = _consume_git_flag_value(rest, value_idx)
+                if malformed:
+                    return None, [], dir_override, True, dir_override_dynamic
                 if token == "-C":
-                    dir_override = rest[value_idx]
-                if span_end is None:
-                    return None, [], dir_override, True
+                    if is_dynamic:
+                        dir_override_dynamic = True
+                        dir_override = None
+                    else:
+                        dir_override = rest[value_idx]
                 idx = span_end + 1
             else:
                 idx += 1
             continue
         if token.startswith("--git-dir=") or token.startswith("--work-tree="):
             value = token.split("=", 1)[1]
-            dir_override = value
-            span_end = _value_fragment_span_end(rest, idx, value)
-            if span_end is None:
-                return None, [], dir_override, True
+            is_dynamic, span_end, malformed = _consume_git_flag_value(rest, idx)
+            if malformed:
+                return None, [], dir_override, True, dir_override_dynamic
+            if is_dynamic:
+                dir_override_dynamic = True
+                dir_override = None
+            else:
+                dir_override = value
             idx = span_end + 1
             continue
         if token in ("--git-dir", "--work-tree") and idx + 1 < len(rest):
             value_idx = idx + 1
-            dir_override = rest[value_idx]
-            span_end = _dynamic_span_end(rest, value_idx)
-            if span_end is None:
-                return None, [], dir_override, True
+            is_dynamic, span_end, malformed = _consume_git_flag_value(rest, value_idx)
+            if malformed:
+                return None, [], dir_override, True, dir_override_dynamic
+            if is_dynamic:
+                dir_override_dynamic = True
+                dir_override = None
+            else:
+                dir_override = rest[value_idx]
             idx = span_end + 1
             continue
         idx += 1
-    return None, [], dir_override, False
+    return None, [], dir_override, False, dir_override_dynamic
 
 
 def _has_force_flag(tokens: list) -> bool:
@@ -316,23 +350,25 @@ def _is_destructive_git(rest: list) -> tuple:
     """git clean -f*/--force, git reset --hard, git push --force (literal
     flag only -- -f/--force-with-lease are a disclosed, deliberate scope
     boundary, not covered here). Returns (is_destructive, dir_override,
-    malformed) -- malformed=True forces is_destructive=True regardless of
-    which subcommand (if any) was found: an unterminated/malformed
-    fragmented dynamic span must not silently un-recognize an otherwise-
-    destructive git invocation (REM-FIX doubt-verify cycle 2, Bug 2
-    continuation; Behavior Contract rule 9)."""
-    subcommand, later, dir_override, malformed = _find_git_subcommand(rest)
+    malformed, dir_override_dynamic) -- malformed=True forces
+    is_destructive=True regardless of which subcommand (if any) was found:
+    an unterminated/malformed fragmented dynamic span must not silently
+    un-recognize an otherwise-destructive git invocation (REM-FIX
+    doubt-verify cycle 2, Bug 2 continuation; Behavior Contract rule 9).
+    dir_override_dynamic is threaded straight through from
+    `_find_git_subcommand()`'s accumulator (ROUND 4, bug 3)."""
+    subcommand, later, dir_override, malformed, dir_override_dynamic = _find_git_subcommand(rest)
     if malformed:
-        return True, dir_override, True
+        return True, dir_override, True, dir_override_dynamic
     if subcommand is None:
-        return False, dir_override, False
+        return False, dir_override, False, dir_override_dynamic
     if subcommand == "clean":
-        return _has_force_flag(later), dir_override, False
+        return _has_force_flag(later), dir_override, False, dir_override_dynamic
     if subcommand == "reset":
-        return "--hard" in later, dir_override, False
+        return "--hard" in later, dir_override, False, dir_override_dynamic
     if subcommand == "push":
-        return "--force" in later, dir_override, False
-    return False, dir_override, False
+        return "--force" in later, dir_override, False, dir_override_dynamic
+    return False, dir_override, False, dir_override_dynamic
 
 
 def _dd_target(tokens: list) -> tuple:
@@ -482,7 +518,7 @@ def _match_destructive_shape(command_name: str, rest: list) -> tuple:
         return command_name, paths, unresolvable
 
     if command_name == "git":
-        is_destructive, dir_override, malformed = _is_destructive_git(rest)
+        is_destructive, dir_override, malformed, dir_override_dynamic = _is_destructive_git(rest)
         if malformed:
             # Fail CLOSED (Behavior Contract rule 9; REM-FIX doubt-verify
             # cycle 2, Bug 2 continuation): an unterminated/malformed
@@ -502,18 +538,16 @@ def _match_destructive_shape(command_name: str, rest: list) -> tuple:
             # whole invocation -- resolve against that directory instead of
             # assuming "." (CRITICAL 1).
             #
-            # A dynamic ($/backtick) dir_override is excluded from the
-            # returned path tokens and flags has_unresolvable=True, exactly
-            # like _positional_targets()/_dd_target() already do for every
-            # other command shape's captured target (doubt-verify
-            # generalization gap: this branch previously hardcoded
-            # has_unresolvable=False unconditionally regardless of
-            # dir_override, never calling looks_dynamic() on it, so
-            # `git -C $(dynamic) reset --hard` combined with a traversal
-            # literal elsewhere in the command was silently allowed instead
-            # of being flagged as an opaque dynamic target subject to the
-            # traversal-fail-closed logic in main()).
-            if dir_override and looks_dynamic(dir_override):
+            # ROUND 4 (bug 3): dir_override_dynamic is an ACCUMULATOR from
+            # `_find_git_subcommand()` -- True if ANY occurrence of
+            # -C/--git-dir/--work-tree anywhere in the command had a
+            # dynamic value, regardless of what a LATER occurrence's value
+            # looked like. Checking this accumulator (rather than
+            # re-deriving dynamic-ness from the final `dir_override` value
+            # alone, which is always None whenever the accumulator is set)
+            # is what keeps an earlier dynamic flag's taint from being
+            # silently overwritten by a later static-looking one.
+            if dir_override_dynamic:
                 return command_name, [], True
             target = dir_override if dir_override else "."
             return command_name, [target], False
