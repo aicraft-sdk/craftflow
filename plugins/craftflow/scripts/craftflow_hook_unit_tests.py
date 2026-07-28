@@ -774,6 +774,23 @@ def test_hooklib_matches_permit_shape_false_for_heredoc() -> None:
     ok(name)
 
 
+def test_hooklib_matches_permit_shape_false_for_substitution_in_value() -> None:
+    # CRITICAL fix: a value token containing a live $(...) command
+    # substitution must never be waved through as the trusted documented
+    # permit-write shape -- the shell would execute the substitution
+    # (arbitrary code) before printf even runs.
+    name = "hooklib/matches-permit-shape-false-for-substitution-in-value"
+    tokens = hooklib.split_subcommands(
+        "printf '%s' \"$(touch /tmp/x)\" > .craftflow/state/.memory-finalize"
+    )[0]
+    if hooklib.matches_memory_finalize_permit_shape(
+        tokens, ".craftflow/state/.memory-finalize"
+    ):
+        fail(name, "expected False for a value token containing command substitution")
+        return
+    ok(name)
+
+
 def test_hooks_json_registers_bash_guard() -> None:
     name = "hooks/bash-guard-registered"
     path = PLUGIN_ROOT / "hooks" / "hooks.json"
@@ -1497,6 +1514,7 @@ def main() -> int:
         test_hooklib_matches_permit_shape_true_for_exact_documented_command()
         test_hooklib_matches_permit_shape_false_for_different_printf_args()
         test_hooklib_matches_permit_shape_false_for_heredoc()
+        test_hooklib_matches_permit_shape_false_for_substitution_in_value()
 
         print()
         print("[ hook-selfcheck ]")

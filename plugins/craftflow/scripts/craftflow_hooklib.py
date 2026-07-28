@@ -431,6 +431,8 @@ def matches_memory_finalize_permit_shape(subcommand_tokens: list, permit_path_st
     if len(subcommand_tokens) != 5:
         return False
     cmd, fmt, _value, redirect, target = subcommand_tokens
+    if looks_dynamic(_value):
+        return False
     return (
         cmd == "printf"
         and fmt == "%s"
