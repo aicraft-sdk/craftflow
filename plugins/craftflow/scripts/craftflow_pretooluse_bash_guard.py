@@ -33,6 +33,7 @@ from craftflow_hooklib import (
     pretool_deny,
     project_state_dir,
     resolve_confinement,
+    resolve_toggle_decision,
     split_subcommands,
     state_root,
     workflows_dir,
@@ -667,7 +668,28 @@ def main() -> int:
     cwd = Path(cwd_raw).resolve()
 
     mode = load_mode()
-    block_mode = mode.get("bashDestructiveTraversal", "block") == "block"
+    # REM-FIX (HIGH, doubt-verify cycle 2): the identical unvalidated
+    # `mode.get(...) == "block"` pattern already fixed for `memoryWrites`/
+    # `protectedWrites` in the sibling craftflow_pretooluse_guard.py gated
+    # this script's ENTIRE core destructive-command detection -- a typo'd
+    # value (e.g. "Block" capital-B) silently ALLOWED every destructive
+    # command this hook exists to block, with zero distinguishing signal.
+    #
+    # DESIGN DECISION: `fail_closed_on_unrecognized=True` here is a
+    # deliberate DIVERGENCE from memoryWrites/protectedWrites (which pass
+    # the default False and audit-degrade on an unrecognized value). This
+    # toggle's own MISSING-key behavior already fail-closes -- the
+    # `mode.get("bashDestructiveTraversal", "block")` default below is
+    # "block", not "audit". An unrecognized-but-PRESENT value (a typo) is
+    # the same kind of "config didn't give a clear answer" as a missing
+    # key, so it should fail the SAME way (closed/deny), not flip to the
+    # OPPOSITE, more permissive posture just because a key happened to be
+    # present with a bad value. See resolve_toggle_decision()'s own
+    # docstring in craftflow_hooklib.py for the shared enum-validation
+    # logic (now used by three callers across two guard scripts).
+    block_mode, bash_destructive_traversal_decision = resolve_toggle_decision(
+        mode.get("bashDestructiveTraversal", "block"), fail_closed_on_unrecognized=True
+    )
 
     # Worktree confinement (Task 3.2 step 2): read worktree_path from the
     # active workflow JSON via the shared hooklib helper, never raising --
@@ -832,6 +854,13 @@ def main() -> int:
         reason_parts.append(f"unverifiable-path:{','.join(unverifiable)}")
     reason = "; ".join(reason_parts)
 
+    # REM-FIX (HIGH, doubt-verify cycle 2): logs the SAME distinguishing
+    # decision string resolve_toggle_decision() computed above (plain
+    # "deny" for a recognized "block" value, "block-unrecognized-config-
+    # value" for a typo) instead of a hardcoded "deny" literal -- a
+    # misconfigured bashDestructiveTraversal value must be greppable in
+    # craftflow-hook-events.log, distinct from an intentional, recognized
+    # "block" choice.
     log_event(
         "plugin_pretooluse_bash_guard",
         {
@@ -839,7 +868,7 @@ def main() -> int:
             "tool_name": "Bash",
             "cwd": str(cwd),
             "command": command,
-            "decision": "deny" if deny_now else "audit",
+            "decision": bash_destructive_traversal_decision if deny_now else "audit",
             "reason": reason,
         },
     )

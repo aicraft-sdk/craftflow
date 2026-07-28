@@ -98,6 +98,59 @@ def load_mode() -> Dict[str, str]:
         }
 
 
+def resolve_toggle_decision(
+    toggle_value, fail_closed_on_unrecognized: bool = False
+) -> Tuple[bool, str]:
+    """Enum-validate a `block`/`audit` hook-mode.json toggle value and
+    compute both the gating decision (`should_block`) and the log_event
+    `decision` string. Shared by every guard-script toggle that reads a
+    `block`/`audit` enum from hook-mode.json (`memoryWrites`,
+    `protectedWrites` in craftflow_pretooluse_guard.py;
+    `bashDestructiveTraversal` in craftflow_pretooluse_bash_guard.py) --
+    gating BEHAVIOR stays entirely per-caller (this helper never inspects
+    the underlying violations, only the toggle value itself), only the
+    enum-validation + decision-string logic is shared.
+
+    Recognized values ("block"/"audit") always map to `should_block`
+    True/False and decision "deny"/"audit".
+
+    An unrecognized value (a typo, e.g. "Block" capital-B, "blocked", a
+    boolean) must never be silently indistinguishable in
+    craftflow-hook-events.log from an intentional, recognized choice.
+    `fail_closed_on_unrecognized` selects which posture an unrecognized
+    value degrades to:
+
+    - False (default; `memoryWrites`/`protectedWrites`): degrades to
+      `should_block=False` (fail OPEN -- same gating outcome as an
+      intentional "audit" choice) but logs a DISTINCT
+      "audit-unrecognized-config-value" decision so the misconfiguration
+      is still greppable.
+    - True (`bashDestructiveTraversal`): degrades to `should_block=True`
+      (fail CLOSED) with a DISTINCT "block-unrecognized-config-value"
+      decision. This is a deliberate DIVERGENCE from the
+      memoryWrites/protectedWrites default, not a copy of it:
+      `bashDestructiveTraversal`'s own missing-key behavior already
+      fail-closes (`mode.get("bashDestructiveTraversal", "block")` --
+      the default when the key is absent entirely is "block", not
+      "audit"). An unrecognized-but-PRESENT value (a typo) should fail
+      exactly the same way a missing key does -- both are "the config
+      didn't give us a clear answer" -- rather than silently flipping to
+      the OPPOSITE, more permissive posture ("audit-degrade") just
+      because a key happened to be present with a bad value. Consistency
+      is with the toggle's OWN established missing-key default, not with
+      the other toggles' unrelated unrecognized-value default.
+    """
+    should_block = toggle_value == "block"
+    if toggle_value in ("block", "audit"):
+        decision = "deny" if should_block else "audit"
+    elif fail_closed_on_unrecognized:
+        should_block = True
+        decision = "block-unrecognized-config-value"
+    else:
+        decision = "audit-unrecognized-config-value"
+    return should_block, decision
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 

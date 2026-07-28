@@ -17,6 +17,7 @@ from craftflow_hooklib import (
     pretool_deny,
     project_state_dir,
     resolve_confinement,
+    resolve_toggle_decision,
     split_subcommands,
     state_root,
     workflows_dir,
@@ -203,33 +204,6 @@ def _python_suspicious_call_bindings(code_text: str) -> set:
             if orig in _SUSPICIOUS_ATTRS_BY_MODULE[module]:
                 patterns.add(f"{bound}(")
     return patterns
-
-
-def _resolve_write_gate_decision(toggle_value):
-    """Enum-validate a `block`/`audit` config toggle value and compute both
-    the blocking decision and the log_event `decision` string. Shared by
-    BOTH the `memoryWrites` (Edit/Write memory-path check) and
-    `protectedWrites` (Bash-write protected-path check) toggles -- gating
-    BEHAVIOR stays entirely per-caller (each caller decides what
-    "should_block" means for its own violation type; this helper never
-    inspects `violations`), only the enum-validation + decision-string logic
-    is shared.
-
-    REM-FIX: a typo'd/unrecognized toggle value (e.g. "Block" capital-B,
-    "blocked", a boolean) must never be silently indistinguishable from an
-    intentional "audit" choice in craftflow-hook-events.log. Recognized
-    values ("block"/"audit") map to `should_block` True/False and decision
-    "deny"/"audit". Any other value degrades to `should_block=False` (fail
-    open, same gating outcome as "audit") but logs a DISTINCT
-    "audit-unrecognized-config-value" decision so the misconfiguration is
-    greppable instead of silently collapsing into the exact same log signal
-    as a deliberate "audit" choice."""
-    should_block = toggle_value == "block"
-    if toggle_value in ("block", "audit"):
-        decision = "deny" if should_block else "audit"
-    else:
-        decision = "audit-unrecognized-config-value"
-    return should_block, decision
 
 
 def _protected_memory_paths() -> set:
@@ -521,19 +495,22 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
         )
         return 0
 
-    # REM-FIX: reuses the same `_resolve_write_gate_decision()` helper the
-    # sibling `protectedWrites` toggle uses (see its own docstring) --
-    # extends enum-validation + a distinguishing "audit-unrecognized-config-
-    # value" log decision to `memoryWrites` too. Gating behavior is
-    # unchanged: a typo'd value still degrades to audit/allow, only the
-    # logged `decision` differs. `should_block_raw`/`decision` are computed
-    # unconditionally from the toggle value alone; `should_block` still
-    # additionally requires "memory-write" in violations (mirrors the
+    # REM-FIX: reuses the shared `resolve_toggle_decision()` helper (moved to
+    # craftflow_hooklib.py so both this script and
+    # craftflow_pretooluse_bash_guard.py's `bashDestructiveTraversal` toggle
+    # share one implementation -- see its own docstring) that the sibling
+    # `protectedWrites` toggle uses -- extends enum-validation + a
+    # distinguishing "audit-unrecognized-config-value" log decision to
+    # `memoryWrites` too. Gating behavior is unchanged: a typo'd value still
+    # degrades to audit/allow (default `fail_closed_on_unrecognized=False`),
+    # only the logged `decision` differs. `should_block_raw`/`decision` are
+    # computed unconditionally from the toggle value alone; `should_block`
+    # still additionally requires "memory-write" in violations (mirrors the
     # pre-existing `and` condition -- at this point in the function it is
     # always true, since "worktree-confinement" already returned above and
     # "memory-write" is the only remaining violation type, but the explicit
     # check is kept for defensive clarity).
-    should_block_raw, memory_writes_decision = _resolve_write_gate_decision(mode.get("memoryWrites"))
+    should_block_raw, memory_writes_decision = resolve_toggle_decision(mode.get("memoryWrites"))
     should_block = "memory-write" in violations and should_block_raw
 
     log_event(
@@ -705,10 +682,12 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     # from an intentional "audit" choice in craftflow-hook-events.log. The
     # gating behavior itself is unchanged (still degrades to audit/allow) --
     # only the logged decision differs, so misconfiguration is greppable.
-    # Uses the shared `_resolve_write_gate_decision()` helper (extracted once
-    # `memoryWrites` became a second caller of this exact enum-validation +
-    # distinguishing-log-decision pattern -- see its own docstring).
-    should_block, decision = _resolve_write_gate_decision(mode.get("protectedWrites"))
+    # Uses the shared `resolve_toggle_decision()` helper in
+    # craftflow_hooklib.py (extracted there once `memoryWrites` became a
+    # second caller of this exact enum-validation + distinguishing-log-
+    # decision pattern, and again once `bashDestructiveTraversal` became a
+    # third caller in a different script -- see its own docstring).
+    should_block, decision = resolve_toggle_decision(mode.get("protectedWrites"))
 
     log_event(
         "plugin_pretooluse_guard",

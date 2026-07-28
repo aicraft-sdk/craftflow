@@ -3911,6 +3911,158 @@ def test_bash_guard_denial_reason_includes_all_triggered_categories(tmp_dir: Pat
 
 
 # ---------------------------------------------------------------------------
+# REM-FIX (HIGH, build-craftflow-guardrail-harden, doubt-verify cycle 2): the
+# `bashDestructiveTraversal` toggle governing this ENTIRE script's core
+# destructive-command detection had the identical unvalidated
+# `mode.get(...) == "block"` pattern already fixed for `memoryWrites`/
+# `protectedWrites` in the sibling craftflow_pretooluse_guard.py. Live-
+# verified pre-fix: {"bashDestructiveTraversal": "Block"} (capital-B typo)
+# silently ALLOWED `rm -rf ../outside_target` instead of denying it.
+#
+# DESIGN DECISION (deliberate divergence from memoryWrites/protectedWrites):
+# unlike those two toggles, `bashDestructiveTraversal`'s own MISSING-key
+# behavior already fail-closes (`mode.get("bashDestructiveTraversal",
+# "block")` -- default is "block", not "audit"). For consistency with this
+# toggle's OWN established missing-key posture, an unrecognized-but-PRESENT
+# value (a typo) fails the SAME way here -- fail CLOSED (deny), not
+# audit-degrade -- via `resolve_toggle_decision(...,
+# fail_closed_on_unrecognized=True)` in craftflow_hooklib.py. The log_event
+# `decision` is "block-unrecognized-config-value", distinct from both the
+# recognized "deny" and from memoryWrites/protectedWrites's
+# "audit-unrecognized-config-value".
+# ---------------------------------------------------------------------------
+
+def test_bash_guard_unrecognized_bash_destructive_traversal_value_fails_closed_with_distinct_decision(
+    tmp_dir: Path,
+) -> None:
+    name = "pretooluse-bash-guard/unrecognized-bash-destructive-traversal-value-fails-closed"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text(
+        json.dumps({"bashDestructiveTraversal": "Block"}), encoding="utf-8"
+    )
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "rm -rf ../outside_target"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected fail-CLOSED deny for a typo'd bashDestructiveTraversal "
+            f"value (must mirror this toggle's own fail-closed missing-key "
+            f"default, not audit-degrade like memoryWrites/protectedWrites); got: {out!r}",
+        )
+        return
+    log_path = project_root / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, f"expected log file {log_path} to exist after hook run")
+        return
+    log_lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+    matching = [line for line in log_lines if "block-unrecognized-config-value" in line]
+    if not matching:
+        fail(
+            name,
+            "expected a log_event entry with decision 'block-unrecognized-config-value' "
+            "for a typo'd bashDestructiveTraversal value, distinct from both an intentional "
+            "'deny' and from the audit-degrade decision used by memoryWrites/protectedWrites",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_missing_bash_destructive_traversal_key_still_fails_closed(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/missing-bash-destructive-traversal-key-still-fails-closed"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    # Deliberately do NOT create hook-mode.json at all -- exercises
+    # load_mode()'s missing-file fallback branch, whose fallback dict has no
+    # `bashDestructiveTraversal` key at all, so `mode.get(...)` must fall
+    # back to its own "block" default (regression check: this pre-existing
+    # fail-closed behavior on a missing key must be unaffected by the fix).
+    (fake_plugin_root / "config").mkdir(parents=True)
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "rm -rf ../outside_target"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected fail-closed deny when bashDestructiveTraversal key is "
+            f"absent entirely (no regression in missing-key default); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_explicit_block_value_still_denies(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/explicit-block-value-still-denies"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text(
+        json.dumps({"bashDestructiveTraversal": "block"}), encoding="utf-8"
+    )
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "rm -rf ../outside_target"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for an explicit 'block' bashDestructiveTraversal value; got: {out!r}")
+        return
+    log_path = project_root / ".craftflow" / "state" / "craftflow-hook-events.log"
+    log_lines = log_path.read_text(encoding="utf-8").strip().splitlines() if log_path.exists() else []
+    matching = [line for line in log_lines if '"decision": "deny"' in line]
+    if not matching:
+        fail(name, f"expected a log_event entry with plain 'deny' decision (recognized value); got lines: {log_lines!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_explicit_audit_value_allows_but_logs_audit(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/explicit-audit-value-allows-but-logs-audit"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text(
+        json.dumps({"bashDestructiveTraversal": "audit"}), encoding="utf-8"
+    )
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "rm -rf ../outside_target"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"expected allow (explicit 'audit' value must not deny); got: {out!r}")
+        return
+    log_path = project_root / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, f"expected log file {log_path} to exist after hook run")
+        return
+    log_lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+    matching = [line for line in log_lines if '"decision": "audit"' in line]
+    if not matching:
+        fail(name, f"expected a log_event entry with plain 'audit' decision (recognized value); got lines: {log_lines!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # --- hooklib shared-helper tests (white-box) ---
 # ---------------------------------------------------------------------------
 
@@ -4968,6 +5120,13 @@ def main() -> int:
         test_bash_guard_allows_git_dash_c_static_key_value_non_destructive_status(tmp / "b80")
         test_bash_guard_blocks_git_dash_c_static_key_value_reset_hard_in_cwd(tmp / "b81")
         test_bash_guard_allows_git_multi_dash_capital_c_static_values_non_destructive(tmp / "b82")
+
+        print()
+        print("[ pretooluse-bash-guard: REM-FIX (extend enum validation + distinguishing log decision to bashDestructiveTraversal) ]")
+        test_bash_guard_unrecognized_bash_destructive_traversal_value_fails_closed_with_distinct_decision(tmp / "b83")
+        test_bash_guard_missing_bash_destructive_traversal_key_still_fails_closed(tmp / "b84")
+        test_bash_guard_explicit_block_value_still_denies(tmp / "b85")
+        test_bash_guard_explicit_audit_value_allows_but_logs_audit(tmp / "b86")
 
         print()
         print("[ hooklib shared-helper (white-box) ]")
