@@ -663,7 +663,18 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     # `memoryWrites` == "block" pattern used for the Edit/Write memory-write
     # check above -- the memoryWrites-gated logic itself is untouched.
     reason = f"bash-write-protected-path:{','.join(protected_write_violations)}"
-    should_block = mode.get("protectedWrites") == "block"
+    protected_writes_value = mode.get("protectedWrites")
+    should_block = protected_writes_value == "block"
+
+    # REM-FIX (HIGH): a typo'd/unrecognized protectedWrites value (e.g.
+    # "Block", "blocked", a boolean) must never be silently indistinguishable
+    # from an intentional "audit" choice in craftflow-hook-events.log. The
+    # gating behavior itself is unchanged (still degrades to audit/allow) --
+    # only the logged decision differs, so misconfiguration is greppable.
+    if protected_writes_value in ("block", "audit"):
+        decision = "deny" if should_block else "audit"
+    else:
+        decision = "audit-unrecognized-config-value"
 
     log_event(
         "plugin_pretooluse_guard",
@@ -672,7 +683,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
             "tool_name": "Bash",
             "cwd": str(cwd),
             "command": command,
-            "decision": "deny" if should_block else "audit",
+            "decision": decision,
             "reason": reason,
         },
     )

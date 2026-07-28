@@ -1577,6 +1577,103 @@ def test_pretooluse_guard_real_plugin_config_now_blocks_bash_writes_by_default(t
     ok(name)
 
 
+# ---------------------------------------------------------------------------
+# REM-FIX (2 HIGH findings): load_mode()'s fallback dicts must fail closed
+# (protectedWrites: "block", not "audit"), and unrecognized protectedWrites
+# values must be distinguishable in the log from an intentional "audit"
+# choice. See docs/plans/2026-07-28-craftflow-guardrail-hardening-plan.md.
+# ---------------------------------------------------------------------------
+
+def test_load_mode_fallback_defaults_protected_writes_to_block_when_file_missing(tmp_dir: Path) -> None:
+    name = "hooklib/load-mode-fallback-defaults-protected-writes-block-missing-file"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    # Deliberately do NOT create hook-mode.json -- exercises load_mode()'s
+    # missing-file fallback branch.
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo x | tee .craftflow/state/project/patterns.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected fail-closed deny (protectedWrites fallback must default "
+            f"to block) when hook-mode.json is missing; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_load_mode_fallback_defaults_protected_writes_to_block_when_file_corrupt(tmp_dir: Path) -> None:
+    name = "hooklib/load-mode-fallback-defaults-protected-writes-block-corrupt-file"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text("{not valid json", encoding="utf-8")
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo x | tee .craftflow/state/project/patterns.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected fail-closed deny (protectedWrites fallback must default "
+            f"to block) when hook-mode.json is corrupt/unparseable; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_unrecognized_protected_writes_value_still_allows_but_logs_distinct_decision(
+    tmp_dir: Path,
+) -> None:
+    name = "pretooluse-guard/unrecognized-protected-writes-value-logs-distinct-decision"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text(
+        json.dumps({"protectedWrites": "blocked"}), encoding="utf-8"
+    )
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo x | tee .craftflow/state/project/patterns.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(
+            name,
+            "expected allow (an unrecognized protectedWrites value must still "
+            f"degrade to audit/allow, not fail-closed); got: {out!r}",
+        )
+        return
+    log_path = project_root / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, f"expected log file {log_path} to exist after hook run")
+        return
+    log_lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+    matching = [line for line in log_lines if "audit-unrecognized-config-value" in line]
+    if not matching:
+        fail(
+            name,
+            "expected a log_event entry with decision 'audit-unrecognized-config-value' "
+            "for a typo'd protectedWrites value, distinct from an intentional 'audit' choice",
+        )
+        return
+    ok(name)
+
+
 def test_learn_distiller_uses_tools_key_not_allowed_tools() -> None:
     name = "learn-distiller/uses-tools-key-not-allowed-tools"
     path = PLUGIN_ROOT / "agents" / "learn-distiller.md"
@@ -4636,6 +4733,12 @@ def main() -> int:
         test_pretooluse_guard_bash_write_audited_not_denied_when_protected_writes_audit(tmp / "g41")
         test_pretooluse_guard_memory_writes_toggle_independent_of_protected_writes(tmp / "g42")
         test_pretooluse_guard_real_plugin_config_now_blocks_bash_writes_by_default(tmp / "g43")
+
+        print()
+        print("[ pretooluse-guard: REM-FIX (load_mode fail-closed + unrecognized protectedWrites logging) ]")
+        test_load_mode_fallback_defaults_protected_writes_to_block_when_file_missing(tmp / "g44")
+        test_load_mode_fallback_defaults_protected_writes_to_block_when_file_corrupt(tmp / "g45")
+        test_pretooluse_guard_unrecognized_protected_writes_value_still_allows_but_logs_distinct_decision(tmp / "g46")
 
         print()
         print("[ pretooluse-bash-guard ]")

@@ -76,17 +76,23 @@ def load_input() -> Dict[str, Any]:
 def load_mode() -> Dict[str, str]:
     path = plugin_config_dir() / "hook-mode.json"
     if not path.exists():
+        # REM-FIX (HIGH): protectedWrites is a NEW protection closing a gap --
+        # it must fail closed (block), not silently reopen the gap it exists
+        # to close, when config is missing.
         return {
-            "protectedWrites": "audit",
+            "protectedWrites": "block",
             "memoryWrites": "audit",
             "taskMetadata": "audit",
         }
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
-        print(f"CRAFTFLOW load_mode: failed to read {path}: {exc}; defaulting to audit mode", file=sys.stderr)
+        print(f"CRAFTFLOW load_mode: failed to read {path}: {exc}; defaulting to fail-closed mode", file=sys.stderr)
+        # REM-FIX (HIGH): same fail-closed rationale as the missing-file
+        # branch above -- a corrupt/unreadable config must not silently
+        # default protectedWrites back to audit-only.
         return {
-            "protectedWrites": "audit",
+            "protectedWrites": "block",
             "memoryWrites": "audit",
             "taskMetadata": "audit",
         }
