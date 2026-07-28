@@ -108,10 +108,27 @@ def _split_statement_like_chunks(text: str) -> list:
     on `;` and newline, treating an active `'...'`/`"..."` string literal
     as a single unit so a `;`/newline inside a quoted string argument is
     never treated as a statement boundary. Not a full python parser --
-    matching this guard family's deterministic-but-imperfect scope."""
+    matching this guard family's deterministic-but-imperfect scope.
+
+    REM-FIX (final round): the splitter used to cut on EVERY unquoted `;`/
+    newline with zero awareness of paren/bracket/brace nesting depth or
+    backslash line-continuation -- an ordinary MULTI-LINE call (exactly the
+    shape a formatter like `black` would produce, not an adversarial
+    construction) silently bypassed the whole statement-proximity check in
+    `_python_suspicious_mechanism_targets()`, since the marker
+    (`os.system(`) and the protected-path literal landed in two different
+    "chunks" once the newlines embedded inside the call's own still-open
+    parens got treated as statement boundaries. Fixed by tracking
+    paren/bracket/brace depth (a counter incremented/decremented per
+    unescaped `(`/`)`/`[`/`]`/`{`/`}` character outside string literals,
+    mirroring the shape of the existing quote-tracking loop) and only
+    treating `;`/newline as a boundary at depth 0; a `\\` immediately
+    followed by a newline is additionally treated as a line-continuation
+    (never a boundary), matching real python lexical rules."""
     chunks = []
     current = []
     quote_char = None
+    depth = 0
     i = 0
     n = len(text)
     while i < n:
@@ -131,7 +148,25 @@ def _split_statement_like_chunks(text: str) -> list:
             current.append(ch)
             i += 1
             continue
-        if ch in (";", "\n"):
+        if ch in "([{":
+            depth += 1
+            current.append(ch)
+            i += 1
+            continue
+        if ch in ")]}":
+            if depth > 0:
+                depth -= 1
+            current.append(ch)
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n and text[i + 1] == "\n":
+            # Backslash line-continuation: the newline is not a statement
+            # boundary, it's a lexical join of two physical lines.
+            current.append(ch)
+            current.append(text[i + 1])
+            i += 2
+            continue
+        if ch in (";", "\n") and depth == 0:
             chunks.append("".join(current))
             current = []
             i += 1

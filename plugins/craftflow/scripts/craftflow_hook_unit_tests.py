@@ -1345,6 +1345,100 @@ def test_pretooluse_guard_allows_bash_python_variable_reference_then_call_write_
     ok(name)
 
 
+def test_pretooluse_guard_denies_bash_python_multiline_os_system_write_to_memory_md(tmp_dir: Path) -> None:
+    # REM-FIX (final round): `_split_statement_like_chunks()` split naive on
+    # raw `;`/`\n` with ZERO paren/bracket-depth awareness -- an ordinary
+    # MULTI-LINE `os.system(...)` call (exactly the shape a formatter like
+    # `black` would produce, not an adversarial construction) silently
+    # bypassed the whole statement-proximity check: the marker
+    # (`os.system(`) landed in one "chunk" and the protected-path literal
+    # landed in the NEXT chunk once the naive splitter cut on the newlines
+    # embedded inside the call's own still-open parens. Live-verified
+    # bypass before this fix -- the single-line form of the identical call
+    # was already correctly denied.
+    name = "pretooluse-guard/denies-bash-python-multiline-os-system-write-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"import os; os.system(\n"
+                "    'printf pwned > ' + '.craftflow/state/project/activeContext.md'\n"
+                ")\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a multi-line (black-formatter-shaped) os.system() write to a memory .md file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_python_multiline_subprocess_run_write_to_workflow_json(tmp_dir: Path) -> None:
+    # Same class of bug as above, proven against a DIFFERENT bracket shape --
+    # a `subprocess.run([...])` call whose list ARGUMENTS are each wrapped
+    # onto their own line (also a realistic `black` output shape). The
+    # marker (`subprocess.run(`) and the protected-path literal must still
+    # co-occur once bracket-depth tracking correctly treats the whole
+    # multi-line `[...]`/`(...)` construct as ONE statement chunk.
+    name = "pretooluse-guard/denies-bash-python-multiline-subprocess-run-write-to-workflow-json"
+    project_root = tmp_dir / "project"
+    wf_dir = project_root / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "wf-test.json").write_text('{"workflow_uuid":"wf-test"}', encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"import subprocess; subprocess.run([\n"
+                "    'bash',\n"
+                "    '-c',\n"
+                "    'printf pwned > .craftflow/state/workflows/wf-test.json',\n"
+                "])\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a multi-line subprocess.run([...]) write to a workflow JSON artifact; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_python_backslash_continued_os_system_write_to_memory_md(tmp_dir: Path) -> None:
+    # Same class of bug, proven against BACKSLASH line-continuation rather
+    # than bracket nesting -- a single python statement whose `os.system(`
+    # call is split across two physical lines via a trailing `\` rather
+    # than relying on the call's own open paren to justify the line break.
+    # The naive splitter's raw `\n` boundary check has no way to know this
+    # newline is a continuation, not a statement end.
+    name = "pretooluse-guard/denies-bash-python-backslash-continued-os-system-write-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"import os; os.system('printf pwned > ' + \\\n"
+                "    '.craftflow/state/project/patterns.md')\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a backslash-continued os.system() write to a memory .md file; got: {out!r}")
+        return
+    ok(name)
+
+
 def test_hooks_json_registers_pretooluse_guard_on_bash() -> None:
     name = "hooks/pretooluse-guard-registered-on-bash"
     path = PLUGIN_ROOT / "hooks" / "hooks.json"
@@ -4397,6 +4491,12 @@ def main() -> int:
         test_pretooluse_guard_denies_bash_python_import_alias_os_system_write_to_memory_md(tmp / "g34")
         test_pretooluse_guard_denies_bash_python_from_import_system_write_to_memory_md(tmp / "g35")
         test_pretooluse_guard_allows_bash_python_variable_reference_then_call_write_to_memory_md_disclosed_gap(tmp / "g36")
+
+        print()
+        print("[ pretooluse-guard: REM-FIX (statement splitter -- paren/bracket depth + backslash-continuation) ]")
+        test_pretooluse_guard_denies_bash_python_multiline_os_system_write_to_memory_md(tmp / "g37")
+        test_pretooluse_guard_denies_bash_python_multiline_subprocess_run_write_to_workflow_json(tmp / "g38")
+        test_pretooluse_guard_denies_bash_python_backslash_continued_os_system_write_to_memory_md(tmp / "g39")
 
         print()
         print("[ pretooluse-bash-guard ]")
