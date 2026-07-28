@@ -1462,6 +1462,138 @@ def test_hooks_json_registers_pretooluse_guard_on_bash() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Phase 5: hook-mode.json protectedWrites wiring.
+# See docs/plans/2026-07-28-craftflow-guardrail-hardening-plan.md, Phase 5.
+#
+# Fake-plugin-root technique (Task 5.1): construct a temp directory
+# mirroring the plugin's required shape (<tmp>/plugin_root/config/
+# hook-mode.json with the desired test values -- no scripts/ subdirectory
+# needed, plugin_config_dir() only ever reads plugin_root() / "config"),
+# then point CLAUDE_PLUGIN_ROOT at the fake root. The real hook script is
+# still invoked from the real SCRIPTS path via run_hook(); only
+# load_mode()'s config lookup resolves to the fake root.
+# ---------------------------------------------------------------------------
+
+def test_pretooluse_guard_bash_write_denied_when_protected_writes_block(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/bash-write-denied-when-protected-writes-block"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text(
+        json.dumps({"protectedWrites": "block"}), encoding="utf-8"
+    )
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo x | tee .craftflow/state/project/patterns.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash protected-path write when protectedWrites=block; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_write_audited_not_denied_when_protected_writes_audit(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/bash-write-audited-not-denied-when-protected-writes-audit"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text(
+        json.dumps({"protectedWrites": "audit"}), encoding="utf-8"
+    )
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo x | tee .craftflow/state/project/patterns.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow (audit-only, logged not blocked) when protectedWrites=audit; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_memory_writes_toggle_independent_of_protected_writes(tmp_dir: Path) -> None:
+    # Proves the two toggles don't cross-gate each other: protectedWrites=
+    # block (governs the NEW Bash-write-protected-path decision) must have
+    # zero effect on memoryWrites=audit's own pre-existing gating of the
+    # Edit/Write direct memory-path check.
+    name = "pretooluse-guard/memory-writes-toggle-independent-of-protected-writes"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text(
+        json.dumps({"protectedWrites": "block", "memoryWrites": "audit"}), encoding="utf-8"
+    )
+    project_root = tmp_dir / "project"
+    target = project_root / ".craftflow" / "state" / "project" / "activeContext.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# Active Context\n", encoding="utf-8")
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(target)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(
+            name,
+            "expected memoryWrites=audit to allow the pre-existing Edit/Write "
+            f"memory-path check regardless of protectedWrites=block; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_real_plugin_config_now_blocks_bash_writes_by_default(tmp_dir: Path) -> None:
+    # Regression test (Task 5.1, 4th bullet): re-runs Phase 4's own
+    # test_pretooluse_guard_denies_bash_heredoc_write_to_memory_md scenario
+    # using the REAL plugin-root convention (CLAUDE_PLUGIN_ROOT=PLUGIN_ROOT),
+    # proving Task 5.2's real config-default flip actually lands -- not just
+    # the fake-root technique above.
+    name = "pretooluse-guard/real-plugin-config-now-blocks-bash-writes-by-default"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": "cat <<'EOF' > .craftflow/state/project/activeContext.md\ninjected\nEOF"
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected the real plugin config's protectedWrites default to deny "
+            f"this Bash heredoc write; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_learn_distiller_uses_tools_key_not_allowed_tools() -> None:
+    name = "learn-distiller/uses-tools-key-not-allowed-tools"
+    path = PLUGIN_ROOT / "agents" / "learn-distiller.md"
+    if not path.exists():
+        fail(name, f"learn-distiller.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    if "\ntools: " not in content:
+        fail(name, "learn-distiller.md frontmatter missing 'tools: ' key")
+        return
+    if "\nallowed-tools: " in content:
+        fail(name, "learn-distiller.md frontmatter still uses legacy 'allowed-tools:' key")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # Bash destructive-command traversal guard tests
 # ---------------------------------------------------------------------------
 # REM-FIX (docs/incidents/2026-07-25-phase3-verifier-rm-attempt.md): a
@@ -4499,6 +4631,13 @@ def main() -> int:
         test_pretooluse_guard_denies_bash_python_backslash_continued_os_system_write_to_memory_md(tmp / "g39")
 
         print()
+        print("[ pretooluse-guard: Phase 5 protectedWrites toggle wiring ]")
+        test_pretooluse_guard_bash_write_denied_when_protected_writes_block(tmp / "g40")
+        test_pretooluse_guard_bash_write_audited_not_denied_when_protected_writes_audit(tmp / "g41")
+        test_pretooluse_guard_memory_writes_toggle_independent_of_protected_writes(tmp / "g42")
+        test_pretooluse_guard_real_plugin_config_now_blocks_bash_writes_by_default(tmp / "g43")
+
+        print()
         print("[ pretooluse-bash-guard ]")
         test_bash_guard_blocks_relative_traversal_escaping_cwd(tmp / "b1")
         test_bash_guard_blocks_absolute_path_outside_cwd(tmp / "b2")
@@ -4668,6 +4807,7 @@ def main() -> int:
     test_workflow_id_script_present()
     test_statusline_script_present()
     test_router_uses_workflow_id_helper()
+    test_learn_distiller_uses_tools_key_not_allowed_tools()
 
     print()
     if _errors:

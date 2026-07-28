@@ -630,12 +630,40 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     if not protected_write_violations and not confinement_violations:
         return 0
 
-    reason_parts = []
-    if protected_write_violations:
-        reason_parts.append(f"bash-write-protected-path:{','.join(protected_write_violations)}")
+    # Worktree-confinement is denied unconditionally -- it is an independent
+    # violation type (mirrors the Edit/Write handler's own treatment of
+    # "worktree-confinement" above), never gated by `protectedWrites`.
     if confinement_violations:
+        reason_parts = []
+        if protected_write_violations:
+            reason_parts.append(f"bash-write-protected-path:{','.join(protected_write_violations)}")
         reason_parts.append(f"worktree-confinement:{','.join(confinement_violations)}")
-    reason = "; ".join(reason_parts)
+        reason = "; ".join(reason_parts)
+
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard",
+                "tool_name": "Bash",
+                "cwd": str(cwd),
+                "command": command,
+                "decision": "deny",
+                "reason": reason,
+            },
+        )
+        pretool_deny(
+            f"CRAFTFLOW plugin hook blocked a Bash write to a protected path (reason: {reason}). "
+            "If this is intentional, run it manually outside the agent session."
+        )
+        return 0
+
+    # Only protected_write_violations remain at this point (Task 5.2): the
+    # NEW Bash-write-protected-path decision is gated behind
+    # `protectedWrites` == "block", exactly mirroring the pre-existing
+    # `memoryWrites` == "block" pattern used for the Edit/Write memory-write
+    # check above -- the memoryWrites-gated logic itself is untouched.
+    reason = f"bash-write-protected-path:{','.join(protected_write_violations)}"
+    should_block = mode.get("protectedWrites") == "block"
 
     log_event(
         "plugin_pretooluse_guard",
@@ -644,14 +672,15 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
             "tool_name": "Bash",
             "cwd": str(cwd),
             "command": command,
-            "decision": "deny",
+            "decision": "deny" if should_block else "audit",
             "reason": reason,
         },
     )
-    pretool_deny(
-        f"CRAFTFLOW plugin hook blocked a Bash write to a protected path (reason: {reason}). "
-        "If this is intentional, run it manually outside the agent session."
-    )
+    if should_block:
+        pretool_deny(
+            f"CRAFTFLOW plugin hook blocked a Bash write to a protected path (reason: {reason}). "
+            "If this is intentional, run it manually outside the agent session."
+        )
     return 0
 
 
