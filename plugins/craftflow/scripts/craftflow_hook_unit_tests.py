@@ -25,6 +25,7 @@ SCRIPTS = PLUGIN_ROOT / "scripts"
 
 sys.path.insert(0, str(SCRIPTS))
 import craftflow_hooklib as hooklib  # noqa: E402
+import craftflow_pretooluse_bash_guard as bash_guard  # noqa: E402
 
 _errors: list[str] = []
 _passes: int = 0
@@ -1012,6 +1013,169 @@ def test_bash_guard_regression_memory_finalize_clear_still_allowed(tmp_dir: Path
 
 
 # ---------------------------------------------------------------------------
+# --- REM-FIX: Phase 2 review+hunt findings (7 real live-verified bypasses) ---
+# ---------------------------------------------------------------------------
+
+def test_bash_guard_blocks_git_dash_capital_c_flag_before_subcommand(tmp_dir: Path) -> None:
+    # CRITICAL 1: `git -C <dir> reset --hard` previously bypassed detection
+    # entirely because `_is_destructive_git` treated `rest[0]` ("-C") as the
+    # subcommand instead of scanning past git's global flags -- and even if
+    # detected, the destructive target must resolve against the -C
+    # directory, not cwd.
+    name = "pretooluse-bash-guard/blocks-git-dash-capital-c-flag-before-subcommand"
+    cwd_dir = tmp_dir / "cwd"
+    outside_dir = tmp_dir / "outside"
+    cwd_dir.mkdir(parents=True)
+    outside_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": f"git -C {outside_dir.resolve()} reset --hard"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'git -C <outside dir> reset --hard'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_git_clean_long_form_force(tmp_dir: Path) -> None:
+    # CRITICAL 2: `_is_destructive_git`'s old `token.startswith("-f")` check
+    # misses the long-form `--force` flag entirely (second char is "-", not
+    # "f").
+    name = "pretooluse-bash-guard/blocks-git-clean-long-form-force"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "git clean --force"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'git clean --force' (long-form force flag); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_dd_bare_stdout_redirect_without_of(tmp_dir: Path) -> None:
+    # CRITICAL 3: `dd if=/dev/zero > <target>` with NO `of=` token at all was
+    # completely invisible to `_dd_target` (which only ever looked for
+    # `of=`) -- the whole subcommand wasn't even recognized as destructive.
+    name = "pretooluse-bash-guard/blocks-dd-bare-stdout-redirect-without-of"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "dd if=/dev/zero > ../../../etc/passwd bs=1 count=10"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a bare 'dd ... > target' redirect with no of=; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_find_execdir_rm(tmp_dir: Path) -> None:
+    # HIGH 4: `_is_destructive_find` only ever matched the exact `-exec`
+    # token, missing `-execdir`/`-ok`/`-okdir`.
+    name = "pretooluse-bash-guard/blocks-find-execdir-rm"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "find /etc -execdir rm {} \\;"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'find -execdir rm' targeting an escaping search path; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_descendant_of_critical_child(tmp_dir: Path) -> None:
+    # HIGH 5: `_is_in_cwd_critical` only exact-matched `cwd / child` -- a
+    # DESCENDANT of a critical top-level child (e.g. `packages/agent-cli`)
+    # slipped through with zero log.
+    name = "pretooluse-bash-guard/blocks-rm-rf-descendant-of-critical-child"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf packages/agent-cli"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf packages/agent-cli' (descendant of critical child); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_mv_target_directory_flag(tmp_dir: Path) -> None:
+    # HIGH 6: `_positional_targets` blindly skipped any token starting with
+    # "-", including `--target-directory=<path>` -- mv's real destination
+    # was silently hidden from confinement checking entirely.
+    name = "pretooluse-bash-guard/blocks-mv-target-directory-flag"
+    cwd_dir = tmp_dir / "cwd"
+    outside_dir = tmp_dir / "outside"
+    cwd_dir.mkdir(parents=True)
+    outside_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": f"mv secret.txt --target-directory={outside_dir.resolve()}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'mv ... --target-directory=<outside>'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_destructive_targets_falls_back_on_parse_exception() -> None:
+    # HIGH 7: zero try/except existed anywhere in _is_destructive_git/
+    # _dd_target/_is_destructive_find/_destructive_targets, contradicting
+    # Behavior Contract rule 9 ("falls back to existing conservative
+    # behavior for that specific check, not a blanket allow"). White-box:
+    # force a synthetic parse failure in _is_destructive_git and confirm
+    # _destructive_targets neither raises nor silently returns "not
+    # destructive" (which would be a blanket allow) -- it must still
+    # produce a conservative fallback target guess.
+    name = "pretooluse-bash-guard/destructive-targets-falls-back-on-parse-exception"
+    original = bash_guard._is_destructive_git
+
+    def _boom(rest):
+        raise ValueError("synthetic parse failure for HIGH 7 regression test")
+
+    bash_guard._is_destructive_git = _boom
+    try:
+        command_name, paths, unresolvable = bash_guard._destructive_targets(
+            ["git", "reset", "--hard", "HEAD~1"]
+        )
+    except Exception as exc:
+        fail(name, f"expected the parse exception to be caught, not propagated; got: {exc!r}")
+        bash_guard._is_destructive_git = original
+        return
+    bash_guard._is_destructive_git = original
+    if command_name is None:
+        fail(name, "expected a conservative fallback target guess, not a blanket allow (command_name was None)")
+        return
+    if not paths:
+        fail(name, f"expected the fallback to still produce at least one conservative target; got paths={paths!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # --- hooklib shared-helper tests (white-box) ---
 # ---------------------------------------------------------------------------
 
@@ -1922,6 +2086,16 @@ def main() -> int:
         test_bash_guard_blocks_truncate_escaping_cwd(tmp / "b26")
         test_bash_guard_regression_lock_release_still_allowed(tmp / "b27")
         test_bash_guard_regression_memory_finalize_clear_still_allowed(tmp / "b28")
+
+        print()
+        print("[ pretooluse-bash-guard: REM-FIX Phase 2 review+hunt findings ]")
+        test_bash_guard_blocks_git_dash_capital_c_flag_before_subcommand(tmp / "b29")
+        test_bash_guard_blocks_git_clean_long_form_force(tmp / "b30")
+        test_bash_guard_blocks_dd_bare_stdout_redirect_without_of(tmp / "b31")
+        test_bash_guard_blocks_find_execdir_rm(tmp / "b32")
+        test_bash_guard_blocks_rm_rf_descendant_of_critical_child(tmp / "b33")
+        test_bash_guard_blocks_mv_target_directory_flag(tmp / "b34")
+        test_bash_guard_destructive_targets_falls_back_on_parse_exception()
 
         print()
         print("[ hooklib shared-helper (white-box) ]")

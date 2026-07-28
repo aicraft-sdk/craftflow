@@ -20,6 +20,7 @@ from pathlib import Path
 
 from craftflow_hooklib import (
     command_has_traversal_or_wildcard,
+    extract_redirect_targets,
     is_env_assignment,
     load_input,
     load_mode,
@@ -44,6 +45,23 @@ CRITICAL_TOP_LEVEL_CHILDREN = (".git", "packages", "tools")
 
 _DD_OF_RE = re.compile(r"^of=(.+)$")
 
+# mv's long-option destination -- carries a real path despite starting with
+# "-", so it must not be silently skipped as a bare flag (HIGH 6).
+_TARGET_DIRECTORY_RE = re.compile(r"^--target-directory=(.+)$")
+
+# Bundled short git-clean force flags where `f` isn't necessarily the first
+# character (e.g. -xdf, -df) -- single leading "-", no "--", containing an
+# `f` anywhere (CRITICAL 2).
+_BUNDLED_SHORT_FORCE_RE = re.compile(r"^-[a-zA-Z]*f[a-zA-Z]*$")
+
+# git subcommand-shaped destructive actions reachable via -exec/-execdir/
+# -ok/-okdir, not just the exact "-exec" token (HIGH 4).
+_FIND_ACTION_FLAGS = ("-exec", "-execdir", "-ok", "-okdir")
+
+# git global options that consume a following, separate token as their
+# argument (as opposed to --git-dir=<path>-style assignment flags).
+_GIT_ARG_FLAGS = {"-C", "-c"}
+
 
 def _split_command_name(tokens: list) -> tuple:
     """Return (command_name, rest_tokens), skipping leading env assignments."""
@@ -58,7 +76,9 @@ def _split_command_name(tokens: list) -> tuple:
 def _positional_targets(rest: list) -> tuple:
     """Return (path_tokens, has_unresolvable_token) using the generic
     positional-token model: skip flags, collect the remaining tokens as
-    candidate path targets."""
+    candidate path targets. `--target-directory=<dir>` (mv's long-option
+    destination) is a disguised path-carrying flag -- captured explicitly
+    instead of being silently skipped like a bare flag (HIGH 6)."""
     paths = []
     unresolvable = False
     past_flag_terminator = False
@@ -67,6 +87,13 @@ def _positional_targets(rest: list) -> tuple:
             past_flag_terminator = True
             continue
         if not past_flag_terminator and token.startswith("-") and token != "-":
+            match = _TARGET_DIRECTORY_RE.match(token)
+            if match:
+                captured = match.group(1)
+                if looks_dynamic(captured):
+                    unresolvable = True
+                else:
+                    paths.append(captured)
             continue
         if looks_dynamic(token):
             unresolvable = True
@@ -75,43 +102,98 @@ def _positional_targets(rest: list) -> tuple:
     return paths, unresolvable
 
 
-def _is_destructive_git(rest: list) -> bool:
-    """git clean -f*, git reset --hard, git push --force (literal flag
-    only -- -f/--force-with-lease are a disclosed, deliberate scope
-    boundary, not covered here)."""
-    if not rest:
-        return False
-    subcommand, later = rest[0], rest[1:]
-    if subcommand == "clean":
-        return any(token.startswith("-f") for token in later)
-    if subcommand == "reset":
-        return "--hard" in later
-    if subcommand == "push":
-        return "--force" in later
+def _find_git_subcommand(rest: list) -> tuple:
+    """Scan past git's global options (anything starting with `-` before the
+    real subcommand) to find the actual subcommand token, instead of
+    assuming `rest[0]` is it -- `git -C /tmp reset --hard`, `git --no-pager
+    clean -fdx`, `git -c foo=bar reset --hard` all put a global flag first
+    (CRITICAL 1). Handles -C <dir>/-c <k=v> (separate-arg flags) and
+    --git-dir=<path>/--work-tree=<path> (assignment-style) or
+    --git-dir <path>/--work-tree <path> (separate-arg form). Returns
+    (subcommand_or_none, later_tokens, dir_override_or_none) -- dir_override
+    is the -C/--work-tree directory the destructive target should resolve
+    against, if one was given."""
+    dir_override = None
+    idx = 0
+    while idx < len(rest):
+        token = rest[idx]
+        if not token.startswith("-"):
+            return token, rest[idx + 1 :], dir_override
+        if token in _GIT_ARG_FLAGS:
+            if token == "-C" and idx + 1 < len(rest):
+                dir_override = rest[idx + 1]
+            idx += 2
+            continue
+        if token.startswith("--git-dir=") or token.startswith("--work-tree="):
+            dir_override = token.split("=", 1)[1]
+            idx += 1
+            continue
+        if token in ("--git-dir", "--work-tree") and idx + 1 < len(rest):
+            dir_override = rest[idx + 1]
+            idx += 2
+            continue
+        idx += 1
+    return None, [], dir_override
+
+
+def _has_force_flag(tokens: list) -> bool:
+    """True if any token is exactly -f/--force, or a bundled short-option
+    token (single leading -, no --) containing an `f` anywhere -- e.g.
+    -xdf, -df, not just tokens where `f` happens to be first (CRITICAL 2)."""
+    for token in tokens:
+        if token in ("-f", "--force"):
+            return True
+        if _BUNDLED_SHORT_FORCE_RE.fullmatch(token):
+            return True
     return False
+
+
+def _is_destructive_git(rest: list) -> tuple:
+    """git clean -f*/--force, git reset --hard, git push --force (literal
+    flag only -- -f/--force-with-lease are a disclosed, deliberate scope
+    boundary, not covered here). Returns (is_destructive, dir_override)."""
+    subcommand, later, dir_override = _find_git_subcommand(rest)
+    if subcommand is None:
+        return False, dir_override
+    if subcommand == "clean":
+        return _has_force_flag(later), dir_override
+    if subcommand == "reset":
+        return "--hard" in later, dir_override
+    if subcommand == "push":
+        return "--force" in later, dir_override
+    return False, dir_override
 
 
 def _dd_target(tokens: list) -> list:
     """Scan tokens for an `of=<path>` argument and return the captured
     path(s) -- dd's overwrite target is key=value, not a positional token,
-    so the generic positional-token extractor cannot see it."""
-    return [match.group(1) for token in tokens for match in [_DD_OF_RE.match(token)] if match]
+    so the generic positional-token extractor cannot see it. When no `of=`
+    token is present (e.g. a bare `dd if=... > file` stdout redirect with no
+    `of=` at all), fall back to this dd invocation's own >/>> redirect
+    target via hooklib.extract_redirect_targets() -- otherwise the whole
+    subcommand is invisible to this guard (CRITICAL 3)."""
+    of_targets = [match.group(1) for token in tokens for match in [_DD_OF_RE.match(token)] if match]
+    if of_targets:
+        return of_targets
+    return extract_redirect_targets(" ".join(tokens))
 
 
 def _is_destructive_find(rest: list) -> bool:
-    """find is destructive if `-delete` is present, or `-exec` is followed
-    by an `rm` token before the next `;`/`+` terminator (the terminator is
-    typically already consumed as a subcommand separator by
+    """find is destructive if `-delete` is present, or any of
+    -exec/-execdir/-ok/-okdir (HIGH 4 -- not just the exact `-exec` token)
+    is followed by an `rm` token before the next `;`/`+` terminator (the
+    terminator is typically already consumed as a subcommand separator by
     split_subcommands, so scanning to the end of `rest` is equivalent)."""
     if "-delete" in rest:
         return True
-    if "-exec" in rest:
-        exec_idx = rest.index("-exec")
-        for token in rest[exec_idx + 1 :]:
-            if token in (";", "+"):
-                break
-            if os.path.basename(token) == "rm":
-                return True
+    for flag in _FIND_ACTION_FLAGS:
+        if flag in rest:
+            exec_idx = rest.index(flag)
+            for token in rest[exec_idx + 1 :]:
+                if token in (";", "+"):
+                    break
+                if os.path.basename(token) == "rm":
+                    return True
     return False
 
 
@@ -130,21 +212,48 @@ def _find_search_paths(rest: list) -> list:
 def _destructive_targets(tokens: list) -> tuple:
     """Return (command_name, path_tokens, has_unresolvable_token) for one
     subcommand if it matches a destructive-command shape, else
-    (None, [], False)."""
+    (None, [], False). Any internal parsing exception in the newer
+    command-shape logic (git/dd/find/chmod's positional matching) falls
+    back to the old, pre-Phase-2 generic positional-token model for that
+    subcommand's own tokens, instead of silently treating it as non-
+    destructive/allowed (HIGH 7 -- Behavior Contract rule 9)."""
     command_name, rest = _split_command_name(tokens)
     if command_name is None:
         return None, [], False
 
+    try:
+        return _match_destructive_shape(command_name, rest)
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_bash_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": command_name,
+                "error": repr(exc),
+                "reason": "fell_back_to_conservative_positional_targets",
+            },
+        )
+        paths, unresolvable = _positional_targets(rest)
+        return command_name, paths, unresolvable
+
+
+def _match_destructive_shape(command_name: str, rest: list) -> tuple:
+    """The actual per-command-shape matching `_destructive_targets` wraps
+    in a try/except -- kept separate so the exception boundary is explicit
+    about exactly what it's guarding."""
     if command_name in SIMPLE_DESTRUCTIVE or command_name == "chmod":
         paths, unresolvable = _positional_targets(rest)
         return command_name, paths, unresolvable
 
     if command_name == "git":
-        if _is_destructive_git(rest):
-            # git clean/reset --hard/push --force always act on the whole
-            # repository at cwd -- there is no positional path argument to
-            # extract, so the target is cwd itself ("." resolves to cwd).
-            return command_name, ["."], False
+        is_destructive, dir_override = _is_destructive_git(rest)
+        if is_destructive:
+            # git clean/reset --hard/push --force act on the repository at
+            # cwd by default, but -C <dir>/--work-tree=<dir> retargets the
+            # whole invocation -- resolve against that directory instead of
+            # assuming "." (CRITICAL 1).
+            target = dir_override if dir_override else "."
+            return command_name, [target], False
         return None, [], False
 
     if command_name == "dd":
@@ -172,15 +281,18 @@ def _resolve_within(path_token: str, cwd: Path) -> bool:
 def _is_in_cwd_critical(resolved: Path, cwd: Path) -> bool:
     """True if a within-cwd destructive target is cwd itself, a literal
     `*`/`.` (checked via the resolved name, since resolving away the
-    literal token is exactly what makes these dangerous), or one of
-    CRITICAL_TOP_LEVEL_CHILDREN."""
+    literal token is exactly what makes these dangerous), one of
+    CRITICAL_TOP_LEVEL_CHILDREN itself, or a DESCENDANT of one of them
+    (HIGH 5 -- `rm -rf packages/agent-cli` is a real, previously-invisible
+    bypass of the exact-equality-only check)."""
     if resolved == cwd:
         return True
     if resolved.name in ("*", "."):
         return True
-    if resolved in {cwd / child for child in CRITICAL_TOP_LEVEL_CHILDREN}:
+    critical_paths = {cwd / child for child in CRITICAL_TOP_LEVEL_CHILDREN}
+    if resolved in critical_paths:
         return True
-    return False
+    return any(critical in resolved.parents for critical in critical_paths)
 
 
 def main() -> int:
