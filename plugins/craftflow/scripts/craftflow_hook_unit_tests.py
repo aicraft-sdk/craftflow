@@ -1223,6 +1223,119 @@ def test_bash_guard_destructive_targets_falls_back_on_parse_exception(tmp_dir: P
     ok(name)
 
 
+def test_bash_guard_mv_falls_back_to_cwd_target_when_positional_targets_itself_raises(tmp_dir: Path) -> None:
+    # Doubt-verify cycle 2, blocking finding: the non-structural-command
+    # fallback in `_destructive_targets` called `_positional_targets(rest)`
+    # AGAIN -- the exact same function whose earlier call is what may have
+    # raised the exception in the first place. If `_positional_targets`
+    # itself is the failure source, the fallback's own call re-raises the
+    # identical uncaught exception, which propagates all the way through
+    # main() and crashes the hook process -- an uncaught crash (non-zero,
+    # non-2 exit) does not block the tool call per Claude Code's hook
+    # exit-code semantics, so this is a silent fail-open ALLOW of a
+    # genuinely destructive command. This test monkeypatches
+    # `_positional_targets` ITSELF (not `_is_destructive_git`/`_dd_target`,
+    # which are already covered by the cycle-1 regression tests above) and
+    # proves `main()` still produces a genuine end-to-end DENY, not a
+    # crash/propagated exception, for a SIMPLE_DESTRUCTIVE command (`mv`).
+    name = "pretooluse-bash-guard/mv-falls-back-to-cwd-target-when-positional-targets-itself-raises"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+
+    original = bash_guard._positional_targets
+
+    def _boom(rest):
+        raise ValueError("synthetic parse failure: _positional_targets itself is the failure source")
+
+    bash_guard._positional_targets = _boom
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "mv secret.txt /tmp/outside/"},
+    }
+    original_stdin = sys.stdin
+    original_stdout = sys.stdout
+    sys.stdin = io.StringIO(json.dumps(payload))
+    captured = io.StringIO()
+    sys.stdout = captured
+    try:
+        exit_code = bash_guard.main()
+    except Exception as exc:
+        fail(
+            name,
+            "expected main() to catch the parse exception even when "
+            f"_positional_targets itself is the failure source; got uncaught: {exc!r}",
+        )
+        return
+    finally:
+        bash_guard._positional_targets = original
+        sys.stdin = original_stdin
+        sys.stdout = original_stdout
+
+    out = captured.getvalue().strip()
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected a genuine end-to-end DENY from main() when "
+            f"_positional_targets itself raises (fallback must not re-call the "
+            f"same failing function); got exit={exit_code} stdout={out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_chmod_falls_back_to_cwd_target_when_positional_targets_itself_raises(tmp_dir: Path) -> None:
+    # Doubt-verify cycle 2 finding, `chmod` case specifically -- the
+    # existing docstring on `_destructive_targets` explicitly names `chmod`
+    # as covered by "the existing generic fallback ... kept unchanged", but
+    # that generic fallback is the same `_positional_targets` call that can
+    # itself be the exception source. Proves the fix's uniform "." fallback
+    # covers chmod too, not just mv/rm/shred/truncate.
+    name = "pretooluse-bash-guard/chmod-falls-back-to-cwd-target-when-positional-targets-itself-raises"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+
+    original = bash_guard._positional_targets
+
+    def _boom(rest):
+        raise ValueError("synthetic parse failure: _positional_targets itself is the failure source (chmod)")
+
+    bash_guard._positional_targets = _boom
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "chmod -R 777 /etc"},
+    }
+    original_stdin = sys.stdin
+    original_stdout = sys.stdout
+    sys.stdin = io.StringIO(json.dumps(payload))
+    captured = io.StringIO()
+    sys.stdout = captured
+    try:
+        exit_code = bash_guard.main()
+    except Exception as exc:
+        fail(
+            name,
+            "expected main() to catch the parse exception even when "
+            f"_positional_targets itself is the failure source (chmod); got uncaught: {exc!r}",
+        )
+        return
+    finally:
+        bash_guard._positional_targets = original
+        sys.stdin = original_stdin
+        sys.stdout = original_stdout
+
+    out = captured.getvalue().strip()
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected a genuine end-to-end DENY from main() when "
+            f"_positional_targets itself raises for chmod; got exit={exit_code} stdout={out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_bash_guard_dd_falls_back_to_cwd_target_on_parse_exception(tmp_dir: Path) -> None:
     # Finding 2 continued (REM-FIX doubt-verify cycle 1): the same exception-
     # isolation fallback fires for `dd` commands too -- dd's overwrite target
@@ -2196,6 +2309,8 @@ def main() -> int:
         test_bash_guard_destructive_targets_falls_back_on_parse_exception(tmp / "b35")
         test_bash_guard_blocks_mv_target_directory_short_attached_flag(tmp / "b36")
         test_bash_guard_dd_falls_back_to_cwd_target_on_parse_exception(tmp / "b37")
+        test_bash_guard_mv_falls_back_to_cwd_target_when_positional_targets_itself_raises(tmp / "b38")
+        test_bash_guard_chmod_falls_back_to_cwd_target_when_positional_targets_itself_raises(tmp / "b39")
 
         print()
         print("[ hooklib shared-helper (white-box) ]")

@@ -217,31 +217,29 @@ def _find_search_paths(rest: list) -> list:
     return paths
 
 
-# Command families whose destructive target is implicit/structural (the
-# repo/device at cwd, or a key=value argument) rather than a plain
-# positional path argument -- the generic positional-token model has no
-# valid interpretation for these shapes (e.g. git's own "reset"/"HEAD~1"
-# tokens would resolve as harmless relative filenames, never triggering
-# escape/in-cwd-critical checks, silently ALLOWing a genuinely destructive
-# command end-to-end). Finding 2, REM-FIX doubt-verify cycle 1.
-_STRUCTURAL_TARGET_COMMANDS = {"git", "dd"}
-
-
 def _destructive_targets(tokens: list) -> tuple:
     """Return (command_name, path_tokens, has_unresolvable_token) for one
     subcommand if it matches a destructive-command shape, else
     (None, [], False). Any internal parsing exception in the newer
     command-shape logic (git/dd/find/chmod's positional matching) falls
-    back to a conservative target for that subcommand's own tokens, instead
-    of silently treating it as non-destructive/allowed (HIGH 7 -- Behavior
-    Contract rule 9). For `git`/`dd` -- whose destructive target is
-    implicit/structural, not a plain positional path argument -- the
-    fallback targets "." (cwd itself), matching what the non-exceptional
-    code path already does for these command shapes and routing into the
-    same in-cwd-critical deny logic (Finding 2). For truly generic
-    simple-positional commands (rm/mv/shred/truncate/chmod/find) where the
-    positional-token model's assumptions are actually valid, the existing
-    generic fallback is kept unchanged."""
+    back to a hardcoded conservative target, "." (cwd itself), instead of
+    silently treating it as non-destructive/allowed (HIGH 7 -- Behavior
+    Contract rule 9).
+
+    The fallback deliberately does NOT re-call any of the shape-specific
+    functions it is guarding against (_positional_targets, _is_destructive_git,
+    _dd_target, etc.) -- doing so for non-structural commands (rm/mv/shred/
+    truncate/chmod) previously re-invoked `_positional_targets` itself, the
+    exact same function whose earlier call may have raised the exception in
+    the first place. If `_positional_targets` was the failure source, that
+    fallback call re-raised the identical uncaught exception, which
+    propagated all the way through main() and crashed the hook process -- an
+    uncaught crash (non-zero, non-2 exit) does not block the tool call, so
+    this was a silent fail-open ALLOW of a genuinely destructive command
+    (doubt-verify cycle 2, blocking finding). Routing every command family
+    uniformly to "." makes ALL destructive-command shapes fail toward the
+    same in-cwd-critical deny path when their shape-specific parsing raises,
+    regardless of which specific function was the source of the exception."""
     command_name, rest = _split_command_name(tokens)
     if command_name is None:
         return None, [], False
@@ -255,13 +253,10 @@ def _destructive_targets(tokens: list) -> tuple:
                 "event": "pretool_guard_parse_error",
                 "command_name": command_name,
                 "error": repr(exc),
-                "reason": "fell_back_to_conservative_positional_targets",
+                "reason": "fell_back_to_conservative_cwd_target",
             },
         )
-        if command_name in _STRUCTURAL_TARGET_COMMANDS:
-            return command_name, ["."], False
-        paths, unresolvable = _positional_targets(rest)
-        return command_name, paths, unresolvable
+        return command_name, ["."], False
 
 
 def _match_destructive_shape(command_name: str, rest: list) -> tuple:
