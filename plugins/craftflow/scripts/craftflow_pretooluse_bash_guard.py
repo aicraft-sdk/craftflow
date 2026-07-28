@@ -49,6 +49,14 @@ _DD_OF_RE = re.compile(r"^of=(.+)$")
 # "-", so it must not be silently skipped as a bare flag (HIGH 6).
 _TARGET_DIRECTORY_RE = re.compile(r"^--target-directory=(.+)$")
 
+# mv's ATTACHED short-option destination form (no space, no "=" -- e.g.
+# `-t/tmp`), distinct from the bare `-t <dir>` two-token form (already
+# handled by the generic positional fallback since the following token
+# doesn't start with "-"). Finding 1, REM-FIX doubt-verify cycle 1: this
+# attached form was silently skipped as a bare flag, hiding the real
+# destination from confinement checking entirely.
+_TARGET_DIRECTORY_SHORT_RE = re.compile(r"^-t(.+)$")
+
 # Bundled short git-clean force flags where `f` isn't necessarily the first
 # character (e.g. -xdf, -df) -- single leading "-", no "--", containing an
 # `f` anywhere (CRITICAL 2).
@@ -87,7 +95,7 @@ def _positional_targets(rest: list) -> tuple:
             past_flag_terminator = True
             continue
         if not past_flag_terminator and token.startswith("-") and token != "-":
-            match = _TARGET_DIRECTORY_RE.match(token)
+            match = _TARGET_DIRECTORY_RE.match(token) or _TARGET_DIRECTORY_SHORT_RE.match(token)
             if match:
                 captured = match.group(1)
                 if looks_dynamic(captured):
@@ -209,14 +217,31 @@ def _find_search_paths(rest: list) -> list:
     return paths
 
 
+# Command families whose destructive target is implicit/structural (the
+# repo/device at cwd, or a key=value argument) rather than a plain
+# positional path argument -- the generic positional-token model has no
+# valid interpretation for these shapes (e.g. git's own "reset"/"HEAD~1"
+# tokens would resolve as harmless relative filenames, never triggering
+# escape/in-cwd-critical checks, silently ALLOWing a genuinely destructive
+# command end-to-end). Finding 2, REM-FIX doubt-verify cycle 1.
+_STRUCTURAL_TARGET_COMMANDS = {"git", "dd"}
+
+
 def _destructive_targets(tokens: list) -> tuple:
     """Return (command_name, path_tokens, has_unresolvable_token) for one
     subcommand if it matches a destructive-command shape, else
     (None, [], False). Any internal parsing exception in the newer
     command-shape logic (git/dd/find/chmod's positional matching) falls
-    back to the old, pre-Phase-2 generic positional-token model for that
-    subcommand's own tokens, instead of silently treating it as non-
-    destructive/allowed (HIGH 7 -- Behavior Contract rule 9)."""
+    back to a conservative target for that subcommand's own tokens, instead
+    of silently treating it as non-destructive/allowed (HIGH 7 -- Behavior
+    Contract rule 9). For `git`/`dd` -- whose destructive target is
+    implicit/structural, not a plain positional path argument -- the
+    fallback targets "." (cwd itself), matching what the non-exceptional
+    code path already does for these command shapes and routing into the
+    same in-cwd-critical deny logic (Finding 2). For truly generic
+    simple-positional commands (rm/mv/shred/truncate/chmod/find) where the
+    positional-token model's assumptions are actually valid, the existing
+    generic fallback is kept unchanged."""
     command_name, rest = _split_command_name(tokens)
     if command_name is None:
         return None, [], False
@@ -233,6 +258,8 @@ def _destructive_targets(tokens: list) -> tuple:
                 "reason": "fell_back_to_conservative_positional_targets",
             },
         )
+        if command_name in _STRUCTURAL_TARGET_COMMANDS:
+            return command_name, ["."], False
         paths, unresolvable = _positional_targets(rest)
         return command_name, paths, unresolvable
 

@@ -1141,36 +1141,134 @@ def test_bash_guard_blocks_mv_target_directory_flag(tmp_dir: Path) -> None:
     ok(name)
 
 
-def test_bash_guard_destructive_targets_falls_back_on_parse_exception() -> None:
-    # HIGH 7: zero try/except existed anywhere in _is_destructive_git/
-    # _dd_target/_is_destructive_find/_destructive_targets, contradicting
-    # Behavior Contract rule 9 ("falls back to existing conservative
-    # behavior for that specific check, not a blanket allow"). White-box:
-    # force a synthetic parse failure in _is_destructive_git and confirm
-    # _destructive_targets neither raises nor silently returns "not
-    # destructive" (which would be a blanket allow) -- it must still
-    # produce a conservative fallback target guess.
+def test_bash_guard_blocks_mv_target_directory_short_attached_flag(tmp_dir: Path) -> None:
+    # Finding 1 (REM-FIX doubt-verify cycle 1): GNU mv's ATTACHED short-option
+    # form `-t<dir>` (no space, no `=` -- e.g. `mv -t/tmp secret.txt`) carries
+    # a real destination path exactly like `--target-directory=<dir>` does,
+    # but `_positional_targets` only ever matched the long `=`-joined form --
+    # the attached short form was silently skipped as a bare flag, hiding the
+    # real destination from confinement checking entirely (zero detection).
+    # Bare `-t <dir>` as two SEPARATE space-separated tokens already worked
+    # via the generic positional fallback -- only the attached, no-space form
+    # was broken.
+    name = "pretooluse-bash-guard/blocks-mv-target-directory-short-attached-flag"
+    cwd_dir = tmp_dir / "cwd"
+    outside_dir = tmp_dir / "outside"
+    cwd_dir.mkdir(parents=True)
+    outside_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": f"mv -t{outside_dir.resolve()} secret.txt"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'mv -t<outside> secret.txt' (attached short-option form); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_destructive_targets_falls_back_on_parse_exception(tmp_dir: Path) -> None:
+    # HIGH 7, strengthened by Finding 2 (REM-FIX doubt-verify cycle 1): the
+    # ORIGINAL version of this test only checked that `_destructive_targets`
+    # returns a non-empty `paths` list -- it never proved the fallback
+    # produces a genuine DENY end-to-end. git's destructive target is
+    # implicit/structural (the repo at cwd itself), not a plain positional
+    # path argument -- the generic positional-token model has no notion of
+    # this, so tokens like "reset"/"HEAD~1" resolve as harmless relative
+    # filenames and the command would silently ALLOW all the way through
+    # main() despite being genuinely destructive. This test forces the exact
+    # exception the codebase's own try/except induces and drives it all the
+    # way through main() (not just the isolated helper function).
     name = "pretooluse-bash-guard/destructive-targets-falls-back-on-parse-exception"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+
     original = bash_guard._is_destructive_git
 
     def _boom(rest):
         raise ValueError("synthetic parse failure for HIGH 7 regression test")
 
     bash_guard._is_destructive_git = _boom
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "git reset --hard HEAD~1"},
+    }
+    original_stdin = sys.stdin
+    original_stdout = sys.stdout
+    sys.stdin = io.StringIO(json.dumps(payload))
+    captured = io.StringIO()
+    sys.stdout = captured
     try:
-        command_name, paths, unresolvable = bash_guard._destructive_targets(
-            ["git", "reset", "--hard", "HEAD~1"]
-        )
+        exit_code = bash_guard.main()
     except Exception as exc:
-        fail(name, f"expected the parse exception to be caught, not propagated; got: {exc!r}")
+        fail(name, f"expected main() to catch the parse exception, not propagate it; got: {exc!r}")
+        return
+    finally:
         bash_guard._is_destructive_git = original
+        sys.stdin = original_stdin
+        sys.stdout = original_stdout
+
+    out = captured.getvalue().strip()
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected a genuine end-to-end DENY from main() when the git-shape "
+            f"exception fallback fires (target must degrade to cwd itself, not a "
+            f"silent ALLOW); got exit={exit_code} stdout={out!r}",
+        )
         return
-    bash_guard._is_destructive_git = original
-    if command_name is None:
-        fail(name, "expected a conservative fallback target guess, not a blanket allow (command_name was None)")
+    ok(name)
+
+
+def test_bash_guard_dd_falls_back_to_cwd_target_on_parse_exception(tmp_dir: Path) -> None:
+    # Finding 2 continued (REM-FIX doubt-verify cycle 1): the same exception-
+    # isolation fallback fires for `dd` commands too -- dd's overwrite target
+    # (`of=<path>`) is likewise structural, not a generic positional path
+    # argument. Forces the exact exception `_dd_target` can raise and proves
+    # the fallback still denies end-to-end via main() rather than silently
+    # ALLOWing (dd has no valid generic-positional-token interpretation
+    # either -- its "target" only exists via the `of=` adapter).
+    name = "pretooluse-bash-guard/dd-falls-back-to-cwd-target-on-parse-exception"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+
+    original = bash_guard._dd_target
+
+    def _boom(tokens):
+        raise ValueError("synthetic parse failure for finding-2 dd regression test")
+
+    bash_guard._dd_target = _boom
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "dd if=/dev/zero of=./scratch.img"},
+    }
+    original_stdin = sys.stdin
+    original_stdout = sys.stdout
+    sys.stdin = io.StringIO(json.dumps(payload))
+    captured = io.StringIO()
+    sys.stdout = captured
+    try:
+        exit_code = bash_guard.main()
+    except Exception as exc:
+        fail(name, f"expected main() to catch the parse exception, not propagate it; got: {exc!r}")
         return
-    if not paths:
-        fail(name, f"expected the fallback to still produce at least one conservative target; got paths={paths!r}")
+    finally:
+        bash_guard._dd_target = original
+        sys.stdin = original_stdin
+        sys.stdout = original_stdout
+
+    out = captured.getvalue().strip()
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected a genuine end-to-end DENY from main() when the dd-shape "
+            f"exception fallback fires (target must degrade to cwd itself, not a "
+            f"silent ALLOW); got exit={exit_code} stdout={out!r}",
+        )
         return
     ok(name)
 
@@ -2095,7 +2193,9 @@ def main() -> int:
         test_bash_guard_blocks_find_execdir_rm(tmp / "b32")
         test_bash_guard_blocks_rm_rf_descendant_of_critical_child(tmp / "b33")
         test_bash_guard_blocks_mv_target_directory_flag(tmp / "b34")
-        test_bash_guard_destructive_targets_falls_back_on_parse_exception()
+        test_bash_guard_destructive_targets_falls_back_on_parse_exception(tmp / "b35")
+        test_bash_guard_blocks_mv_target_directory_short_attached_flag(tmp / "b36")
+        test_bash_guard_dd_falls_back_to_cwd_target_on_parse_exception(tmp / "b37")
 
         print()
         print("[ hooklib shared-helper (white-box) ]")
