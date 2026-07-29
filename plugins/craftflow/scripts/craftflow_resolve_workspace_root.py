@@ -90,7 +90,10 @@ def _git_toplevel(child: Path) -> Path | None:
         return None
     try:
         return child.resolve()
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
+        # RuntimeError is the real exception pathlib.Path.resolve() raises
+        # for a genuine on-disk symlink loop on CPython 3.9-3.12
+        # ("Symlink loop from ..."), not OSError -- both must be caught.
         print(
             f"craftflow_resolve_workspace_root: path resolve failed for {child}: {exc}",
             file=sys.stderr,
@@ -158,10 +161,13 @@ def main() -> int:
     parser.add_argument("--request", required=True, metavar="TEXT")
     args = parser.parse_args()
 
-    cwd = Path(args.cwd).resolve()
     try:
+        cwd = Path(args.cwd).resolve()
         result = resolve(cwd, args.request)
-    except RuntimeError as exc:
+    except (OSError, RuntimeError) as exc:
+        # RuntimeError covers a genuine on-disk symlink loop in --cwd itself
+        # (Path.resolve() real CPython 3.9-3.12 behavior); OSError covers
+        # other resolve()/scan failures (e.g. unreadable path).
         print(f"craftflow_resolve_workspace_root: {exc}", file=sys.stderr)
         return 1
 

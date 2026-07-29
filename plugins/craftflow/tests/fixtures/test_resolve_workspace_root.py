@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -160,40 +161,70 @@ def test_find_repo_candidates_git_missing_logs_diagnostic_and_excludes_child() -
             )
 
 
-def test_find_repo_candidates_path_resolve_oserror_logs_diagnostic_and_excludes_child() -> None:
-    # A child whose `git rev-parse --show-toplevel` succeeds, but where
-    # Path.resolve() then raises OSError (e.g. ELOOP from a symlink cycle,
-    # the real errno a resolve loop would raise) while comparing the
-    # reported toplevel against the child's own resolved path, must be
+def test_find_repo_candidates_path_resolve_runtimeerror_from_real_symlink_loop_excludes_child() -> None:
+    # A child whose `git rev-parse --show-toplevel` succeeds, but where the
+    # final `child.resolve()` call then raises RuntimeError, must be
     # excluded from candidates -- same outcome as "not a repo" -- but the
     # exception must NOT be silently swallowed. A stderr diagnostic must
     # name the child so a real environment problem (symlink cycle) is
     # distinguishable from "git says no".
+    #
+    # RuntimeError -- NOT OSError -- is the real exception pathlib.Path.resolve()
+    # raises for a genuine on-disk symlink loop on CPython 3.9-3.12 (live-
+    # confirmed: "Symlink loop from '<path>'"). A prior version of this test
+    # mocked OSError(62, ...), which does not match reality and would have
+    # let an unbroadened `except OSError` clause pass incorrectly. This
+    # version constructs a REAL on-disk symlink loop (os.symlink(link, link))
+    # and lets Python's own resolve() algorithm raise the real exception --
+    # it is never fabricated by hand. `git -C <child>` and `child.samefile()`
+    # are faked to reach the final `child.resolve()` call deterministically,
+    # because a genuine loop directly on `child`'s own path would make the
+    # `git -C child` subprocess call itself fail first (same kernel-level
+    # path resolution), before ever reaching this line.
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         good_repo = root / "good-repo"
         _init_repo(good_repo)
         broken_child = root / "broken-child"
-        _init_repo(broken_child)
+        broken_child.mkdir()
+
+        loop_link = root / "real-symlink-loop"
+        os.symlink(loop_link, loop_link)
+
+        real_run = subprocess.run
+
+        def fake_run(cmd, *args, **kwargs):
+            if str(broken_child) in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=str(broken_child) + "\n", stderr="")
+            return real_run(cmd, *args, **kwargs)
+
+        real_samefile = Path.samefile
+
+        def fake_samefile(self, other):
+            if str(self) == str(broken_child):
+                return True
+            return real_samefile(self, other)
 
         real_resolve = Path.resolve
 
         def fake_resolve(self, *args, **kwargs):
-            if "broken-child" in str(self):
-                raise OSError(62, "Too many levels of symbolic links")
+            if str(self) == str(broken_child):
+                return real_resolve(loop_link, *args, **kwargs)  # genuinely raises RuntimeError
             return real_resolve(self, *args, **kwargs)
 
         stderr_capture = io.StringIO()
-        with mock.patch.object(Path, "resolve", fake_resolve):
-            with contextlib.redirect_stderr(stderr_capture):
-                result = find_repo_candidates(root)
+        with mock.patch("craftflow_resolve_workspace_root.subprocess.run", side_effect=fake_run):
+            with mock.patch.object(Path, "samefile", fake_samefile):
+                with mock.patch.object(Path, "resolve", fake_resolve):
+                    with contextlib.redirect_stderr(stderr_capture):
+                        result = find_repo_candidates(root)
 
         stderr_output = stderr_capture.getvalue()
         if result == [good_repo.resolve()] and "broken-child" in stderr_output:
-            ok("path-resolve OSError child excluded from result + stderr diagnostic produced")
+            ok("real on-disk symlink-loop RuntimeError from child.resolve() excluded + stderr diagnostic")
         else:
             fail(
-                "path-resolve-oserror-diagnostic",
+                "path-resolve-runtimeerror-diagnostic",
                 f"result={result}, stderr={stderr_output!r}",
             )
 
@@ -383,6 +414,40 @@ def test_resolve_workspace_root_cli_unreadable_cwd_exits_nonzero() -> None:
         fail("cli-error-path", f"exit={result.returncode} stdout={result.stdout!r}")
 
 
+def test_resolve_workspace_root_cli_symlink_loop_cwd_exits_cleanly_not_traceback() -> None:
+    # A REAL on-disk symlink loop passed as --cwd makes
+    # `Path(args.cwd).resolve()` raise RuntimeError ("Symlink loop from
+    # ...", real CPython 3.9-3.12 behavior, live-confirmed). Prior to the
+    # fix, that call sat OUTSIDE main()'s `try/except` block wrapping
+    # `resolve(cwd, args.request)`, so a raw Python traceback went to
+    # stderr instead of the documented clean
+    # "craftflow_resolve_workspace_root: {exc}" diagnostic + exit 1 that
+    # every other failure mode (e.g. unreadable --cwd, above) already uses.
+    with tempfile.TemporaryDirectory() as tmp:
+        loop_link = Path(tmp) / "self"
+        os.symlink(loop_link, loop_link)
+        script = str(SCRIPTS / "craftflow_resolve_workspace_root.py")
+        result = subprocess.run(
+            [sys.executable, script, "--cwd", str(loop_link), "--request", "x"],
+            capture_output=True,
+            text=True,
+        )
+        clean_diagnostic = result.stderr.strip().startswith("craftflow_resolve_workspace_root:")
+        no_traceback = "Traceback (most recent call last)" not in result.stderr
+        if (
+            result.returncode != 0
+            and result.stdout.strip() == ""
+            and clean_diagnostic
+            and no_traceback
+        ):
+            ok("CLI exits cleanly (exit 1, clean diagnostic, no traceback) for symlink-loop --cwd")
+        else:
+            fail(
+                "cli-symlink-loop-cwd",
+                f"exit={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}",
+            )
+
+
 def main() -> int:
     print("test_resolve_workspace_root: running")
 
@@ -392,7 +457,7 @@ def main() -> int:
     test_find_repo_candidates_excludes_child_nested_in_ancestor_repo()
     test_find_repo_candidates_excludes_symlinked_child()
     test_find_repo_candidates_git_missing_logs_diagnostic_and_excludes_child()
-    test_find_repo_candidates_path_resolve_oserror_logs_diagnostic_and_excludes_child()
+    test_find_repo_candidates_path_resolve_runtimeerror_from_real_symlink_loop_excludes_child()
     test_git_toplevel_case_mismatch_uses_filesystem_identity_not_string_equality()
     test_match_request_text_unique_token_match()
     test_match_request_text_no_match_returns_none()
@@ -403,6 +468,7 @@ def main() -> int:
     test_resolve_ambiguous_when_no_unique_match()
     test_resolve_workspace_root_cli()
     test_resolve_workspace_root_cli_unreadable_cwd_exits_nonzero()
+    test_resolve_workspace_root_cli_symlink_loop_cwd_exits_cleanly_not_traceback()
 
     print()
     print("=" * 40)
