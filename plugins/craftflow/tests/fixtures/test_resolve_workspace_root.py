@@ -160,6 +160,44 @@ def test_find_repo_candidates_git_missing_logs_diagnostic_and_excludes_child() -
             )
 
 
+def test_find_repo_candidates_path_resolve_oserror_logs_diagnostic_and_excludes_child() -> None:
+    # A child whose `git rev-parse --show-toplevel` succeeds, but where
+    # Path.resolve() then raises OSError (e.g. ELOOP from a symlink cycle,
+    # the real errno a resolve loop would raise) while comparing the
+    # reported toplevel against the child's own resolved path, must be
+    # excluded from candidates -- same outcome as "not a repo" -- but the
+    # exception must NOT be silently swallowed. A stderr diagnostic must
+    # name the child so a real environment problem (symlink cycle) is
+    # distinguishable from "git says no".
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        good_repo = root / "good-repo"
+        _init_repo(good_repo)
+        broken_child = root / "broken-child"
+        _init_repo(broken_child)
+
+        real_resolve = Path.resolve
+
+        def fake_resolve(self, *args, **kwargs):
+            if "broken-child" in str(self):
+                raise OSError(62, "Too many levels of symbolic links")
+            return real_resolve(self, *args, **kwargs)
+
+        stderr_capture = io.StringIO()
+        with mock.patch.object(Path, "resolve", fake_resolve):
+            with contextlib.redirect_stderr(stderr_capture):
+                result = find_repo_candidates(root)
+
+        stderr_output = stderr_capture.getvalue()
+        if result == [good_repo.resolve()] and "broken-child" in stderr_output:
+            ok("path-resolve OSError child excluded from result + stderr diagnostic produced")
+        else:
+            fail(
+                "path-resolve-oserror-diagnostic",
+                f"result={result}, stderr={stderr_output!r}",
+            )
+
+
 def test_match_request_text_unique_token_match() -> None:
     print("\n[match_request_text]")
     with tempfile.TemporaryDirectory() as tmp:
@@ -305,6 +343,7 @@ def main() -> int:
     test_find_repo_candidates_excludes_child_nested_in_ancestor_repo()
     test_find_repo_candidates_excludes_symlinked_child()
     test_find_repo_candidates_git_missing_logs_diagnostic_and_excludes_child()
+    test_find_repo_candidates_path_resolve_oserror_logs_diagnostic_and_excludes_child()
     test_match_request_text_unique_token_match()
     test_match_request_text_no_match_returns_none()
     test_match_request_text_multiple_names_returns_none()

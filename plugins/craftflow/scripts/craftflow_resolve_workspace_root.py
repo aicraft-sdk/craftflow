@@ -71,7 +71,12 @@ def _git_toplevel(child: Path) -> Path | None:
     try:
         reported_path = Path(reported).resolve()
         child_resolved = child.resolve()
-    except Exception:
+    except OSError as exc:
+        print(
+            f"craftflow_resolve_workspace_root: path resolve failed for {child} "
+            f"(reported={reported}): {exc}",
+            file=sys.stderr,
+        )
         return None
     if reported_path != child_resolved:
         return None
