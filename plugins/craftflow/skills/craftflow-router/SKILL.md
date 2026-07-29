@@ -80,7 +80,7 @@ JUST_GO:
 - While `JUST_GO=true`, auto-default all non-REVERT AskUserQuestion gates to the recommended option and log the choice in `## Decisions`.
 
 v10 trust rule:
-- `JUST_GO` never overrides explicit user/project standards, open plan decisions, or failure-stop gates.
+- `JUST_GO` never overrides explicit user/project standards, open plan decisions, or failure-stop gates — including any gate that explicitly documents its own exception, such as the multi-repo AMBIGUOUS resolution gate in Worktree Isolation.
 - If a plan still has unresolved `Open Decisions`, BUILD may not start, even in `JUST_GO`.
 
 ## 2a. Workflow Artifact And Hook Policy
@@ -266,9 +266,14 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
        plan **Open Decision**: always stop and ask, even in `JUST_GO` mode.]
      - **`NO_REPO_FOUND`** (or `RESOLVE_EXIT != 0` above): no git-repo children exist under
        cwd at all. Do NOT set `PROJECT_ROOT` and do NOT run the `mkdir`/`git worktree add`
-       block below — skip directly to step 3 ("On failure") further down this section. This
-       reuses the existing, already-tested no-isolation fallback verbatim; it is reached via a
-       new path, not a new failure mode.
+       block below — skip directly to step 3 ("On failure") further down this section, using
+       that step's `{"event":"worktree_fallback","reason":"..."}` entry with a pinned literal
+       reason string so future sessions never diverge on what gets logged for the same
+       condition: `reason:"NO_REPO_FOUND"` when the resolver itself returned that outcome, or
+       `reason:"RESOLVE_SCRIPT_ERROR"` when `RESOLVE_EXIT != 0` (the script could not complete
+       the scan at all). Both cases get identical fallback behavior — only the logged reason
+       string differs. This reuses the existing, already-tested no-isolation fallback verbatim;
+       it is reached via a new path, not a new failure mode.
 
    Once `PROJECT_ROOT` is set (either path above):
    ```bash
@@ -305,12 +310,25 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
    to merge).
 
    a. **Resolve project root, the plugin install path, and this workflow's own identity:**
-      Read `workflow_uuid`, `worktree_path`, `worktree_branch` from the current workflow
-      artifact (already set in step 2) FIRST — `PROJECT_ROOT` is derived from `worktree_path`,
-      never re-derived via `git rev-parse --show-toplevel`. A workflow whose worktree was
-      created via the step 1a multi-repo resolver still has a cwd that does not resolve to a
-      git repo at merge time either; re-running `git rev-parse --show-toplevel` here would
-      fail again for exactly the same reason it failed at worktree-creation time.
+      **Guard first, before anything else in this step:** read `worktree_path` from the current
+      workflow artifact. If `worktree_path` is null or empty despite `worktree_mode ==
+      "auto_created"` (a corrupted or partially-written artifact), treat it identically to
+      `worktree_mode != "auto_created"` at the top of step 4 — skip the rest of step 4 entirely.
+      Do NOT run the `dirname` derivation below or any of 4b-4e (no `git status`, no `git merge`,
+      no `git worktree remove`, no `git branch -d`). Append `{"event":"worktree_path_missing"}`
+      to the event log and proceed straight to doc-sync/memory-finalize, exactly like the
+      ordinary no-worktree case. [EASY TO MISS: `dirname` on an empty/unset string silently
+      returns `.` (the current working directory) at every nesting level — no error, no
+      sentinel. Without this guard, `PROJECT_ROOT` would silently become an arbitrary directory
+      and every downstream command in 4b-4e would run against the wrong root with no failure
+      signal.]
+
+      Once `worktree_path` is confirmed present, read `workflow_uuid` and `worktree_branch` from
+      the current workflow artifact (already set in step 2) — `PROJECT_ROOT` is derived from
+      `worktree_path`, never re-derived via `git rev-parse --show-toplevel`. A workflow whose
+      worktree was created via the step 1a multi-repo resolver still has a cwd that does not
+      resolve to a git repo at merge time either; re-running `git rev-parse --show-toplevel` here
+      would fail again for exactly the same reason it failed at worktree-creation time.
       ```bash
       # worktree_path = "{project_root}/.claude/worktrees/{worktree_dir}" (set in step 2) --
       # three levels down from PROJECT_ROOT (.claude/worktrees/{worktree_dir}), so its
