@@ -207,9 +207,71 @@ Perform `risk_keyword_scan`:
 
 Every new BUILD workflow attempts to isolate file writes in a dedicated git worktree:
 
-1. At BUILD start (before any child task creation), resolve the project root and run:
+1. At BUILD start (before any child task creation), resolve the project root:
    ```bash
-   PROJECT_ROOT=$(git rev-parse --show-toplevel)
+   PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+   TOPLEVEL_EXIT=$?
+   ```
+   [EASY TO MISS: Use `git rev-parse --show-toplevel` for the absolute path — never a bare
+   `~/.claude/worktrees/` because `~` may not expand correctly in all shell contexts, and a
+   relative path resolves against cwd, not the project root.]
+
+   - **If `TOPLEVEL_EXIT == 0`**: `PROJECT_ROOT` is set — this is the unchanged single-repo
+     path. Skip directly to the `mkdir`/`git worktree add` block below (skip step 1a).
+   - **If `TOPLEVEL_EXIT != 0`**: cwd itself is not a git repo. This happens when a session is
+     launched at a multi-repo workspace root (a directory that is not itself a git repo but
+     contains several independently git-initialized nested repos, e.g. `ai-infra/` containing
+     `ai-platform-core/`, `genai-platform-dev/`, etc.). Run **step 1a** below before deciding
+     whether to proceed.
+
+   **1a. Multi-repo workspace root resolution** (only reached when `TOPLEVEL_EXIT != 0`):
+   ```bash
+   CRAFTFLOW_INSTALL=$(python3 -c "
+   import json, pathlib
+   reg = json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())
+   print(reg['plugins']['craftflow@craftflow'][0]['installPath'])
+   ")
+   RESOLVE_RESULT=$(python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_resolve_workspace_root.py" \
+     --cwd "$(pwd)" \
+     --request "USER_REQUEST_SHELL_ESCAPED")
+   RESOLVE_EXIT=$?
+   ```
+   Replace `USER_REQUEST_SHELL_ESCAPED` with the actual user request, properly shell-quoted
+   (same convention as **Parent workflow creation** step 1). The script never mutates git or
+   filesystem state — it only reads cwd's immediate child directories and runs non-mutating
+   `git rev-parse --show-toplevel` calls.
+
+   - **If `RESOLVE_EXIT != 0`** (the script itself could not complete the scan, e.g. cwd
+     unreadable): do not parse `$RESOLVE_RESULT`. Treat identically to `NO_REPO_FOUND` below.
+   - **Otherwise**, parse the outcome:
+     ```bash
+     RESOLVE_OUTCOME=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin)['outcome'])")
+     ```
+     - **`DETERMINISTIC`** (exactly one candidate nested repo exists, or the request text
+       uniquely names one among several):
+       ```bash
+       PROJECT_ROOT=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin)['project_root'])")
+       ```
+       `PROJECT_ROOT` is now set — proceed to the `mkdir`/`git worktree add` block below,
+       exactly as the single-repo path does.
+     - **`AMBIGUOUS`** (2+ candidate nested repos exist and the request text does not uniquely
+       name one): ask the user once via `AskUserQuestion`, with one option per path in the
+       `candidates` array from `$RESOLVE_RESULT` (optionally enrich each option's label with
+       that repo's `git -C <candidate> log -1 --format=%s` first line, if available). Set
+       `PROJECT_ROOT` to the chosen candidate's absolute path, then proceed to the
+       `mkdir`/`git worktree add` block below.
+       [EASY TO MISS: this `AskUserQuestion` gate is NEVER auto-defaulted under `JUST_GO=true`
+       (§ 2 `JUST_GO` rule) — cross-repo routing has no safe "recommended" default the way an
+       ordinary implementation-choice gate does, so it is treated the same as an unresolved
+       plan **Open Decision**: always stop and ask, even in `JUST_GO` mode.]
+     - **`NO_REPO_FOUND`** (or `RESOLVE_EXIT != 0` above): no git-repo children exist under
+       cwd at all. Do NOT set `PROJECT_ROOT` and do NOT run the `mkdir`/`git worktree add`
+       block below — skip directly to step 3 ("On failure") further down this section. This
+       reuses the existing, already-tested no-isolation fallback verbatim; it is reached via a
+       new path, not a new failure mode.
+
+   Once `PROJECT_ROOT` is set (either path above):
+   ```bash
    mkdir -p "$PROJECT_ROOT/.claude/worktrees"
    git worktree add "$PROJECT_ROOT/.claude/worktrees/{worktree_dir}" -b {worktree_branch}
    ```
@@ -217,7 +279,6 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
    output (see step 1 of **Parent workflow creation** above).
    The trailing 8-hex suffix in both names ties the worktree back to the workflow id,
    guaranteeing concurrent same-feature workflows always get distinct dirs/branches.
-   [EASY TO MISS: Use `git rev-parse --show-toplevel` for the absolute path — never a bare `~/.claude/worktrees/` because `~` may not expand correctly in all shell contexts, and a relative path resolves against cwd, not the project root.]
 
 2. On success:
    - Set `worktree_mode: "auto_created"` in the workflow artifact
@@ -244,8 +305,18 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
    to merge).
 
    a. **Resolve project root, the plugin install path, and this workflow's own identity:**
+      Read `workflow_uuid`, `worktree_path`, `worktree_branch` from the current workflow
+      artifact (already set in step 2) FIRST — `PROJECT_ROOT` is derived from `worktree_path`,
+      never re-derived via `git rev-parse --show-toplevel`. A workflow whose worktree was
+      created via the step 1a multi-repo resolver still has a cwd that does not resolve to a
+      git repo at merge time either; re-running `git rev-parse --show-toplevel` here would
+      fail again for exactly the same reason it failed at worktree-creation time.
       ```bash
-      PROJECT_ROOT=$(git rev-parse --show-toplevel)
+      # worktree_path = "{project_root}/.claude/worktrees/{worktree_dir}" (set in step 2) --
+      # three levels down from PROJECT_ROOT (.claude/worktrees/{worktree_dir}), so its
+      # great-grandparent directory is always PROJECT_ROOT, in both the single-repo and
+      # multi-repo-resolved cases.
+      PROJECT_ROOT=$(dirname "$(dirname "$(dirname "{worktree_path}")")")
       CRAFTFLOW_INSTALL=$(python3 -c "
       import json, pathlib
       reg = json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())
@@ -253,8 +324,6 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
       ")
       LOCK_DIR="$PROJECT_ROOT/.claude/worktrees/.merge.lock"
       ```
-      Read `workflow_uuid`, `worktree_path`, `worktree_branch` from the current workflow
-      artifact (already set in step 2).
 
    b. **Acquire the merge lock.** The lock is a *directory*, not a plain file — `mkdir` is
       atomic on POSIX filesystems, which a bare existence check is not. The staleness/contention
