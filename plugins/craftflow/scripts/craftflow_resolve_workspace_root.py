@@ -57,7 +57,11 @@ def _git_toplevel(child: Path) -> Path | None:
             text=True,
             timeout=5,
         )
-    except Exception:
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        print(
+            f"craftflow_resolve_workspace_root: git check failed for {child}: {exc}",
+            file=sys.stderr,
+        )
         return None
     if result.returncode != 0:
         return None
@@ -76,10 +80,14 @@ def _git_toplevel(child: Path) -> Path | None:
 
 def find_repo_candidates(cwd: Path) -> list[Path]:
     """Return immediate child directories of cwd that are themselves git
-    repo toplevels (not merely nested inside some outer repo). Sorted for
-    deterministic output."""
+    repo toplevels (not merely nested inside some outer repo). Symlinked
+    children are excluded -- the design's intent is "immediate child
+    directories", not arbitrary symlink targets (a symlink could point
+    anywhere on disk, including an unrelated real git repo, which would
+    otherwise become a silent, unconfirmed DETERMINISTIC candidate). Sorted
+    for deterministic output."""
     try:
-        children = sorted(p for p in cwd.iterdir() if p.is_dir())
+        children = sorted(p for p in cwd.iterdir() if p.is_dir() and not p.is_symlink())
     except OSError as exc:
         raise RuntimeError(f"cannot list cwd children: {exc}") from exc
     candidates: list[Path] = []

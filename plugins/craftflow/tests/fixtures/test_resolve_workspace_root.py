@@ -13,11 +13,14 @@ Run: python3 tests/fixtures/test_resolve_workspace_root.py
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = PLUGIN_ROOT / "scripts"
@@ -101,6 +104,60 @@ def test_find_repo_candidates_excludes_child_nested_in_ancestor_repo() -> None:
             ok("child nested inside unrelated ancestor repo excluded")
         else:
             fail("ancestor-repo-exclusion", f"expected [], got {result}")
+
+
+def test_find_repo_candidates_excludes_symlinked_child() -> None:
+    # A symlinked child pointing at an unrelated real git repo elsewhere on
+    # disk must never be offered as a candidate -- the design's intent is
+    # "immediate child directories", not arbitrary symlink targets. Prior to
+    # the fix, `p.is_dir()` follows symlinks and this became a silent
+    # single-candidate DETERMINISTIC bypass (no AskUserQuestion confirmation).
+    with tempfile.TemporaryDirectory() as external_tmp, tempfile.TemporaryDirectory() as tmp:
+        external_repo = Path(external_tmp) / "external-repo"
+        _init_repo(external_repo)
+        workspace_root = Path(tmp)
+        symlink_child = workspace_root / "symlinked-repo"
+        symlink_child.symlink_to(external_repo, target_is_directory=True)
+        result = find_repo_candidates(workspace_root)
+        if result == []:
+            ok("symlinked child pointing to external real git repo excluded")
+        else:
+            fail("symlink-exclusion", f"expected [], got {result}")
+
+
+def test_find_repo_candidates_git_missing_logs_diagnostic_and_excludes_child() -> None:
+    # A child where `git` itself is missing/broken (FileNotFoundError, OSError,
+    # or subprocess.TimeoutExpired) must be excluded from candidates (same
+    # outcome as "not a repo"), but the exception must NOT be silently
+    # swallowed -- a stderr diagnostic must be emitted so a real environment
+    # problem (git missing/timed out) is distinguishable from "git says no".
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        good_repo = root / "good-repo"
+        _init_repo(good_repo)
+        broken_child = root / "broken-child"
+        broken_child.mkdir()
+
+        real_run = subprocess.run
+
+        def fake_run(cmd, *args, **kwargs):
+            if str(broken_child) in cmd:
+                raise FileNotFoundError("git not found on PATH")
+            return real_run(cmd, *args, **kwargs)
+
+        stderr_capture = io.StringIO()
+        with mock.patch("craftflow_resolve_workspace_root.subprocess.run", side_effect=fake_run):
+            with contextlib.redirect_stderr(stderr_capture):
+                result = find_repo_candidates(root)
+
+        stderr_output = stderr_capture.getvalue()
+        if result == [good_repo.resolve()] and "broken-child" in stderr_output:
+            ok("git-missing child excluded from result + stderr diagnostic produced")
+        else:
+            fail(
+                "git-missing-diagnostic",
+                f"result={result}, stderr={stderr_output!r}",
+            )
 
 
 def test_match_request_text_unique_token_match() -> None:
@@ -246,6 +303,8 @@ def main() -> int:
     test_find_repo_candidates_zero_when_children_not_repos()
     test_find_repo_candidates_finds_nested_repos()
     test_find_repo_candidates_excludes_child_nested_in_ancestor_repo()
+    test_find_repo_candidates_excludes_symlinked_child()
+    test_find_repo_candidates_git_missing_logs_diagnostic_and_excludes_child()
     test_match_request_text_unique_token_match()
     test_match_request_text_no_match_returns_none()
     test_match_request_text_multiple_names_returns_none()
