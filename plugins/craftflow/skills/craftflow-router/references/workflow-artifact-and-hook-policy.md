@@ -196,7 +196,7 @@ Workflow event log:
 
 Hook policy:
 - CRAFTFLOW plugin hooks live in the plugin bundle under `hooks/hooks.json` and should stay minimal:
-  - `PreToolUse` for protected writes (Edit and Write matchers only; Read events are not intercepted)
+  - `PreToolUse` for protected writes (Edit, Write, and Bash matchers; Read events are not intercepted) and for destructive Bash command denial (in-cwd and cwd/worktree-escaping)
   - `SessionStart` for resume context (fires on startup|resume|compact)
   - `PostToolUse` for workflow artifact integrity audit and memory placeholder restore (defensive, fires on Edit/Write)
   - `TaskCompleted` for task metadata checks (enforced: block mode)
@@ -206,6 +206,6 @@ Hook policy:
   - `Stop` for workflow state snapshot and memory placeholder restore on session stop (never blocks)
 - `StopFailure` for API error logging to workflow event log (async, telemetry only)
 - `InstructionsLoaded` for instruction file load audit trail (async, telemetry only)
-- Hook modes: `memoryWrites` and `taskMetadata` are enforced in block mode; all other hooks operate in audit mode. Do not rely on hooks as the only source of truth; the router still owns orchestration decisions.
+- Hook modes: `memoryWrites`, `protectedWrites`, `bashDestructiveTraversal`, and `taskMetadata` are enforced in block mode; all other hooks operate in audit mode. Each of the first three enum-validates its `hook-mode.json` value and fails closed (block) on a missing or malformed config. Do not rely on hooks as the only source of truth; the router still owns orchestration decisions.
 - Repo-local `.claude/settings.json` is not part of the shipped CRAFTFLOW product.
 - Optional accelerator MCPs are user-configured in Claude Code. CRAFTFLOW assumes the names `brightdata` and `octocode` if they are available, but must degrade to built-in research paths when they are absent.
