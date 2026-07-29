@@ -329,6 +329,20 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
       worktree was created via the step 1a multi-repo resolver still has a cwd that does not
       resolve to a git repo at merge time either; re-running `git rev-parse --show-toplevel` here
       would fail again for exactly the same reason it failed at worktree-creation time.
+
+      **Guard also required for `worktree_branch`** (identical corrupted/partial-artifact threat
+      model as the `worktree_path` guard above): if `worktree_branch` is null or empty despite
+      `worktree_mode == "auto_created"`, treat it identically to `worktree_mode != "auto_created"`
+      at the top of step 4 — skip the rest of step 4 entirely. Do NOT run the `dirname`
+      derivation below or any of 4b-4e (no `git status`, no `git merge`, no `git worktree
+      remove`, no `git branch -d`). Append `{"event":"worktree_branch_missing"}` to the event log
+      and proceed straight to doc-sync/memory-finalize, exactly like the ordinary no-worktree
+      case. [EASY TO MISS: an empty `{worktree_branch}` substituted directly into `git merge
+      {worktree_branch}` in step 4e would not fail with a clear, recognizable error — it risks
+      matching an unrelated ref or producing a confusing generic git error that obscures the real
+      missing-artifact problem. Without this guard, the failure would surface deep inside 4e
+      instead of being caught at the earliest possible point, the same way an unguarded
+      `worktree_path` would silently corrupt `PROJECT_ROOT` via `dirname`.]
       ```bash
       # worktree_path = "{project_root}/.claude/worktrees/{worktree_dir}" (set in step 2) --
       # three levels down from PROJECT_ROOT (.claude/worktrees/{worktree_dir}), so its
@@ -478,13 +492,19 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
 
    e. **Finalize** (destination behavior unchanged from before this fix, now guarded — and now
       covers the copy-fallback path explicitly and executably for the first time):
-      - Attempt: `git merge {worktree_branch}` (from `$PROJECT_ROOT`; read `worktree_branch`
-        from the workflow artifact).
-      - **If the merge output contains `"Already up to date"`**: this means the worktree's
-        builder edited files but never committed them on `{worktree_branch}` — a real,
-        frequently-observed gotcha in this repo, not a sign there's nothing to merge. Recover
-        the actual changes directly from the worktree's own uncommitted state via the real
-        copy-fallback script, never via free-form manual copying:
+      - Attempt (capture both output and exit code, mirroring the `TOPLEVEL_EXIT`/`RESOLVE_EXIT`/
+        `DIRTY_EXIT` pattern used earlier in this section — never leave `git merge`'s own exit
+        code unchecked):
+        ```bash
+        MERGE_OUTPUT=$(git merge {worktree_branch} 2>&1)
+        MERGE_EXIT=$?
+        ```
+        (from `$PROJECT_ROOT`; read `worktree_branch` from the workflow artifact.)
+      - **If `MERGE_EXIT == 0` AND `$MERGE_OUTPUT` contains `"Already up to date"`**: this means
+        the worktree's builder edited files but never committed them on `{worktree_branch}` — a
+        real, frequently-observed gotcha in this repo, not a sign there's nothing to merge.
+        Recover the actual changes directly from the worktree's own uncommitted state via the
+        real copy-fallback script, never via free-form manual copying:
         ```bash
         python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_worktree_copy_fallback.py" \
           "{worktree_path}" "$PROJECT_ROOT"
@@ -515,15 +535,36 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
           conflict/rename edge case the script refused to guess on), then resume this workflow to
           retry."
         - Resuming this workflow re-enters this step from 4a.
-      - **If the merge succeeds with real content merged** (not "Already up to date", no
-        conflicts): nothing further needed here.
-      - **If the merge reports conflicts** (existing, unchanged outcome):
+      - **If `MERGE_EXIT == 0` AND `$MERGE_OUTPUT` does not contain `"Already up to date"`** (a
+        real merge succeeded with actual content merged, no conflicts): nothing further needed
+        here.
+      - **If `MERGE_EXIT != 0` AND `$MERGE_OUTPUT` contains a conflict marker (`"CONFLICT"`)**
+        (existing, unchanged outcome, now gated on `MERGE_EXIT` + output text rather than assumed
+        by exclusion):
         - Release the lock: `rm -rf "$LOCK_DIR"`
         - Persist `pending_gate: "worktree_merge_conflict"`, ask user to resolve before
           memory-finalize.
         - Do NOT remove the worktree or delete the branch while conflicts are unresolved.
         - Resuming this workflow re-enters this step from 4a once the user has resolved the
           conflict.
+      - **If `MERGE_EXIT != 0` AND `$MERGE_OUTPUT` matches neither `"Already up to date"` nor a
+        conflict marker** (an unrecognized merge failure — e.g. an invalid ref, an
+        unrelated-histories error, or an uncommitted-changes-would-be-overwritten error that
+        slipped past the 4d clean-tree check): this is the explicit 4th branch closing the
+        by-exclusion gap — nothing was actually merged, so nothing may be treated as if it had
+        merged.
+        - Release the lock: `rm -rf "$LOCK_DIR"`
+        - Persist `pending_gate: "worktree_merge_unrecognized_failure"` (include `$MERGE_OUTPUT`
+          in the event log for visibility).
+        - Do NOT remove the worktree, do NOT delete the branch, do NOT run the copy-fallback
+          script — nothing has been confirmed merged, so the worktree's committed/uncommitted
+          content remains the only source of truth.
+        - Stop before memory-finalize. Tell the user: "`git merge {worktree_branch}` failed with
+          an error this router does not recognize as either 'already up to date' or a merge
+          conflict: `{merge_output}`. Nothing has been merged, and the worktree/branch have not
+          been touched. Inspect the error above, resolve the underlying issue in `$PROJECT_ROOT`,
+          then resume this workflow to retry."
+        - Resuming this workflow re-enters this step from 4a.
       - On successful merge or successful copy-fallback:
         - Remove worktree: `git worktree remove {worktree_path} --force`
         - Delete branch: `git branch -d {worktree_branch}`
@@ -531,7 +572,7 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
         - Release the lock: `rm -rf "$LOCK_DIR"`
         - Continue to doc-sync/memory-finalize as today.
 
-Safety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: "auto_created"` already set, re-use `worktree_path` from the artifact rather than creating a new worktree. If `worktree_path` is null despite `worktree_mode: "auto_created"`, treat as fallback and proceed with main tree. If a resume finds `pending_gate` set to `worktree_merge_locked`, `worktree_dirty_main_tree`, `worktree_merge_conflict`, or `worktree_copy_fallback_failed`, re-enter this step from 4a — none of these gates require any bespoke resume branch beyond the generic resume algorithm in `## 4. Resume And Hydration`.
+Safety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: "auto_created"` already set, re-use `worktree_path` from the artifact rather than creating a new worktree. If `worktree_path` is null despite `worktree_mode: "auto_created"`, treat as fallback and proceed with main tree. If a resume finds `pending_gate` set to `worktree_merge_locked`, `worktree_dirty_main_tree`, `worktree_merge_conflict`, `worktree_merge_unrecognized_failure`, or `worktree_copy_fallback_failed`, re-enter this step from 4a — none of these gates require any bespoke resume branch beyond the generic resume algorithm in `## 4. Resume And Hydration`.
 
 ### DEBUG preparation
 
