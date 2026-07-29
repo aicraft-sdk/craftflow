@@ -4990,6 +4990,866 @@ def test_hooks_json_registers_new_hooks() -> None:
 
 
 # ---------------------------------------------------------------------------
+# pretooluse-bash-guard: REM-FIX (residual gap found in post-BUILD
+# verification of wf-build-craftflow-guardrail-harden-20260728-093811-
+# 2c402af7, commit 54f6756) -- wildcard as a MIDDLE path segment, e.g.
+# `rm -rf ./*/.git`. `_is_in_cwd_critical` only ever recognized a literal
+# `*`/`.` as the resolved path's OWN final component (`resolved.name`), or
+# an exact/descendant match against a CRITICAL_TOP_LEVEL_CHILDREN path -- a
+# wildcard used as a MIDDLE segment (`./*/.git`, `./*/packages`, `*/tools`,
+# `./*/*/packages`) resolves via plain pathlib.Path normalization to a
+# literal, never-glob-expanded path like `<cwd>/*/.git`, which is neither
+# equal to nor a descendant of `<cwd>/.git` -- so it silently fell through
+# to ALLOW. Live-reproduced against the exact merged commit 54f6756 before
+# this fix: empty stdout (allowed) for `rm -rf ./*/.git`.
+# ---------------------------------------------------------------------------
+
+def test_bash_guard_blocks_rm_rf_wildcard_middle_segment_dotgit(tmp_dir: Path) -> None:
+    # The exact residual bypass reported in post-BUILD verification:
+    # `rm -rf ./*/.git` resolves to a literal `<cwd>/*/.git` path that a
+    # real shell's glob would plausibly expand to hit a nested `.git` under
+    # any top-level directory -- must be denied, not silently allowed.
+    name = "pretooluse-bash-guard/blocks-rm-rf-wildcard-middle-segment-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./*/.git"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./*/.git' (wildcard middle segment hitting .git); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_wildcard_middle_segment_packages(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-rm-rf-wildcard-middle-segment-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./*/packages"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./*/packages' (wildcard middle segment hitting packages); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_wildcard_middle_segment_tools_no_dot_prefix(tmp_dir: Path) -> None:
+    # Variant: no leading "./" -- a bare `*/tools` token shape, proving the
+    # fix is not keyed to the exact reported command's literal spelling.
+    name = "pretooluse-bash-guard/blocks-rm-rf-wildcard-middle-segment-tools-no-dot-prefix"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf */tools"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf */tools' (wildcard middle segment, no ./ prefix); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_double_wildcard_middle_segments_packages(tmp_dir: Path) -> None:
+    # Two consecutive wildcard segments before the critical child.
+    name = "pretooluse-bash-guard/blocks-rm-rf-double-wildcard-middle-segments-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./*/*/packages"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./*/*/packages' (two wildcard segments); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_wildcard_critical_child_at_deeper_depth(tmp_dir: Path) -> None:
+    # A wildcard directly followed by a critical child name, but nested
+    # deeper than the first segment after cwd -- proves the check isn't
+    # hardcoded to only the first two path components.
+    name = "pretooluse-bash-guard/blocks-rm-rf-wildcard-critical-child-at-deeper-depth"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./sub1/sub2/*/tools"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./sub1/sub2/*/tools' (wildcard-critical adjacency at depth); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_globstar_middle_segment_dotgit(tmp_dir: Path) -> None:
+    # Self-caught during this fix's own adversarial verification pass: a
+    # globstar (`**`, bash's recursive `shopt -s globstar` wildcard) as the
+    # middle segment is the same bypass class as a single `*` and must also
+    # be denied -- a single-star-only check would have missed it.
+    name = "pretooluse-bash-guard/blocks-rm-rf-globstar-middle-segment-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./**/.git"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./**/.git' (globstar middle segment hitting .git); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_wildcard_middle_segment_noncritical_name(tmp_dir: Path) -> None:
+    # Anti-hardcode control: a wildcard immediately followed by a
+    # NON-critical name must stay allowed -- the fix must key off
+    # CRITICAL_TOP_LEVEL_CHILDREN membership, not "any wildcard anywhere."
+    name = "pretooluse-bash-guard/allows-wildcard-middle-segment-noncritical-name"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./*/scratch"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'rm -rf ./*/scratch' (wildcard + non-critical name); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_dot_slash_star_still_denied(tmp_dir: Path) -> None:
+    # Confirmed still-working denial (must not regress): `rm -rf ./*` on its
+    # own (bare trailing wildcard, no middle-segment shape at all).
+    name = "pretooluse-bash-guard/blocks-rm-rf-dot-slash-star-still-denied"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./*"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./*' (regression guard); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_dot_slash_dotgit_still_denied(tmp_dir: Path) -> None:
+    # Confirmed still-working denial (must not regress): `rm -rf ./.git`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-dot-slash-dotgit-still-denied"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./.git"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./.git' (regression guard); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_traversal_normalizing_to_dotgit_still_denied(tmp_dir: Path) -> None:
+    # Confirmed still-working denial (must not regress): a traversal literal
+    # that normalizes back to `.git` (`./packages/../.git`).
+    name = "pretooluse-bash-guard/blocks-rm-rf-traversal-normalizing-to-dotgit-still-denied"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./packages/../.git"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./packages/../.git' (regression guard); got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# pretooluse-bash-guard: REM-FIX round 2 (2 CRITICAL sibling bypasses found
+# by code-reviewer in the wildcard-middle-segment fix above):
+#
+# 1. `_BARE_WILDCARD_COMPONENT_RE` (recognizes bare `*`/globstar `**`) was
+#    only wired into `_has_wildcard_adjacent_critical_child` -- the older,
+#    semantically-identical `resolved.name in ("*", ".")` trailing check
+#    was left untouched, so `rm -rf **`/`rm -rf ./**` (same blast radius as
+#    `rm -rf *`) were live-confirmed ALLOWED.
+# 2. `_BARE_WILDCARD_COMPONENT_RE` requires the ENTIRE component to be `*`
+#    chars, and CRITICAL_TOP_LEVEL_CHILDREN membership was exact-string
+#    only -- a partial-glob component like `pack*ages` (a real, valid bash
+#    glob expanding to `packages`) was neither a bare wildcard nor an exact
+#    match, so it evaded detection entirely at both the top-level-child
+#    position (`./pack*ages`) and as the literal immediately after a
+#    wildcard middle segment (`./*/pack*ages`).
+# ---------------------------------------------------------------------------
+
+def test_bash_guard_blocks_rm_rf_bare_globstar_still_denied(tmp_dir: Path) -> None:
+    # CRITICAL 1: `rm -rf **` must have the identical blast radius as
+    # `rm -rf *` under `shopt -s globstar` -- live-confirmed ALLOWED before
+    # this fix.
+    name = "pretooluse-bash-guard/blocks-rm-rf-bare-globstar-still-denied"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf **"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf **' (bare globstar, same blast radius as 'rm -rf *'); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_dot_slash_globstar_still_denied(tmp_dir: Path) -> None:
+    # CRITICAL 1 variant: `rm -rf ./**` -- same bypass with a leading `./`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-dot-slash-globstar-still-denied"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./**"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./**' (bare globstar, same blast radius as 'rm -rf *'); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_partial_wildcard_top_level_packages(tmp_dir: Path) -> None:
+    # CRITICAL 2: `pack*ages` is a real, valid bash glob that expands to
+    # `packages` -- neither a bare wildcard nor an exact string match, so it
+    # evaded detection entirely as a TOP-LEVEL child of cwd.
+    name = "pretooluse-bash-guard/blocks-rm-rf-partial-wildcard-top-level-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./pack*ages"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./pack*ages' (partial-glob top-level match for 'packages'); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_partial_wildcard_middle_segment_packages(tmp_dir: Path) -> None:
+    # CRITICAL 2, the exact middle-segment bug class this whole workflow's
+    # fix targets, defeated by attaching characters to the critical name:
+    # `./*/pack*ages` combines a wildcard middle segment with a partial-glob
+    # critical-name component.
+    name = "pretooluse-bash-guard/blocks-rm-rf-partial-wildcard-middle-segment-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./*/pack*ages"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./*/pack*ages' (wildcard middle segment + partial-glob critical name); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_globstar_and_partial_wildcard_combo(tmp_dir: Path) -> None:
+    # Adversarial combo (memory: this bug class has recurred 3x -- combine
+    # BOTH issues in one command): a globstar middle segment immediately
+    # followed by a partial-glob critical-name component.
+    name = "pretooluse-bash-guard/blocks-rm-rf-globstar-and-partial-wildcard-combo"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./**/pack*ages"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./**/pack*ages' (globstar + partial-glob combo); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_partial_wildcard_final_component_nested(tmp_dir: Path) -> None:
+    # Adversarial: partial-wildcard on the FINAL component nested beneath a
+    # literal top-level critical directory reference is not the shape here
+    # -- instead this proves a partial-glob top-level match is detected
+    # regardless of what's nested beneath it (descendant generalization,
+    # not just the exact top-level path itself).
+    name = "pretooluse-bash-guard/blocks-rm-rf-partial-wildcard-top-level-descendant"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./pack*ages/subdir"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./pack*ages/subdir' (partial-glob top-level match, nested descendant); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_partial_wildcard_noncritical_name(tmp_dir: Path) -> None:
+    # Anti-hardcode control: a partial-glob component that does NOT expand
+    # to any CRITICAL_TOP_LEVEL_CHILDREN name must stay allowed -- proves
+    # the fix keys off actual fnmatch membership, not "any component
+    # containing a wildcard."
+    name = "pretooluse-bash-guard/allows-partial-wildcard-noncritical-name"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./buil*d-tmp"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'rm -rf ./buil*d-tmp' (partial-glob, non-critical name); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_wildcard_middle_segment_still_noncritical(tmp_dir: Path) -> None:
+    # Regression guard for the false-positive shapes named in this REM-FIX's
+    # requirements: a bare wildcard middle segment followed by an unrelated
+    # literal name must stay allowed.
+    name = "pretooluse-bash-guard/allows-wildcard-middle-segment-still-noncritical"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./*/build-tmp"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'rm -rf ./*/build-tmp' (regression guard, must not over-block); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_wildcard_middle_segment_node_modules_cache(tmp_dir: Path) -> None:
+    # Regression guard for the second false-positive shape named in this
+    # REM-FIX's requirements.
+    name = "pretooluse-bash-guard/allows-wildcard-middle-segment-node-modules-cache"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./*/node_modules/.cache"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'rm -rf ./*/node_modules/.cache' (regression guard, must not over-block); got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# pretooluse-bash-guard: REM-FIX round 3 (3rd consecutive code-review-found
+# bypass in `_has_wildcard_adjacent_critical_child()` -- the fnmatch
+# unification from round 2 only covered the CRITICAL-NAME side of the
+# adjacency pair, not the FILLER side). Live-confirmed bypassed before this
+# fix: `rm -rf ./?/.git`, `rm -rf ./[a]/.git`, `rm -rf ./[!x]/packages`,
+# `rm -rf ./*a/tools`, `rm -rf ./a*/packages` (all resolved to an empty,
+# ALLOW stdout). The control shapes `rm -rf ./*/.git` (must stay denied) and
+# `rm -rf ./*/build-tmp` (must stay allowed) were already, and remain,
+# correct -- covered by the round-1/round-2 tests above, not re-asserted
+# here to avoid duplication.
+# ---------------------------------------------------------------------------
+
+def test_bash_guard_blocks_rm_rf_question_mark_middle_segment_dotgit(tmp_dir: Path) -> None:
+    # `?` (single-char glob) as the filler immediately before `.git`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-question-mark-middle-segment-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./?/.git"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./?/.git' (question-mark filler hitting .git); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_bracket_seq_middle_segment_dotgit(tmp_dir: Path) -> None:
+    # `[a]` (bracket-sequence glob) as the filler immediately before `.git`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-bracket-seq-middle-segment-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./[a]/.git"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./[a]/.git' (bracket-sequence filler hitting .git); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_negated_bracket_seq_middle_segment_packages(tmp_dir: Path) -> None:
+    # `[!x]` (negated bracket-sequence glob) as the filler immediately
+    # before `packages`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-negated-bracket-seq-middle-segment-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./[!x]/packages"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./[!x]/packages' (negated bracket-sequence filler hitting packages); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_leading_partial_star_middle_segment_tools(tmp_dir: Path) -> None:
+    # `*a` (partial-star, wildcard prefix) as the filler immediately before
+    # `tools`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-leading-partial-star-middle-segment-tools"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./*a/tools"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./*a/tools' (partial-star-prefix filler hitting tools); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_trailing_partial_star_middle_segment_packages(tmp_dir: Path) -> None:
+    # `a*` (partial-star, wildcard suffix) as the filler immediately before
+    # `packages`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-trailing-partial-star-middle-segment-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./a*/packages"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./a*/packages' (partial-star-suffix filler hitting packages); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_posix_char_class_middle_segment_dotgit(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): a POSIX character class (`[[:alpha:]]`) is
+    # STILL a bracket-expression glob (starts with `[`) -- must be caught by
+    # the same generalized filler check, not just simple `[a]`/`[!x]`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-posix-char-class-middle-segment-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./[[:alpha:]]/.git"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./[[:alpha:]]/.git' (POSIX character-class filler hitting .git); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_combined_multi_bracket_middle_segment_dotgit(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): a filler with TWO bracket expressions fused
+    # into one component (`[ab][cd]`).
+    name = "pretooluse-bash-guard/blocks-rm-rf-combined-multi-bracket-middle-segment-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./[ab][cd]/.git"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./[ab][cd]/.git' (combined multi-bracket filler hitting .git); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_two_different_filler_shapes_in_a_row_dotgit(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): TWO different wildcard-like filler shapes in a
+    # row before the critical name (`?` then `[a]`) -- proves the adjacency
+    # check only needs the LAST filler immediately before the critical name,
+    # regardless of what shape any EARLIER filler used.
+    name = "pretooluse-bash-guard/blocks-rm-rf-two-different-filler-shapes-in-a-row-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./?/[a]/.git"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./?/[a]/.git' (two different filler shapes in a row); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_filler_resembling_critical_name_itself(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): the FILLER component itself resembles a
+    # critical name (`packages?`) but is used as the filler BEFORE a
+    # different critical name (`.git`) -- must still be recognized as a
+    # filler (it contains `?`), not mistaken for anything else.
+    name = "pretooluse-bash-guard/blocks-rm-rf-filler-resembling-critical-name-itself"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./packages?/.git"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./packages?/.git' (filler resembling a critical name itself, hitting .git); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_nonadjacent_fillers_before_critical_name(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): wildcard-like fillers spanning >1 NON-adjacent
+    # component before the critical name (`*` ... literal `foo` ... `[a]`
+    # immediately before `packages`) -- proves detection isn't defeated by
+    # an intervening literal component breaking up the filler run.
+    name = "pretooluse-bash-guard/blocks-rm-rf-nonadjacent-fillers-before-critical-name"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./*/foo/[a]/packages"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./*/foo/[a]/packages' (non-adjacent fillers, last one immediately before packages); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_bracket_seq_middle_segment_noncritical_name(tmp_dir: Path) -> None:
+    # Anti-hardcode control: a bracket-sequence filler immediately followed
+    # by a NON-critical name must stay allowed.
+    name = "pretooluse-bash-guard/allows-bracket-seq-middle-segment-noncritical-name"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./[a]/build-tmp"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'rm -rf ./[a]/build-tmp' (bracket-sequence filler + non-critical name); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_question_mark_middle_segment_noncritical_name(tmp_dir: Path) -> None:
+    # Anti-hardcode control: a question-mark filler immediately followed by
+    # a NON-critical name must stay allowed.
+    name = "pretooluse-bash-guard/allows-question-mark-middle-segment-noncritical-name"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./?/scratch"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'rm -rf ./?/scratch' (question-mark filler + non-critical name); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_sibling_dotgit(tmp_dir: Path) -> None:
+    # CRITICAL live-confirmed bypass: bash unconditionally (no shopt needed)
+    # brace-expands `./{a,.git}` into `./a ./.git` -- the second alternative
+    # is a top-level critical child. `split_subcommands`' shlex tokenizer
+    # never splits on `{`/`}`/`,`, so this whole component previously
+    # reached matching as one opaque literal string that neither exact
+    # equality nor fnmatch (whose glob vocabulary is only `*`/`?`/`[`) could
+    # ever recognize as ".git".
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-sibling-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{a,.git}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{a,.git}}' (brace sibling hitting .git); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_sibling_packages(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-sibling-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{foo,packages}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{foo,packages}}' (brace sibling hitting packages); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_top_level_no_dot_prefix(tmp_dir: Path) -> None:
+    # Variant with no leading "./" -- proves the fix isn't keyed to the
+    # exact reported command's literal spelling.
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-top-level-no-dot-prefix"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf {tools,packages}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf {{tools,packages}}' (bare brace, no ./ prefix); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_middle_segment_packages(tmp_dir: Path) -> None:
+    # A brace group used as a MIDDLE path segment (the same shape as the
+    # already-fixed `rm -rf ./*/packages` wildcard-middle-segment bypass,
+    # except the filler here is a finite, explicit enumeration `{a,b}`
+    # instead of an open-ended `*`) -- bash expands to `./a/packages
+    # ./b/packages`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-middle-segment-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{a,b}/packages"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{a,b}}/packages' (brace as middle segment); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_three_alternatives_dotgit(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): proves the expander isn't hardcoded to
+    # exactly 2 comma-separated alternatives.
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-three-alternatives-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{foo,bar,.git}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{foo,bar,.git}}' (3-alternative brace group); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_combined_partial_wildcard_packages(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): one brace alternative is ITSELF a partial
+    # wildcard (`pack*ages`, a real bash glob expanding to `packages`) --
+    # proves each expanded alternative is routed through the same fnmatch
+    # check the plain-glob middle-segment fix already uses, not a plain
+    # string-equality check.
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-combined-partial-wildcard-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{a,pack*ages}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{a,pack*ages}}' (brace alternative is itself a partial wildcard); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_sibling_descendant_dotgit(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): brace group forms the TOP-LEVEL component and
+    # is followed by a further subpath (`./{a,.git}/sub` -> bash expands to
+    # `./a/sub ./.git/sub`) -- proves the fix fires on the top-level
+    # component match regardless of what (if anything) follows it, mirroring
+    # the existing descendant-of-critical-child protection.
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-sibling-descendant-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{a,.git}/sub"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{a,.git}}/sub' (brace sibling with a further subpath); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_brace_benign_suffix_build_dist_tmp(tmp_dir: Path) -> None:
+    # Anti-hardcode control: a brace group where NEITHER alternative
+    # (after full-component substitution, "build-tmp"/"dist-tmp") matches a
+    # critical child must stay allowed.
+    name = "pretooluse-bash-guard/allows-brace-benign-suffix-build-dist-tmp"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{build,dist}-tmp"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'rm -rf ./{{build,dist}}-tmp' (benign brace usage); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_mkdir_brace_non_destructive(tmp_dir: Path) -> None:
+    # Anti-hardcode control: mkdir isn't in the destructive-command
+    # vocabulary at all, brace or not.
+    name = "pretooluse-bash-guard/allows-mkdir-brace-non-destructive"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "mkdir -p ./{a,b}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'mkdir -p ./{{a,b}}' (non-destructive command); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_extglob_negation_scratch(tmp_dir: Path) -> None:
+    # MEDIUM live-confirmed bypass: `./!(scratch)` (bash extglob negation,
+    # requires `shopt -s extglob`) matches EVERYTHING except `scratch`,
+    # including `.git`/`packages`/`tools`. Unlike a brace group, an extglob
+    # negation's full expansion depends on real directory contents this
+    # guard cannot see -- treated as an opaque, unresolvable target (the
+    # same fail-closed treatment as a `$()`/backtick dynamic substitution)
+    # rather than attempting to enumerate it.
+    name = "pretooluse-bash-guard/blocks-rm-rf-extglob-negation-scratch"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./!(scratch)"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./!(scratch)' (extglob negation); got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -5219,6 +6079,59 @@ def main() -> int:
         test_bash_guard_missing_bash_destructive_traversal_key_still_fails_closed(tmp / "b84")
         test_bash_guard_explicit_block_value_still_denies(tmp / "b85")
         test_bash_guard_explicit_audit_value_allows_but_logs_audit(tmp / "b86")
+
+        print()
+        print("[ pretooluse-bash-guard: REM-FIX (residual gap -- wildcard as a MIDDLE path segment) ]")
+        test_bash_guard_blocks_rm_rf_wildcard_middle_segment_dotgit(tmp / "b87")
+        test_bash_guard_blocks_rm_rf_wildcard_middle_segment_packages(tmp / "b88")
+        test_bash_guard_blocks_rm_rf_wildcard_middle_segment_tools_no_dot_prefix(tmp / "b89")
+        test_bash_guard_blocks_rm_rf_double_wildcard_middle_segments_packages(tmp / "b90")
+        test_bash_guard_blocks_rm_rf_wildcard_critical_child_at_deeper_depth(tmp / "b91")
+        test_bash_guard_blocks_rm_rf_globstar_middle_segment_dotgit(tmp / "b91b")
+        test_bash_guard_allows_wildcard_middle_segment_noncritical_name(tmp / "b92")
+        test_bash_guard_blocks_rm_rf_dot_slash_star_still_denied(tmp / "b93")
+        test_bash_guard_blocks_rm_rf_dot_slash_dotgit_still_denied(tmp / "b94")
+        test_bash_guard_blocks_rm_rf_traversal_normalizing_to_dotgit_still_denied(tmp / "b95")
+
+        print()
+        print("[ pretooluse-bash-guard: REM-FIX round 2 (bare globstar trailing check + partial-wildcard component bypass) ]")
+        test_bash_guard_blocks_rm_rf_bare_globstar_still_denied(tmp / "b96")
+        test_bash_guard_blocks_rm_rf_dot_slash_globstar_still_denied(tmp / "b97")
+        test_bash_guard_blocks_rm_rf_partial_wildcard_top_level_packages(tmp / "b98")
+        test_bash_guard_blocks_rm_rf_partial_wildcard_middle_segment_packages(tmp / "b99")
+        test_bash_guard_blocks_rm_rf_globstar_and_partial_wildcard_combo(tmp / "b100")
+        test_bash_guard_blocks_rm_rf_partial_wildcard_final_component_nested(tmp / "b101")
+        test_bash_guard_allows_partial_wildcard_noncritical_name(tmp / "b102")
+        test_bash_guard_allows_wildcard_middle_segment_still_noncritical(tmp / "b103")
+        test_bash_guard_allows_wildcard_middle_segment_node_modules_cache(tmp / "b104")
+
+        print()
+        print("[ pretooluse-bash-guard: REM-FIX round 3 (filler-side fnmatch-vocabulary generalization) ]")
+        test_bash_guard_blocks_rm_rf_question_mark_middle_segment_dotgit(tmp / "b105")
+        test_bash_guard_blocks_rm_rf_bracket_seq_middle_segment_dotgit(tmp / "b106")
+        test_bash_guard_blocks_rm_rf_negated_bracket_seq_middle_segment_packages(tmp / "b107")
+        test_bash_guard_blocks_rm_rf_leading_partial_star_middle_segment_tools(tmp / "b108")
+        test_bash_guard_blocks_rm_rf_trailing_partial_star_middle_segment_packages(tmp / "b109")
+        test_bash_guard_blocks_rm_rf_posix_char_class_middle_segment_dotgit(tmp / "b110")
+        test_bash_guard_blocks_rm_rf_combined_multi_bracket_middle_segment_dotgit(tmp / "b111")
+        test_bash_guard_blocks_rm_rf_two_different_filler_shapes_in_a_row_dotgit(tmp / "b112")
+        test_bash_guard_blocks_rm_rf_filler_resembling_critical_name_itself(tmp / "b113")
+        test_bash_guard_blocks_rm_rf_nonadjacent_fillers_before_critical_name(tmp / "b114")
+        test_bash_guard_allows_bracket_seq_middle_segment_noncritical_name(tmp / "b115")
+        test_bash_guard_allows_question_mark_middle_segment_noncritical_name(tmp / "b116")
+
+        print()
+        print("[ pretooluse-bash-guard: REM-FIX round 4 (brace-expansion middle-segment bypass + extglob negation bypass) ]")
+        test_bash_guard_blocks_rm_rf_brace_sibling_dotgit(tmp / "b117")
+        test_bash_guard_blocks_rm_rf_brace_sibling_packages(tmp / "b118")
+        test_bash_guard_blocks_rm_rf_brace_top_level_no_dot_prefix(tmp / "b119")
+        test_bash_guard_blocks_rm_rf_brace_middle_segment_packages(tmp / "b120")
+        test_bash_guard_blocks_rm_rf_brace_three_alternatives_dotgit(tmp / "b121")
+        test_bash_guard_blocks_rm_rf_brace_combined_partial_wildcard_packages(tmp / "b122")
+        test_bash_guard_blocks_rm_rf_brace_sibling_descendant_dotgit(tmp / "b123")
+        test_bash_guard_allows_brace_benign_suffix_build_dist_tmp(tmp / "b124")
+        test_bash_guard_allows_mkdir_brace_non_destructive(tmp / "b125")
+        test_bash_guard_blocks_rm_rf_extglob_negation_scratch(tmp / "b126")
 
         print()
         print("[ hooklib shared-helper (white-box) ]")

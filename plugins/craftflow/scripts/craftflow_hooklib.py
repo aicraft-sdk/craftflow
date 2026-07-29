@@ -439,15 +439,48 @@ def looks_dynamic(token: str) -> bool:
 
 _SUBSTITUTION_RE = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
 
+# Extglob pattern-list group prefix characters (`!(...)`, `@(...)`,
+# `+(...)`, `*(...)`, `?(...)`) -- bash pattern-list groups enabled only
+# under `shopt -s extglob`, but once enabled (a real, if less common, live
+# shell setting) `!(pattern-list)` in particular matches EVERYTHING except
+# the given pattern-list, an unbounded/directory-dependent expansion this
+# guard has no way to enumerate ahead of time (unlike a `{a,b}` brace
+# group, whose alternatives are fully spelled out in the command text
+# itself -- see craftflow_pretooluse_bash_guard.py's brace-expansion
+# handling). `split_subcommands()`'s shlex tokenizer (punctuation_chars=
+# True) splits a literal "(" into its OWN token, so `!(scratch)` never
+# appears as one token containing "!(...)" verbatim -- it tokenizes as
+# [..., "./!", "(", "scratch", ")"]. This existence check only needs to
+# answer "is an extglob group plausibly present in this subcommand,"
+# mirroring the bare `*`/`..` check just above it -- the fuller span
+# handling (finding the matching close paren so the whole group is
+# excluded from concrete path targets) lives in
+# craftflow_pretooluse_bash_guard.py's `_positional_targets()`, which
+# has access to `_scan_paren_depth()`.
+_EXTGLOB_PREFIX_CHARS = ("!", "@", "?", "+", "*")
+
+
+def _tokens_contain_extglob_span(tokens: list) -> bool:
+    for idx, token in enumerate(tokens):
+        if token and token[-1] in _EXTGLOB_PREFIX_CHARS and idx + 1 < len(tokens) and tokens[idx + 1] == "(":
+            return True
+    return False
+
 
 def command_has_traversal_or_wildcard(command: str) -> bool:
     """True if a `..` path-traversal literal or a `*`/bare `.` wildcard
     token appears anywhere in the command text OR inside any $(...) /
-    backtick substitution it contains. Text-level heuristic only --
-    guards see static command strings, never shell-expanded values."""
+    backtick substitution it contains -- OR an extglob pattern-list group
+    (`!(...)`/`@(...)`/`+(...)`/`*(...)`/`?(...)`) is plausibly present
+    (MEDIUM, live-confirmed bypass: `rm -rf ./!(scratch)` expands to
+    everything except `scratch`, including `.git`/`packages`/`tools`).
+    Text-level heuristic only -- guards see static command strings, never
+    shell-expanded values."""
     extra = " ".join(m.group(1) or m.group(2) for m in _SUBSTITUTION_RE.finditer(command))
     combined = f"{command} {extra}"
     for tokens in split_subcommands(combined):
+        if _tokens_contain_extglob_span(tokens):
+            return True
         for token in tokens:
             stripped = token.strip("'\"")
             if stripped in ("..", "*", "."):
