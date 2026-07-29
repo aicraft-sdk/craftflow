@@ -510,7 +510,16 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     # always true, since "worktree-confinement" already returned above and
     # "memory-write" is the only remaining violation type, but the explicit
     # check is kept for defensive clarity).
-    should_block_raw, memory_writes_decision = resolve_toggle_decision(mode.get("memoryWrites"))
+    # REM-FIX (doubt-verify cycle 3): `mode.get("memoryWrites")` had no
+    # default -- a hook-mode.json that is valid JSON but simply omits this
+    # key returned None, which resolve_toggle_decision() treats as
+    # "unrecognized." The default here is "audit" (not "block"), matching
+    # this long-established toggle's own pre-existing default in
+    # load_mode()'s fallback dict -- mirrors bashDestructiveTraversal's
+    # already-correct `mode.get("bashDestructiveTraversal", "block")`
+    # pattern in the sibling craftflow_pretooluse_bash_guard.py, but with
+    # THIS toggle's own correct default value, not a copy of that one's.
+    should_block_raw, memory_writes_decision = resolve_toggle_decision(mode.get("memoryWrites", "audit"))
     should_block = "memory-write" in violations and should_block_raw
 
     log_event(
@@ -687,7 +696,16 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     # second caller of this exact enum-validation + distinguishing-log-
     # decision pattern, and again once `bashDestructiveTraversal` became a
     # third caller in a different script -- see its own docstring).
-    should_block, decision = resolve_toggle_decision(mode.get("protectedWrites"))
+    # REM-FIX (doubt-verify cycle 3): `mode.get("protectedWrites")` had no
+    # default -- a hook-mode.json that is valid JSON but simply omits this
+    # key returned None, which resolve_toggle_decision() treats as
+    # "unrecognized," silently failing OPEN despite
+    # fail_closed_on_unrecognized=False. This toggle's whole purpose is a
+    # NEW fail-closed protection, so a missing key must default to "block"
+    # -- mirrors bashDestructiveTraversal's already-correct
+    # `mode.get("bashDestructiveTraversal", "block")` pattern in the sibling
+    # craftflow_pretooluse_bash_guard.py.
+    should_block, decision = resolve_toggle_decision(mode.get("protectedWrites", "block"))
 
     log_event(
         "plugin_pretooluse_guard",

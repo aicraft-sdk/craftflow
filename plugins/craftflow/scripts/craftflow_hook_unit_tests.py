@@ -1787,6 +1787,93 @@ def test_pretooluse_guard_protected_writes_toggle_independent_of_memory_writes(t
     ok(name)
 
 
+# ---------------------------------------------------------------------------
+# REM-FIX (doubt-verify cycle 3): `mode.get("protectedWrites")` and
+# `mode.get("memoryWrites")` had NO default argument at their call sites in
+# craftflow_pretooluse_guard.py -- unlike bashDestructiveTraversal's call
+# site in the sibling craftflow_pretooluse_bash_guard.py, which correctly
+# does `mode.get("bashDestructiveTraversal", "block")`. A hook-mode.json
+# that is valid JSON but simply OMITS one of these two keys (distinct from
+# the missing-FILE / corrupt-FILE cases already covered above, which are
+# caught entirely inside load_mode()'s own fallback dicts -- this bug lives
+# at the CALL SITE, after load_mode() has already returned a real,
+# successfully-parsed dict that just happens to lack one key) returned None
+# from mode.get(), which resolve_toggle_decision() treats as "unrecognized"
+# -- and since fail_closed_on_unrecognized=False for these two toggles, this
+# silently failed OPEN. Live-verified: {"memoryWrites": "block"} with
+# protectedWrites entirely absent allowed a heredoc write to a protected
+# memory .md file via the Bash-write-inspection layer with zero deny --
+# directly contradicting protectedWrites' own stated fail-closed intent.
+# Fix: mirror bashDestructiveTraversal's pattern exactly --
+# mode.get("protectedWrites", "block") (this toggle's whole purpose is a
+# fail-closed protection) and mode.get("memoryWrites", "audit") (a
+# long-established toggle whose correct default is "audit", matching
+# load_mode()'s own fallback dict value -- NOT made fail-closed here).
+# ---------------------------------------------------------------------------
+
+def test_pretooluse_guard_bash_write_denied_when_protected_writes_key_missing(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/bash-write-denied-when-protected-writes-key-missing"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    # Valid JSON, but `protectedWrites` is entirely absent -- distinct from
+    # the missing-FILE/corrupt-FILE cases above (those never even reach this
+    # call site; load_mode() returns its own fail-closed fallback dict
+    # first). Only `memoryWrites` is present, mirroring the exact
+    # live-verified bug report shape.
+    (fake_plugin_root / "config" / "hook-mode.json").write_text(
+        json.dumps({"memoryWrites": "block"}), encoding="utf-8"
+    )
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo x | tee .craftflow/state/project/patterns.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected fail-closed deny (protectedWrites must default to "
+            f"'block' when the key is missing from an otherwise-valid config); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_memory_write_allowed_when_memory_writes_key_missing(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/memory-write-allowed-when-memory-writes-key-missing"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    # Valid JSON, but `memoryWrites` is entirely absent -- only
+    # `protectedWrites` is present. `memoryWrites`' own pre-existing,
+    # long-established default is "audit" (matching load_mode()'s own
+    # fallback dict value) -- a missing key must NOT flip this toggle to
+    # fail-closed; that would be a behavior change beyond this fix's scope.
+    (fake_plugin_root / "config" / "hook-mode.json").write_text(
+        json.dumps({"protectedWrites": "block"}), encoding="utf-8"
+    )
+    project_root = tmp_dir / "project"
+    target = project_root / ".craftflow" / "state" / "project" / "activeContext.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# Active Context\n", encoding="utf-8")
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(target)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(
+            name,
+            "expected allow (memoryWrites must keep its own pre-existing "
+            f"'audit' default when the key is missing, not fail closed); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_learn_distiller_uses_tools_key_not_allowed_tools() -> None:
     name = "learn-distiller/uses-tools-key-not-allowed-tools"
     path = PLUGIN_ROOT / "agents" / "learn-distiller.md"
@@ -5010,6 +5097,11 @@ def main() -> int:
         test_pretooluse_guard_memory_writes_unrecognized_value_still_allows_but_logs_distinct_decision(tmp / "g47")
         test_pretooluse_guard_memory_write_audited_not_denied_when_memory_writes_audit(tmp / "g48")
         test_pretooluse_guard_protected_writes_toggle_independent_of_memory_writes(tmp / "g49")
+
+        print()
+        print("[ pretooluse-guard: REM-FIX (doubt-verify cycle 3: missing-key mode.get() defaults) ]")
+        test_pretooluse_guard_bash_write_denied_when_protected_writes_key_missing(tmp / "g50")
+        test_pretooluse_guard_memory_write_allowed_when_memory_writes_key_missing(tmp / "g51")
 
         print()
         print("[ pretooluse-bash-guard ]")
