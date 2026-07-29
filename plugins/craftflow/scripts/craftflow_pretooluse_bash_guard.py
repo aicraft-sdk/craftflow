@@ -149,52 +149,512 @@ _WILDCARD_LIKE_CHAR_RE = re.compile(r"[*?\[]")
 # bash brace-expansion group (bash leaves it as a literal string) --
 # deliberately excluded so a literal `{single}`-named directory isn't
 # mistaken for one.
-_BRACE_GROUP_RE = re.compile(r"\{([^{}]+)\}")
+#
+# REM-FIX round 8 (CRITICAL, live-confirmed bypass, doubt-verify): the
+# original single-pass `\{([^{}]+)\}` regex this comment used to describe
+# required NON-EMPTY content between a `{` and the very NEXT `}` -- when a
+# bare `}` appears immediately after an unquoted `{` (via ANSI-C decode,
+# `$'\x7d'`/`$'\175'`, or plain literal text: `./{}a,.git}`), the regex
+# cannot match at that `{` at all (its character class excludes `}`
+# entirely, so it can never skip past one to look for a LATER close for
+# the SAME `{`), and `_component_has_brace_group()` silently returned
+# False -- falling through to the literal whole-string fnmatch that can
+# never match a critical name. Real bash instead BACKTRACKS: when the
+# content between `{` and a candidate `}` has no top-level comma (empty or
+# otherwise), that `}` is NOT treated as the real close -- bash keeps
+# scanning for a LATER `}` that DOES yield a comma-bearing span. Ground
+# truth: `bash -c 'echo ./{}a,.git}'` -> `./}a ./.git` (the empty `{}`
+# candidate is skipped; the group closes at the FINAL `}`, giving content
+# `}a,.git`, which does have a comma).
+#
+# Fixed by replacing the single regex with `_iter_brace_groups()` below, a
+# depth-aware scan (same character-counting technique as
+# `_scan_brace_depth()`/`_scan_paren_depth()` elsewhere in this module)
+# that, for each `{`, keeps extending past an invalid (comma-less)
+# candidate close instead of giving up, and reports a component as
+# unresolved/malformed -- rather than silently "no group here" -- when a
+# `{` never finds ANY balancing `}` at all (fail CLOSED per this module's
+# existing parse-failure convention, not a silent fnmatch fallthrough).
+_MAX_BRACE_SCAN_ITERATIONS = 4096
+
+# REM-FIX (CRITICAL, algorithmic-complexity DoS, live-timed): `_MAX_BRACE_SCAN_ITERATIONS`
+# above only bounds a SINGLE `_scan_one_brace_group()` attempt. It does
+# nothing to bound how many such attempts `_iter_brace_groups()`'s outer
+# loop makes across ONE call -- that loop advances by only +1 character
+# after a failed/malformed/no-comma attempt, so a component with many
+# nested or adjacent comma-less brace pairs triggers up to O(n) independent
+# attempts, each itself re-scanning `_content_has_top_level_comma()` over a
+# GROWING content span every time it rejects a candidate close. For `n`
+# perfectly-nested, comma-less empty brace pairs (`"{" * n + "}" * n`) this
+# compounds into cubic-class blowup -- live-timed against THIS module's own
+# `_iter_brace_groups()`: n=100 pairs (200 chars) ~0.03s, n=300 (600 chars)
+# ~0.7s, n=600 (1200 chars) ~5.9s. The registered PreToolUse hook timeout
+# for this script (hooks/hooks.json) is 10s, and this module's own
+# documented invariant is that an uncaught crash / non-zero, non-2 exit
+# does NOT block the tool call -- a timeout-killed hook process is the
+# SAME "no blocking decision produced" failure mode, so a ~2KB adversarial
+# command argument can silently fail this guard open.
+#
+# Fixed by threading a single GLOBAL budget counter through the ENTIRE
+# `_iter_brace_groups()` call -- shared across every `_scan_one_brace_group()`
+# attempt it makes, not reset per attempt -- decremented for both the
+# character-by-character scan AND the cost of every
+# `_content_has_top_level_comma()` re-scan (the actual hidden quadratic
+# cost). Once the global budget is exhausted, the scan fails CLOSED
+# (`malformed=True`), the same existing convention already used elsewhere
+# in this file for an unresolvable/ambiguous brace structure -- never
+# silently truncated as "no group found here". Generous enough for any
+# realistic legitimate command (a real command component is nowhere near
+# this size) but far below what would risk the registered 10s hook
+# timeout.
+_MAX_BRACE_SCAN_TOTAL_BUDGET = 20000
+
+# REM-FIX (CRITICAL, algorithmic-complexity DoS variant -- unbounded CALL
+# COUNT, not just unbounded cost within one call): the fix above bounds the
+# total work `_iter_brace_groups()` can do WITHIN a single call (one path
+# COMPONENT's own brace-scan attempt), but does nothing to bound how MANY
+# such calls happen across one guard invocation. `_has_wildcard_adjacent_
+# critical_child()` below calls `_component_has_brace_group()` -- which,
+# pre-fix, created a FRESH, fully-reset `_MAX_BRACE_SCAN_TOTAL_BUDGET`-sized
+# budget every time -- once per path COMPONENT in `resolved.parts`, with NO
+# cap on how many components a single destructive-command argument may
+# contain. A target made of many small, individually-cheap-but-brace-
+# bearing `/`-joined segments (each well under the per-call budget on its
+# own, ~2ms/segment observed vs ~0.003ms/segment for a plain segment) pays
+# that per-segment cost N times over with nothing bounding N -- cost is
+# LINEAR in segment count. Router-confirmed timings (command =
+# `rm -rf ./` + N segments of `"{"*30+"}"*30` joined by `/`): n=500
+# segments (30KB command) 0.75s, n=1500 (91KB) 2.88s, n=3000 (183KB) 6.14s,
+# n=6000 (~366KB) 13.4-15.0s -- exceeding the registered 10s PreToolUse
+# hook timeout in hooks/hooks.json. A timeout-killed hook process is this
+# module's own documented "no blocking decision produced" case (see
+# `_destructive_targets()`'s docstring on HIGH 7): the destructive command
+# proceeds UNBLOCKED -- the SAME fail-open risk class as the single-call
+# DoS fixed directly above.
+#
+# Fixed by converting `_MAX_BRACE_SCAN_TOTAL_BUDGET` from a fresh
+# PER-CALL allowance into a single, PROCESS-WIDE budget shared across
+# EVERY `_iter_brace_groups()` call made during the CURRENT hook
+# invocation -- a true global counter spanning ALL path components
+# examined across the whole command, not reset per component and not
+# reset per call. Once this shared budget is exhausted, every subsequent
+# `_iter_brace_groups()` call (for any component, from any call site) fails
+# CLOSED immediately (`malformed=True`, O(1) cost, no scanning attempted)
+# instead of ever running a fresh scan -- bounding the TOTAL brace-scan
+# work for the entire guard invocation to one fixed ceiling no matter how
+# many brace-bearing path components the target contains. Reset exactly
+# once per hook invocation, at the very top of `main()` -- see
+# `_reset_global_brace_scan_budget()` below; a direct caller that never
+# goes through `main()` (e.g. a white-box unit test) gets a lazily
+# initialized fresh budget on first use instead of crashing, via
+# `_global_brace_scan_budget_list()`.
+_global_brace_scan_budget: "list | None" = None
+
+
+def _reset_global_brace_scan_budget() -> None:
+    """Reset the process-wide brace-scan budget shared by every
+    `_iter_brace_groups()` call for the remainder of this hook invocation.
+    MUST be called exactly once, at the very top of `main()`, before any
+    subcommand or path-component parsing begins -- see the module-level
+    docstring on `_MAX_BRACE_SCAN_TOTAL_BUDGET` above for the call-COUNT DoS
+    this closes."""
+    global _global_brace_scan_budget
+    _global_brace_scan_budget = [_MAX_BRACE_SCAN_TOTAL_BUDGET]
+
+
+def _global_brace_scan_budget_list() -> list:
+    """Return the shared, process-wide budget list, lazily initializing it
+    to a fresh full budget if `_reset_global_brace_scan_budget()` was never
+    called first (e.g. a unit test invoking `_iter_brace_groups()` or a
+    sibling helper directly, rather than through `main()`) -- never raises
+    just because the reset step was skipped."""
+    global _global_brace_scan_budget
+    if _global_brace_scan_budget is None:
+        _global_brace_scan_budget = [_MAX_BRACE_SCAN_TOTAL_BUDGET]
+    return _global_brace_scan_budget
+
+
+def _content_has_top_level_comma(content: str) -> bool:
+    """True if `content` contains a `,` at brace-nesting depth 0 -- nested
+    `{`/`}` pairs within `content` are depth-tracked (and CLAMPED at a
+    minimum of 0, since `content` may itself carry a stray, unmatched `}`
+    left over from a skipped invalid candidate close -- e.g. content
+    `"}a,.git"` from the empty-pair backtrack above -- which must be
+    treated as ordinary literal text, not as closing a nesting level that
+    was never opened)."""
+    depth = 0
+    for ch in content:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+        elif ch == "," and depth == 0:
+            return True
+    return False
+
+
+def _split_top_level_commas(content: str) -> list:
+    """Split `content` on every `,` at brace-nesting depth 0 only -- a
+    comma INSIDE a nested `{...}` group is left alone for that nested
+    group's own later expansion round. Same depth-clamping as
+    `_content_has_top_level_comma()` above, for the same reason."""
+    parts = []
+    depth = 0
+    last = 0
+    for idx, ch in enumerate(content):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+        elif ch == "," and depth == 0:
+            parts.append(content[last:idx])
+            last = idx + 1
+    parts.append(content[last:])
+    return parts
+
+
+def _scan_one_brace_group(text: str, open_idx: int, budget: list) -> tuple:
+    """Find the valid (comma-bearing) closing `}` for the `{` at
+    `text[open_idx]`, backtracking past any invalid (empty or comma-less)
+    candidate close exactly like real bash does. Returns
+    (close_idx, content, malformed):
+
+    - A candidate close is found the instant nesting depth returns to 0.
+      If `text[open_idx + 1 : candidate_idx]` has no TOP-LEVEL comma, that
+      close is rejected -- depth is reset to 1 (treating the rejected `}`
+      as ordinary content, not a real terminator) and the scan keeps
+      going, looking for a LATER `}` instead.
+    - `close_idx=None, malformed=False` when depth returned to 0 at least
+      once (a well-formed, but comma-less, pair like `{single}`) with no
+      more `}` characters left to extend to -- NOT a real bash
+      brace-expansion group; deliberately left as ordinary literal text
+      (pre-existing, documented behavior).
+    - `close_idx=None, malformed=True` when depth NEVER returns to 0 at
+      all across the rest of `text` -- a genuinely unbalanced/ambiguous
+      `{` with no matching `}` anywhere -- callers MUST fail CLOSED on
+      this (Behavior Contract rule 9), never silently treat it as
+      "no group here". Also `malformed=True` when the GLOBAL `budget`
+      (shared across the WHOLE `_iter_brace_groups()` call this attempt
+      belongs to -- see that function's docstring) runs out mid-scan --
+      fail CLOSED rather than silently truncating the scan as
+      "no group here" (REM-FIX, algorithmic-complexity DoS).
+
+    `budget`: a single-element list `[remaining]`, decremented for every
+    character examined by THIS attempt's own while loop AND for the full
+    cost of every `_content_has_top_level_comma()` re-scan this attempt
+    performs (the actual hidden quadratic cost -- each rejected candidate
+    close re-scans a content span that only grows as the attempt
+    continues). Mutated in place so the running total persists across
+    every attempt `_iter_brace_groups()` makes, not just this one."""
+    depth = 1
+    ever_balanced = False
+    idx = open_idx + 1
+    n = len(text)
+    iterations = 0
+    while idx < n:
+        iterations += 1
+        budget[0] -= 1
+        if budget[0] <= 0:
+            return None, None, True
+        if iterations > _MAX_BRACE_SCAN_ITERATIONS:
+            return None, None, True
+        ch = text[idx]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                ever_balanced = True
+                content = text[open_idx + 1 : idx]
+                budget[0] -= len(content)
+                if budget[0] <= 0:
+                    return None, None, True
+                if _content_has_top_level_comma(content):
+                    return idx, content, False
+                depth = 1
+        idx += 1
+    if ever_balanced:
+        return None, None, False
+    return None, None, True
+
+
+def _iter_brace_groups(text: str) -> tuple:
+    """Scan `text` left to right for every valid, non-overlapping,
+    OUTERMOST brace-expansion group (using `_scan_one_brace_group()`'s own
+    backtrack-past-invalid-candidate matching). Returns
+    (groups, malformed) where `groups` is a list of
+    `(start_idx, end_idx, content)` tuples (`end_idx` one past the closing
+    `}`, matching `re.Match.start()`/`.end()` semantics so existing
+    substitution call sites need no offset changes) in left-to-right
+    order, and `malformed=True` if ANY `{` in `text` never found a
+    balancing `}` at all (fail-CLOSED signal; see `_scan_one_brace_group()`
+    docstring).
+
+    REM-FIX (CRITICAL, algorithmic-complexity DoS): a GLOBAL budget counter
+    is threaded through EVERY `_scan_one_brace_group()` attempt this call
+    makes -- not reset per attempt. `_MAX_BRACE_SCAN_ITERATIONS` alone only
+    bounds a single attempt; it does nothing to bound the total work across
+    the many independent attempts this outer loop can trigger for a
+    component with many nested/adjacent comma-less brace pairs (see that
+    constant's own module-level docstring for the live-timed blowup this
+    closes). Once the shared budget is exhausted mid-scan, this loop stops
+    immediately (fails CLOSED, `malformed=True`) rather than continuing to
+    burn through the rest of `text` one attempt at a time.
+
+    REM-FIX (CRITICAL, algorithmic-complexity DoS variant -- unbounded CALL
+    COUNT): the budget obtained below is the shared, PROCESS-WIDE budget
+    (`_global_brace_scan_budget_list()`) -- NOT a fresh list created here --
+    so it persists across every call this function receives during the
+    whole hook invocation, not just across the attempts within ONE call.
+    This is what bounds the total cost of scanning MANY brace-bearing path
+    components (e.g. many `/`-joined segments in one destructive-command
+    target), where a fresh per-call budget would let each component pay its
+    own full scan cost independently, multiplying linearly with component
+    count (see `_MAX_BRACE_SCAN_TOTAL_BUDGET`'s own module-level docstring
+    for the live-timed blowup this closes)."""
+    groups = []
+    malformed = False
+    idx = 0
+    n = len(text)
+    budget = _global_brace_scan_budget_list()
+    while idx < n:
+        if budget[0] <= 0:
+            malformed = True
+            break
+        if text[idx] != "{":
+            idx += 1
+            continue
+        close_idx, content, is_malformed = _scan_one_brace_group(text, idx, budget)
+        if is_malformed:
+            malformed = True
+            idx += 1
+            continue
+        if close_idx is None:
+            idx += 1
+            continue
+        groups.append((idx, close_idx + 1, content))
+        idx = close_idx + 1
+    return groups, malformed
 
 
 def _component_has_brace_group(component: str) -> bool:
-    """True if `component` contains at least one non-nested
-    `{alt1,alt2,...}` brace-expansion group with 2+ comma-separated
-    alternatives."""
-    return any("," in match.group(1) for match in _BRACE_GROUP_RE.finditer(component))
+    """True if `component` contains at least one valid, comma-bearing
+    `{alt1,alt2,...}` brace-expansion group -- found via `_iter_brace_groups()`'s
+    depth-aware backtracking scan, not a single-pass regex (REM-FIX round
+    8). Also True when `component` has an unbalanced/ambiguous `{`/`}`
+    structure `_iter_brace_groups()` cannot fully resolve (`malformed`) --
+    fail CLOSED (treated as a brace-bearing, potentially-dangerous
+    component requiring full critical-child checking) rather than silently
+    treating an unresolvable shape as "no brace group here"."""
+    groups, malformed = _iter_brace_groups(component)
+    return bool(groups) or malformed
 
 
-def _expand_brace_groups(component: str) -> list:
-    """Expand every non-nested `{alt1,alt2,...}` group in `component` into
-    every concrete combination bash's own brace expansion would produce
-    (cross product across multiple groups in the same component, e.g.
-    `{a,b}-{c,d}` -> 4 combinations, via itertools.product) -- the common
-    single-level case bash unconditionally supports. Substitution uses each
-    match's ORIGINAL start/end offset against the ORIGINAL string (not a
+# REM-FIX (composition-boundary bypass, follow-up to the round-4 brace-
+# expansion hardening above): bound how many ROUNDS of nested-group
+# expansion `_expand_brace_groups()` below will attempt, and how many total
+# concrete alternatives one call may produce, before it gives up and fails
+# CLOSED (treats the component as a match) instead of silently returning a
+# partially-expanded, still-brace-containing set of "alternatives" as if
+# expansion had converged. A real bash brace-expansion nesting depth this
+# deep, or a fan-out this wide, is already deep into adversarial/DoS
+# territory -- mirrors this module's existing `_scan_paren_depth()`/
+# `_consume_git_flag_value()` "malformed span -> fail closed, never fail
+# open" convention rather than open-ended recursion or an unbounded
+# itertools.product cross product.
+_MAX_BRACE_EXPANSION_ROUNDS = 6
+_MAX_BRACE_EXPANSION_ALTERNATIVES = 512
+
+
+def _expand_brace_groups(component: str) -> tuple:
+    """Expand every `{alt1,alt2,...}` group in `component` into every
+    concrete combination bash's own brace expansion would produce,
+    including NESTED groups (`{a,{b,.git}}`) -- REM-FIX (CRITICAL,
+    live-confirmed bypass): a nested shape like `rm -rf ./{a,{.git,c}}` was
+    previously left with its OUTER braces as literal, unexpanded text (only
+    the innermost group was found and expanded), so bash's real 3-way
+    expansion (`./a ./.git ./c`) was never fully enumerated and the
+    `.git`/`c` alternatives escaped detection.
+
+    Fixed by RECURSING the same single-round match instead of running it
+    once: each round finds every OUTERMOST valid group in the CURRENT
+    candidate set (via `_iter_brace_groups()`'s depth-aware backtracking
+    scan, REM-FIX round 8 -- replacing the prior single-pass `_BRACE_GROUP_RE`
+    regex, which only ever matched a group with no braces INSIDE it and
+    could never skip past an invalid empty/comma-less candidate close to
+    find a later, valid one), splits each found group's content on its own
+    TOP-LEVEL commas only (`_split_top_level_commas()` -- a comma inside a
+    still-nested inner group is left alone for that inner group's own
+    later round), then re-scans every produced alternative for further
+    (now-unnested) groups on the NEXT round. A nested shape's inner group
+    surfaces as an ordinary, no-longer-nested group once its enclosing
+    outer group's own top-level-comma split isolates it into its own
+    candidate string (e.g. `{a,{.git,c}}` -> round 1 finds the OUTER group
+    (content `a,{.git,c}`, one top-level comma) -> alternatives `a` and
+    `{.git,c}` -> round 2 expands the latter fully to `.git`/`c`). Cross
+    product across multiple SIBLING groups within the same round-candidate
+    (e.g. `{a,b}-{c,d}` -> 4 combinations) is preserved exactly as before,
+    via itertools.product; substitution uses each group's ORIGINAL
+    start/end offset against that round's OWN candidate string (not a
     running mutated copy), so multiple groups at different positions never
     drift out of alignment even when a chosen alternative's length differs
     from its group's own original span.
 
-    Deliberately does NOT support NESTED braces (`{a,{b,c}}`) -- a
-    disclosed scope boundary matching this fix's own documented single-level
-    `{x,y}` case. A nested group's OUTER braces are left as a literal,
-    unexpanded substring in every produced alternative (only the innermost
-    group is found and expanded) -- this is no LESS safe than before this
-    fix (a nested shape was previously unrecognized either way), just not
-    exhaustively enumerated.
+    Bounded by `_MAX_BRACE_EXPANSION_ROUNDS` (nesting depth) and
+    `_MAX_BRACE_EXPANSION_ALTERNATIVES` (combinatorial fan-out) -- see their
+    own module-level docstring above. Returns `(candidates, bound_exceeded)`:
+    `bound_exceeded=True` signals the caller to treat the component as
+    matching regardless of the (necessarily incomplete) candidate list,
+    rather than silently treating the still-unresolved braces as inert
+    literal text past either bound. Also `bound_exceeded=True` immediately,
+    without even attempting a round, when `_iter_brace_groups()` reports a
+    component as malformed (an unbalanced/ambiguous `{`/`}` structure it
+    cannot fully resolve) -- fail CLOSED (Behavior Contract rule 9) rather
+    than silently expanding only what little it COULD parse.
 
-    Returns `[component]` unchanged (a single-element list) when no
-    comma-bearing brace group is present at all."""
-    groups = [m for m in _BRACE_GROUP_RE.finditer(component) if "," in m.group(1)]
-    if not groups:
-        return [component]
-    alt_lists = [m.group(1).split(",") for m in groups]
-    results = []
-    for combo in itertools.product(*alt_lists):
-        pieces = []
-        last_end = 0
-        for group, alt in zip(groups, combo):
-            pieces.append(component[last_end : group.start()])
-            pieces.append(alt)
-            last_end = group.end()
-        pieces.append(component[last_end:])
-        results.append("".join(pieces))
-    return results
+    Returns `([component], False)` unchanged when no comma-bearing brace
+    group is present in `component` at all."""
+    current = [component]
+    for _ in range(_MAX_BRACE_EXPANSION_ROUNDS):
+        next_round = []
+        any_group_found = False
+        for item in current:
+            groups, malformed = _iter_brace_groups(item)
+            if malformed:
+                return [item], True
+            if not groups:
+                next_round.append(item)
+                continue
+            any_group_found = True
+            alt_lists = [_split_top_level_commas(content) for (_start, _end, content) in groups]
+            for combo in itertools.product(*alt_lists):
+                pieces = []
+                last_end = 0
+                for (start, end, _content), alt in zip(groups, combo):
+                    pieces.append(item[last_end:start])
+                    pieces.append(alt)
+                    last_end = end
+                pieces.append(item[last_end:])
+                next_round.append("".join(pieces))
+                if len(next_round) > _MAX_BRACE_EXPANSION_ALTERNATIVES:
+                    return next_round, True
+        current = next_round
+        if not any_group_found:
+            return current, False
+    # Depth bound hit -- fail CLOSED if any candidate still carries an
+    # unresolved comma-bearing group, rather than treating the bound as
+    # silent convergence.
+    if any(_component_has_brace_group(item) for item in current):
+        return current, True
+    return current, False
+
+
+# REM-FIX (CRITICAL, live-confirmed bypass, doubt-verify): bash's ANSI-C
+# quoting (`$'...'`) decodes a bounded set of backslash escapes -- `\xHH`
+# (hex), `\NNN` (1-3 digit octal), and the common single-character C
+# escapes (`\n`, `\t`, `\\`, `\'`, ...) -- into literal bytes BEFORE the
+# shell ever tokenizes the word. `$'\x2e\x67\x69\x74'` decodes to the
+# literal string `.git` (ground truth: `bash -c "echo \$'\x2e\x67\x69\x74'"`
+# -> `.git`).
+#
+# `split_subcommands()`'s shlex tokenizer (posix=True) strips the `$'...'`
+# quote MARKERS via its own POSIX single-quote handling, but POSIX single
+# quotes never process backslash escapes -- the resulting token still
+# carries the RAW, undecoded escape text with a leading "$" (e.g.
+# `"$\\x2e\\x67\\x69\\x74"`). `looks_dynamic()` ("$" in token) fires on
+# that raw text, short-circuiting `_positional_targets()` to "unresolvable"
+# BEFORE the decoded literal is ever matched against
+# CRITICAL_TOP_LEVEL_CHILDREN -- and `command_has_traversal_or_wildcard()`
+# has zero ANSI-C-quote awareness either, so no corroborating traversal/
+# wildcard signal fires, landing the whole command in the non-denying
+# `unverifiable` bucket in main() (live-confirmed: `rm -rf
+# $'\x2e\x67\x69\x74'` and the brace-wrapped `rm -rf
+# ./{$'\x2e\x67\x69\x74',a}` were both ALLOWED).
+#
+# Fixed by decoding every `$'...'` span in the RAW command text -- applied
+# once in main(), before split_subcommands()'s shlex ever consumes the
+# distinguishing quote markers -- substituting each span with its OWN
+# single-quoted decoded literal (re-escaping any embedded single quote via
+# the standard POSIX `'"'"'` trick), so downstream shlex tokenization still
+# produces exactly one token for it, now carrying the real decoded text
+# instead of the raw escape sequence. A decoded `.git` then flows through
+# the EXACT SAME literal-matching path as a plain, unquoted `.git` argument
+# -- including, for the brace-wrapped form, the ALREADY-EXISTING
+# `_component_matches_critical_child()` brace-expansion handling -- no new
+# matching logic needed once the text is decoded early enough. This also
+# correctly handles bash's own word-concatenation of a quoted fragment
+# adjacent to a literal or another quoted fragment with no whitespace
+# between them (e.g. `.` + `$'\x67\x69\x74'`, or two adjacent `$'...'`
+# spans) purely as a side effect of only replacing the `$'...'` SPAN itself
+# and leaving surrounding text untouched -- shlex's own concatenation
+# behavior does the rest, exactly as real bash would.
+#
+# Bounded, static, fully-resolvable-from-text -- no real shell/subprocess
+# invoked, mirroring `_expand_brace_groups()`'s own text-level expansion
+# approach. A malformed/never-closing `$'...'` span (no matching closing
+# quote) simply doesn't match `_ANSI_C_QUOTE_RE` and is left as literal,
+# undecoded text -- it still contains a bare "$" and therefore still trips
+# the existing `looks_dynamic()` fail-toward-unresolvable path unchanged.
+_ANSI_C_QUOTE_RE = re.compile(r"\$'((?:[^'\\]|\\.)*)'")
+
+# One $'...'-content escape sequence at a time: `\xHH` (1-2 hex digits),
+# `\NNN` (1-3 octal digits), or `\<any other char>` (a single-character
+# escape, or an unrecognized escape that bash itself would emit as the
+# literal character with the backslash dropped).
+_ANSI_C_ESCAPE_RE = re.compile(r"\\(x[0-9a-fA-F]{1,2}|[0-7]{1,3}|.)", re.DOTALL)
+
+_ANSI_C_SINGLE_CHAR_ESCAPES = {
+    "n": "\n",
+    "t": "\t",
+    "r": "\r",
+    "a": "\a",
+    "b": "\b",
+    "e": "\x1b",
+    "E": "\x1b",
+    "f": "\f",
+    "v": "\v",
+    "\\": "\\",
+    "'": "'",
+    '"': '"',
+}
+
+
+def _decode_ansi_c_escapes(inner: str) -> str:
+    """Decode the escape sequences inside one `$'...'` span's own content
+    (the text already extracted BETWEEN the quote markers -- the markers
+    themselves are not part of `inner`). Recognizes `\\xHH` (1-2 hex
+    digits), `\\NNN` (1-3 octal digits), and the common single-character C
+    escapes bash's own $'...' documents; any other backslash-escaped
+    character passes through as the literal character itself, matching
+    bash's own "unrecognized escape -> literal char, backslash dropped"
+    behavior."""
+
+    def _replace(match: "re.Match") -> str:
+        esc = match.group(1)
+        if esc[0] in "xX" and len(esc) > 1:
+            return chr(int(esc[1:], 16))
+        if esc[0] in "01234567":
+            return chr(int(esc, 8) & 0xFF)
+        return _ANSI_C_SINGLE_CHAR_ESCAPES.get(esc, esc)
+
+    return _ANSI_C_ESCAPE_RE.sub(_replace, inner)
+
+
+def _expand_ansi_c_quotes(command: str) -> str:
+    """Replace every `$'...'` span in `command` with its own decoded
+    literal, re-quoted (plain single quotes, with any embedded single quote
+    re-escaped via the standard POSIX `'"'"'` trick) so downstream shlex
+    tokenization still produces exactly one token for it. A no-op (returns
+    `command` unchanged) when no `$'...'` span is present at all."""
+
+    def _replace(match: "re.Match") -> str:
+        decoded = _decode_ansi_c_escapes(match.group(1))
+        escaped = decoded.replace("'", "'\"'\"'")
+        return f"'{escaped}'"
+
+    return _ANSI_C_QUOTE_RE.sub(_replace, command)
 
 
 def _is_wildcard_like_filler_component(component: str) -> bool:
@@ -242,18 +702,26 @@ def _component_matches_critical_child(component: str) -> bool:
     shape (`rm -rf ./*/build-tmp`).
 
     REM-FIX (CRITICAL, live-confirmed bypass): when `component` contains a
-    comma-bearing brace-expansion group (`{a,.git}`, `{tools,packages}`),
-    every concrete alternative bash would actually expand it to is checked
-    independently via `_expand_brace_groups()` -- each expanded alternative
-    is itself routed through the SAME fnmatch check below (so a brace
-    alternative that is ITSELF a partial wildcard, e.g. `{a,pack*ages}`,
-    is also caught, not just an exact literal name)."""
+    comma-bearing brace-expansion group (`{a,.git}`, `{tools,packages}`,
+    including a NESTED group like `{a,{.git,c}}`), every concrete
+    alternative bash would actually expand it to is checked independently
+    via `_expand_brace_groups()` -- each expanded alternative is itself
+    routed through the SAME fnmatch check below (so a brace alternative
+    that is ITSELF a partial wildcard, e.g. `{a,pack*ages}`, is also
+    caught, not just an exact literal name). If `_expand_brace_groups()`
+    hit its own recursion/fan-out bound before fully resolving the group
+    (`bound_exceeded=True`), this returns True unconditionally -- fail
+    CLOSED on an adversarially-deep or wide brace shape rather than
+    matching only against its (necessarily incomplete) candidate list."""
     if _BARE_WILDCARD_COMPONENT_RE.match(component):
         return False
     if _component_has_brace_group(component):
+        candidates, bound_exceeded = _expand_brace_groups(component)
+        if bound_exceeded:
+            return True
         return any(
             fnmatch.fnmatch(child, candidate)
-            for candidate in _expand_brace_groups(component)
+            for candidate in candidates
             for child in CRITICAL_TOP_LEVEL_CHILDREN
         )
     return any(fnmatch.fnmatch(child, component) for child in CRITICAL_TOP_LEVEL_CHILDREN)
@@ -297,7 +765,33 @@ def _positional_targets(rest: list) -> tuple:
     treated as one opaque, unresolvable target via `_scan_paren_depth()`
     (already used for `$(...)` fragment scanning) -- the same fail-closed
     treatment as a dynamic `$()`/backtick substitution -- rather than
-    silently reducing to unrelated-looking literal path tokens."""
+    silently reducing to unrelated-looking literal path tokens.
+
+    REM-FIX (composition-boundary bypass, follow-up to the above):
+    `rm -rf ./{$(echo a),.git}` nests a `$(...)` command substitution
+    INSIDE a brace-expansion group -- shlex's punctuation_chars=True splits
+    the substitution's `(`/`)` into their own tokens exactly as above, but
+    now the split happens MID-brace-group (e.g.
+    `["./{$", "(", "echo", "a", ")", ",.git}"]`), fragmenting the enclosing
+    `{...,...}` syntax across tokens before either the brace-detection
+    logic (`_component_matches_critical_child`) or this function's own
+    per-token model ever sees one clean component -- the trailing
+    alternative (`",.git}"`) was previously appended as an unrelated-
+    looking literal path token that matches nothing. A token with more `{`
+    than `}` characters is this fragmented-brace-span signature (an intact
+    brace group, nested or not, always tokenizes as exactly one token with
+    BALANCED `{`/`}` counts -- see `_tokens_contain_unbalanced_brace()`'s
+    docstring in craftflow_hooklib.py for why). The whole span is scanned
+    via `_scan_brace_depth()` (the same technique as `_scan_paren_depth()`
+    just above) and treated as one opaque, unresolvable target -- not
+    fully re-parsed into concrete alternatives (that would require
+    resolving the nested `$(...)` value itself, which this guard never
+    attempts for any dynamic substitution) -- so none of its fragments are
+    added as literal path tokens. This alone doesn't have to carry the
+    deny decision: `command_has_traversal_or_wildcard()` (hooklib) also
+    recognizes the same fragmented-brace signature, which is what routes
+    this into `denied_dynamic` rather than the non-denying `unverifiable`
+    bucket in main() below."""
     paths = []
     unresolvable = False
     past_flag_terminator = False
@@ -321,6 +815,11 @@ def _positional_targets(rest: list) -> tuple:
         if token and token[-1] in _EXTGLOB_PREFIX_CHARS and idx + 1 < len(rest) and rest[idx + 1] == "(":
             unresolvable = True
             end_idx = _scan_paren_depth(rest, idx + 1)
+            idx = len(rest) if end_idx is None else end_idx + 1
+            continue
+        if token.count("{") > token.count("}"):
+            unresolvable = True
+            end_idx = _scan_brace_depth(rest, idx)
             idx = len(rest) if end_idx is None else end_idx + 1
             continue
         if looks_dynamic(token):
@@ -354,6 +853,36 @@ def _scan_paren_depth(rest: list, start_idx: int) -> "int | None":
             if ch == "(":
                 depth += 1
             elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    return idx
+    return None
+
+
+def _scan_brace_depth(rest: list, start_idx: int) -> "int | None":
+    """Same technique as `_scan_paren_depth()` above, but tracking `{`/`}`
+    CHARACTER depth instead of `(`/`)` -- used to find where a FRAGMENTED
+    brace-expansion span (one whose opening `{` didn't get a matching `}`
+    within its own token, because a `$(...)`/backtick command substitution
+    nested inside it forced shlex's punctuation_chars=True to split the
+    substitution's `(`/`)` into their own separate tokens) actually closes
+    (REM-FIX, composition-boundary bypass: `rm -rf ./{$(echo a),.git}`).
+
+    `rest[start_idx]` is expected to be the token that OPENS the imbalance
+    (more `{` than `}` characters within it) -- depth starts at 0 and this
+    token's own characters are scanned first, exactly like
+    `_scan_paren_depth()` does for its own start token.
+
+    Returns the index of the token in which brace depth first returns to
+    0, or None if it never does across every remaining token (a
+    malformed/unbalanced span -- callers MUST fail CLOSED on None, same
+    contract as `_scan_paren_depth()`)."""
+    depth = 0
+    for idx in range(start_idx, len(rest)):
+        for ch in rest[idx]:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
                 depth -= 1
                 if depth == 0:
                     return idx
@@ -936,6 +1465,16 @@ def _is_in_cwd_critical(resolved: Path, cwd: Path) -> bool:
 
 
 def main() -> int:
+    # REM-FIX (CRITICAL, algorithmic-complexity DoS variant -- unbounded
+    # call COUNT): reset the process-wide brace-scan budget exactly once,
+    # at the very top of this function, before any subcommand or
+    # path-component parsing begins -- see `_MAX_BRACE_SCAN_TOTAL_BUDGET`'s
+    # own module-level docstring for the call-count DoS this closes. Every
+    # `_iter_brace_groups()` call made anywhere below (across every
+    # subcommand and every path component) shares this SAME budget for the
+    # remainder of this invocation.
+    _reset_global_brace_scan_budget()
+
     data = load_input()
     if data.get("tool_name") != "Bash":
         return 0
@@ -943,6 +1482,15 @@ def main() -> int:
     command = (data.get("tool_input") or {}).get("command")
     if not command or not isinstance(command, str):
         return 0
+
+    # REM-FIX (ANSI-C quoting bypass, doubt-verify): decode every `$'...'`
+    # span BEFORE anything else touches `command` -- both split_subcommands()
+    # (used for destructive-target extraction and the redirect-confinement
+    # check below) and command_has_traversal_or_wildcard() must see the
+    # decoded literal, not the raw, undecoded escape text. A no-op when no
+    # `$'...'` span is present. See `_expand_ansi_c_quotes()`'s own
+    # docstring above for the full bypass mechanics.
+    command = _expand_ansi_c_quotes(command)
 
     cwd_raw = data.get("cwd")
     if not cwd_raw:

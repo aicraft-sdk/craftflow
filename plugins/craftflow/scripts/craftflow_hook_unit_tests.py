@@ -5850,6 +5850,773 @@ def test_bash_guard_blocks_rm_rf_extglob_negation_scratch(tmp_dir: Path) -> None
 
 
 # ---------------------------------------------------------------------------
+# REM-FIX (follow-up to wf-residual-wildcard-middle-segment-20260729-053459-
+# b9b10db1): 2 disclosed residual bypasses at the COMPOSITION boundary
+# between two already-hardened mechanisms -- nested brace groups (Bug 1),
+# and a command/backtick substitution nested inside a brace group (Bug 2).
+# Ground truth for every scenario below was independently confirmed against
+# real bash (`bash -c 'echo ...'`) before being encoded as a test.
+# ---------------------------------------------------------------------------
+
+
+def test_bash_guard_blocks_rm_rf_nested_brace_dotgit(tmp_dir: Path) -> None:
+    # Bug 1, CRITICAL live-confirmed bypass: `_expand_brace_groups()` only
+    # matched the innermost, non-nested `{...}` group -- a nested shape like
+    # `./{a,{.git,c}}` left the OUTER braces as literal, unexpanded text
+    # instead of bash's real 3-way expansion (`./a ./.git ./c`), so the
+    # `.git`/`c` alternatives escaped detection. Ground truth:
+    # `bash -c 'echo ./{a,{.git,c}}'` -> `./a ./.git ./c`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-nested-brace-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{a,{.git,c}}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{a,{{.git,c}}}}' (nested brace group); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_nested_brace_benign(tmp_dir: Path) -> None:
+    # Anti-hardcode control (non-default variant): a NESTED brace group
+    # where NO alternative (a/b/c) matches a critical child must stay
+    # allowed -- proves the fix generalizes the nested-expansion logic
+    # rather than special-casing the one reported `.git` shape. Ground
+    # truth: `bash -c 'echo ./{a,{b,c}}'` -> `./a ./b ./c` (no critical
+    # name in the expansion).
+    name = "pretooluse-bash-guard/allows-nested-brace-benign"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{a,{b,c}}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'rm -rf ./{{a,{{b,c}}}}' (benign nested brace, no critical alternative); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_doubly_nested_brace_dotgit(tmp_dir: Path) -> None:
+    # Adversarial (own-pass, per task instruction to test at least one more
+    # composition depth): brace nested inside a nested brace, 3 levels deep.
+    # Ground truth: `bash -c 'echo ./{a,{b,{.git,c}}}'` ->
+    # `./a ./b ./.git ./c`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-doubly-nested-brace-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{a,{b,{.git,c}}}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{a,{{b,{{.git,c}}}}}}' (3-level nested brace); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_command_sub_nested_in_brace_dotgit(tmp_dir: Path) -> None:
+    # Bug 2, CRITICAL live-confirmed bypass: a `$(...)` command substitution
+    # nested inside a brace group fragments the enclosing `{...,...}`
+    # syntax across multiple shlex tokens (`split_subcommands()`'s
+    # punctuation_chars=True splits `(`/`)` into their own tokens), so the
+    # brace-detection logic never sees one clean component and the trailing
+    # `.git` alternative was silently allowed. Ground truth:
+    # `bash -c 'echo ./{$(echo a),.git}'` -> `./a ./.git`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-command-sub-nested-in-brace-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{$(echo a),.git}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{$(echo a),.git}}' (command-sub nested in brace); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_command_sub_nested_in_doubly_nested_brace_packages(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): command substitution nested inside a DOUBLY-
+    # nested brace group -- combines both disclosed gaps' compositions in
+    # one shape. Ground truth:
+    # `bash -c 'echo ./{a,{$(echo b),packages}}'` -> `./a ./b ./packages`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-command-sub-nested-in-doubly-nested-brace-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{a,{$(echo b),packages}}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{a,{{$(echo b),packages}}}}' (command-sub nested in doubly-nested brace); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_backtick_nested_in_brace_dotgit(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): backtick substitution (the OTHER dynamic-
+    # substitution syntax bash supports, not just `$(...)`) nested inside a
+    # brace group -- proves the fix isn't keyed to the `$(` spelling
+    # specifically. Ground truth: `bash -c 'echo ./{`echo a`,.git}'` ->
+    # `./a ./.git`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-backtick-nested-in-brace-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{`echo a`,.git}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{`echo a`,.git}}' (backtick nested in brace); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_deeply_nested_brace_exceeds_bound(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): a brace-expansion chain nested 10 levels deep
+    # (beyond `_MAX_BRACE_EXPANSION_ROUNDS`'s bound of 6), with a
+    # deliberately BENIGN leaf (`buildtmp`, matching no critical child).
+    # Ground truth confirms bash's real expansion never touches a critical
+    # name here (`bash -c 'echo ./{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,buildtmp}}}}}}}}}}'`
+    # -> `./a ./a ./a ./a ./a ./a ./a ./a ./a ./a ./buildtmp`) -- this
+    # command is denied ONLY because the recursion-depth bound was hit
+    # before expansion could converge, a deliberate fail-CLOSED choice
+    # (not a real match), matching this fix's documented "bound recursion
+    # depth and fail closed past that bound" design.
+    name = "pretooluse-bash-guard/blocks-rm-rf-deeply-nested-brace-exceeds-bound"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    nested = "buildtmp"
+    for _ in range(10):
+        nested = "{a," + nested + "}"
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": f"rm -rf ./{nested}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 10-level-deep nested brace exceeding the expansion bound (fail-closed); got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# ANSI-C quoting ($'...') bypass -- doubt-verify live-confirmed
+#
+# bash's `$'...'` syntax decodes bounded backslash escapes (`\xHH` hex,
+# `\NNN` octal, plus common single-char C escapes) into literal bytes BEFORE
+# tokenization -- `$'\x2e\x67\x69\x74'` decodes to the literal string
+# `.git`. `looks_dynamic()` ("$" in token) fires on the RAW, undecoded
+# escape text (shlex's own POSIX single-quote handling strips the quote
+# markers without performing this decoding), short-circuiting to
+# "unresolvable" before the decoded literal is ever matched against
+# CRITICAL_TOP_LEVEL_CHILDREN -- and `command_has_traversal_or_wildcard()`
+# has zero ANSI-C-quote awareness, so no corroborating signal fires either,
+# landing the whole command in the non-denying `unverifiable` bucket.
+# Ground truth for every case below verified via real `bash -c 'echo ...'`.
+# ---------------------------------------------------------------------------
+
+def test_bash_guard_blocks_rm_rf_ansi_c_hex_quoted_dotgit(tmp_dir: Path) -> None:
+    # Ground truth: `bash -c "echo \$'\x2e\x67\x69\x74'"` -> `.git`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-ansi-c-hex-quoted-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": r"rm -rf $'\x2e\x67\x69\x74'"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for ANSI-C hex-quoted $'\\x2e\\x67\\x69\\x74' decoding to .git; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_ansi_c_quoted_brace_sibling_dotgit(tmp_dir: Path) -> None:
+    # Ground truth: `bash -c "echo ./{\$'\x2e\x67\x69\x74',a}"` -> `./.git ./a`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-ansi-c-quoted-brace-sibling-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": r"rm -rf ./{$'\x2e\x67\x69\x74',a}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for ANSI-C hex-quoted .git as a brace-group alternative; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_ansi_c_octal_quoted_dotgit(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): octal escapes (`\NNN`), not just hex -- a
+    # sibling ANSI-C escape form. Ground truth:
+    # `bash -c "echo \$'\056\147\151\164'"` -> `.git`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-ansi-c-octal-quoted-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": r"rm -rf $'\056\147\151\164'"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for ANSI-C octal-quoted $'\\056\\147\\151\\164' decoding to .git; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_ansi_c_quoted_packages(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): targeting `packages` (not `.git`) directly,
+    # proving the decode isn't keyed to the `.git` name specifically. Ground
+    # truth: `bash -c "echo \$'\x70\x61\x63\x6b\x61\x67\x65\x73'"` -> `packages`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-ansi-c-quoted-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": r"rm -rf $'\x70\x61\x63\x6b\x61\x67\x65\x73'"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for ANSI-C hex-quoted packages target; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_ansi_c_quoted_brace_sibling_tools(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): combined with ANOTHER brace alternative,
+    # targeting `tools`. Ground truth:
+    # `bash -c "echo ./{a,\$'\x74\x6f\x6f\x6c\x73'}"` -> `./a ./tools`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-ansi-c-quoted-brace-sibling-tools"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": r"rm -rf ./{a,$'\x74\x6f\x6f\x6c\x73'}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for ANSI-C hex-quoted tools as a brace-group alternative; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_ansi_c_adjacent_quotes_concatenated_dotgit(tmp_dir: Path) -> None:
+    # Adversarial (own-pass, self-found sibling shape per task instruction):
+    # bash concatenates adjacent quoted words with no whitespace between
+    # them into ONE shell word -- two separate $'...' spans side by side
+    # decode-and-concatenate to `.git`, not just one span holding the whole
+    # name. Ground truth: `bash -c "echo \$'\x2e'\$'\x67\x69\x74'"` -> `.git`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-ansi-c-adjacent-quotes-concatenated-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": r"rm -rf $'\x2e'$'\x67\x69\x74'"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for two adjacent ANSI-C-quoted spans concatenating to .git; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_ansi_c_quoted_suffix_of_literal_prefix_dotgit(tmp_dir: Path) -> None:
+    # Adversarial (own-pass, self-found sibling shape): a literal `.`
+    # OUTSIDE any quoting, immediately followed (no whitespace) by an
+    # ANSI-C-quoted `git` suffix -- bash concatenates a literal fragment and
+    # a quoted fragment into one word exactly like two quoted fragments.
+    # Ground truth: `bash -c "echo .\$'\x67\x69\x74'"` -> `.git`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-ansi-c-quoted-suffix-of-literal-prefix-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": r"rm -rf .$'\x67\x69\x74'"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for literal '.' prefix + ANSI-C-quoted 'git' suffix concatenating to .git; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_ansi_c_quoted_benign_name(tmp_dir: Path) -> None:
+    # Anti-hardcode control: an ANSI-C-quoted target that decodes to a
+    # BENIGN name (no critical child match) must stay allowed -- proves the
+    # fix decodes-then-matches rather than blanket-denying every $'...'
+    # token. Ground truth: `bash -c "echo \$'\x73\x63\x72\x61\x74\x63\x68'"`
+    # -> `scratch`.
+    name = "pretooluse-bash-guard/allows-ansi-c-quoted-benign-name"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": r"rm -rf $'\x73\x63\x72\x61\x74\x63\x68'"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected silent allow for ANSI-C-quoted 'scratch' (benign, no critical-child match); got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# REM-FIX (CRITICAL, live-confirmed bypass, doubt-verify): `_BRACE_GROUP_RE`'s
+# empty-pair intolerance. bash's real brace matching BACKTRACKS past an
+# immediate, empty (or comma-less) `{...}` candidate closing to a LATER `}`
+# that DOES yield a comma-bearing span -- e.g. `./{}a,.git}` -> bash finds
+# the FIRST `}` (right after `{`) gives empty content (invalid, no comma),
+# so it does NOT stop there; it keeps scanning and closes at the LAST `}`
+# instead, giving content `}a,.git` (comma-bearing) -> `./}a ./.git`. The
+# prior single-pass `\{([^{}]+)\}` regex can never match at a `{` whose
+# immediately-following char is `}` (the character class excludes `}`
+# entirely, so there is no way to "skip past" it to a later close for the
+# SAME `{`) -- `_component_has_brace_group()` returned False for every one
+# of these shapes, and the whole component fell through to a literal
+# whole-string fnmatch that trivially can never match a critical name.
+# Ground truth for every scenario below independently confirmed against
+# real bash (`bash -c 'echo ...'`).
+# ---------------------------------------------------------------------------
+
+
+def test_bash_guard_blocks_rm_rf_brace_empty_pair_before_dotgit(tmp_dir: Path) -> None:
+    # CRITICAL live-confirmed bypass (no ANSI-C involved at all -- a
+    # pre-existing gap in the round-4/5 brace hardening). Ground truth:
+    # `bash -c 'echo ./{}a,.git}'` -> `./}a ./.git`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-empty-pair-before-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{}a,.git}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{}}a,.git}}' (empty brace pair forces backtrack to .git); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_empty_pair_before_ansi_c_hex_dotgit(tmp_dir: Path) -> None:
+    # CRITICAL live-confirmed bypass: `$'\x7d'` ANSI-C-decodes to a literal
+    # `}`, reproducing the identical empty-pair shape after decode. Ground
+    # truth: `bash -c "echo ./{\$'\x7d'a,.git}"` -> `./}a ./.git`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-empty-pair-before-ansi-c-hex-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": r"rm -rf ./{$'\x7d'a,.git}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{$'\\x7d'a,.git}}' (ANSI-C hex-decoded empty brace pair); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_empty_pair_before_packages(tmp_dir: Path) -> None:
+    # CRITICAL live-confirmed bypass: targeting `packages` instead of
+    # `.git`. Ground truth: `bash -c 'echo ./{}a,packages}'` -> `./}a ./packages`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-empty-pair-before-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{}a,packages}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{}}a,packages}}' (empty brace pair forces backtrack to packages); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_empty_pair_before_ansi_c_octal_dotgit(tmp_dir: Path) -> None:
+    # CRITICAL live-confirmed bypass: `$'\175'` is the OCTAL ANSI-C form of
+    # the same `}` decode (0o175 == 0x7d), proving the fix isn't keyed to
+    # the hex escape spelling. Ground truth:
+    # `bash -c "echo ./{\$'\175'a,.git}"` -> `./}a ./.git`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-empty-pair-before-ansi-c-octal-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": r"rm -rf ./{$'\175'a,.git}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{$'\\175'a,.git}}' (ANSI-C octal-decoded empty brace pair); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_multiple_consecutive_empty_pairs_dotgit(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): THREE consecutive empty pairs before the
+    # comma-bearing span closes -- proves the backtrack isn't bounded to
+    # skipping exactly one invalid candidate. Ground truth:
+    # `bash -c 'echo ./{}{}{}a,.git}'` -> `./}{}{}a ./.git`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-multiple-consecutive-empty-pairs-dotgit"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{}{}{}a,.git}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{}}{{}}{{}}a,.git}}' (3 consecutive empty brace pairs before .git); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_empty_pair_before_tools(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): targeting `tools` (the third critical child,
+    # not just `.git`/`packages`) -- proves the fix isn't keyed to a
+    # specific critical name. Ground truth:
+    # `bash -c 'echo ./{}a,tools}'` -> `./}a ./tools`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-empty-pair-before-tools"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{}a,tools}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{}}a,tools}}' (empty brace pair forces backtrack to tools); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_empty_pair_middle_segment_packages(tmp_dir: Path) -> None:
+    # Adversarial (own-pass, DISTINCT code path): the empty-pair backtrack
+    # bug also independently breaks `_is_wildcard_like_filler_component()`
+    # (used by `_has_wildcard_adjacent_critical_child()` for the
+    # already-hardened MIDDLE-SEGMENT bypass family), not just
+    # `_component_matches_critical_child()` -- `packages` here is a plain
+    # LITERAL trailing path segment (no expansion needed to reach it); the
+    # bug is that the preceding `{}a,b}` component was never recognized as
+    # a brace-bearing FILLER at all, so the adjacency pair never fired.
+    # Ground truth: `bash -c 'echo ./{}a,b}/packages'` ->
+    # `./}a/packages ./b/packages` (both alternatives end in /packages).
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-empty-pair-middle-segment-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{}a,b}/packages"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{}}a,b}}/packages' (empty-pair filler immediately before literal packages segment); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_empty_pair_before_dotgit_descendant_sub(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): empty-pair-before-dotgit combined with a
+    # further subpath after the group closes -- proves the fix fires
+    # regardless of what (if anything) follows the group, mirroring the
+    # existing plain-brace sibling-descendant coverage. Ground truth:
+    # `bash -c 'echo ./{}a,.git}/sub'` -> `./}a/sub ./.git/sub`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-empty-pair-before-dotgit-descendant-sub"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{}a,.git}/sub"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{}}a,.git}}/sub' (empty-pair-before-dotgit with a further subpath); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_brace_double_empty_pair_before_packages(tmp_dir: Path) -> None:
+    # Adversarial (own-pass): TWO consecutive empty pairs (distinct count
+    # from the 3-pair case above) before the comma-bearing span, targeting
+    # `packages`. Ground truth: `bash -c 'echo ./{}{}a,packages}'` ->
+    # `./}{}a ./packages`.
+    name = "pretooluse-bash-guard/blocks-rm-rf-brace-double-empty-pair-before-packages"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{}{}a,packages}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for 'rm -rf ./{{}}{{}}a,packages}}' (2 consecutive empty brace pairs before packages); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_brace_empty_pair_before_benign_name(tmp_dir: Path) -> None:
+    # Anti-hardcode control: the identical empty-pair-forces-backtrack
+    # shape, but resolving to a BENIGN name only, must stay allowed --
+    # proves the fix backtracks-then-matches rather than denying every
+    # component with an empty `{}` pair unconditionally. Ground truth:
+    # `bash -c 'echo ./{}a,scratch}'` -> `./}a ./scratch`.
+    name = "pretooluse-bash-guard/allows-brace-empty-pair-before-benign-name"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{}a,scratch}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'rm -rf ./{{}}a,scratch}}' (empty-pair backtrack resolves to benign-only name); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_brace_empty_alternative_after_dotgit_contaminated(tmp_dir: Path) -> None:
+    # Anti-hardcode control (task-suggested shape, independently ground-
+    # truthed): `./{.git,}a}` places an EMPTY alternative AFTER `.git`
+    # (trailing comma) rather than an empty PAIR before it. This is NOT a
+    # bypass: the group's FIRST candidate closing brace already has a
+    # top-level comma (`.git,`), so bash commits to that close immediately
+    # -- no backtrack ever happens -- and the trailing literal `a}` outside
+    # the group is concatenated onto EVERY alternative, so the actual
+    # expansion is `.gita}` / `a}`, NEITHER of which is the bare critical
+    # name `.git`. Ground truth: `bash -c 'echo ./{.git,}a}'` ->
+    # `./.gita} ./a}`. Included per task instruction to adversarially test
+    # this shape family; ground truth confirms it must stay allowed.
+    name = "pretooluse-bash-guard/allows-brace-empty-alternative-after-dotgit-contaminated"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": "rm -rf ./{.git,}a}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for 'rm -rf ./{{.git,}}a}}' (trailing empty alternative after .git, contaminates to .gita}}/a}}, not a bare .git match); got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# REM-FIX (CRITICAL, algorithmic-complexity DoS): `_MAX_BRACE_SCAN_ITERATIONS`
+# only ever bounded a SINGLE `_scan_one_brace_group()` attempt --
+# `_iter_brace_groups()`'s outer loop advances by only +1 character after a
+# failed/malformed/no-comma attempt, so a component with many nested or
+# adjacent comma-less brace pairs triggers up to O(n) independent
+# expensive attempts, each re-scanning `_content_has_top_level_comma()`
+# over a GROWING content span on every rejected candidate close. For `n`
+# perfectly-nested, comma-less empty brace pairs (`"{" * n + "}" * n`) this
+# compounds into cubic-class blowup -- live-timed against the PRE-FIX
+# `_iter_brace_groups()`: n=100 pairs (200 chars) ~0.03s, n=300 (600
+# chars) ~0.7s, n=600 (1200 chars) ~5.9s -- while the registered
+# PreToolUse hook timeout for this script (hooks/hooks.json) is only 10s,
+# and a timeout-killed hook process is this module's own documented
+# "no blocking decision produced" fail-open case, turning a performance bug
+# into a genuine bypass. Fixed by a single GLOBAL budget
+# (`_MAX_BRACE_SCAN_TOTAL_BUDGET`) shared across the WHOLE
+# `_iter_brace_groups()` call, fail-CLOSED (`malformed=True`) once
+# exhausted.
+# ---------------------------------------------------------------------------
+
+
+def test_bash_guard_iter_brace_groups_bounded_time_for_deeply_nested_empty_braces() -> None:
+    # White-box (direct call, no subprocess) regression test locking in a
+    # fixed wall-clock budget for a several-KB adversarial payload -- so
+    # this specific DoS class cannot silently reappear even if a future
+    # change re-widens or removes the global budget. n=900 (1800 chars)
+    # comfortably exceeds `_MAX_BRACE_SCAN_TOTAL_BUDGET`, so the correct
+    # post-fix behavior is a FAST fail-CLOSED (`malformed=True`), not a
+    # slow full resolution -- pre-fix, this exact shape at even n=600 took
+    # ~5.9s (see module-level docstring on `_MAX_BRACE_SCAN_TOTAL_BUDGET`).
+    name = "pretooluse-bash-guard/iter-brace-groups-bounded-time-for-deeply-nested-empty-braces"
+    n = 900
+    text = "{" * n + "}" * n
+    budget_seconds = 1.0
+    start = time.time()
+    groups, malformed = bash_guard._iter_brace_groups(text)
+    elapsed = time.time() - start
+    if elapsed >= budget_seconds:
+        fail(
+            name,
+            f"_iter_brace_groups() took {elapsed:.3f}s for a {len(text)}-char adversarial "
+            f"nested-empty-brace payload (n={n}) -- exceeds the {budget_seconds}s regression "
+            "budget; the global brace-scan budget fix may have regressed",
+        )
+        return
+    if not malformed:
+        fail(
+            name,
+            "expected malformed=True (fail-CLOSED) once the global brace-scan budget is "
+            f"exhausted for this adversarial payload; got malformed={malformed!r}, groups={groups!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_blocks_rm_rf_deeply_nested_empty_braces_dos_payload_end_to_end(tmp_dir: Path) -> None:
+    # End-to-end (real subprocess, full script) sibling of the white-box
+    # test above: proves the budget-exhausted fail-CLOSED signal actually
+    # propagates all the way to a `deny` decision through the real hook
+    # process, within a bounded wall-clock budget, for a real `rm -rf`
+    # command carrying the adversarial nested-empty-brace payload
+    # immediately before a `.git` target.
+    name = "pretooluse-bash-guard/blocks-rm-rf-deeply-nested-empty-braces-dos-payload-end-to-end"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    n = 900
+    nested = "{" * n + "}" * n
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": f"rm -rf ./{nested}a,.git}}"},
+    }
+    budget_seconds = 5.0
+    start = time.time()
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    elapsed = time.time() - start
+    if elapsed >= budget_seconds:
+        fail(
+            name,
+            f"end-to-end hook invocation took {elapsed:.3f}s for a {len(nested)}-char adversarial "
+            f"nested-empty-brace payload (n={n}) -- exceeds the {budget_seconds}s regression "
+            "budget (registered hook timeout is 10s)",
+        )
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny (fail-CLOSED on budget-exhausted brace scan) for adversarial nested-empty-brace payload; got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# REM-FIX (CRITICAL, algorithmic-complexity DoS variant -- unbounded CALL
+# COUNT): the fix above (`_MAX_BRACE_SCAN_TOTAL_BUDGET`) only bounds the
+# total work within a SINGLE `_iter_brace_groups()` call (one path
+# component's own scan) -- `_has_wildcard_adjacent_critical_child()` calls
+# `_component_has_brace_group()` (a fresh budget, pre-fix) once PER PATH
+# COMPONENT in `resolved.parts`, with no cap on segment COUNT. Cost is
+# LINEAR in segment count when each segment contains brace characters
+# (~2ms/segment vs ~0.003ms/segment for a plain segment) -- live-timed:
+# n=1500 segments (91KB command) ~2.88s, n=3000 (183KB) ~6.14s, n=6000
+# (~366KB) 13.4-15.0s, exceeding the registered 10s PreToolUse hook
+# timeout. Fixed by converting the per-call budget into a single, GLOBAL
+# budget shared across EVERY `_iter_brace_groups()` call made during the
+# WHOLE hook invocation, not reset per path component.
+# ---------------------------------------------------------------------------
+
+
+def test_bash_guard_bounded_time_for_many_brace_bearing_path_segments_end_to_end(tmp_dir: Path) -> None:
+    # End-to-end (real subprocess, full script): the reproduction shape is
+    # NOT one deeply-nested brace group in a single component (the sibling
+    # test above) but many SEPARATE, individually-small brace-bearing
+    # segments joined by "/" -- each one alone comfortably fits under the
+    # per-call budget, so only a GLOBAL, call-count-spanning budget (not a
+    # per-call one) can bound the total cost. n=1500 keeps RED-phase
+    # wall-clock reasonable (router-confirmed ~2.88s pre-fix, matching the
+    # documented reproduction) while still clearly exceeding the fixed
+    # post-fix regression budget below (~0.96s post-fix, measured).
+    name = "pretooluse-bash-guard/bounded-time-for-many-brace-bearing-path-segments-end-to-end"
+    cwd_dir = tmp_dir / "cwd"
+    cwd_dir.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    n_segments = 1500
+    segment = "{" * 30 + "}" * 30
+    target = "/".join([segment] * n_segments)
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd_dir.resolve()),
+        "tool_input": {"command": f"rm -rf ./{target}"},
+    }
+    budget_seconds = 2.0
+    start = time.time()
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    elapsed = time.time() - start
+    if elapsed >= budget_seconds:
+        fail(
+            name,
+            f"end-to-end hook invocation took {elapsed:.3f}s for {n_segments} brace-bearing "
+            f"'/'-joined path segments ({len(target)}-char target) -- exceeds the "
+            f"{budget_seconds}s regression budget (registered hook timeout is 10s); the "
+            "call-count-spanning global brace-scan budget fix may have regressed",
+        )
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny (fail-CLOSED once the shared global brace-scan budget is exhausted "
+            f"partway through this many-segment target) for the many-brace-segment payload; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -6132,6 +6899,47 @@ def main() -> int:
         test_bash_guard_allows_brace_benign_suffix_build_dist_tmp(tmp / "b124")
         test_bash_guard_allows_mkdir_brace_non_destructive(tmp / "b125")
         test_bash_guard_blocks_rm_rf_extglob_negation_scratch(tmp / "b126")
+
+        print()
+        print("[ pretooluse-bash-guard: REM-FIX (composition-boundary bypass -- nested brace + command-sub-in-brace) ]")
+        test_bash_guard_blocks_rm_rf_nested_brace_dotgit(tmp / "b127")
+        test_bash_guard_allows_nested_brace_benign(tmp / "b128")
+        test_bash_guard_blocks_rm_rf_doubly_nested_brace_dotgit(tmp / "b129")
+        test_bash_guard_blocks_rm_rf_command_sub_nested_in_brace_dotgit(tmp / "b130")
+        test_bash_guard_blocks_rm_rf_command_sub_nested_in_doubly_nested_brace_packages(tmp / "b131")
+        test_bash_guard_blocks_rm_rf_backtick_nested_in_brace_dotgit(tmp / "b132")
+        test_bash_guard_blocks_rm_rf_deeply_nested_brace_exceeds_bound(tmp / "b133")
+
+        print()
+        print("[ pretooluse-bash-guard: REM-FIX (ANSI-C quoting $'...' bypass) ]")
+        test_bash_guard_blocks_rm_rf_ansi_c_hex_quoted_dotgit(tmp / "b134")
+        test_bash_guard_blocks_rm_rf_ansi_c_quoted_brace_sibling_dotgit(tmp / "b135")
+        test_bash_guard_blocks_rm_rf_ansi_c_octal_quoted_dotgit(tmp / "b136")
+        test_bash_guard_blocks_rm_rf_ansi_c_quoted_packages(tmp / "b137")
+        test_bash_guard_blocks_rm_rf_ansi_c_quoted_brace_sibling_tools(tmp / "b138")
+        test_bash_guard_blocks_rm_rf_ansi_c_adjacent_quotes_concatenated_dotgit(tmp / "b139")
+        test_bash_guard_blocks_rm_rf_ansi_c_quoted_suffix_of_literal_prefix_dotgit(tmp / "b140")
+        test_bash_guard_allows_ansi_c_quoted_benign_name(tmp / "b141")
+
+        print()
+        print("[ pretooluse-bash-guard: REM-FIX round 8 (brace empty-pair backtrack bypass) ]")
+        test_bash_guard_blocks_rm_rf_brace_empty_pair_before_dotgit(tmp / "b142")
+        test_bash_guard_blocks_rm_rf_brace_empty_pair_before_ansi_c_hex_dotgit(tmp / "b143")
+        test_bash_guard_blocks_rm_rf_brace_empty_pair_before_packages(tmp / "b144")
+        test_bash_guard_blocks_rm_rf_brace_empty_pair_before_ansi_c_octal_dotgit(tmp / "b145")
+        test_bash_guard_blocks_rm_rf_brace_multiple_consecutive_empty_pairs_dotgit(tmp / "b146")
+        test_bash_guard_blocks_rm_rf_brace_empty_pair_before_tools(tmp / "b147")
+        test_bash_guard_blocks_rm_rf_brace_empty_pair_middle_segment_packages(tmp / "b148")
+        test_bash_guard_blocks_rm_rf_brace_empty_pair_before_dotgit_descendant_sub(tmp / "b149")
+        test_bash_guard_blocks_rm_rf_brace_double_empty_pair_before_packages(tmp / "b150")
+        test_bash_guard_allows_brace_empty_pair_before_benign_name(tmp / "b151")
+        test_bash_guard_allows_brace_empty_alternative_after_dotgit_contaminated(tmp / "b152")
+
+        print()
+        print("[ pretooluse-bash-guard: REM-FIX (algorithmic-complexity DoS -- global brace-scan budget) ]")
+        test_bash_guard_iter_brace_groups_bounded_time_for_deeply_nested_empty_braces()
+        test_bash_guard_blocks_rm_rf_deeply_nested_empty_braces_dos_payload_end_to_end(tmp / "b153")
+        test_bash_guard_bounded_time_for_many_brace_bearing_path_segments_end_to_end(tmp / "b154")
 
         print()
         print("[ hooklib shared-helper (white-box) ]")

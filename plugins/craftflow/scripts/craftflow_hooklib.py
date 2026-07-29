@@ -467,19 +467,53 @@ def _tokens_contain_extglob_span(tokens: list) -> bool:
     return False
 
 
+# REM-FIX (composition-boundary bypass, follow-up to the brace/extglob
+# hardening above): `split_subcommands()`'s shlex tokenizer never splits on
+# `{`/`}`/`,`, so an INTACT single-level-or-nested brace-expansion group
+# (`{a,.git}`, `{a,{b,.git}}`) always tokenizes as exactly ONE token no
+# matter how deeply nested. The ONLY way a `{`/`}` pair can end up
+# IMBALANCED within one token is a DIFFERENT mechanism fragmenting it first
+# -- concretely, a `$(...)`/backtick command substitution nested inside the
+# brace group forces shlex's `punctuation_chars=True` to split the `(`/`)`
+# into their own separate tokens (e.g. `./{$(echo a),.git}` tokenizes as
+# `["./{$", "(", "echo", "a", ")", ",.git}"]`), fragmenting the enclosing
+# brace syntax across tokens before brace-detection ever sees one clean
+# component. A token with more `{` than `}` characters is exactly this
+# fragmented-span signature -- mirrors `_tokens_contain_extglob_span()`
+# above (an existence check only; the fuller span-consuming logic lives in
+# craftflow_pretooluse_bash_guard.py's `_positional_targets()`, which
+# already has `_scan_paren_depth()`-style tools available for finding where
+# the fragmented span actually closes).
+def _tokens_contain_unbalanced_brace(tokens: list) -> bool:
+    for token in tokens:
+        if token.count("{") > token.count("}"):
+            return True
+    return False
+
+
 def command_has_traversal_or_wildcard(command: str) -> bool:
     """True if a `..` path-traversal literal or a `*`/bare `.` wildcard
     token appears anywhere in the command text OR inside any $(...) /
     backtick substitution it contains -- OR an extglob pattern-list group
     (`!(...)`/`@(...)`/`+(...)`/`*(...)`/`?(...)`) is plausibly present
     (MEDIUM, live-confirmed bypass: `rm -rf ./!(scratch)` expands to
-    everything except `scratch`, including `.git`/`packages`/`tools`).
-    Text-level heuristic only -- guards see static command strings, never
+    everything except `scratch`, including `.git`/`packages`/`tools`) -- OR
+    a command-substitution-fragmented brace-expansion span is plausibly
+    present (REM-FIX, composition-boundary bypass: `rm -rf
+    ./{$(echo a),.git}` has a real, live-confirmed destructive alternative
+    but a dynamic `$(...)` target ALONE, with no accompanying traversal/
+    wildcard signal elsewhere in the command, is normally left ALLOWED by
+    this guard's dynamic-target-fail-closed-only-with-corroboration design;
+    a fragmented brace span is itself exactly that corroborating signal,
+    the same way a bare extglob span already is above). Text-level
+    heuristic only -- guards see static command strings, never
     shell-expanded values."""
     extra = " ".join(m.group(1) or m.group(2) for m in _SUBSTITUTION_RE.finditer(command))
     combined = f"{command} {extra}"
     for tokens in split_subcommands(combined):
         if _tokens_contain_extglob_span(tokens):
+            return True
+        if _tokens_contain_unbalanced_brace(tokens):
             return True
         for token in tokens:
             stripped = token.strip("'\"")
