@@ -198,6 +198,55 @@ def test_find_repo_candidates_path_resolve_oserror_logs_diagnostic_and_excludes_
             )
 
 
+def test_git_toplevel_case_mismatch_uses_filesystem_identity_not_string_equality() -> None:
+    # On a case-insensitive/case-preserving filesystem (macOS/APFS), git's
+    # reported toplevel reflects the TRUE on-disk case, while the caller's
+    # --cwd-derived child path preserves whatever case the caller happened to
+    # use -- these can differ in string form while still being the SAME real
+    # directory. A string-equality identity check spuriously excludes this
+    # real repo; filesystem-identity comparison (samefile(), inode+device via
+    # os.stat) must not. A real cross-case directory can't be portably
+    # constructed in a unit test (behavior is filesystem-dependent), so this
+    # is simulated deterministically: subprocess.run is mocked so git
+    # "reports" a different-case string for the same real directory, and
+    # Path.samefile is mocked to model case-insensitive filesystem identity
+    # for that pair (mirroring this file's convention of mocking
+    # subprocess.run/Path.resolve for OS-boundary edge cases).
+    print("\n[_git_toplevel case-mismatch identity]")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "MyRepo"
+        _init_repo(repo)
+
+        real_run = subprocess.run
+
+        def fake_run(cmd, *args, **kwargs):
+            if str(repo) in cmd:
+                # git reports the TRUE on-disk case ("myrepo"), which differs
+                # in string form from the caller-cased child path ("MyRepo")
+                # even though both refer to the same real directory.
+                lower_reported = str(repo).replace("MyRepo", "myrepo")
+                return subprocess.CompletedProcess(cmd, 0, stdout=lower_reported + "\n", stderr="")
+            return real_run(cmd, *args, **kwargs)
+
+        real_samefile = Path.samefile
+
+        def fake_samefile(self, other):
+            other_path = other if isinstance(other, Path) else Path(other)
+            if str(self).lower() == str(other_path).lower():
+                return True
+            return real_samefile(self, other)
+
+        with mock.patch("craftflow_resolve_workspace_root.subprocess.run", side_effect=fake_run):
+            with mock.patch.object(Path, "samefile", fake_samefile):
+                result = find_repo_candidates(root)
+
+        if result == [repo.resolve()]:
+            ok("case-mismatched git-reported path still resolves to the real repo via samefile identity")
+        else:
+            fail("case-mismatch-identity", f"expected [{repo.resolve()}], got {result}")
+
+
 def test_match_request_text_unique_token_match() -> None:
     print("\n[match_request_text]")
     with tempfile.TemporaryDirectory() as tmp:
@@ -344,6 +393,7 @@ def main() -> int:
     test_find_repo_candidates_excludes_symlinked_child()
     test_find_repo_candidates_git_missing_logs_diagnostic_and_excludes_child()
     test_find_repo_candidates_path_resolve_oserror_logs_diagnostic_and_excludes_child()
+    test_git_toplevel_case_mismatch_uses_filesystem_identity_not_string_equality()
     test_match_request_text_unique_token_match()
     test_match_request_text_no_match_returns_none()
     test_match_request_text_multiple_names_returns_none()

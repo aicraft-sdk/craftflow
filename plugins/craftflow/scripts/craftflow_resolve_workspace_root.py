@@ -46,9 +46,17 @@ def _git_toplevel(child: Path) -> Path | None:
     """Return child's own resolved git toplevel iff child IS that toplevel.
 
     Returns None if `git -C child rev-parse --show-toplevel` fails, OR if it
-    succeeds but reports a DIFFERENT directory as the toplevel (child is
+    succeeds but identifies a DIFFERENT directory as the toplevel (child is
     merely nested inside an unrelated ancestor repo -- not itself an owning
     repo root, so it must not be offered as a candidate).
+
+    Identity is compared via `Path.samefile()` (inode+device via os.stat),
+    NOT string equality of resolved paths. On a case-insensitive/
+    case-preserving filesystem (macOS/APFS), git's reported toplevel reflects
+    the true on-disk case while `child.resolve()` preserves the caller's own
+    cwd-derived case -- these can differ as strings while still being the
+    same real directory. String equality would spuriously exclude such a
+    child; samefile() is immune to case-representation differences.
     """
     try:
         result = subprocess.run(
@@ -68,19 +76,26 @@ def _git_toplevel(child: Path) -> Path | None:
     reported = result.stdout.strip()
     if not reported:
         return None
+    reported_path = Path(reported)
     try:
-        reported_path = Path(reported).resolve()
-        child_resolved = child.resolve()
+        is_same = child.samefile(reported_path)
     except OSError as exc:
         print(
-            f"craftflow_resolve_workspace_root: path resolve failed for {child} "
+            f"craftflow_resolve_workspace_root: identity check failed for {child} "
             f"(reported={reported}): {exc}",
             file=sys.stderr,
         )
         return None
-    if reported_path != child_resolved:
+    if not is_same:
         return None
-    return child_resolved
+    try:
+        return child.resolve()
+    except OSError as exc:
+        print(
+            f"craftflow_resolve_workspace_root: path resolve failed for {child}: {exc}",
+            file=sys.stderr,
+        )
+        return None
 
 
 def find_repo_candidates(cwd: Path) -> list[Path]:
