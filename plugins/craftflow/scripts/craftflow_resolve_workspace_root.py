@@ -108,13 +108,33 @@ def find_repo_candidates(cwd: Path) -> list[Path]:
     directories", not arbitrary symlink targets (a symlink could point
     anywhere on disk, including an unrelated real git repo, which would
     otherwise become a silent, unconfirmed DETERMINISTIC candidate). Sorted
-    for deterministic output."""
+    for deterministic output.
+
+    A child's own is_dir()/is_symlink() probe can raise OSError (e.g. errno
+    13 EACCES for a permission-denied sibling -- not swallowed by pathlib
+    the way ENOENT/ENOTDIR/EBADF/ELOOP are). That must exclude only the
+    offending child, not abort the whole scan -- a denied sibling has
+    nothing to do with whether some OTHER neighboring directory is a valid
+    repo. Only a genuine failure of cwd.iterdir() itself (cwd unreadable)
+    aborts the scan."""
     try:
-        children = sorted(p for p in cwd.iterdir() if p.is_dir() and not p.is_symlink())
+        entries = list(cwd.iterdir())
     except OSError as exc:
         raise RuntimeError(f"cannot list cwd children: {exc}") from exc
+    children: list[Path] = []
+    for entry in entries:
+        try:
+            is_candidate_dir = entry.is_dir() and not entry.is_symlink()
+        except OSError as exc:
+            print(
+                f"craftflow_resolve_workspace_root: permission check failed for {entry}: {exc}",
+                file=sys.stderr,
+            )
+            continue
+        if is_candidate_dir:
+            children.append(entry)
     candidates: list[Path] = []
-    for child in children:
+    for child in sorted(children):
         toplevel = _git_toplevel(child)
         if toplevel is not None:
             candidates.append(toplevel)

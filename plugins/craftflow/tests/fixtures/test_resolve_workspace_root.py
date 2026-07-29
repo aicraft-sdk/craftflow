@@ -229,6 +229,47 @@ def test_find_repo_candidates_path_resolve_runtimeerror_from_real_symlink_loop_e
             )
 
 
+def test_find_repo_candidates_child_permission_error_excludes_child_not_whole_scan() -> None:
+    # A sibling directory with restrictive permissions/ACLs can make its own
+    # is_dir()/is_symlink() probe raise PermissionError (an OSError subclass)
+    # -- errno 13 EACCES is NOT swallowed by pathlib internally the way
+    # ENOENT/ENOTDIR/EBADF/ELOOP are. Prior to the fix this propagated through
+    # the single try/except wrapping the whole `sorted(cwd.iterdir()...)`
+    # generator and aborted the ENTIRE scan (re-raised as RuntimeError),
+    # silently discarding an otherwise-valid neighboring repo. A real
+    # ACL-based repro isn't portably constructible in a fast cross-platform
+    # unit test, so Path.is_dir is mocked to raise for the specific denied
+    # child -- matching this file's convention of mocking specific
+    # OS-boundary calls (subprocess.run, Path.samefile, Path.resolve above).
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        good_repo = root / "good-repo"
+        _init_repo(good_repo)
+        denied_child = root / "denied-child"
+        denied_child.mkdir()
+
+        real_is_dir = Path.is_dir
+
+        def fake_is_dir(self):
+            if str(self) == str(denied_child):
+                raise PermissionError(13, "Permission denied")
+            return real_is_dir(self)
+
+        stderr_capture = io.StringIO()
+        with mock.patch.object(Path, "is_dir", fake_is_dir):
+            with contextlib.redirect_stderr(stderr_capture):
+                result = find_repo_candidates(root)
+
+        stderr_output = stderr_capture.getvalue()
+        if result == [good_repo.resolve()] and "denied-child" in stderr_output:
+            ok("permission-denied child excluded + stderr diagnostic + valid sibling still found")
+        else:
+            fail(
+                "child-permission-error",
+                f"result={result}, stderr={stderr_output!r}",
+            )
+
+
 def test_git_toplevel_case_mismatch_uses_filesystem_identity_not_string_equality() -> None:
     # On a case-insensitive/case-preserving filesystem (macOS/APFS), git's
     # reported toplevel reflects the TRUE on-disk case, while the caller's
@@ -458,6 +499,7 @@ def main() -> int:
     test_find_repo_candidates_excludes_symlinked_child()
     test_find_repo_candidates_git_missing_logs_diagnostic_and_excludes_child()
     test_find_repo_candidates_path_resolve_runtimeerror_from_real_symlink_loop_excludes_child()
+    test_find_repo_candidates_child_permission_error_excludes_child_not_whole_scan()
     test_git_toplevel_case_mismatch_uses_filesystem_identity_not_string_equality()
     test_match_request_text_unique_token_match()
     test_match_request_text_no_match_returns_none()
