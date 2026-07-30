@@ -768,6 +768,14 @@ Write(
 )
 ```
 
+**Conditional — only if `## 0.` recorded a `project_root_resolution_fallback` reason for this
+session** (i.e. `TOPLEVEL_EXIT != 0` and the outcome was `NO_REPO_FOUND` or
+`RESOLVE_SCRIPT_ERROR`): append a second `status_history` entry and a second events.jsonl line
+alongside `workflow_started`, using the same `{workflow_uuid}`/`{iso_timestamp}` values as step
+3 above — `{"event":"project_root_resolution_fallback","ts":"{iso_timestamp}","reason":"NO_REPO_FOUND"|"RESOLVE_SCRIPT_ERROR"}`.
+If `## 0.` did not fall back (the common, single-repo case), skip this — there is nothing to
+append.
+
 4. Immediately after artifact creation, initialize the per-workflow state directory:
 
 ```text
@@ -1241,10 +1249,10 @@ Memory finalization permit (required before any `.md` memory write):
 - If workflow_uuid is unavailable (fallback path), omit the permit steps — the guard will audit-log but not block in that case.
 
 The memory task also:
-- Replaces `workflows/{workflow_uuid}/progress.md ## Tasks` with the active workflow snapshot.
-- Keeps only the most recent 10 items in `workflows/{workflow_uuid}/progress.md ## Completed`.
-- Updates `project/progress.md ## Completed` with a one-line summary of the finished workflow.
-- Removes the matching `[craftflow-internal] memory_task_id` line from `project/activeContext.md ## References`.
+- Replaces `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md ## Tasks` with the active workflow snapshot.
+- Keeps only the most recent 10 items in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md ## Completed`.
+- Updates `$PROJECT_ROOT/.craftflow/state/project/progress.md ## Completed` with a one-line summary of the finished workflow.
+- Removes the matching `[craftflow-internal] memory_task_id` line from `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References`.
 - If any artifact or memory write fails, stop immediately (clear the permit first). Never advance the workflow after a failed persistence write.
 
 Fallback: If `workflow_uuid` is unavailable, write to root-flat files
@@ -1252,10 +1260,10 @@ Fallback: If `workflow_uuid` is unavailable, write to root-flat files
 `$PROJECT_ROOT/.craftflow/state/progress.md`) as in prior versions.
 
 For PLAN:
-- Ensure `- Plan: {plan_file}` remains correct in `activeContext.md ## References`.
-- Ensure `- Design: {design_file}` remains correct in `activeContext.md ## References` when a design exists.
-- If a plan exists, record `Plan saved: {plan_file}` in `activeContext.md ## Recent Changes`.
-- If a plan exists, set `activeContext.md ## Next Steps` to `1. Execute plan: {plan_file}` unless the workflow ended in clarification-needed state.
+- Ensure `- Plan: {plan_file}` remains correct in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## References`.
+- Ensure `- Design: {design_file}` remains correct in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## References` when a design exists.
+- If a plan exists, record `Plan saved: {plan_file}` in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## Recent Changes`.
+- If a plan exists, set `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## Next Steps` to `1. Execute plan: {plan_file}` unless the workflow ended in clarification-needed state.
 
 For DEBUG:
 - Preserve the latest `[DEBUG-RESET: wf:{workflow_task_id}]` section in `## Recent Changes` and summarize the final result beneath it.
