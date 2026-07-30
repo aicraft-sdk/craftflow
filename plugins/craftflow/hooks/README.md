@@ -3,32 +3,43 @@
 This directory now serves two different purposes:
 
 1. **Plugin runtime hooks** via `hooks.json`
-   - `PreToolUse` — protected writes guard (Edit and Write matchers only; Read events are not intercepted); destructive-command traversal guard (Bash matcher — blocks rm/rmdir whose resolved target escapes the session's own cwd, e.g. a worktree relative-path escape; see `docs/incidents/2026-07-25-phase3-verifier-rm-attempt.md`)
+   - `PreToolUse` — protected writes guard (Edit and Write matchers only; Read events are not intercepted); destructive-command traversal guard (Bash matcher — blocks rm/rmdir whose resolved target escapes the session's own cwd, e.g. a worktree relative-path escape; see `docs/incidents/2026-07-25-phase3-verifier-rm-attempt.md`); catastrophic-command guard (Bash matcher — `craftflow_safe_shell_guard.py`, an absolute denylist for `rm -rf /`, `mkfs`, and fork-bomb patterns regardless of path, plus an opt-in recursive-grep-against-a-broad-path advisory; concept ported from `xai-org/grok-build`, see this plugin's `NOTICE`)
    - `SessionStart` — workflow resume context; hook import self-check
    - `PostToolUse` — workflow artifact integrity audit and memory placeholder restore (defensive, fires on Edit/Write)
    - `TaskCompleted` — task metadata validation (enforced: block mode)
    - `PostCompact` — compaction event capture
    - `SubagentStop` — agent contract presence audit and memory placeholder restore
    - `PreCompact` — workflow state snapshot before compaction
-   - `Stop` — workflow state snapshot and memory placeholder restore on session stop
+   - `Stop` — workflow state snapshot and memory placeholder restore on session stop; opt-in stop-verify gate (`craftflow_stop_verify.py` — inert unless `config/stop-verify.json` sets `{"enabled": true, "command": "..."}`; concept ported from `xai-org/grok-build`, see this plugin's `NOTICE`)
    - `StopFailure` — API error logging (async)
    - `InstructionsLoaded` — instruction file load audit (async)
 2. **Optional git pre-commit helper** via `pre-commit`
+
+## Composable Trust Gate (not wired to a hook event)
+
+`craftflow_hook_trust.py` is a standalone CLI (`check` / `update` subcommands),
+not registered in `hooks.json`. It fail-closed refuses to vouch for a
+repo-local hook script that isn't listed in `.craftflow/hook-trust.json`'s
+sha256 manifest, or whose content no longer matches its manifested hash.
+Intended for a future caller (e.g. repo-conductor's sandbox spawner) to
+invoke before executing a less-trusted repo-local hook script. Concept
+ported from `xai-org/grok-build`'s `trust.rs`; see this plugin's `NOTICE`.
 
 ## Plugin Runtime Hooks
 
 When CRAFTFLOW is installed as a Claude Code plugin, Claude Code reads `hooks/hooks.json`
 from the plugin bundle and runs the referenced scripts from `${CLAUDE_PLUGIN_ROOT}/scripts`.
 
-The shipped runtime hooks are intentionally minimal. Most hooks operate in audit mode; `memoryWrites`, `taskMetadata`, and `bashDestructiveTraversal` are enforced in block mode:
+The shipped runtime hooks are intentionally minimal. Most hooks operate in audit mode; `memoryWrites`, `taskMetadata`, `bashDestructiveTraversal`, and `safeShellGuard` are enforced in block mode:
 - protect and enforce direct memory markdown writes (block mode)
 - block rm/rmdir commands whose resolved target escapes the session's cwd (block mode)
+- deny an absolute denylist of catastrophic Bash commands — `rm -rf /`, `mkfs`, fork bombs (block mode; concept ported from `xai-org/grok-build`, see `NOTICE`)
 - inject workflow resume context
 - self-check that every sibling hook script still imports cleanly under python3, warning (not blocking) on failure
 - audit workflow artifact integrity after writes
 - validate and enforce CRAFTFLOW task metadata on completion (block mode)
 - restore memory placeholders after Edit/Write and on SubagentStop and Stop
-- snapshot workflow state before compaction and on session stop
+- snapshot workflow state before compaction and on session stop; optionally block session completion until a configured verify command passes (opt-in, off by default; concept ported from `xai-org/grok-build`, see `NOTICE`)
 - log API failures and instruction file loads for telemetry
 
 ## Internal Publication Audit

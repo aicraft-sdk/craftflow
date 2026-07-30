@@ -1271,6 +1271,1032 @@ def test_hooks_json_registers_new_hooks() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Safe-shell guard tests (Workstream B — concept-ported from
+# xai-org/grok-build's xai-grok-hooks safe-shell-guard.sh /
+# no-recursive-grep-guard.py, Apache-2.0; see this plugin's NOTICE)
+# ---------------------------------------------------------------------------
+
+def test_safe_shell_guard_blocks_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for rm -rf /; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_blocks_sudo_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-sudo-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "sudo rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for sudo rm -rf /; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_allows_rm_rf_subdir(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/allows-rm-rf-non-root-subdir"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": "rm -rf ./build/tmp-artifacts"},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if out:
+        fail(name, f"expected silent allow for rm -rf on a non-root subdir; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_blocks_mkfs_variant(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-mkfs-variant"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": "mkfs.ext4 /dev/sda1"},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for mkfs.ext4; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_blocks_fork_bomb(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-classic-fork-bomb"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": ":(){ :|:& };:"},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for the classic fork bomb; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_blocks_fork_bomb_renamed(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-renamed-fork-bomb"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": "bomb(){bomb|bomb&};bomb"},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a renamed fork-bomb function; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_ignores_non_bash_tool(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/ignores-non-bash-tool"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Edit", "cwd": str(tmp_dir), "tool_input": {"file_path": "x.md"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if out:
+        fail(name, f"expected silent allow for a non-Bash tool; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_allows_benign_command(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/allows-benign-command"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "git status"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if out:
+        fail(name, f"expected silent allow for a benign command; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_recursive_grep_off_by_default(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/recursive-grep-inert-by-default"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "grep -r foo /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if out:
+        fail(name, f"expected recursive-grep check to be fully inert with no opt-in config; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_recursive_grep_blocked_when_opted_in(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/recursive-grep-blocked-when-opted-in"
+    plugin_copy = tmp_dir / "plugin"
+    shutil.copytree(PLUGIN_ROOT, plugin_copy)
+    config_dir = plugin_copy / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "hook-mode.json").write_text(
+        json.dumps({"recursiveGrepGuard": "block"}), encoding="utf-8"
+    )
+    env = {"CLAUDE_PLUGIN_ROOT": str(plugin_copy)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "grep -r foo /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for recursive grep against / when opted in to block mode; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_recursive_grep_no_false_positive_on_pattern_text(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/recursive-grep-no-false-positive-on-pattern-text"
+    plugin_copy = tmp_dir / "plugin"
+    shutil.copytree(PLUGIN_ROOT, plugin_copy)
+    config_dir = plugin_copy / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "hook-mode.json").write_text(
+        json.dumps({"recursiveGrepGuard": "block"}), encoding="utf-8"
+    )
+    env = {"CLAUDE_PLUGIN_ROOT": str(plugin_copy)}
+    # "recursive" appears only in the SEARCH PATTERN, not as an actual -r flag.
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": 'grep "recursive" ./notes.txt'},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out:
+        fail(name, f"expected no deny when 'recursive' only appears in the search pattern; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_recursive_grep_no_false_positive_in_unrelated_segment(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/recursive-grep-no-false-positive-in-unrelated-pipeline-segment"
+    plugin_copy = tmp_dir / "plugin"
+    shutil.copytree(PLUGIN_ROOT, plugin_copy)
+    config_dir = plugin_copy / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "hook-mode.json").write_text(
+        json.dumps({"recursiveGrepGuard": "block"}), encoding="utf-8"
+    )
+    env = {"CLAUDE_PLUGIN_ROOT": str(plugin_copy)}
+    # "grep -r /" only appears as a quoted STRING ARGUMENT to `echo` in one
+    # pipeline segment -- not as a real grep invocation in any subcommand.
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": 'echo "grep -r /" | cat'},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out:
+        fail(name, f"expected no deny for a recursive-grep flag embedded in an unrelated quoted segment; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_blocks_command_builtin_prefix(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-command-builtin-prefix-bypass"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "command rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for `command rm -rf /` (builtin-prefix bypass); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_allows_command_builtin_benign(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/allows-command-builtin-benign"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "command git status"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if out:
+        fail(name, f"expected silent allow for command-builtin-wrapped benign command; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_blocks_eval_wrapped_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-eval-wrapped-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": 'eval "rm -rf /"'}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for eval-wrapped rm -rf /; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_allows_benign_eval_command(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/allows-benign-eval-command"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": 'eval "git status"'}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if out:
+        fail(name, f"expected silent allow for benign eval-wrapped command; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_blocks_bash_c_mkfs(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-bash-c-wrapped-mkfs"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": 'bash -c "mkfs.ext4 /dev/sda1"'},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for bash -c wrapped mkfs.ext4; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_blocks_sh_c_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-sh-c-wrapped-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": 'sh -c "rm -rf /"'}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for sh -c wrapped rm -rf /; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_fails_closed_on_unparseable_command(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/fails-closed-on-unparseable-command"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": 'rm -rf / ; echo "unterminated'},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected fail-closed deny for an unparseable/malformed command; got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# Safe-shell guard REM-FIX round 2 tests (4 CRITICAL findings)
+# ---------------------------------------------------------------------------
+
+def _assert_denied(name: str, out: str) -> bool:
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny; got: {out!r}")
+        return False
+    return True
+
+
+def _assert_allowed(name: str, out: str) -> bool:
+    if out:
+        fail(name, f"expected silent allow; got: {out!r}")
+        return False
+    return True
+
+
+# --- CRITICAL A: sudo long-flag space-separated bypass ---------------------
+
+def test_safe_shell_guard_blocks_sudo_user_long_flag_space_separated(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-sudo-user-long-flag-space-separated"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "sudo --user root rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_sudo_group_long_flag_space_separated(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-sudo-group-long-flag-space-separated"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "sudo --group root rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_allows_sudo_user_long_flag_benign(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/allows-sudo-user-long-flag-benign-command"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "sudo --user root git status"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_allowed(name, out):
+        ok(name)
+
+
+# --- CRITICAL B: ReDoS in FORK_BOMB_RE --------------------------------------
+
+def test_safe_shell_guard_fork_bomb_check_bounded_timing(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/fork-bomb-check-bounded-timing-100kb-adversarial"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    adversarial = "a" * 100000
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": adversarial}}
+    start = time.time()
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    elapsed = time.time() - start
+    if elapsed > 2.0:
+        fail(name, f"expected well under 1s (2s hard ceiling incl. subprocess overhead); took {elapsed:.3f}s")
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_still_blocks_fork_bomb_embedded_in_long_command(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-fork-bomb-embedded-in-long-benign-prefix"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    command = ("echo hi; " * 5000) + ":(){ :|:& };:"
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": command}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+# --- CRITICAL C: unrecognized wrapper prefixes bypass detection ------------
+
+def test_safe_shell_guard_blocks_env_wrapped_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-env-wrapped-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "env rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_nice_wrapped_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-nice-wrapped-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "nice rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_nohup_wrapped_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-nohup-wrapped-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "nohup rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_timeout_wrapped_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-timeout-wrapped-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "timeout 5 rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_xargs_wrapped_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-xargs-wrapped-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": "xargs -I{} rm -rf / </dev/null"},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_find_exec_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-find-exec-rm-rf-placeholder"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": r"find / -exec rm -rf {} \;"},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_python3_c_os_system_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-python3-c-os-system-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": "python3 -c \"import os; os.system('rm -rf /')\""},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_perl_e_system_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-perl-e-system-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": 'perl -e \'system("rm -rf /")\''},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_allows_env_wrapped_benign(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/allows-env-wrapped-benign-command"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "env FOO=bar git status"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_allowed(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_allows_timeout_wrapped_benign(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/allows-timeout-wrapped-benign-command"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "timeout 5 git status"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_allowed(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_allows_python3_c_benign(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/allows-python3-c-benign-code"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": "python3 -c \"print('hello world')\""},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_allowed(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_allows_find_without_exec(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/allows-plain-find-without-exec"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "find . -name '*.tmp'"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_allowed(name, out):
+        ok(name)
+
+
+# --- CRITICAL D: dynamic/indirect command-name tokens bypass detection -----
+
+def test_safe_shell_guard_blocks_dynamic_var_command_name(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-dynamic-var-command-name-argv0"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "X=rm; $X -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_command_substitution_argv0(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-command-substitution-argv0"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "$(echo rm) -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_fails_closed_on_dynamic_command_name_generic(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/fails-closed-on-dynamic-command-name-generic"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "$TOOL --version"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+# ---------------------------------------------------------------------------
+# REM-FIX round 3 (FINAL for this file): 3 CRITICAL + 1 HIGH findings
+# ---------------------------------------------------------------------------
+
+def _read_fork_bomb_window_right() -> int:
+    """Reads the guard's own _FORK_BOMB_WINDOW_RIGHT constant from source so
+    the boundary tests below track it instead of duplicating a hardcoded
+    number that could silently drift out of sync with the implementation."""
+    content = (SCRIPTS / "craftflow_safe_shell_guard.py").read_text(encoding="utf-8")
+    match = re.search(r"_FORK_BOMB_WINDOW_RIGHT\s*=\s*(\d+)", content)
+    if not match:
+        raise AssertionError(
+            "could not find _FORK_BOMB_WINDOW_RIGHT = <int> in craftflow_safe_shell_guard.py "
+            "-- constant name likely changed without updating this test helper"
+        )
+    return int(match.group(1))
+
+
+# --- ROUND-3 CRITICAL-1: fork-bomb bounded-window bypass via padded body ---
+
+def test_safe_shell_guard_blocks_fork_bomb_padded_body_well_under_window(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-fork-bomb-padded-body-well-under-window"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    padding = " " * 4000
+    command = ":(){" + padding + ":|:& };:"
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": command}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_fork_bomb_padded_body_at_window_boundary(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-fork-bomb-padded-body-at-window-boundary"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    tail = ":|:& };:"
+    window_right = _read_fork_bomb_window_right()
+    padding = " " * (window_right - len(tail))  # tail's last char lands exactly at the window edge
+    command = ":(){" + padding + tail
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": command}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_allows_fork_bomb_padded_past_window_documented_limit(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/allows-fork-bomb-padded-past-window-documented-limit"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    tail = ":|:& };:"
+    window_right = _read_fork_bomb_window_right()
+    padding = " " * (window_right - len(tail) + 1)  # one char past the window edge
+    command = ":(){" + padding + tail
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": command}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_allowed(name, out):
+        ok(name)
+
+
+# --- ROUND-3 CRITICAL-2: brace-expansion argv0 bypass -----------------------
+
+def test_safe_shell_guard_blocks_brace_expansion_argv0_leading(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-brace-expansion-argv0-leading"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "{r,}m -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_brace_expansion_argv0_trailing(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-brace-expansion-argv0-trailing"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "r{m,} -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_brace_expansion_argv0_empty_alt(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-brace-expansion-argv0-empty-alt"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "{,}rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_root_target_alongside_unrelated_brace_arg(tmp_dir: Path) -> None:
+    """Regression guard for a bypass that CRITICAL-2's initial implementation
+    (broadening the shared `_looks_dynamic` used by both argv0 detection AND
+    `_parse_rm_invocation`'s target scan) would otherwise introduce: an
+    incidental brace-expansion-shaped TARGET token (e.g. `{x,y}`) marking
+    the whole rm invocation "has_dynamic" and suppressing the root-target
+    check for an ADJACENT literal `/` target too. `_parse_rm_invocation`
+    must keep using the narrower $/backtick-only `_looks_dynamic_substitution`
+    for targets, not the broadened argv0-only `_looks_dynamic`."""
+    name = "safe-shell-guard/blocks-root-target-alongside-unrelated-brace-arg"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "rm -rf / {x,y}"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+# --- ROUND-3 CRITICAL-3: nice/nohup/timeout own-flags bypass ---------------
+
+def test_safe_shell_guard_blocks_nice_n_flag_space_separated(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-nice-n-flag-space-separated"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "nice -n 19 rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_nice_adjustment_flag_equals_joined(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-nice-adjustment-flag-equals-joined"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": "nice --adjustment=19 rm -rf /"},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_timeout_signal_flag_equals_joined(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-timeout-signal-flag-equals-joined"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": "timeout --signal=KILL 5 rm -rf /"},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_timeout_kill_after_flag_space_separated(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-timeout-kill-after-flag-space-separated"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": "timeout -k 5 30 rm -rf /"},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_nohup_double_dash_flag(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-nohup-double-dash-flag"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "nohup -- rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_allows_nice_n_flag_benign(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/allows-nice-n-flag-benign-command"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "nice -n 10 git status"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_allowed(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_allows_timeout_plain_benign(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/allows-timeout-plain-benign-command"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "timeout 5 npm test"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_allowed(name, out):
+        ok(name)
+
+
+# --- ROUND-3 HIGH: watch/ssh/su/chroot/flock wrapper forms bypass entirely --
+
+def test_safe_shell_guard_blocks_watch_wrapped_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-watch-wrapped-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "watch -n1 rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_ssh_wrapped_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-ssh-wrapped-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "ssh localhost rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_su_c_wrapped_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-su-c-wrapped-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": 'su -c "rm -rf /"'},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_chroot_wrapped_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-chroot-wrapped-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "chroot / rm -rf /"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_allows_chroot_wrapped_non_root_target_by_design(tmp_dir: Path) -> None:
+    """chroot's own newroot argument ("/") is correctly skipped as the
+    wrapper's positional argument (not misread as rm's target); the wrapped
+    `rm -rf /tmp` is then checked under this guard's EXISTING, unchanged,
+    root-target-only scope (see _is_root_target docstring) -- same as an
+    unwrapped `rm -rf /tmp` would be. Expanding rm-target scope beyond the
+    literal filesystem root is explicitly out of scope for this round."""
+    name = "safe-shell-guard/allows-chroot-wrapped-non-root-target-by-design"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": "chroot / rm -rf /tmp"},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_allowed(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_blocks_flock_wrapped_rm_rf_root(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/blocks-flock-wrapped-rm-rf-root"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": "flock /tmp/x rm -rf /"},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_denied(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_allows_ssh_wrapped_benign(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/allows-ssh-wrapped-benign-command"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": "ssh someuser@host git pull"},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_allowed(name, out):
+        ok(name)
+
+
+def test_safe_shell_guard_allows_su_without_c_flag(tmp_dir: Path) -> None:
+    name = "safe-shell-guard/allows-su-without-c-flag"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": "su - someuser"}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if _assert_allowed(name, out):
+        ok(name)
+
+
+def test_hooks_json_registers_safe_shell_guard() -> None:
+    name = "hooks/safe-shell-guard-registered-alongside-bash-guard"
+    path = PLUGIN_ROOT / "hooks" / "hooks.json"
+    if not path.exists():
+        fail(name, f"hooks.json not found at {path}")
+        return
+    hooks = json.loads(path.read_text(encoding="utf-8"))
+    pre_hooks = hooks.get("hooks", {}).get("PreToolUse", [])
+    bash_entries = [entry for entry in pre_hooks if entry.get("matcher") == "Bash"]
+    if len(bash_entries) != 1:
+        fail(name, f"expected exactly 1 PreToolUse entry with matcher 'Bash'; found {len(bash_entries)}")
+        return
+    commands = [h.get("command", "") for h in bash_entries[0].get("hooks", [])]
+    if not any("craftflow_pretooluse_bash_guard" in c for c in commands):
+        fail(name, "existing craftflow_pretooluse_bash_guard.py registration was removed or moved")
+        return
+    if not any("craftflow_safe_shell_guard" in c for c in commands):
+        fail(name, "craftflow_safe_shell_guard.py not registered alongside craftflow_pretooluse_bash_guard.py")
+        return
+    if len(commands) < 2:
+        fail(name, f"expected >=2 hooks in the Bash matcher entry; found {len(commands)}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# Stop-verify gate tests (Workstream B — concept-ported from
+# xai-org/grok-build's xai-grok-hooks stop-verify guard, Apache-2.0)
+# ---------------------------------------------------------------------------
+
+def _write_stop_verify_config(plugin_copy: Path, config: dict) -> None:
+    config_dir = plugin_copy / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "stop-verify.json").write_text(json.dumps(config), encoding="utf-8")
+
+
+def test_stop_verify_inert_when_unconfigured(tmp_dir: Path) -> None:
+    name = "stop-verify/inert-when-unconfigured"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT), "CLAUDE_PROJECT_DIR": str(tmp_dir)}
+    code, out = run_hook("craftflow_stop_verify.py", {}, env)
+    if code != 0:
+        fail(name, f"exit code {code}; expected 0 when unconfigured")
+        return
+    if '"decision": "block"' in out or '"decision":"block"' in out:
+        fail(name, f"expected no block when the verify gate is unconfigured; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_stop_verify_allows_when_command_passes(tmp_dir: Path) -> None:
+    name = "stop-verify/allows-when-command-passes"
+    plugin_copy = tmp_dir / "plugin"
+    shutil.copytree(PLUGIN_ROOT, plugin_copy)
+    _write_stop_verify_config(plugin_copy, {"enabled": True, "command": "true"})
+    env = {"CLAUDE_PLUGIN_ROOT": str(plugin_copy), "CLAUDE_PROJECT_DIR": str(tmp_dir)}
+    code, out = run_hook("craftflow_stop_verify.py", {}, env)
+    if code != 0:
+        fail(name, f"exit code {code}; expected 0")
+        return
+    if '"decision": "block"' in out or '"decision":"block"' in out:
+        fail(name, f"expected no block when the configured command exits 0; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_stop_verify_blocks_when_command_fails(tmp_dir: Path) -> None:
+    name = "stop-verify/blocks-when-command-fails"
+    plugin_copy = tmp_dir / "plugin"
+    shutil.copytree(PLUGIN_ROOT, plugin_copy)
+    _write_stop_verify_config(plugin_copy, {"enabled": True, "command": "false"})
+    env = {"CLAUDE_PLUGIN_ROOT": str(plugin_copy), "CLAUDE_PROJECT_DIR": str(tmp_dir)}
+    code, out = run_hook("craftflow_stop_verify.py", {}, env)
+    if code != 0:
+        fail(name, f"exit code {code}; expected 0 (Stop hooks block via JSON decision, not exit code)")
+        return
+    if '"decision": "block"' not in out and '"decision":"block"' not in out:
+        fail(name, f"expected a block decision when the configured verify command fails; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_stop_verify_never_blocks_on_continuation_stop(tmp_dir: Path) -> None:
+    name = "stop-verify/never-blocks-on-stop-hook-active"
+    plugin_copy = tmp_dir / "plugin"
+    shutil.copytree(PLUGIN_ROOT, plugin_copy)
+    _write_stop_verify_config(plugin_copy, {"enabled": True, "command": "false"})
+    env = {"CLAUDE_PLUGIN_ROOT": str(plugin_copy), "CLAUDE_PROJECT_DIR": str(tmp_dir)}
+    code, out = run_hook("craftflow_stop_verify.py", {"stop_hook_active": True}, env)
+    if code != 0:
+        fail(name, f"exit code {code}; expected 0")
+        return
+    if '"decision": "block"' in out or '"decision":"block"' in out:
+        fail(name, f"expected no block on a continuation stop (stop_hook_active=True), even with a failing command; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_hooks_json_registers_stop_verify() -> None:
+    name = "hooks/stop-verify-registered"
+    path = PLUGIN_ROOT / "hooks" / "hooks.json"
+    if not path.exists():
+        fail(name, f"hooks.json not found at {path}")
+        return
+    hooks = json.loads(path.read_text(encoding="utf-8"))
+    stop_hooks = hooks.get("hooks", {}).get("Stop", [])
+    commands = [h.get("command", "") for entry in stop_hooks for h in entry.get("hooks", [])]
+    if not any("craftflow_stop_persist" in c for c in commands):
+        fail(name, "existing craftflow_stop_persist.py registration was removed or moved")
+        return
+    if not any("craftflow_stop_verify" in c for c in commands):
+        fail(name, "craftflow_stop_verify.py not registered under Stop")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# Hook trust/provenance gate tests (Workstream B — concept-ported from
+# xai-org/grok-build's xai-grok-hooks trust.rs, Apache-2.0)
+# ---------------------------------------------------------------------------
+
+def test_hook_trust_refuses_unknown_script(tmp_dir: Path) -> None:
+    name = "hook-trust/refuses-script-not-in-manifest"
+    tmp_dir.mkdir(parents=True)
+    project_root = tmp_dir / "project"
+    project_root.mkdir()
+    target_script = project_root / "some_hook.py"
+    target_script.write_text("VALUE = 1\n", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_hook_trust.py"), "check", str(target_script),
+         "--project-root", str(project_root)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        fail(name, f"expected non-zero (untrusted) exit for a script absent from any manifest; got 0, stdout={result.stdout!r}")
+        return
+    if '"trusted": false' not in result.stdout and '"trusted":false' not in result.stdout:
+        fail(name, f"expected trusted:false in stdout; got: {result.stdout!r}")
+        return
+    ok(name)
+
+
+def test_hook_trust_allows_manifest_listed_matching_hash(tmp_dir: Path) -> None:
+    name = "hook-trust/allows-manifest-listed-matching-hash"
+    import hashlib
+    tmp_dir.mkdir(parents=True)
+    project_root = tmp_dir / "project"
+    project_root.mkdir()
+    target_script = project_root / "some_hook.py"
+    content = "VALUE = 1\n"
+    target_script.write_text(content, encoding="utf-8")
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    manifest_path = project_root / ".craftflow" / "hook-trust.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps({"scripts": {"some_hook.py": digest}}), encoding="utf-8"
+    )
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_hook_trust.py"), "check", str(target_script),
+         "--project-root", str(project_root)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"expected exit 0 (trusted) for a manifest-listed matching-hash script; got {result.returncode}, stdout={result.stdout!r}")
+        return
+    if '"trusted": true' not in result.stdout and '"trusted":true' not in result.stdout:
+        fail(name, f"expected trusted:true in stdout; got: {result.stdout!r}")
+        return
+    ok(name)
+
+
+def test_hook_trust_refuses_hash_mismatch(tmp_dir: Path) -> None:
+    name = "hook-trust/refuses-hash-mismatch-tampered-script"
+    import hashlib
+    tmp_dir.mkdir(parents=True)
+    project_root = tmp_dir / "project"
+    project_root.mkdir()
+    target_script = project_root / "some_hook.py"
+    target_script.write_text("VALUE = 1  # tampered after manifest was generated\n", encoding="utf-8")
+    stale_digest = hashlib.sha256(b"VALUE = 1\n").hexdigest()
+    manifest_path = project_root / ".craftflow" / "hook-trust.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps({"scripts": {"some_hook.py": stale_digest}}), encoding="utf-8"
+    )
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_hook_trust.py"), "check", str(target_script),
+         "--project-root", str(project_root)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        fail(name, f"expected non-zero (untrusted) exit for a hash-mismatched (tampered) script; got 0")
+        return
+    if '"trusted": false' not in result.stdout and '"trusted":false' not in result.stdout:
+        fail(name, f"expected trusted:false in stdout for a hash mismatch; got: {result.stdout!r}")
+        return
+    ok(name)
+
+
+def test_hook_trust_update_generates_manifest_then_check_passes(tmp_dir: Path) -> None:
+    name = "hook-trust/update-generates-manifest-then-check-passes"
+    tmp_dir.mkdir(parents=True)
+    project_root = tmp_dir / "project"
+    scripts_dir = project_root / "scripts"
+    scripts_dir.mkdir(parents=True)
+    script_a = scripts_dir / "craftflow_scratch_a.py"
+    script_a.write_text("VALUE = 1\n", encoding="utf-8")
+    update_result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_hook_trust.py"), "update",
+         "--project-root", str(project_root), "--scripts-dir", str(scripts_dir)],
+        capture_output=True,
+        text=True,
+    )
+    if update_result.returncode != 0:
+        fail(name, f"expected 'update' to exit 0; got {update_result.returncode}, stderr={update_result.stderr!r}")
+        return
+    manifest_path = project_root / ".craftflow" / "hook-trust.json"
+    if not manifest_path.exists():
+        fail(name, f"expected manifest to be written at {manifest_path}")
+        return
+    check_result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_hook_trust.py"), "check", str(script_a),
+         "--project-root", str(project_root)],
+        capture_output=True,
+        text=True,
+    )
+    if check_result.returncode != 0:
+        fail(name, f"expected the freshly-manifested script to be trusted; got {check_result.returncode}, stdout={check_result.stdout!r}")
+        return
+    ok(name)
+
+
+def test_hook_trust_never_imports_hooklib_directly() -> None:
+    name = "hook-trust/never-imports-hooklib"
+    path = SCRIPTS / "craftflow_hook_trust.py"
+    if not path.exists():
+        fail(name, f"craftflow_hook_trust.py not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    if "import craftflow_hooklib" in content or "from craftflow_hooklib" in content:
+        fail(name, "craftflow_hook_trust.py must not import craftflow_hooklib directly (it may be the very script under trust evaluation)")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1342,6 +2368,92 @@ def main() -> int:
         test_selfcheck_discovery_itself_bounded_by_timeout(tmp / "hc6")
         test_selfcheck_main_emits_distinct_warning_when_discovery_times_out(tmp / "hc7")
 
+        print()
+        print("[ safe-shell-guard ]")
+        test_safe_shell_guard_blocks_rm_rf_root(tmp / "sg1")
+        test_safe_shell_guard_blocks_sudo_rm_rf_root(tmp / "sg2")
+        test_safe_shell_guard_allows_rm_rf_subdir(tmp / "sg3")
+        test_safe_shell_guard_blocks_mkfs_variant(tmp / "sg4")
+        test_safe_shell_guard_blocks_fork_bomb(tmp / "sg5")
+        test_safe_shell_guard_blocks_fork_bomb_renamed(tmp / "sg6")
+        test_safe_shell_guard_ignores_non_bash_tool(tmp / "sg7")
+        test_safe_shell_guard_allows_benign_command(tmp / "sg8")
+        test_safe_shell_guard_recursive_grep_off_by_default(tmp / "sg9")
+        test_safe_shell_guard_recursive_grep_blocked_when_opted_in(tmp / "sg10")
+        test_safe_shell_guard_recursive_grep_no_false_positive_on_pattern_text(tmp / "sg11")
+        test_safe_shell_guard_recursive_grep_no_false_positive_in_unrelated_segment(tmp / "sg12")
+        test_safe_shell_guard_blocks_command_builtin_prefix(tmp / "sg13")
+        test_safe_shell_guard_allows_command_builtin_benign(tmp / "sg14")
+        test_safe_shell_guard_blocks_eval_wrapped_rm_rf_root(tmp / "sg15")
+        test_safe_shell_guard_allows_benign_eval_command(tmp / "sg16")
+        test_safe_shell_guard_blocks_bash_c_mkfs(tmp / "sg17")
+        test_safe_shell_guard_blocks_sh_c_rm_rf_root(tmp / "sg18")
+        test_safe_shell_guard_fails_closed_on_unparseable_command(tmp / "sg19")
+
+        print()
+        print("[ safe-shell-guard REM-FIX round 2 ]")
+        test_safe_shell_guard_blocks_sudo_user_long_flag_space_separated(tmp / "sg20")
+        test_safe_shell_guard_blocks_sudo_group_long_flag_space_separated(tmp / "sg21")
+        test_safe_shell_guard_allows_sudo_user_long_flag_benign(tmp / "sg22")
+        test_safe_shell_guard_fork_bomb_check_bounded_timing(tmp / "sg23")
+        test_safe_shell_guard_still_blocks_fork_bomb_embedded_in_long_command(tmp / "sg24")
+        test_safe_shell_guard_blocks_env_wrapped_rm_rf_root(tmp / "sg25")
+        test_safe_shell_guard_blocks_nice_wrapped_rm_rf_root(tmp / "sg26")
+        test_safe_shell_guard_blocks_nohup_wrapped_rm_rf_root(tmp / "sg27")
+        test_safe_shell_guard_blocks_timeout_wrapped_rm_rf_root(tmp / "sg28")
+        test_safe_shell_guard_blocks_xargs_wrapped_rm_rf_root(tmp / "sg29")
+        test_safe_shell_guard_blocks_find_exec_rm_rf_root(tmp / "sg30")
+        test_safe_shell_guard_blocks_python3_c_os_system_rm_rf_root(tmp / "sg31")
+        test_safe_shell_guard_blocks_perl_e_system_rm_rf_root(tmp / "sg32")
+        test_safe_shell_guard_allows_env_wrapped_benign(tmp / "sg33")
+        test_safe_shell_guard_allows_timeout_wrapped_benign(tmp / "sg34")
+        test_safe_shell_guard_allows_python3_c_benign(tmp / "sg35")
+        test_safe_shell_guard_allows_find_without_exec(tmp / "sg36")
+        test_safe_shell_guard_blocks_dynamic_var_command_name(tmp / "sg37")
+        test_safe_shell_guard_blocks_command_substitution_argv0(tmp / "sg38")
+        test_safe_shell_guard_fails_closed_on_dynamic_command_name_generic(tmp / "sg39")
+
+        print()
+        print("[ safe-shell-guard REM-FIX round 3 (FINAL for this file) ]")
+        test_safe_shell_guard_blocks_fork_bomb_padded_body_well_under_window(tmp / "sg40")
+        test_safe_shell_guard_blocks_fork_bomb_padded_body_at_window_boundary(tmp / "sg41")
+        test_safe_shell_guard_allows_fork_bomb_padded_past_window_documented_limit(tmp / "sg42")
+        test_safe_shell_guard_blocks_brace_expansion_argv0_leading(tmp / "sg43")
+        test_safe_shell_guard_blocks_brace_expansion_argv0_trailing(tmp / "sg44")
+        test_safe_shell_guard_blocks_brace_expansion_argv0_empty_alt(tmp / "sg45")
+        test_safe_shell_guard_blocks_root_target_alongside_unrelated_brace_arg(tmp / "sg45b")
+        test_safe_shell_guard_blocks_nice_n_flag_space_separated(tmp / "sg46")
+        test_safe_shell_guard_blocks_nice_adjustment_flag_equals_joined(tmp / "sg47")
+        test_safe_shell_guard_blocks_timeout_signal_flag_equals_joined(tmp / "sg48")
+        test_safe_shell_guard_blocks_timeout_kill_after_flag_space_separated(tmp / "sg49")
+        test_safe_shell_guard_blocks_nohup_double_dash_flag(tmp / "sg50")
+        test_safe_shell_guard_allows_nice_n_flag_benign(tmp / "sg51")
+        test_safe_shell_guard_allows_timeout_plain_benign(tmp / "sg52")
+        test_safe_shell_guard_blocks_watch_wrapped_rm_rf_root(tmp / "sg53")
+        test_safe_shell_guard_blocks_ssh_wrapped_rm_rf_root(tmp / "sg54")
+        test_safe_shell_guard_blocks_su_c_wrapped_rm_rf_root(tmp / "sg55")
+        test_safe_shell_guard_blocks_chroot_wrapped_rm_rf_root(tmp / "sg56")
+        test_safe_shell_guard_allows_chroot_wrapped_non_root_target_by_design(tmp / "sg57")
+        test_safe_shell_guard_blocks_flock_wrapped_rm_rf_root(tmp / "sg58")
+        test_safe_shell_guard_allows_ssh_wrapped_benign(tmp / "sg59")
+        test_safe_shell_guard_allows_su_without_c_flag(tmp / "sg60")
+
+        print()
+        print("[ stop-verify ]")
+        test_stop_verify_inert_when_unconfigured(tmp / "sv1")
+        test_stop_verify_allows_when_command_passes(tmp / "sv2")
+        test_stop_verify_blocks_when_command_fails(tmp / "sv3")
+        test_stop_verify_never_blocks_on_continuation_stop(tmp / "sv4")
+
+        print()
+        print("[ hook-trust ]")
+        test_hook_trust_refuses_unknown_script(tmp / "ht1")
+        test_hook_trust_allows_manifest_listed_matching_hash(tmp / "ht2")
+        test_hook_trust_refuses_hash_mismatch(tmp / "ht3")
+        test_hook_trust_update_generates_manifest_then_check_passes(tmp / "ht4")
+
+    test_hook_trust_never_imports_hooklib_directly()
+
     print()
     print("[ structural ]")
     test_anti_rationalization_tables_present()
@@ -1351,6 +2463,8 @@ def main() -> int:
     test_router_dispatches_intent_interview()
     test_hooks_json_registers_new_hooks()
     test_hooks_json_registers_bash_guard()
+    test_hooks_json_registers_safe_shell_guard()
+    test_hooks_json_registers_stop_verify()
     test_selfcheck_never_imports_hooklib_directly()
     test_selfcheck_resolves_bare_python3_not_sys_executable()
     test_hooks_json_registers_selfcheck_sessionstart()
