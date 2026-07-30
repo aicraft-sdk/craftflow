@@ -463,6 +463,36 @@ def test_parent_workflow_creation_anchored_to_project_root() -> None:
     ok(name)
 
 
+def test_parent_workflow_creation_fallback_reason_wired() -> None:
+    name = "router/parent-workflow-creation-fallback-reason-wired"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    start = content.find("### Parent workflow creation")
+    end = content.find("\n### BUILD task graph", start)
+    if start == -1 or end == -1:
+        fail(name, "could not bound ### Parent workflow creation section")
+        return
+    section = content[start:end]
+    fallback_idx = section.find("project_root_resolution_fallback")
+    if fallback_idx == -1:
+        fail(name, "project_root_resolution_fallback conditional block not found in ### Parent workflow creation")
+        return
+    fallback_block = section[fallback_idx: fallback_idx + 500]
+    if "NO_REPO_FOUND" not in fallback_block:
+        fail(name, "NO_REPO_FOUND reason literal not found in fallback conditional block")
+        return
+    if "RESOLVE_SCRIPT_ERROR" not in fallback_block:
+        fail(name, "RESOLVE_SCRIPT_ERROR reason literal not found in fallback conditional block")
+        return
+    if "{workflow_uuid}" not in fallback_block:
+        fail(name, "{workflow_uuid} templating not found in fallback conditional block")
+        return
+    if "{iso_timestamp}" not in fallback_block:
+        fail(name, "{iso_timestamp} templating not found in fallback conditional block")
+        return
+    ok(name)
+
+
 def test_shared_preparation_anchored_to_project_root() -> None:
     name = "router/shared-preparation-anchored"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
@@ -7353,6 +7383,7 @@ def main() -> int:
     test_section_0_precedes_memory_load()
     test_memory_load_anchored_to_project_root()
     test_parent_workflow_creation_anchored_to_project_root()
+    test_parent_workflow_creation_fallback_reason_wired()
     test_shared_preparation_anchored_to_project_root()
     test_worktree_isolation_reuses_project_root_no_duplicate_resolution()
     test_memory_finalization_for_plan_anchored_to_project_tier()
