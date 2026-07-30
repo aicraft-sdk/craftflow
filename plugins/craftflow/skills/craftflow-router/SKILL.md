@@ -172,7 +172,7 @@ Auto-heal rule:
 - After every `Edit(...)`, immediately `Read(...)` and verify the new section exists.
 
 JUST_GO:
-- Read `activeContext.md ## Session Settings`.
+- Read `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Session Settings`.
 - If `AUTO_PROCEED: true`, set `JUST_GO=true`.
 - While `JUST_GO=true`, auto-default all non-REVERT AskUserQuestion gates to the recommended option and log the choice in `## Decisions`.
 
@@ -238,7 +238,7 @@ Resume algorithm:
 5. Reconstruct the memory task as the unique pending/in_progress `kind:memory` task in the same `wf:`.
 
 Scope-decision resume:
-- Before normal routing, check `activeContext.md ## Decisions` for a live marker:
+- Before normal routing, check `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Decisions` for a live marker:
   - `[SCOPE-DECISION-PENDING: wf:{workflow_uuid} reason:{...}]`
 - If present, treat the current user reply as the answer to that pending BUILD scope gate:
   - `critical only` -> create the pending REM-FIX with `scope:CRITICAL_ONLY`
