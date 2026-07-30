@@ -130,7 +130,7 @@ Rules:
   - `reconcile`
   - `reasoning`
 - `pending_gate` is required whenever BUILD/PLAN/DEBUG is waiting on user clarification, scope selection, or persistence repair.
-- BUILD's worktree merge-safety guard uses 4 `pending_gate` values (canonical logic lives in
+- BUILD's worktree merge-safety guard uses 6 `pending_gate` values (canonical logic lives in
   `skills/craftflow-router/SKILL.md` → "### Worktree Isolation (BUILD Default)" step 4; this is a
   summary, not a duplicate of the logic):
   - `worktree_merge_conflict` — a real textual git merge conflict. Ask the user to resolve it in
@@ -148,6 +148,14 @@ Rules:
     applying the worktree's uncommitted changes to the main tree; earlier files in the same run
     may already have landed. The user must inspect `git status --porcelain` in the main tree and
     resolve the underlying issue, then resume.
+  - `worktree_merge_unrecognized_failure` — `git merge` exited non-zero with output that is
+    neither "Already up to date" nor a conflict marker (e.g. an invalid ref, unrelated
+    histories). Nothing was merged; the worktree and branch are left untouched. The user must
+    inspect the error and resolve the underlying issue, then resume.
+  - `worktree_cleanup_failed` — after a successful merge or copy-fallback, either
+    `git worktree remove --force` or `git branch -d` failed (e.g. the worktree is busy/locked, or
+    the branch is not fully merged — a real correctness signal). The user must resolve the
+    underlying issue, then resume to retry cleanup.
 - `status_history` and `remediation_history` are append-only summaries of major router decisions.
 
 v10 router gates:

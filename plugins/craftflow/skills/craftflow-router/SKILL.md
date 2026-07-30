@@ -231,11 +231,16 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
    reg = json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())
    print(reg['plugins']['craftflow@craftflow'][0]['installPath'])
    ")
+   CRAFTFLOW_INSTALL_EXIT=$?
    RESOLVE_RESULT=$(python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_resolve_workspace_root.py" \
      --cwd "$(pwd)" \
      --request "USER_REQUEST_SHELL_ESCAPED")
    RESOLVE_EXIT=$?
    ```
+   (A non-zero `CRAFTFLOW_INSTALL_EXIT` here is not handled as a separate branch — it surfaces
+   downstream as a non-zero `RESOLVE_EXIT` from the next command, an empty/unusable
+   `$CRAFTFLOW_INSTALL` path, which the existing `RESOLVE_EXIT != 0` handling below already
+   catches.)
    Replace `USER_REQUEST_SHELL_ESCAPED` with the actual user request, properly shell-quoted
    (same convention as **Parent workflow creation** step 1). The script never mutates git or
    filesystem state — it only reads cwd's immediate child directories and runs non-mutating
@@ -354,8 +359,13 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
       reg = json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())
       print(reg['plugins']['craftflow@craftflow'][0]['installPath'])
       ")
+      CRAFTFLOW_INSTALL_EXIT=$?
       LOCK_DIR="$PROJECT_ROOT/.claude/worktrees/.merge.lock"
       ```
+      (A non-zero `CRAFTFLOW_INSTALL_EXIT` here is not handled as a separate branch — it surfaces
+      downstream as an empty/unusable `$CRAFTFLOW_INSTALL` path in whichever script it is used to
+      invoke next, e.g. the lock-staleness `DECISION_EXIT` capture and default `case` arm in step
+      4b below, or `COPY_FALLBACK_EXIT` in step 4e.)
 
    b. **Acquire the merge lock.** The lock is a *directory*, not a plain file — `mkdir` is
       atomic on POSIX filesystems, which a bare existence check is not. The staleness/contention
@@ -380,6 +390,7 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
 
         DECISION=$(python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_worktree_lock_staleness.py" \
           "$LOCK_DIR/metadata.json" "$PROJECT_ROOT" "{workflow_uuid}")
+        DECISION_EXIT=$?
 
         case "$DECISION" in
           STALE_WORKTREE_GONE*|STALE_INACTIVE*|SELF_RECLAIM*)
@@ -402,6 +413,14 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
             fi
             # Metadata changed underneath us -- fall through to the normal
             # wait/retry path below, exactly like ordinary contention.
+            ;;
+          *)
+            # Unrecognized $DECISION -- covers ordinary CONTENDED*/LOCK_READ_ERROR*/
+            # GIT_WORKTREE_LIST_ERROR* outcomes (no reclaim action needed, just wait/retry)
+            # AND a genuinely unknown/garbled value (e.g. empty output from a non-zero
+            # DECISION_EXIT, or an unexpected outcome word this router doesn't recognize).
+            # Both are treated identically to CONTENDED_UNKNOWN_HOLDER: fail closed, never
+            # reclaim on an unrecognized state, fall through to the wait/retry path below.
             ;;
         esac
 
@@ -478,7 +497,9 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
       ```
       - If `DIRTY_EXIT != 0` (the `git status` command itself failed) OR `DIRTY_STATUS` is
         non-empty (uncommitted changes exist):
-        - Release the lock: `rm -rf "$LOCK_DIR"`
+        - Release the lock: `rm -rf "$LOCK_DIR"; RELEASE_LOCK_EXIT=$?` (a non-zero exit here is
+          self-detecting via the next workflow's contention path in step 4b — not treated as
+          fatal here)
         - Persist `pending_gate: "worktree_dirty_main_tree"` (include `$DIRTY_STATUS` in the
           event log for visibility).
         - Do NOT run `git merge`, do NOT copy any files from the worktree, do NOT remove the
@@ -504,10 +525,13 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
         the worktree's builder edited files but never committed them on `{worktree_branch}` — a
         real, frequently-observed gotcha in this repo, not a sign there's nothing to merge.
         Recover the actual changes directly from the worktree's own uncommitted state via the
-        real copy-fallback script, never via free-form manual copying:
+        real copy-fallback script, never via free-form manual copying — capture both its output
+        and its own exit code, mirroring the `MERGE_EXIT` pattern immediately above (never leave
+        this script's exit code unchecked either):
         ```bash
-        python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_worktree_copy_fallback.py" \
-          "{worktree_path}" "$PROJECT_ROOT"
+        COPY_FALLBACK_OUTPUT=$(python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_worktree_copy_fallback.py" \
+          "{worktree_path}" "$PROJECT_ROOT" 2>&1)
+        COPY_FALLBACK_EXIT=$?
         ```
         This script parses `git status --porcelain=1 -z` in `{worktree_path}` (NUL-delimited,
         unquoted paths — chosen to correctly handle renamed/copied entries and paths containing
@@ -518,30 +542,36 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
         [EASY TO MISS: this fallback only ever runs after the clean-tree check in 4d has already
         passed for `$PROJECT_ROOT` — it never bypasses that check, because it is reached only
         from this already-guarded branch.]
-      - **If the copy-fallback script itself exits non-zero:** the script's own documented
-        guarantee is partial-apply-but-diagnosable, not atomic — earlier tokens in the same run
-        that already applied successfully remain applied in the main tree even if a later token
-        fails, so a non-zero exit does NOT mean nothing landed.
-        - Release the lock: `rm -rf "$LOCK_DIR"`
-        - Persist `pending_gate: "worktree_copy_fallback_failed"` (include the script's
-          stderr/error text in the event log for visibility).
+      - **If `COPY_FALLBACK_EXIT != 0`** (the copy-fallback script itself exits non-zero): the
+        script's own documented guarantee is partial-apply-but-diagnosable, not atomic — earlier
+        tokens in the same run that already applied successfully remain applied in the main tree
+        even if a later token fails, so a non-zero exit does NOT mean nothing landed.
+        - Release the lock: `rm -rf "$LOCK_DIR"; RELEASE_LOCK_EXIT=$?` (a non-zero exit here is
+          self-detecting via the next workflow's contention path in step 4b — not treated as
+          fatal here)
+        - Persist `pending_gate: "worktree_copy_fallback_failed"` (include `$COPY_FALLBACK_OUTPUT`
+          in the event log for visibility).
         - Do NOT remove the worktree, do NOT delete the branch — the worktree still holds the
           uncommitted source of truth for whatever did not land.
         - Stop before memory-finalize. Tell the user: "The copy-fallback script failed while
-          applying the worktree's uncommitted changes to the main tree: `{stderr_or_error_text}`.
+          applying the worktree's uncommitted changes to the main tree: `{copy_fallback_output}`.
           This may be a partial apply — earlier files in this run may have already landed. Run
           `git status --porcelain` in the main tree to see exactly what applied before resuming.
           Resolve the underlying issue (e.g. a filesystem/permission problem, or a genuine
           conflict/rename edge case the script refused to guess on), then resume this workflow to
           retry."
         - Resuming this workflow re-enters this step from 4a.
+      - **If `COPY_FALLBACK_EXIT == 0`**: the fallback applied cleanly. Proceed to the final
+        cleanup below exactly as a successful `git merge` would.
       - **If `MERGE_EXIT == 0` AND `$MERGE_OUTPUT` does not contain `"Already up to date"`** (a
         real merge succeeded with actual content merged, no conflicts): nothing further needed
         here.
       - **If `MERGE_EXIT != 0` AND `$MERGE_OUTPUT` contains a conflict marker (`"CONFLICT"`)**
         (existing, unchanged outcome, now gated on `MERGE_EXIT` + output text rather than assumed
         by exclusion):
-        - Release the lock: `rm -rf "$LOCK_DIR"`
+        - Release the lock: `rm -rf "$LOCK_DIR"; RELEASE_LOCK_EXIT=$?` (a non-zero exit here is
+          self-detecting via the next workflow's contention path in step 4b — not treated as
+          fatal here)
         - Persist `pending_gate: "worktree_merge_conflict"`, ask user to resolve before
           memory-finalize.
         - Do NOT remove the worktree or delete the branch while conflicts are unresolved.
@@ -553,7 +583,9 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
         slipped past the 4d clean-tree check): this is the explicit 4th branch closing the
         by-exclusion gap — nothing was actually merged, so nothing may be treated as if it had
         merged.
-        - Release the lock: `rm -rf "$LOCK_DIR"`
+        - Release the lock: `rm -rf "$LOCK_DIR"; RELEASE_LOCK_EXIT=$?` (a non-zero exit here is
+          self-detecting via the next workflow's contention path in step 4b — not treated as
+          fatal here)
         - Persist `pending_gate: "worktree_merge_unrecognized_failure"` (include `$MERGE_OUTPUT`
           in the event log for visibility).
         - Do NOT remove the worktree, do NOT delete the branch, do NOT run the copy-fallback
@@ -565,14 +597,56 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
           been touched. Inspect the error above, resolve the underlying issue in `$PROJECT_ROOT`,
           then resume this workflow to retry."
         - Resuming this workflow re-enters this step from 4a.
-      - On successful merge or successful copy-fallback:
-        - Remove worktree: `git worktree remove {worktree_path} --force`
-        - Delete branch: `git branch -d {worktree_branch}`
-        - Update artifact: `worktree_mode → "merged_and_removed"`
-        - Release the lock: `rm -rf "$LOCK_DIR"`
-        - Continue to doc-sync/memory-finalize as today.
+      - On successful merge or successful copy-fallback, clean up — capture the exit code of
+        each command, mirroring the `MERGE_EXIT`/`COPY_FALLBACK_EXIT` pattern above (never leave
+        either cleanup command's exit code unchecked):
+        ```bash
+        WORKTREE_REMOVE_OUTPUT=$(git worktree remove {worktree_path} --force 2>&1)
+        WORKTREE_REMOVE_EXIT=$?
+        ```
+        - **If `WORKTREE_REMOVE_EXIT != 0`** (e.g. the worktree is busy/locked — a process still
+          has an open handle inside it): do NOT run `git branch -d`, do NOT set
+          `worktree_mode → "merged_and_removed"`.
+          - Release the lock: `rm -rf "$LOCK_DIR"; RELEASE_LOCK_EXIT=$?` (a non-zero exit here
+            is self-detecting via the next workflow's contention path in step 4b — not treated
+            as fatal here)
+          - Persist `pending_gate: "worktree_cleanup_failed"` (include `$WORKTREE_REMOVE_OUTPUT`
+            and the failing command, `git worktree remove`, in the event log for visibility).
+          - Stop before memory-finalize. Tell the user: "The merge/copy-fallback succeeded, but
+            `git worktree remove {worktree_path} --force` failed: `{worktree_remove_output}`. The
+            worktree and its branch are still present and untouched. Resolve the underlying issue
+            (e.g. a process still holding a handle inside the worktree), then resume this
+            workflow to retry cleanup."
+          - Resuming this workflow re-enters this step from 4a.
+        - **If `WORKTREE_REMOVE_EXIT == 0`**, proceed to delete the branch:
+          ```bash
+          BRANCH_DELETE_OUTPUT=$(git branch -d {worktree_branch} 2>&1)
+          BRANCH_DELETE_EXIT=$?
+          ```
+          - **If `BRANCH_DELETE_EXIT != 0`** (e.g. `git branch -d` refuses because the branch is
+            not fully merged into the current branch — a real correctness signal, not a cosmetic
+            failure): do NOT set `worktree_mode → "merged_and_removed"`.
+            - Release the lock: `rm -rf "$LOCK_DIR"; RELEASE_LOCK_EXIT=$?` (a non-zero exit here
+              is self-detecting via the next workflow's contention path in step 4b — not
+              treated as fatal here)
+            - Persist `pending_gate: "worktree_cleanup_failed"` (include `$BRANCH_DELETE_OUTPUT`
+              and the failing command, `git branch -d`, in the event log for visibility).
+            - Stop before memory-finalize. Tell the user: "The merge/copy-fallback succeeded and
+              the worktree was removed, but `git branch -d {worktree_branch}` failed:
+              `{branch_delete_output}`. This can mean the branch is not fully merged — a real
+              correctness signal, not a cosmetic failure. Inspect `git log {worktree_branch}` in
+              `$PROJECT_ROOT`, resolve the discrepancy (or delete the branch manually with
+              `git branch -D` once you've confirmed nothing is lost), then resume this workflow
+              to retry cleanup."
+            - Resuming this workflow re-enters this step from 4a.
+          - **If `BRANCH_DELETE_EXIT == 0`**: both cleanup commands succeeded.
+            - Update artifact: `worktree_mode → "merged_and_removed"`
+            - Release the lock: `rm -rf "$LOCK_DIR"; RELEASE_LOCK_EXIT=$?` (a non-zero exit here
+              is self-detecting via the next workflow's contention path in step 4b — not
+              treated as fatal here)
+            - Continue to doc-sync/memory-finalize as today.
 
-Safety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: "auto_created"` already set, re-use `worktree_path` from the artifact rather than creating a new worktree. If `worktree_path` is null despite `worktree_mode: "auto_created"`, treat as fallback and proceed with main tree. If a resume finds `pending_gate` set to `worktree_merge_locked`, `worktree_dirty_main_tree`, `worktree_merge_conflict`, `worktree_merge_unrecognized_failure`, or `worktree_copy_fallback_failed`, re-enter this step from 4a — none of these gates require any bespoke resume branch beyond the generic resume algorithm in `## 4. Resume And Hydration`.
+Safety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: "auto_created"` already set, re-use `worktree_path` from the artifact rather than creating a new worktree. If `worktree_path` is null despite `worktree_mode: "auto_created"`, treat as fallback and proceed with main tree. If a resume finds `pending_gate` set to `worktree_merge_locked`, `worktree_dirty_main_tree`, `worktree_merge_conflict`, `worktree_merge_unrecognized_failure`, `worktree_copy_fallback_failed`, or `worktree_cleanup_failed`, re-enter this step from 4a — none of these gates require any bespoke resume branch beyond the generic resume algorithm in `## 4. Resume And Hydration`.
 
 ### DEBUG preparation
 
