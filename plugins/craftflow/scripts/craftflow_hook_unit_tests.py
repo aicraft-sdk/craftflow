@@ -8,6 +8,8 @@ Run: python3 scripts/craftflow_hook_unit_tests.py
 """
 from __future__ import annotations
 
+import argparse
+import fcntl
 import importlib.util
 import json
 import os
@@ -27,6 +29,9 @@ sys.path.insert(0, str(SCRIPTS))
 import craftflow_hooklib as hooklib  # noqa: E402
 import craftflow_pretooluse_bash_guard as bash_guard  # noqa: E402
 import craftflow_pretooluse_guard as pretooluse_guard  # noqa: E402
+import craftflow_skill_ledger as skill_ledger  # noqa: E402
+import craftflow_skill_promote as skill_promote  # noqa: E402
+import craftflow_skill_propose as skill_propose  # noqa: E402
 
 _errors: list[str] = []
 _passes: int = 0
@@ -518,6 +523,601 @@ def test_pretooluse_guard_denies_edit_write_to_memory_finalize(tmp_dir: Path) ->
     _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
     if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
         fail(name, f"expected deny for an unpermitted Edit/Write to .memory-finalize; got: {out!r}")
+        return
+    ok(name)
+
+
+def _stage_inflight_skill_candidate(
+    root: Path, name: str, candidate_id: str = "cand0001", status: str = "candidate"
+) -> None:
+    """Test fixture (REM-FIX round 2, CRITICAL 1+2): stage a ledger candidate
+    plus its matching staged proposal so `<name>` is recognized as ACTIVELY
+    IN-FLIGHT in the skill-distillation pipeline -- the only shape the
+    narrowed `_is_protected_skill_promotion_path()` now protects. Mirrors the
+    real `craftflow_skill_ledger.py` candidate schema and the real
+    `skill-author` agent's staged-proposal frontmatter shape."""
+    ledger_path = root / ".craftflow" / "state" / "project" / "skill-candidates.json"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "candidates": [
+                    {
+                        "id": candidate_id,
+                        "surface": "test/surface",
+                        "signature": "test recurring signature",
+                        "workflows": ["wf-a", "wf-b"],
+                        "distinct_workflows": 2,
+                        "max_severity": "high",
+                        "evidence": [],
+                        "first_seen": "2026-01-01T00:00:00Z",
+                        "last_seen": "2026-01-01T00:00:00Z",
+                        "status": status,
+                        "promoted_skill": None,
+                        "rejected_reason": None,
+                        "rejected_at_distinct_workflows": None,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    proposal_dir = root / ".craftflow" / "state" / "project" / "skill-proposals" / candidate_id
+    proposal_dir.mkdir(parents=True, exist_ok=True)
+    (proposal_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: \"Use when testing narrowed skill-promotion "
+        "protection end to end.\"\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+
+
+def test_pretooluse_guard_allows_unrelated_hand_authored_skill_write_no_ledger(tmp_dir: Path) -> None:
+    # CRITICAL 1 (REM-FIX round 2): an ordinary, unrelated hand-authored
+    # skill (no matching ledger entry, no ledger file at all) must be
+    # allowed -- the STANDARD Claude Code/Cursor project-skill convention
+    # (.claude/skills/<name>/SKILL.md) is not craftflow-exclusive. This is
+    # the regression test for the over-broad blanket path-shape deny; it
+    # must FAIL against the pre-fix code (which denies unconditionally) to
+    # prove it is a real test.
+    name = "pretooluse-guard/allows-unrelated-hand-authored-skill-write-no-ledger"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    target = tmp_dir / ".claude" / "skills" / "my-handwritten-skill" / "SKILL.md"
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": str(target),
+            "content": "---\nname: my-handwritten-skill\ndescription: \"hand authored\"\n---\n",
+        },
+        "cwd": str(tmp_dir),
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(
+            name,
+            "expected allow (no output) for an unrelated hand-authored skill write with "
+            f"no matching ledger entry / no ledger file at all; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_edit_write_to_claude_skills_skill_md(tmp_dir: Path) -> None:
+    # HIGH 5 (REM-FIX, skill-distillation Phase 2 remediation): a raw
+    # Edit/Write tool call must never be able to reach
+    # `.claude/skills/<name>/SKILL.md` directly -- the sole authorized writer
+    # is craftflow_skill_promote.py's own internal file I/O via --approve.
+    # REM-FIX round 2 (CRITICAL 1): protection is now narrowed to in-flight
+    # ledger candidates, so "foo" must be staged as one for this deny to
+    # still fire -- proves the narrowed check still protects what it needs
+    # to (see test_pretooluse_guard_allows_unrelated_hand_authored_skill_write_no_ledger
+    # for the companion regression proof with NO staged candidate).
+    name = "pretooluse-guard/denies-edit-write-to-claude-skills-skill-md"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "foo")
+    target = tmp_dir / ".claude" / "skills" / "foo" / "SKILL.md"
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target), "content": "---\nname: foo\n---\n"},
+        "cwd": str(tmp_dir),
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a raw Write to .claude/skills/foo/SKILL.md; got: {out!r}")
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"expected the deny reason to name 'skill-promotion-path'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_edit_write_to_cursor_skills_skill_md(tmp_dir: Path) -> None:
+    # REM-FIX round 2 (CRITICAL 1): staged as an in-flight ledger candidate
+    # (status "proposed" this time, to exercise both recognized statuses).
+    name = "pretooluse-guard/denies-edit-write-to-cursor-skills-skill-md"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "foo", status="proposed")
+    target = tmp_dir / ".cursor" / "skills" / "foo" / "SKILL.md"
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(target), "old_string": "a", "new_string": "b"},
+        "cwd": str(tmp_dir),
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a raw Edit to .cursor/skills/foo/SKILL.md; got: {out!r}")
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"expected the deny reason to name 'skill-promotion-path'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_redirect_to_claude_skills_skill_md(tmp_dir: Path) -> None:
+    # REM-FIX round 2 (CRITICAL 1): staged as an in-flight ledger candidate.
+    name = "pretooluse-guard/denies-bash-redirect-to-claude-skills-skill-md"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "foo")
+    target = tmp_dir / ".claude" / "skills" / "foo" / "SKILL.md"
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": f"echo 'hi' > {target}"},
+        "cwd": str(tmp_dir),
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash redirect into .claude/skills/foo/SKILL.md; got: {out!r}")
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"expected the deny reason to name 'skill-promotion-path'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_python_oneliner_write_to_inflight_skill(tmp_dir: Path) -> None:
+    # CRITICAL 2 (REM-FIX round 2): live-reproduced bypass -- the
+    # `skill_promotion_violations` lane in `_handle_bash` only scanned
+    # `>`/`>>`/`tee` redirect targets, never cross-checking the
+    # `_python_script_write_targets()` detector already built (and used) for
+    # memory-file protection. A python -c one-liner using open().write()
+    # against an in-flight skill's SKILL.md was silently ALLOWED before this
+    # fix.
+    name = "pretooluse-guard/denies-python-oneliner-write-to-inflight-skill"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "newskill")
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {
+            "command": "python3 -c \"open('.claude/skills/newskill/SKILL.md', 'w').write('pwned')\""
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a python -c open().write() bypass targeting an in-flight skill; got: {out!r}")
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"expected the deny reason to name 'skill-promotion-path'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_python_os_system_write_to_inflight_skill(tmp_dir: Path) -> None:
+    # CRITICAL 2 (REM-FIX round 2): live-reproduced bypass -- os.system(),
+    # never cross-checked against the `_python_suspicious_mechanism_targets()`
+    # detector already built (and used) for memory-file protection.
+    name = "pretooluse-guard/denies-python-os-system-write-to-inflight-skill"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "newskill")
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {
+            "command": "python3 -c \"import os; os.system('echo pwned > .claude/skills/newskill/SKILL.md')\""
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a python os.system() bypass targeting an in-flight skill; got: {out!r}")
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"expected the deny reason to name 'skill-promotion-path'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_python_heredoc_write_to_inflight_skill(tmp_dir: Path) -> None:
+    # CRITICAL 2 (REM-FIX round 2): live-reproduced bypass -- a heredoc/stdin-
+    # fed python script, never cross-checked against
+    # `_python_script_write_targets()`'s whole-command-text scan.
+    name = "pretooluse-guard/denies-python-heredoc-write-to-inflight-skill"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "newskill")
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {
+            "command": (
+                "python3 - <<'EOF'\n"
+                "open('.claude/skills/newskill/SKILL.md','w').write('pwned-heredoc')\n"
+                "EOF"
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a python heredoc bypass targeting an in-flight skill; got: {out!r}")
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"expected the deny reason to name 'skill-promotion-path'; got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# REM-FIX round 3: ledger/proposal tamper protection (CRITICAL 1) + fail-
+# closed on ledger corruption (CRITICAL 2).
+# ---------------------------------------------------------------------------
+
+def test_pretooluse_guard_denies_tamper_then_write_via_ledger_write(tmp_dir: Path) -> None:
+    # CRITICAL 1 (REM-FIX round 3): live-reproduced tamper sequence -- stage
+    # an in-flight candidate, confirm a Write to its SKILL.md is denied
+    # (round 2 behavior), then Write the ledger file itself (replacing
+    # `candidates` with `[]`) -- this was previously ALLOWED (not itself
+    # protected) -- which then made the retried SAME write to the SKILL.md
+    # ALLOWED too, since the guard re-reads the (now-tampered) ledger on
+    # every invocation. This test proves the tamper is now denied AT THE
+    # LEDGER-WRITE STEP, so the SKILL.md stays protected.
+    name = "pretooluse-guard/denies-tamper-then-write-via-ledger-write"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "foo")
+    skill_target = tmp_dir / ".claude" / "skills" / "foo" / "SKILL.md"
+
+    skill_payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(skill_target), "content": "pwned"},
+        "cwd": str(tmp_dir),
+    }
+    _, skill_out = run_hook("craftflow_pretooluse_guard.py", skill_payload, env)
+    if '"permissionDecision": "deny"' not in skill_out and '"permissionDecision":"deny"' not in skill_out:
+        fail(name, f"expected the initial SKILL.md write to be denied; got: {skill_out!r}")
+        return
+
+    ledger_target = tmp_dir / ".craftflow" / "state" / "project" / "skill-candidates.json"
+    ledger_payload = {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": str(ledger_target),
+            "content": json.dumps({"schema_version": 1, "candidates": []}),
+        },
+        "cwd": str(tmp_dir),
+    }
+    _, ledger_out = run_hook("craftflow_pretooluse_guard.py", ledger_payload, env)
+    if '"permissionDecision": "deny"' not in ledger_out and '"permissionDecision":"deny"' not in ledger_out:
+        fail(name, f"expected the ledger-tamper Write to be DENIED; got: {ledger_out!r}")
+        return
+    if "skill-ledger-write" not in ledger_out:
+        fail(name, f"expected the deny reason to name 'skill-ledger-write'; got: {ledger_out!r}")
+        return
+
+    # The tamper write was denied (and this subprocess-only harness never
+    # applies a denied write to disk either way), so the on-disk ledger is
+    # unchanged -- the retried SAME write to the SKILL.md must STILL be
+    # denied, proving protection survived the tamper attempt.
+    _, retry_out = run_hook("craftflow_pretooluse_guard.py", skill_payload, env)
+    if '"permissionDecision": "deny"' not in retry_out and '"permissionDecision":"deny"' not in retry_out:
+        fail(name, f"expected the retried SKILL.md write to STILL be denied; got: {retry_out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_write_to_skill_proposal_file(tmp_dir: Path) -> None:
+    # CRITICAL 1 (REM-FIX round 3): the staged-proposal file backing an
+    # in-flight candidate's name<->path linkage must be protected the same
+    # unconditional way as the ledger itself -- tampering with the
+    # proposal's `name:` frontmatter is an equally viable way to redirect
+    # protection away from the real in-flight skill name.
+    name = "pretooluse-guard/denies-write-to-skill-proposal-file"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "foo")
+    proposal_target = (
+        tmp_dir / ".craftflow" / "state" / "project" / "skill-proposals" / "cand0001" / "SKILL.md"
+    )
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(proposal_target), "content": "---\nname: renamed\n---\n"},
+        "cwd": str(tmp_dir),
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Write to a staged skill-proposal file; got: {out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected the deny reason to name 'skill-ledger-write'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_write_to_not_yet_existing_proposal_path(tmp_dir: Path) -> None:
+    # REM-FIX round 4 (architectural fix): the round-3 guard scoped
+    # protection of the proposals tree to targets that ALREADY EXISTED on
+    # disk, to avoid breaking skill-author's own legitimate first-time
+    # `Write` there -- but `candidate_id()` is a deterministic
+    # `sha1(surface+signature)` hash, precomputable OFFLINE with no
+    # observation needed, and the ledger is freely readable via `--query`.
+    # That let an attacker precompute a FUTURE legitimate candidate's exact
+    # id and plant a file there FIRST (a precompute-squat hijack), before the
+    # round-3 guard's existence check would ever protect it. Now that
+    # `skill-author` stages proposals through `craftflow_skill_propose.py`
+    # instead of a direct `Write`, there is no longer a legitimate direct-
+    # `Write` caller to carve an exception out for -- the ENTIRE tree is
+    # protected unconditionally, existing or not, matching or non-matching
+    # any ledger entry. This is the direct regression test proving that
+    # precompute-squat hijack is now impossible regardless of timing.
+    name = "pretooluse-guard/denies-write-to-not-yet-existing-proposal-path"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    new_proposal_target = (
+        tmp_dir / ".craftflow" / "state" / "project" / "skill-proposals" / "cand-brand-new" / "SKILL.md"
+    )
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": str(new_proposal_target),
+            "content": "---\nname: brand-new-skill\n---\n",
+        },
+        "cwd": str(tmp_dir),
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Write to a NOT-yet-existing proposal path; got: {out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected the deny reason to name 'skill-ledger-write'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_redirect_to_not_yet_existing_proposal_path(tmp_dir: Path) -> None:
+    # REM-FIX round 4: same precompute-squat proof as above, via a Bash
+    # redirect instead of a raw Write tool call.
+    name = "pretooluse-guard/denies-bash-redirect-to-not-yet-existing-proposal-path"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    new_proposal_target = (
+        tmp_dir / ".craftflow" / "state" / "project" / "skill-proposals" / "cand-squat" / "SKILL.md"
+    )
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": f"mkdir -p $(dirname {new_proposal_target}) && echo 'pwned' > {new_proposal_target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash redirect into a NOT-yet-existing proposal path; got: {out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected the deny reason to name 'skill-ledger-write'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_python_oneliner_write_to_not_yet_existing_proposal_path(tmp_dir: Path) -> None:
+    # REM-FIX round 4: same precompute-squat proof, via a python -c
+    # open().write() one-liner instead of a shell redirect.
+    name = "pretooluse-guard/denies-python-oneliner-write-to-not-yet-existing-proposal-path"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    proposal_rel = ".craftflow/state/project/skill-proposals/cand-squat2/SKILL.md"
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {
+            "command": f"python3 -c \"import os; os.makedirs('{os.path.dirname(proposal_rel)}', exist_ok=True); open('{proposal_rel}', 'w').write('pwned')\""
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a python -c write into a NOT-yet-existing proposal path; got: {out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected the deny reason to name 'skill-ledger-write'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_redirect_to_skill_ledger(tmp_dir: Path) -> None:
+    # CRITICAL 1 (REM-FIX round 3): same tamper vector as the Edit/Write
+    # test above, but via a Bash redirect -- the ledger must be protected
+    # across both write mechanisms, mirroring how skill-promotion-path
+    # itself is enforced on both lanes.
+    name = "pretooluse-guard/denies-bash-redirect-to-skill-ledger"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "foo")
+    ledger_target = tmp_dir / ".craftflow" / "state" / "project" / "skill-candidates.json"
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": f"echo '{{\"candidates\": []}}' > {ledger_target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash redirect overwriting the skill-candidate ledger; got: {out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected the deny reason to name 'skill-ledger-write'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_write_when_ledger_json_is_malformed(tmp_dir: Path) -> None:
+    # CRITICAL 2 (REM-FIX round 3): live-reproduced bypass -- a legitimate
+    # in-flight candidate + staged proposal exist, but the ledger file is
+    # truncated to invalid JSON. Before this fix, `load_ledger()`'s own
+    # `(OSError, ValueError)` catch silently degraded to an empty ledger --
+    # indistinguishable from the benign "no ledger file" case -- so
+    # `_inflight_skill_promotion_paths()` protected zero candidates and a
+    # direct Write to the candidate's SKILL.md was ALLOWED, with nothing
+    # logged to craftflow-hook-events.log. This test proves the write is now
+    # DENIED (fail-closed) instead.
+    name = "pretooluse-guard/denies-write-when-ledger-json-is-malformed"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "foo")
+    ledger_path = tmp_dir / ".craftflow" / "state" / "project" / "skill-candidates.json"
+    # Truncate to invalid JSON -- a single corrupted byte is enough.
+    ledger_path.write_text("{not valid json", encoding="utf-8")
+
+    target = tmp_dir / ".claude" / "skills" / "foo" / "SKILL.md"
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target), "content": "pwned"},
+        "cwd": str(tmp_dir),
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for a write to an in-flight skill's SKILL.md when the ledger JSON "
+            f"is malformed; got: {out!r}",
+        )
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"expected the deny reason to name 'skill-promotion-path'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_any_skill_write_when_ledger_malformed_no_matching_candidate(
+    tmp_dir: Path,
+) -> None:
+    # CRITICAL 2 (REM-FIX round 3): once the ledger EXISTS but is corrupt,
+    # protection fails closed for ANY `.claude/skills/<name>/SKILL.md`
+    # write -- not just a name that happens to match a (now-unreadable)
+    # candidate -- since the guard cannot prove ANY skill write is safe
+    # when it cannot read the ledger at all. This is the rare,
+    # operator-actionable corrupt-ledger case, distinct from the common
+    # "no ledger file" case proven safe (still allowed) by
+    # test_pretooluse_guard_allows_unrelated_hand_authored_skill_write_no_ledger.
+    name = "pretooluse-guard/denies-any-skill-write-when-ledger-malformed-no-matching-candidate"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    ledger_path = tmp_dir / ".craftflow" / "state" / "project" / "skill-candidates.json"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text("{not valid json", encoding="utf-8")
+
+    target = tmp_dir / ".claude" / "skills" / "totally-unrelated" / "SKILL.md"
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target), "content": "hand authored"},
+        "cwd": str(tmp_dir),
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for ANY skill write while the ledger JSON is malformed; got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# REM-FIX round 4: malformed per-candidate ledger entry (missing "status" or
+# "id") must fail closed the same way whole-file ledger corruption already
+# does, not be silently treated as "legitimately not in-flight" (hunter's 2nd
+# CRITICAL finding from the round-3 remediation batch).
+# ---------------------------------------------------------------------------
+
+def test_inflight_skill_promotion_paths_fails_closed_on_malformed_candidate_missing_status(
+    tmp_dir: Path,
+) -> None:
+    name = "pretooluse-guard/inflight-fn-fails-closed-on-malformed-candidate-missing-status"
+    ledger_path = tmp_dir / ".craftflow" / "state" / "project" / "skill-candidates.json"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "candidates": [{"id": "cand-malformed", "surface": "s", "signature": "sig"}],
+        }),
+        encoding="utf-8",
+    )
+    paths, ledger_corrupt = pretooluse_guard._inflight_skill_promotion_paths(tmp_dir)
+    if not ledger_corrupt:
+        fail(name, "expected ledger_corrupt=True when a candidate entry is missing 'status'")
+        return
+    if paths:
+        fail(name, f"expected an empty path set when failing closed on a malformed candidate entry, got: {paths}")
+        return
+    ok(name)
+
+
+def test_inflight_skill_promotion_paths_fails_closed_on_malformed_candidate_missing_id(
+    tmp_dir: Path,
+) -> None:
+    name = "pretooluse-guard/inflight-fn-fails-closed-on-malformed-candidate-missing-id"
+    ledger_path = tmp_dir / ".craftflow" / "state" / "project" / "skill-candidates.json"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "candidates": [{"status": "candidate", "surface": "s", "signature": "sig"}],
+        }),
+        encoding="utf-8",
+    )
+    paths, ledger_corrupt = pretooluse_guard._inflight_skill_promotion_paths(tmp_dir)
+    if not ledger_corrupt:
+        fail(name, "expected ledger_corrupt=True when a candidate entry is missing 'id'")
+        return
+    if paths:
+        fail(name, f"expected an empty path set when failing closed on a malformed candidate entry, got: {paths}")
+        return
+    ok(name)
+
+
+def test_inflight_skill_promotion_paths_still_skips_legitimately_terminal_candidates(
+    tmp_dir: Path,
+) -> None:
+    # Regression guard for fix #4's own scoping: a WELL-FORMED candidate
+    # entry with status "rejected"/"promoted" (has BOTH 'status' and 'id')
+    # must stay a normal skip, never be treated as malformed/ledger_corrupt.
+    name = "pretooluse-guard/inflight-fn-still-skips-legitimately-terminal-candidates"
+    ledger_path = tmp_dir / ".craftflow" / "state" / "project" / "skill-candidates.json"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "candidates": [{"id": "cand-done", "status": "rejected", "surface": "s", "signature": "sig"}],
+        }),
+        encoding="utf-8",
+    )
+    paths, ledger_corrupt = pretooluse_guard._inflight_skill_promotion_paths(tmp_dir)
+    if ledger_corrupt:
+        fail(name, "expected ledger_corrupt=False for a well-formed terminal-status candidate")
+        return
+    if paths:
+        fail(name, f"expected an empty path set (no in-flight candidates), got: {paths}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_fails_closed_when_candidate_entry_missing_status(tmp_dir: Path) -> None:
+    # End-to-end proof (subprocess-level, not just the pure-function unit
+    # tests above): a real Write to an UNRELATED skill path is now denied
+    # while a malformed candidate entry exists in the ledger, exactly
+    # mirroring how a corrupt/unparseable ledger FILE already fails closed.
+    name = "pretooluse-guard/fails-closed-when-candidate-entry-missing-status"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    ledger_path = tmp_dir / ".craftflow" / "state" / "project" / "skill-candidates.json"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "candidates": [{"id": "cand-malformed", "surface": "s", "signature": "missing status key"}],
+        }),
+        encoding="utf-8",
+    )
+    target = tmp_dir / ".claude" / "skills" / "totally-unrelated" / "SKILL.md"
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target), "content": "hand authored"},
+        "cwd": str(tmp_dir),
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for ANY skill write while a ledger candidate entry is missing 'status'; got: {out!r}")
         return
     ok(name)
 
@@ -1870,6 +2470,287 @@ def test_pretooluse_guard_memory_write_allowed_when_memory_writes_key_missing(tm
             "expected allow (memoryWrites must keep its own pre-existing "
             f"'audit' default when the key is missing, not fail closed); got: {out!r}",
         )
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# REM-FIX round 5: `cp`/`mv`/`ln`/`install`/`rsync`/`dd` destination-argument
+# bypass -- these ordinary shell file-copy/move/link commands have ZERO
+# `>`/`>>`/`tee` redirect syntax, so `_bash_write_targets_in_tokens()` (and
+# the python-write detectors alongside it) never saw them at all. Live-
+# reproduced bypass (all 3 silently ALLOWED, zero log_event call, before this
+# fix; see docstrings on `_cp_mv_like_write_targets()`/`_dd_write_targets()`
+# in craftflow_pretooluse_guard.py).
+# ---------------------------------------------------------------------------
+
+def test_pretooluse_guard_denies_bash_cp_write_to_skill_proposal_file(tmp_dir: Path) -> None:
+    # Exact live-reproduced bypass command #1 from the REM-FIX report.
+    name = "pretooluse-guard/denies-bash-cp-write-to-skill-proposal-file"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "foo")
+    proposal_target = ".craftflow/state/project/skill-proposals/cand0001/SKILL.md"
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir.resolve()),
+        "tool_input": {"command": f"cp /tmp/evil.md {proposal_target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a plain 'cp' write into the skill-proposals tree; got: {out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected the deny reason to name 'skill-ledger-write'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_cp_write_to_skill_ledger(tmp_dir: Path) -> None:
+    # Exact live-reproduced bypass command #2 from the REM-FIX report.
+    name = "pretooluse-guard/denies-bash-cp-write-to-skill-ledger"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir.resolve()),
+        "tool_input": {"command": "cp /tmp/forged.json .craftflow/state/project/skill-candidates.json"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a plain 'cp' write overwriting the skill-candidate ledger; got: {out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected the deny reason to name 'skill-ledger-write'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_mv_write_to_skill_proposal_file(tmp_dir: Path) -> None:
+    # Exact live-reproduced bypass command #3 from the REM-FIX report.
+    name = "pretooluse-guard/denies-bash-mv-write-to-skill-proposal-file"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "foo")
+    proposal_target = ".craftflow/state/project/skill-proposals/cand0001/SKILL.md"
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir.resolve()),
+        "tool_input": {"command": f"mv /tmp/staged.md {proposal_target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a plain 'mv' write into the skill-proposals tree; got: {out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected the deny reason to name 'skill-ledger-write'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_ln_write_to_memory_md(tmp_dir: Path) -> None:
+    # Same systemic gap, memory-file protected-path class, via `ln` (never a
+    # redirect/tee shape either) -- while staying INSIDE cwd, the shape this
+    # workflow's existing `mv`-escaping-cwd tests never cover.
+    name = "pretooluse-guard/denies-bash-ln-write-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "ln -f /tmp/evil.md .craftflow/state/project/activeContext.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a plain 'ln' write into a memory .md file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_mv_write_to_inflight_skill_promotion_path(tmp_dir: Path) -> None:
+    # Third protected-path class (skill-promotion-path), via `mv`.
+    name = "pretooluse-guard/denies-bash-mv-write-to-inflight-skill-promotion-path"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "newskill")
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir.resolve()),
+        "tool_input": {"command": "mv /tmp/staged.md .claude/skills/newskill/SKILL.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a plain 'mv' write into an in-flight skill's SKILL.md; got: {out!r}")
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"expected the deny reason to name 'skill-promotion-path'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_cp_target_directory_form_write_to_skill_proposals(tmp_dir: Path) -> None:
+    # `--target-directory=`/`-t` form (mv/cp's disguised destination flag) --
+    # must resolve to <dir>/<basename(source)>, not just the last bare token.
+    name = "pretooluse-guard/denies-bash-cp-target-directory-form-write-to-skill-proposals"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "foo")
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir.resolve()),
+        "tool_input": {
+            "command": "cp --target-directory=.craftflow/state/project/skill-proposals/cand0001 /tmp/SKILL.md"
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a 'cp --target-directory=' write into the skill-proposals tree; got: {out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected the deny reason to name 'skill-ledger-write'; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_bash_cp_unrelated_elsewhere(tmp_dir: Path) -> None:
+    # Regression guard against over-blocking (mirrors this workflow's
+    # established care around this failure mode from round 2): an ordinary
+    # `cp` writing somewhere that is NOT any protected-path class, staying
+    # inside cwd, must remain allowed.
+    name = "pretooluse-guard/allows-bash-cp-unrelated-elsewhere"
+    project_root = tmp_dir / "project"
+    (project_root / "src").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "cp src/foo.ts src/bar.ts"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for an ordinary unrelated 'cp' write; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_bash_mv_unrelated_elsewhere(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/allows-bash-mv-unrelated-elsewhere"
+    project_root = tmp_dir / "project"
+    (project_root / "src").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "mv src/foo.ts src/renamed.ts"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for an ordinary unrelated 'mv' write; got: {out!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# REM-FIX round 5 (MEDIUM): non-UTF-8 draft/proposal content must degrade to
+# this script's own documented `{"error": ...}` JSON shape, not a raw
+# `UnicodeDecodeError` traceback (`UnicodeDecodeError` is a `ValueError`
+# subclass, not caught by a bare `except OSError`).
+# ---------------------------------------------------------------------------
+
+def test_skill_propose_non_utf8_skill_md_file_returns_json_error(tmp_dir: Path) -> None:
+    name = "skill-propose/non-utf8-skill-md-file-returns-json-error"
+    state_dir = tmp_dir / ".craftflow" / "state"
+    ledger_path = state_dir / "project" / "skill-candidates.json"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "candidates": [{
+                "id": "cand0001",
+                "surface": "s",
+                "signature": "sig",
+                "status": "candidate",
+            }],
+        }),
+        encoding="utf-8",
+    )
+    bad_skill_md = tmp_dir / "draft-SKILL.md"
+    # Invalid UTF-8 byte sequence (a lone continuation byte).
+    bad_skill_md.write_bytes(b"---\nname: foo\n---\n\xff\xfe invalid utf-8 body\n")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "craftflow_skill_propose.py"),
+            "--candidate-id", "cand0001",
+            "--skill-md-file", str(bad_skill_md),
+            "--state-dir", str(state_dir),
+            "--project-root", str(tmp_dir),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        fail(name, f"expected non-zero exit for non-UTF-8 draft content; got exit 0, stdout: {result.stdout!r}")
+        return
+    if "Traceback" in result.stderr:
+        fail(name, f"expected a clean JSON error, not a raw traceback; stderr: {result.stderr!r}")
+        return
+    try:
+        parsed = json.loads(result.stderr.strip())
+    except ValueError:
+        fail(name, f"expected stderr to be valid JSON; got: {result.stderr!r}")
+        return
+    if "error" not in parsed:
+        fail(name, f"expected an 'error' key in the JSON output; got: {parsed!r}")
+        return
+    ok(name)
+
+
+def test_skill_promote_non_utf8_skill_md_returns_json_error(tmp_dir: Path) -> None:
+    name = "skill-promote/non-utf8-skill-md-returns-json-error"
+    proposals_dir = tmp_dir / "proposals"
+    proposal_dir = proposals_dir / "cand0001"
+    proposal_dir.mkdir(parents=True)
+    bad_skill_md = proposal_dir / "SKILL.md"
+    bad_skill_md.write_bytes(b"---\nname: foo\n---\n\xff\xfe invalid utf-8 body\n")
+    ledger_path = tmp_dir / "skill-candidates.json"
+    ledger_path.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "candidates": [{
+                "id": "cand0001",
+                "surface": "s",
+                "signature": "sig",
+                "status": "proposed",
+            }],
+        }),
+        encoding="utf-8",
+    )
+    project_root = tmp_dir / "project"
+    project_root.mkdir()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "craftflow_skill_promote.py"),
+            "--approve", "cand0001",
+            "--proposals-dir", str(proposals_dir),
+            "--project-root", str(project_root),
+            "--ledger", str(ledger_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        fail(name, f"expected non-zero exit for non-UTF-8 proposal content; got exit 0, stdout: {result.stdout!r}")
+        return
+    if "Traceback" in result.stderr:
+        fail(name, f"expected a clean JSON error, not a raw traceback; stderr: {result.stderr!r}")
+        return
+    try:
+        parsed = json.loads(result.stderr.strip())
+    except ValueError:
+        fail(name, f"expected stderr to be valid JSON; got: {result.stderr!r}")
+        return
+    if "error" not in parsed:
+        fail(name, f"expected an 'error' key in the JSON output; got: {parsed!r}")
         return
     ok(name)
 
@@ -6617,6 +7498,3468 @@ def test_bash_guard_bounded_time_for_many_brace_bearing_path_segments_end_to_end
 
 
 # ---------------------------------------------------------------------------
+# Skill-candidate ledger (craftflow_skill_ledger.py) -- white-box + subprocess
+# ---------------------------------------------------------------------------
+# REM-FIX (found during Phase 1 empirical calibration against the 141 real
+# workflow logs): bare positive-verdict strings ("APPROVE", "CLEAN") in
+# results.reviewer/results.hunter are the ABSENCE of a finding, not a
+# recurring failure/finding signature, and must never become candidates.
+# Also: a severity word immediately followed by "=0"/": 0" (e.g.
+# "critical=0 so ...") is a zero-count metric, not an actual severity marker.
+
+def test_ledger_bare_verdict_strings_are_not_candidates(tmp_dir: Path) -> None:
+    name = "skill-ledger/bare-verdict-strings-are-not-candidates"
+    results = {"reviewer": "APPROVE", "hunter": "CLEAN", "verifier": None}
+    signals = skill_ledger.extract_finding_signals(results, "reviewer")
+    signals += skill_ledger.extract_finding_signals(results, "hunter")
+    if signals:
+        fail(name, f"expected bare verdict strings APPROVE/CLEAN to produce zero signals, got: {signals}")
+        return
+    ok(name)
+
+
+def test_ledger_severity_word_followed_by_zero_count_is_not_that_severity(tmp_dir: Path) -> None:
+    name = "skill-ledger/severity-word-followed-by-zero-count-is-not-that-severity"
+    sev = skill_ledger.normalize_severity("critical=0 so 1a-SCOPE auto-proceeds without user checkpoint")
+    if sev == "critical":
+        fail(name, f"expected 'critical=0 so ...' (a zero-count metric) to NOT normalize to severity=critical, got {sev!r}")
+        return
+    ok(name)
+
+
+def test_ledger_distinct_workflow_counts_not_raw_events(tmp_dir: Path) -> None:
+    name = "skill-ledger/distinct-workflow-not-raw-event-count"
+    events = [
+        {"event": "remediation_created", "reason": "flaky test in auth module", "ts": "2026-07-01T00:00:00Z"}
+        for _ in range(5)
+    ]
+    ledger = {"schema_version": 1, "candidates": []}
+    signals = skill_ledger.collect_signals({}, events)
+    ledger = skill_ledger.upsert_candidates(ledger, "wf-test-1", signals)
+    signature = skill_ledger.learn_scan.normalize_reason("flaky test in auth module")
+    matches = [c for c in ledger["candidates"] if c["signature"] == signature]
+    if len(matches) != 1:
+        fail(name, f"expected exactly 1 candidate cluster for the 5 same-workflow events, got {len(matches)}")
+        return
+    c = matches[0]
+    if c["distinct_workflows"] != 1:
+        fail(name, f"expected distinct_workflows=1 for 5 events inside 1 workflow, got {c['distinct_workflows']}")
+        return
+    if len(c["workflows"]) != 1:
+        fail(name, f"expected workflows list of length 1, got {c['workflows']}")
+        return
+    ok(name)
+
+
+def test_ledger_distinct_workflow_counts_two_separate_workflows(tmp_dir: Path) -> None:
+    name = "skill-ledger/distinct-workflow-count-increments-across-workflows"
+    ledger = {"schema_version": 1, "candidates": []}
+    signals_a = skill_ledger.collect_signals(
+        {}, [{"event": "remediation_created", "reason": "shared recurring reason", "ts": "2026-07-01T00:00:00Z"}]
+    )
+    ledger = skill_ledger.upsert_candidates(ledger, "wf-a", signals_a)
+    signals_b = skill_ledger.collect_signals(
+        {}, [{"event": "remediation_created", "reason": "shared recurring reason", "ts": "2026-07-02T00:00:00Z"}]
+    )
+    ledger = skill_ledger.upsert_candidates(ledger, "wf-b", signals_b)
+    signature = skill_ledger.learn_scan.normalize_reason("shared recurring reason")
+    matches = [c for c in ledger["candidates"] if c["signature"] == signature]
+    if len(matches) != 1:
+        fail(name, f"expected 1 candidate cluster across 2 workflows, got {len(matches)}")
+        return
+    if matches[0]["distinct_workflows"] != 2:
+        fail(name, f"expected distinct_workflows=2 after 2 separate workflows, got {matches[0]['distinct_workflows']}")
+        return
+    ok(name)
+
+
+def test_ledger_lru_eviction_at_200_cap(tmp_dir: Path) -> None:
+    name = "skill-ledger/lru-eviction-at-200-cap"
+    ledger = {"schema_version": 1, "candidates": []}
+    for i in range(200):
+        ledger["candidates"].append({
+            "id": f"id{i:04d}",
+            "surface": "unscoped",
+            "signature": f"sig-{i}",
+            "workflows": [f"wf-{i}"],
+            "distinct_workflows": 1,
+            "max_severity": "unknown",
+            "evidence": [],
+            "first_seen": f"2026-01-{(i % 28) + 1:02d}T00:00:00Z",
+            "last_seen": f"2026-01-{(i % 28) + 1:02d}T00:00:00Z",
+            "status": "candidate",
+            "promoted_skill": None,
+            "rejected_reason": None,
+            "rejected_at_distinct_workflows": None,
+        })
+    # sig-0 has the OLDEST last_seen of the batch -- it must be the eviction target.
+    ledger["candidates"][0]["last_seen"] = "2020-01-01T00:00:00Z"
+    signals = skill_ledger.collect_signals(
+        {}, [{"event": "remediation_created", "reason": "brand new unique signature", "ts": "2026-08-01T00:00:00Z"}]
+    )
+    ledger = skill_ledger.upsert_candidates(ledger, "wf-new", signals)
+    if len(ledger["candidates"]) != 200:
+        fail(name, f"expected ledger capped at 200 entries, got {len(ledger['candidates'])}")
+        return
+    ids = {c["id"] for c in ledger["candidates"]}
+    if "id0000" in ids:
+        fail(name, "expected the oldest last_seen candidate (id0000) to be LRU-evicted, but it is still present")
+        return
+    ok(name)
+
+
+def test_ledger_rejected_stays_rejected_below_doubling_threshold(tmp_dir: Path) -> None:
+    name = "skill-ledger/rejected-stays-rejected-below-doubling-threshold"
+    signature = skill_ledger.learn_scan.normalize_reason("legacy pattern flagged")
+    ledger = {
+        "schema_version": 1,
+        "candidates": [{
+            "id": skill_ledger.candidate_id("unscoped", signature),
+            "surface": "unscoped",
+            "signature": signature,
+            "workflows": ["wf-a", "wf-b"],
+            "distinct_workflows": 2,
+            "max_severity": "medium",
+            "evidence": [],
+            "first_seen": "2026-01-01T00:00:00Z",
+            "last_seen": "2026-01-01T00:00:00Z",
+            "status": "rejected",
+            "promoted_skill": None,
+            "rejected_reason": "already documented",
+            "rejected_at_distinct_workflows": 2,
+        }],
+    }
+    # +1 distinct workflow -> distinct_workflows=3, which is < 2x2=4 -- must stay rejected.
+    signals = skill_ledger.collect_signals(
+        {}, [{"event": "remediation_created", "reason": "legacy pattern flagged", "ts": "2026-02-01T00:00:00Z"}]
+    )
+    ledger = skill_ledger.upsert_candidates(ledger, "wf-c", signals)
+    c = ledger["candidates"][0]
+    if c["status"] != "rejected":
+        fail(name, f"expected status to remain 'rejected' at distinct_workflows=3 (below double of 2), got {c['status']!r}")
+        return
+    ok(name)
+
+
+def test_ledger_rejected_revives_once_distinct_workflows_double(tmp_dir: Path) -> None:
+    name = "skill-ledger/rejected-revives-once-distinct-workflows-double"
+    signature = skill_ledger.learn_scan.normalize_reason("legacy pattern flagged again")
+    ledger = {
+        "schema_version": 1,
+        "candidates": [{
+            "id": skill_ledger.candidate_id("unscoped", signature),
+            "surface": "unscoped",
+            "signature": signature,
+            "workflows": ["wf-a", "wf-b"],
+            "distinct_workflows": 2,
+            "max_severity": "medium",
+            "evidence": [],
+            "first_seen": "2026-01-01T00:00:00Z",
+            "last_seen": "2026-01-01T00:00:00Z",
+            "status": "rejected",
+            "promoted_skill": None,
+            "rejected_reason": "already documented",
+            "rejected_at_distinct_workflows": 2,
+        }],
+    }
+    for i, wf in enumerate(["wf-c", "wf-d"]):
+        signals = skill_ledger.collect_signals(
+            {}, [{"event": "remediation_created", "reason": "legacy pattern flagged again", "ts": f"2026-03-0{i+1}T00:00:00Z"}]
+        )
+        ledger = skill_ledger.upsert_candidates(ledger, wf, signals)
+    c = ledger["candidates"][0]
+    if c["distinct_workflows"] < 4:
+        fail(name, f"test setup issue: expected distinct_workflows>=4 (2x2), got {c['distinct_workflows']}")
+        return
+    if c["status"] != "candidate":
+        fail(name, f"expected revival to status='candidate' once distinct_workflows doubled, got {c['status']!r}")
+        return
+    if c["rejected_at_distinct_workflows"] is not None:
+        fail(name, "expected rejected_at_distinct_workflows to be cleared after revival")
+        return
+    ok(name)
+
+
+def test_ledger_atomic_write_survives_os_replace_failure(tmp_dir: Path) -> None:
+    name = "skill-ledger/atomic-write-survives-os-replace-failure"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    ledger_path = tmp_dir / "skill-candidates.json"
+    original = {
+        "schema_version": 1,
+        "candidates": [{
+            "id": "orig0001", "surface": "unscoped", "signature": "original untouched",
+            "workflows": ["wf-orig"], "distinct_workflows": 1, "max_severity": "unknown",
+            "evidence": [], "first_seen": "2026-01-01T00:00:00Z", "last_seen": "2026-01-01T00:00:00Z",
+            "status": "candidate", "promoted_skill": None, "rejected_reason": None,
+            "rejected_at_distinct_workflows": None,
+        }],
+    }
+    ledger_path.write_text(json.dumps(original), encoding="utf-8")
+    original_bytes = ledger_path.read_bytes()
+
+    real_replace = os.replace
+
+    def boom(*a, **kw):
+        raise OSError("simulated torn write")
+
+    os.replace = boom
+    raised = False
+    try:
+        skill_ledger.save_ledger_atomic(ledger_path, {"schema_version": 1, "candidates": []})
+    except OSError:
+        raised = True
+    finally:
+        os.replace = real_replace
+
+    if not raised:
+        fail(name, "expected save_ledger_atomic to propagate the os.replace failure")
+        return
+    after_bytes = ledger_path.read_bytes()
+    if after_bytes != original_bytes:
+        fail(name, "original ledger file content changed despite a simulated os.replace failure")
+        return
+    leftovers = [p for p in tmp_dir.iterdir() if p.name != "skill-candidates.json"]
+    if leftovers:
+        fail(name, f"expected the temp write file to be cleaned up after failure, found leftovers: {leftovers}")
+        return
+    ok(name)
+
+
+def test_ledger_prune_removes_stale_candidate_only(tmp_dir: Path) -> None:
+    name = "skill-ledger/prune-removes-stale-candidate-only"
+    old_ts = "2020-01-01T00:00:00Z"
+    fresh_ts = skill_ledger.now_iso()
+    ledger = {
+        "schema_version": 1,
+        "candidates": [
+            {"id": "stale001", "surface": "unscoped", "signature": "stale one", "workflows": ["wf-a"],
+             "distinct_workflows": 1, "max_severity": "unknown", "evidence": [], "first_seen": old_ts,
+             "last_seen": old_ts, "status": "candidate", "promoted_skill": None, "rejected_reason": None,
+             "rejected_at_distinct_workflows": None},
+            {"id": "fresh001", "surface": "unscoped", "signature": "fresh one", "workflows": ["wf-b"],
+             "distinct_workflows": 1, "max_severity": "unknown", "evidence": [], "first_seen": fresh_ts,
+             "last_seen": fresh_ts, "status": "candidate", "promoted_skill": None, "rejected_reason": None,
+             "rejected_at_distinct_workflows": None},
+            {"id": "rej0001", "surface": "unscoped", "signature": "rejected stale", "workflows": ["wf-c"],
+             "distinct_workflows": 1, "max_severity": "unknown", "evidence": [], "first_seen": old_ts,
+             "last_seen": old_ts, "status": "rejected", "promoted_skill": None, "rejected_reason": "dup",
+             "rejected_at_distinct_workflows": 1},
+            {"id": "prom0001", "surface": "unscoped", "signature": "promoted stale", "workflows": ["wf-d"],
+             "distinct_workflows": 1, "max_severity": "unknown", "evidence": [], "first_seen": old_ts,
+             "last_seen": old_ts, "status": "promoted", "promoted_skill": "foo", "rejected_reason": None,
+             "rejected_at_distinct_workflows": None},
+        ],
+    }
+    pruned = skill_ledger.prune_ledger(ledger)
+    ids = {c["id"] for c in pruned["candidates"]}
+    if "stale001" in ids:
+        fail(name, "expected the stale (>90d, no new evidence) candidate entry to be removed by prune")
+        return
+    if "fresh001" not in ids:
+        fail(name, "expected the fresh candidate entry to survive prune")
+        return
+    if "rej0001" not in ids:
+        fail(name, "expected the rejected entry to be left untouched by prune (never dropped)")
+        return
+    if "prom0001" not in ids:
+        fail(name, "expected the promoted entry to be left untouched by prune")
+        return
+    ok(name)
+
+
+def _write_promoted_skill_md(project_root: Path, name: str, referenced_paths: str = "", review_after: str = "") -> None:
+    """Test helper: writes a minimal, validly-frontmattered canonical
+    SKILL.md for a promoted skill under `<project_root>/.claude/skills/<name>/`."""
+    skill_dir = project_root / ".claude" / "skills" / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "---",
+        f"name: {name}",
+        'description: "Use when doing X. Provides Y for testing purposes only today."',
+    ]
+    if referenced_paths:
+        lines.append(f"craftflow-referenced-paths: {referenced_paths}")
+    if review_after:
+        lines.append(f"craftflow-review-after: {review_after}")
+    lines += ["---", "", "Body content."]
+    (skill_dir / "SKILL.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _promoted_entry(candidate_id: str, promoted_skill: str) -> dict:
+    return {
+        "id": candidate_id, "surface": "unscoped", "signature": "some recurring issue",
+        "workflows": ["wf-a", "wf-b"], "distinct_workflows": 2, "max_severity": "medium",
+        "evidence": [], "first_seen": "2026-01-01T00:00:00Z", "last_seen": "2026-01-01T00:00:00Z",
+        "status": "promoted", "promoted_skill": promoted_skill, "rejected_reason": None,
+        "rejected_at_distinct_workflows": None,
+    }
+
+
+def test_ledger_prune_rejected_tombstone_untouched(tmp_dir: Path) -> None:
+    # Phase 4: the new promoted-rot check must never touch a "rejected"
+    # entry -- it is a permanent tombstone (status, reason, and any
+    # needs_review-shaped fields all stay exactly as they were).
+    name = "skill-ledger/prune-rejected-tombstone-untouched"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    ledger = {
+        "schema_version": 1,
+        "candidates": [{
+            "id": "rej0002", "surface": "unscoped", "signature": "rejected thing",
+            "workflows": ["wf-a"], "distinct_workflows": 1, "max_severity": "unknown",
+            "evidence": [], "first_seen": skill_ledger.now_iso(), "last_seen": skill_ledger.now_iso(),
+            "status": "rejected", "promoted_skill": None, "rejected_reason": "duplicate",
+            "rejected_at_distinct_workflows": 1,
+        }],
+    }
+    before = json.loads(json.dumps(ledger))
+    pruned = skill_ledger.prune_ledger(ledger, tmp_dir)
+    entry = next(c for c in pruned["candidates"] if c["id"] == "rej0002")
+    if entry.get("status") != "rejected":
+        fail(name, f"expected status to remain 'rejected', got {entry.get('status')!r}")
+        return
+    if "needs_review" in entry or "needs_review_reason" in entry:
+        fail(name, f"expected a rejected entry to never gain needs_review fields, got: {entry}")
+        return
+    if entry != before["candidates"][0]:
+        fail(name, f"expected the rejected entry to be byte-for-byte untouched, got: {entry}")
+        return
+    ok(name)
+
+
+def test_ledger_prune_promoted_healthy_no_needs_review(tmp_dir: Path) -> None:
+    name = "skill-ledger/prune-promoted-healthy-no-needs-review"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_dir / "real.ts").write_text("x", encoding="utf-8")
+    _write_promoted_skill_md(
+        tmp_dir, "healthy-skill",
+        referenced_paths="real.ts",
+        review_after="2099-01-01T00:00:00Z",
+    )
+    ledger = {"schema_version": 1, "candidates": [_promoted_entry("p1", "healthy-skill")]}
+    pruned = skill_ledger.prune_ledger(ledger, tmp_dir)
+    entry = next(c for c in pruned["candidates"] if c["id"] == "p1")
+    if entry.get("status") != "promoted":
+        fail(name, f"expected status to remain 'promoted', got {entry.get('status')!r}")
+        return
+    if entry.get("needs_review"):
+        fail(name, f"expected a healthy promoted entry to have no needs_review flag, got: {entry}")
+        return
+    ok(name)
+
+
+def test_ledger_prune_promoted_missing_referenced_path_flags_stale_path(tmp_dir: Path) -> None:
+    name = "skill-ledger/prune-promoted-missing-referenced-path-stale-path"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_dir / "real.ts").write_text("x", encoding="utf-8")
+    _write_promoted_skill_md(
+        tmp_dir, "rotting-skill",
+        referenced_paths="real.ts, gone/forever.ts",
+        review_after="2099-01-01T00:00:00Z",
+    )
+    ledger = {"schema_version": 1, "candidates": [_promoted_entry("p2", "rotting-skill")]}
+    pruned = skill_ledger.prune_ledger(ledger, tmp_dir)
+    entry = next(c for c in pruned["candidates"] if c["id"] == "p2")
+    if entry.get("status") != "promoted":
+        fail(name, f"expected status to remain 'promoted' (never changed), got {entry.get('status')!r}")
+        return
+    if entry.get("needs_review") is not True:
+        fail(name, f"expected needs_review=True when a referenced path is missing, got: {entry}")
+        return
+    if entry.get("needs_review_reason") != "stale_path":
+        fail(name, f"expected needs_review_reason='stale_path', got {entry.get('needs_review_reason')!r}")
+        return
+    ok(name)
+
+
+def test_ledger_prune_promoted_elapsed_review_after_flags_review_after_elapsed(tmp_dir: Path) -> None:
+    name = "skill-ledger/prune-promoted-elapsed-review-after"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    _write_promoted_skill_md(
+        tmp_dir, "overdue-skill",
+        review_after="2020-01-01T00:00:00Z",
+    )
+    ledger = {"schema_version": 1, "candidates": [_promoted_entry("p3", "overdue-skill")]}
+    pruned = skill_ledger.prune_ledger(ledger, tmp_dir)
+    entry = next(c for c in pruned["candidates"] if c["id"] == "p3")
+    if entry.get("status") != "promoted":
+        fail(name, f"expected status to remain 'promoted' (never changed), got {entry.get('status')!r}")
+        return
+    if entry.get("needs_review") is not True:
+        fail(name, f"expected needs_review=True when craftflow-review-after has elapsed, got: {entry}")
+        return
+    if entry.get("needs_review_reason") != "review_after_elapsed":
+        fail(name, f"expected needs_review_reason='review_after_elapsed', got {entry.get('needs_review_reason')!r}")
+        return
+    ok(name)
+
+
+def test_ledger_prune_promoted_missing_name_flags_missing_promoted_skill_name(tmp_dir: Path) -> None:
+    # HIGH (task #59, item 2): a promoted entry with a missing/blank
+    # `promoted_skill` name used to return None from `_check_promoted_rot`
+    # (treated as healthy) since there is "nothing on disk to check
+    # against" -- but a promoted ledger entry with no recorded skill name at
+    # all IS itself a rot condition (the entry can never be reconciled
+    # against a real SKILL.md again) and must be flagged for human review,
+    # not silently treated as clean.
+    name = "skill-ledger/prune-promoted-missing-name-flags-missing-promoted-skill-name"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    ledger = {"schema_version": 1, "candidates": [_promoted_entry("p5", None)]}
+    pruned = skill_ledger.prune_ledger(ledger, tmp_dir)
+    entry = next(c for c in pruned["candidates"] if c["id"] == "p5")
+    if entry.get("status") != "promoted":
+        fail(name, f"expected status to remain 'promoted' (never changed), got {entry.get('status')!r}")
+        return
+    if entry.get("needs_review") is not True:
+        fail(name, f"expected needs_review=True when promoted_skill is missing, got: {entry}")
+        return
+    if entry.get("needs_review_reason") != "missing_promoted_skill_name":
+        fail(name, f"expected needs_review_reason='missing_promoted_skill_name', got {entry.get('needs_review_reason')!r}")
+        return
+    ok(name)
+
+
+def test_ledger_prune_promoted_blank_name_flags_missing_promoted_skill_name(tmp_dir: Path) -> None:
+    name = "skill-ledger/prune-promoted-blank-name-flags-missing-promoted-skill-name"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    ledger = {"schema_version": 1, "candidates": [_promoted_entry("p6", "   ")]}
+    pruned = skill_ledger.prune_ledger(ledger, tmp_dir)
+    entry = next(c for c in pruned["candidates"] if c["id"] == "p6")
+    if entry.get("needs_review_reason") != "missing_promoted_skill_name":
+        fail(name, f"expected needs_review_reason='missing_promoted_skill_name' for a blank/whitespace name, got {entry.get('needs_review_reason')!r}")
+        return
+    ok(name)
+
+
+def test_ledger_prune_promoted_unparseable_review_after_flags_unparseable(tmp_dir: Path) -> None:
+    # HIGH (task #59, item 3): an unparseable `craftflow-review-after` value
+    # (not a real ISO timestamp, and not the `PENDING_APPROVAL` placeholder)
+    # used to be silently treated as "not elapsed" (healthy) by
+    # `_review_after_elapsed`'s bare `except ValueError: return False` --
+    # indistinguishable from a legitimate future date. It must instead be
+    # flagged for human review as its own distinct reason.
+    name = "skill-ledger/prune-promoted-unparseable-review-after-flags-unparseable"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    _write_promoted_skill_md(
+        tmp_dir, "garbled-date-skill",
+        review_after="not-a-real-date",
+    )
+    ledger = {"schema_version": 1, "candidates": [_promoted_entry("p7", "garbled-date-skill")]}
+    pruned = skill_ledger.prune_ledger(ledger, tmp_dir)
+    entry = next(c for c in pruned["candidates"] if c["id"] == "p7")
+    if entry.get("status") != "promoted":
+        fail(name, f"expected status to remain 'promoted' (never changed), got {entry.get('status')!r}")
+        return
+    if entry.get("needs_review") is not True:
+        fail(name, f"expected needs_review=True for an unparseable craftflow-review-after value, got: {entry}")
+        return
+    if entry.get("needs_review_reason") != "unparseable_review_after":
+        fail(name, f"expected needs_review_reason='unparseable_review_after', got {entry.get('needs_review_reason')!r}")
+        return
+    ok(name)
+
+
+def test_ledger_prune_promoted_referenced_path_escapes_project_root_flags_stale_path(tmp_dir: Path) -> None:
+    # MEDIUM (task #59, item 4): a `craftflow-referenced-paths` entry that
+    # contains a ".." traversal component used to be joined onto
+    # `project_root` and existence-checked with no containment guard. This
+    # test plants a REAL file just OUTSIDE `project_root` that the traversal
+    # reaches, so the pre-fix code reports "exists" (healthy, no rot) --
+    # exactly the silent escape this closes. Must instead fail closed
+    # (treated as rot) whenever a referenced-paths entry does not stay
+    # contained under `project_root`, regardless of what it happens to
+    # resolve to on disk.
+    name = "skill-ledger/prune-promoted-referenced-path-escapes-project-root-flags-stale-path"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True, exist_ok=True)
+    escape_target_dir = tmp_dir / "outside-project-root"
+    escape_target_dir.mkdir(parents=True, exist_ok=True)
+    (escape_target_dir / "escape-target.ts").write_text("x", encoding="utf-8")
+    _write_promoted_skill_md(
+        project_root, "traversal-skill",
+        referenced_paths="../outside-project-root/escape-target.ts",
+        review_after="2099-01-01T00:00:00Z",
+    )
+    ledger = {"schema_version": 1, "candidates": [_promoted_entry("p8", "traversal-skill")]}
+    pruned = skill_ledger.prune_ledger(ledger, project_root)
+    entry = next(c for c in pruned["candidates"] if c["id"] == "p8")
+    if entry.get("needs_review") is not True:
+        fail(name, f"expected needs_review=True when a referenced path escapes project_root via '..' (even though the escaped-to file exists), got: {entry}")
+        return
+    if entry.get("needs_review_reason") != "stale_path":
+        fail(name, f"expected needs_review_reason='stale_path' for a path-traversal referenced-paths entry, got {entry.get('needs_review_reason')!r}")
+        return
+    ok(name)
+
+
+def test_ledger_prune_promoted_name_escapes_project_root_flags_stale_path(tmp_dir: Path) -> None:
+    # MEDIUM (task #59, item 4): a `promoted_skill` name containing a ".."
+    # traversal component used to be joined directly onto
+    # `project_root/.claude/skills/<name>/SKILL.md` with no containment
+    # guard before being read. This test plants a REAL, validly-frontmattered
+    # SKILL.md just OUTSIDE `project_root/.claude/skills/` that the traversal
+    # reaches, so the pre-fix code reads it successfully (healthy, no rot) --
+    # exactly the silent escape this closes. Must fail closed instead of
+    # reading/following an escaping path.
+    name = "skill-ledger/prune-promoted-name-escapes-project-root-flags-stale-path"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    project_root = tmp_dir / "project"
+    # The intermediate ".claude/skills" directory must physically exist for
+    # the OS to actually resolve a ".." traversal through it (Path.exists()
+    # on a path with ".." components requires every intermediate segment,
+    # including ones later cancelled by "..", to be a real, stat-able
+    # directory) -- otherwise the traversal can never reach the real escape
+    # target and the test would pass "by accident" regardless of any fix.
+    (project_root / ".claude" / "skills").mkdir(parents=True, exist_ok=True)
+    # Real SKILL.md OUTSIDE project_root/.claude/skills/, placed directly at
+    # tmp_dir/escaped-skill/SKILL.md -- exactly where
+    # "project_root/.claude/skills/../../../escaped-skill/SKILL.md" resolves
+    # to (3 ".." components cancel "skills", ".claude", and "project").
+    escaped_skill_dir = tmp_dir / "escaped-skill"
+    escaped_skill_dir.mkdir(parents=True, exist_ok=True)
+    (escaped_skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: escaped-skill\n"
+        'description: "Use when doing X. Provides Y for testing purposes only today."\n'
+        "craftflow-review-after: 2099-01-01T00:00:00Z\n"
+        "---\n\nBody content.",
+        encoding="utf-8",
+    )
+    ledger = {"schema_version": 1, "candidates": [_promoted_entry("p9", "../../../escaped-skill")]}
+    pruned = skill_ledger.prune_ledger(ledger, project_root)
+    entry = next(c for c in pruned["candidates"] if c["id"] == "p9")
+    if entry.get("needs_review") is not True:
+        fail(name, f"expected needs_review=True when promoted_skill name contains '..' traversal (even though the escaped-to SKILL.md is real and healthy), got: {entry}")
+        return
+    if entry.get("needs_review_reason") != "stale_path":
+        fail(name, f"expected needs_review_reason='stale_path' for a traversal promoted_skill name, got {entry.get('needs_review_reason')!r}")
+        return
+    ok(name)
+
+
+def test_ledger_prune_multi_entry_malformed_promoted_entry_does_not_affect_healthy_entry(tmp_dir: Path) -> None:
+    # Test-coverage gap (task #59, item 7): proves prune_ledger() isolates
+    # each promoted entry's rot check from every OTHER entry in the same
+    # ledger -- a malformed entry (blank promoted_skill name) must be
+    # flagged on its own, while a separate, genuinely healthy promoted entry
+    # in the SAME prune() call is completely unaffected (correctly stays
+    # needs_review=False).
+    name = "skill-ledger/prune-multi-entry-malformed-does-not-affect-healthy-entry"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_dir / "real.ts").write_text("x", encoding="utf-8")
+    _write_promoted_skill_md(
+        tmp_dir, "healthy-skill-in-mixed-batch",
+        referenced_paths="real.ts",
+        review_after="2099-01-01T00:00:00Z",
+    )
+    ledger = {
+        "schema_version": 1,
+        "candidates": [
+            _promoted_entry("malformed1", ""),
+            _promoted_entry("healthy1", "healthy-skill-in-mixed-batch"),
+        ],
+    }
+    pruned = skill_ledger.prune_ledger(ledger, tmp_dir)
+
+    malformed_entry = next(c for c in pruned["candidates"] if c["id"] == "malformed1")
+    if malformed_entry.get("needs_review") is not True:
+        fail(name, f"expected the malformed entry to be flagged needs_review=True, got: {malformed_entry}")
+        return
+    if malformed_entry.get("needs_review_reason") != "missing_promoted_skill_name":
+        fail(name, f"expected the malformed entry's reason to be 'missing_promoted_skill_name', got: {malformed_entry.get('needs_review_reason')!r}")
+        return
+
+    healthy_entry = next(c for c in pruned["candidates"] if c["id"] == "healthy1")
+    if healthy_entry.get("status") != "promoted":
+        fail(name, f"expected the healthy entry's status to remain 'promoted', got {healthy_entry.get('status')!r}")
+        return
+    if healthy_entry.get("needs_review") is not False:
+        fail(
+            name,
+            f"expected the separate healthy entry to be UNAFFECTED by the malformed entry "
+            f"in the same batch (needs_review=False), got: {healthy_entry}",
+        )
+        return
+    if healthy_entry.get("needs_review_reason") is not None:
+        fail(name, f"expected the healthy entry's needs_review_reason to stay None, got: {healthy_entry.get('needs_review_reason')!r}")
+        return
+    ok(name)
+
+
+def test_ledger_prune_honors_state_dir_when_ledger_flag_left_at_default(tmp_dir: Path) -> None:
+    # LOW (task #59, item 5): `--state-dir` was declared as a CLI argument
+    # and accepted by `cmd_prune`, but its value was never read anywhere in
+    # the function body -- unlike `--observe`/`--backtest`, which both honor
+    # a custom `--state-dir` to locate workflow artifacts. Proves that when
+    # `--ledger` is left at its default and a custom `--state-dir` is given,
+    # `--prune` now operates on `<state-dir>/project/skill-candidates.json`
+    # (the same nesting convention the built-in default already documents),
+    # not the hardcoded default path.
+    name = "skill-ledger/prune-honors-state-dir-when-ledger-flag-left-at-default"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    custom_state_dir = tmp_dir / "custom-state"
+    ledger_path = custom_state_dir / "project" / "skill-candidates.json"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(json.dumps({
+        "schema_version": 1,
+        "candidates": [{
+            "id": "keepme", "surface": "unscoped", "signature": "some fresh candidate",
+            "workflows": ["wf-a"], "distinct_workflows": 1, "max_severity": "unknown",
+            "evidence": [], "first_seen": skill_ledger.now_iso(), "last_seen": skill_ledger.now_iso(),
+            "status": "candidate", "promoted_skill": None, "rejected_reason": None,
+            "rejected_at_distinct_workflows": None,
+        }],
+    }), encoding="utf-8")
+
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--prune", "--state-dir", str(custom_state_dir)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result.returncode != 0:
+        fail(name, f"--prune exited {result.returncode}: {result.stderr[:500]}")
+        return
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        fail(name, f"--prune did not print valid JSON on stdout: {result.stdout[:300]}")
+        return
+    if payload.get("remaining_candidates") != 1:
+        fail(
+            name,
+            f"expected --prune to operate on <state-dir>/project/skill-candidates.json "
+            f"(remaining_candidates=1), got: {payload}",
+        )
+        return
+    ok(name)
+
+
+def test_ledger_prune_promoted_missing_skill_md_flags_stale_path_no_crash(tmp_dir: Path) -> None:
+    # The promoted skill's canonical SKILL.md is entirely absent (e.g. hand-
+    # deleted, or the directory was never created) -- must degrade to
+    # needs_review_reason='stale_path' without raising.
+    name = "skill-ledger/prune-promoted-missing-skill-md-no-crash"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    ledger = {"schema_version": 1, "candidates": [_promoted_entry("p4", "never-existed-skill")]}
+    pruned = skill_ledger.prune_ledger(ledger, tmp_dir)
+    entry = next(c for c in pruned["candidates"] if c["id"] == "p4")
+    if entry.get("status") != "promoted":
+        fail(name, f"expected status to remain 'promoted' (never changed), got {entry.get('status')!r}")
+        return
+    if entry.get("needs_review") is not True:
+        fail(name, f"expected needs_review=True when the canonical SKILL.md is entirely missing, got: {entry}")
+        return
+    if entry.get("needs_review_reason") != "stale_path":
+        fail(name, f"expected needs_review_reason='stale_path' for a missing SKILL.md, got {entry.get('needs_review_reason')!r}")
+        return
+    ok(name)
+
+
+def test_ledger_prune_refuses_to_overwrite_corrupt_ledger_file(tmp_dir: Path) -> None:
+    # CRITICAL (task #59, item 1): before this fix, `load_ledger()` caught
+    # (OSError, ValueError) on a truncated/corrupt-but-EXISTING ledger file
+    # and silently degraded to an empty in-memory ledger -- indistinguishable
+    # from the benign "no ledger file at all" case. `cmd_prune` then wrote
+    # that empty ledger straight back over the corrupt file via
+    # `save_ledger_atomic` and exited 0, permanently destroying whatever was
+    # recoverable in the original file. This is now triggered on EVERY
+    # workflow via the router's unconditional `--prune` wiring. Proves
+    # `--prune` now fails closed instead: non-zero exit, a clean JSON error
+    # on stderr, and the original corrupt bytes left completely untouched on
+    # disk (no overwrite).
+    name = "skill-ledger/prune-refuses-to-overwrite-corrupt-ledger-file"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    ledger_path = tmp_dir / "skill-candidates.json"
+    corrupt_bytes = b'{"schema_version": 1, "candidates": [{"id": "trunc'
+    ledger_path.write_bytes(corrupt_bytes)
+
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--prune", "--ledger", str(ledger_path)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result.returncode == 0:
+        fail(name, f"expected --prune to fail closed (non-zero exit) on a corrupt ledger file, got exit 0: stdout={result.stdout[:300]!r}")
+        return
+    try:
+        payload = json.loads(result.stderr.strip())
+    except json.JSONDecodeError:
+        fail(name, f"expected a clean JSON error on stderr, got: {result.stderr[:400]!r}")
+        return
+    if "error" not in payload:
+        fail(name, f"expected an 'error' key in the JSON error payload, got: {payload}")
+        return
+    after_bytes = ledger_path.read_bytes()
+    if after_bytes != corrupt_bytes:
+        fail(name, "expected the corrupt ledger file to be left byte-for-byte untouched, but it was overwritten")
+        return
+    ok(name)
+
+
+def test_ledger_backtest_never_mutates_real_ledger_file(tmp_dir: Path) -> None:
+    name = "skill-ledger/backtest-never-mutates-real-ledger-file"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    state_dir = tmp_dir / ".craftflow" / "state"
+    workflows_dir = state_dir / "workflows"
+    workflows_dir.mkdir(parents=True)
+
+    artifact = {
+        "workflow_uuid": "wf-fixture-1",
+        "results": {"reviewer": None, "hunter": None, "verifier": None},
+        "remediation_history": [{"reason": "sample recurring issue for backtest fixture"}],
+        "memory_notes": [],
+    }
+    (workflows_dir / "wf-fixture-1.json").write_text(json.dumps(artifact), encoding="utf-8")
+    (workflows_dir / "wf-fixture-1.events.jsonl").write_text("", encoding="utf-8")
+
+    real_ledger_dir = state_dir / "project"
+    real_ledger_dir.mkdir(parents=True)
+    real_ledger_path = real_ledger_dir / "skill-candidates.json"
+    real_ledger_path.write_text(json.dumps({"schema_version": 1, "candidates": [{"id": "keepme"}]}), encoding="utf-8")
+    before_mtime = real_ledger_path.stat().st_mtime_ns
+    before_bytes = real_ledger_path.read_bytes()
+
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--backtest", "--state-dir", str(state_dir)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result.returncode != 0:
+        fail(name, f"--backtest exited {result.returncode}: {result.stderr[:500]}")
+        return
+
+    after_mtime = real_ledger_path.stat().st_mtime_ns
+    after_bytes = real_ledger_path.read_bytes()
+    if before_mtime != after_mtime or before_bytes != after_bytes:
+        fail(name, "the real ledger file's mtime/content changed after a --backtest run")
+        return
+
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        fail(name, f"--backtest did not print valid JSON on stdout: {result.stdout[:300]}")
+        return
+    if "gate_eligible_count" not in payload or "candidates" not in payload:
+        fail(name, f"--backtest output missing expected keys, got: {list(payload.keys())}")
+        return
+    if payload["total_candidates"] < 1:
+        fail(name, "expected the fixture workflow's remediation_history reason to surface as a candidate")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# REM-FIX (1a-SCOPE: code-reviewer CRITICAL + silent-failure-hunter 3 CRITICAL
+# + 3 HIGH on craftflow_skill_ledger.py)
+# ---------------------------------------------------------------------------
+
+def test_ledger_lru_eviction_exempts_rejected_and_promoted_at_200_cap(tmp_dir: Path) -> None:
+    name = "skill-ledger/lru-eviction-exempts-rejected-and-promoted-at-200-cap"
+    ledger = {"schema_version": 1, "candidates": []}
+    # 3 rejected + 3 promoted tombstones, all with a much OLDER last_seen
+    # than every candidate entry below -- a naive last_seen-only sort (the
+    # pre-fix behavior) would target these FIRST for eviction.
+    for i in range(3):
+        ledger["candidates"].append({
+            "id": f"rej{i:04d}", "surface": "unscoped", "signature": f"rejected-sig-{i}",
+            "workflows": [f"wf-rej-{i}"], "distinct_workflows": 1, "max_severity": "unknown",
+            "evidence": [], "first_seen": "2000-01-01T00:00:00Z", "last_seen": "2000-01-01T00:00:00Z",
+            "status": "rejected", "promoted_skill": None, "rejected_reason": "already documented",
+            "rejected_at_distinct_workflows": 1,
+        })
+    for i in range(3):
+        ledger["candidates"].append({
+            "id": f"prom{i:04d}", "surface": "unscoped", "signature": f"promoted-sig-{i}",
+            "workflows": [f"wf-prom-{i}"], "distinct_workflows": 1, "max_severity": "unknown",
+            "evidence": [], "first_seen": "2000-06-01T00:00:00Z", "last_seen": "2000-06-01T00:00:00Z",
+            "status": "promoted", "promoted_skill": f"skill-{i}", "rejected_reason": None,
+            "rejected_at_distinct_workflows": None,
+        })
+    # 194 ordinary candidate entries so the ledger sits exactly at the 200 cap.
+    for i in range(194):
+        ledger["candidates"].append({
+            "id": f"cand{i:04d}", "surface": "unscoped", "signature": f"candidate-sig-{i}",
+            "workflows": [f"wf-cand-{i}"], "distinct_workflows": 1, "max_severity": "unknown",
+            "evidence": [], "first_seen": f"2026-01-{(i % 28) + 1:02d}T00:00:00Z",
+            "last_seen": f"2026-01-{(i % 28) + 1:02d}T00:00:00Z",
+            "status": "candidate", "promoted_skill": None, "rejected_reason": None,
+            "rejected_at_distinct_workflows": None,
+        })
+    for c in ledger["candidates"]:
+        if c["id"] == "cand0000":
+            c["last_seen"] = "2025-01-01T00:00:00Z"  # oldest among CANDIDATE-status entries only
+    if len(ledger["candidates"]) != 200:
+        fail(name, f"test setup issue: expected 200 seed entries, got {len(ledger['candidates'])}")
+        return
+
+    signals = skill_ledger.collect_signals(
+        {}, [{"event": "remediation_created", "reason": "brand new 201st unique signature", "ts": "2026-08-01T00:00:00Z"}]
+    )
+    ledger = skill_ledger.upsert_candidates(ledger, "wf-new", signals)
+
+    if len(ledger["candidates"]) != 200:
+        fail(name, f"expected ledger capped at 200 entries, got {len(ledger['candidates'])}")
+        return
+    ids = {c["id"] for c in ledger["candidates"]}
+    for i in range(3):
+        if f"rej{i:04d}" not in ids:
+            fail(name, f"expected rejected tombstone rej{i:04d} to survive the size-cap eviction, but it was destroyed")
+            return
+        if f"prom{i:04d}" not in ids:
+            fail(name, f"expected promoted tombstone prom{i:04d} to survive the size-cap eviction, but it was destroyed")
+            return
+    if "cand0000" in ids:
+        fail(name, "expected the oldest CANDIDATE-status entry (cand0000) to be evicted, but it is still present")
+        return
+    ok(name)
+
+
+def test_ledger_observe_rejects_relative_traversal_wf_id(tmp_dir: Path) -> None:
+    name = "skill-ledger/observe-rejects-relative-traversal-wf-id"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    state_dir = tmp_dir / ".craftflow" / "state"
+    (state_dir / "workflows").mkdir(parents=True)
+    # Plant a file OUTSIDE state_dir that a traversal escape would reach.
+    secret_dir = tmp_dir / "secret"
+    secret_dir.mkdir()
+    (secret_dir / "escape-target.json").write_text(
+        json.dumps({"workflow_uuid": "should-never-be-read"}), encoding="utf-8"
+    )
+    traversal_wf_id = "../../secret/escape-target"
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--observe", traversal_wf_id, "--state-dir", str(state_dir)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result.returncode != 1:
+        fail(
+            name,
+            f"expected --observe with a '..'-traversal wf_id to fail closed (exit 1), "
+            f"got exit {result.returncode}; stdout={result.stdout[:300]}",
+        )
+        return
+    ok(name)
+
+
+def test_ledger_observe_rejects_absolute_path_wf_id(tmp_dir: Path) -> None:
+    name = "skill-ledger/observe-rejects-absolute-path-wf-id"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    state_dir = tmp_dir / ".craftflow" / "state"
+    (state_dir / "workflows").mkdir(parents=True)
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--observe", "/etc/passwd", "--state-dir", str(state_dir)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result.returncode != 1:
+        fail(
+            name,
+            f"expected --observe with an absolute-path wf_id to fail closed (exit 1), "
+            f"got exit {result.returncode}; stdout={result.stdout[:300]}",
+        )
+        return
+    ok(name)
+
+
+def test_ledger_observe_tolerates_non_utf8_events_file(tmp_dir: Path) -> None:
+    name = "skill-ledger/observe-tolerates-non-utf8-events-file"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    state_dir = tmp_dir / ".craftflow" / "state"
+    workflows_dir = state_dir / "workflows"
+    workflows_dir.mkdir(parents=True)
+    ledger_path = state_dir / "project" / "skill-candidates.json"
+    wf_id = "wf-badbytes-fixture"
+    (workflows_dir / f"{wf_id}.json").write_text(json.dumps({
+        "results": {"reviewer": None, "hunter": None, "verifier": None},
+        "remediation_history": [],
+        "memory_notes": [],
+    }), encoding="utf-8")
+    # Simulate a torn write: one valid JSONL line followed by invalid UTF-8
+    # bytes (never a valid encoding under any common codec).
+    events_path = workflows_dir / f"{wf_id}.events.jsonl"
+    with open(events_path, "wb") as f:
+        f.write(b'{"event": "workflow_failed", "reason": "ok line"}\n')
+        f.write(b"\xff\xfe\x00 not valid utf-8 torn write\n")
+
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--observe", wf_id, "--state-dir", str(state_dir), "--ledger", str(ledger_path)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result.returncode != 0:
+        fail(
+            name,
+            f"expected --observe to tolerate a non-UTF-8 events.jsonl and exit 0 with a diagnostic "
+            f"(not crash), got exit {result.returncode}; stderr={result.stderr[:500]}",
+        )
+        return
+    ok(name)
+
+
+def test_ledger_observe_tolerates_malformed_entries_missing_fields(tmp_dir: Path) -> None:
+    """HIGH (REM-FIX round 6): `upsert_candidates` used to direct-index
+    untrusted loaded ledger JSON (`entry["surface"]`, `entry["signature"]`,
+    `entry["workflows"]`, `entry["evidence"]`) without guarding against a
+    well-formed DICT that is simply missing expected keys (as opposed to a
+    non-dict entry, which was already guarded elsewhere). --observe is the
+    entrypoint invoked on EVERY workflow completion per the router's
+    memory-finalization wiring -- once one such malformed entry lands in the
+    ledger (hand-edited, partially migrated, or a future schema change),
+    every future --observe call crashes with a raw KeyError traceback (not
+    caught by main()'s OSError/UnicodeDecodeError/AttributeError/TypeError
+    wrapper) instead of the documented clean JSON error contract,
+    permanently breaking ledger mining. Covers two distinct malformed
+    shapes: (1) a dict entry missing BOTH surface/signature entirely, and
+    (2) a dict entry that HAS surface/signature (so it participates in
+    key-matching) but is missing workflows/evidence (e.g. a partially
+    migrated schema)."""
+    name = "skill-ledger/observe-tolerates-malformed-entries-missing-fields"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    state_dir = tmp_dir / ".craftflow" / "state"
+    workflows_dir = state_dir / "workflows"
+    workflows_dir.mkdir(parents=True)
+    ledger_path = state_dir / "project" / "skill-candidates.json"
+
+    # Case 1: dict entry entirely missing surface/signature.
+    missing_surface_signature_entry = {
+        "id": "malformed-no-surface-sig",
+        "status": "candidate",
+        "workflows": ["wf-old"],
+    }
+    # Case 2: dict entry WITH surface/signature (so it is looked up and
+    # matched against a fresh incoming signal below) but missing
+    # workflows/evidence/distinct_workflows/max_severity -- as a partially
+    # migrated or hand-edited schema would produce.
+    matching_signature_text = "a recurring missing-workflows issue"
+    missing_workflows_entry = {
+        "id": "malformed-no-workflows",
+        "surface": "unscoped",
+        "signature": matching_signature_text,
+        "status": "candidate",
+    }
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(json.dumps({
+        "schema_version": 1,
+        "candidates": [missing_surface_signature_entry, missing_workflows_entry],
+    }), encoding="utf-8")
+
+    wf_id = "wf-malformed-ledger-fixture"
+    (workflows_dir / f"{wf_id}.json").write_text(json.dumps({
+        "results": {"reviewer": None, "hunter": None, "verifier": None},
+        "remediation_history": [{"reason": matching_signature_text}],
+        "memory_notes": [],
+    }), encoding="utf-8")
+    (workflows_dir / f"{wf_id}.events.jsonl").write_text("", encoding="utf-8")
+
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--observe", wf_id, "--state-dir", str(state_dir), "--ledger", str(ledger_path)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result.returncode != 0:
+        fail(
+            name,
+            f"expected --observe to degrade cleanly against a malformed ledger (not crash), "
+            f"got exit {result.returncode}; stderr={result.stderr[:800]}",
+        )
+        return
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        fail(name, f"--observe did not print valid JSON on stdout: {result.stdout[:300]}")
+        return
+    if "observed" not in payload:
+        fail(name, f"expected a clean {{'observed': ...}} JSON success shape, got: {payload}")
+        return
+
+    ledger_after = json.loads(ledger_path.read_text(encoding="utf-8"))
+    ids_after = {c.get("id") for c in ledger_after["candidates"] if isinstance(c, dict)}
+    if "malformed-no-surface-sig" not in ids_after:
+        fail(name, "expected the surface/signature-less entry to survive untouched, not be dropped")
+        return
+    if "malformed-no-workflows" not in ids_after:
+        fail(name, "expected the workflows-less entry to survive (repaired), not be dropped")
+        return
+
+    repaired = next(c for c in ledger_after["candidates"] if c.get("id") == "malformed-no-workflows")
+    if not isinstance(repaired.get("workflows"), list) or wf_id not in repaired["workflows"]:
+        fail(name, f"expected the malformed entry's 'workflows' to be repaired and include {wf_id!r}, got: {repaired.get('workflows')!r}")
+        return
+    if not isinstance(repaired.get("evidence"), list) or not repaired["evidence"]:
+        fail(name, f"expected the malformed entry's 'evidence' to be repaired with the new signal, got: {repaired.get('evidence')!r}")
+        return
+    ok(name)
+
+
+def test_ledger_reject_sets_status_and_reason(tmp_dir: Path) -> None:
+    # Phase 3 (router wiring): the approval flow's "Reject" option needs a
+    # deterministic script-level way to tombstone a candidate -- this was a
+    # documented gap in Phase 1 (craftflow_skill_ledger.py had --observe,
+    # --query, --prune, --backtest but no --reject). Minimal addition, same
+    # atomic-write/lock discipline as the other mutating subcommands.
+    name = "skill-ledger/reject-sets-status-and-reason"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    ledger_path = tmp_dir / "skill-candidates.json"
+    candidate_id = "abc12345"
+    ledger_path.write_text(json.dumps({
+        "schema_version": 1,
+        "candidates": [{
+            "id": candidate_id,
+            "surface": "unscoped",
+            "signature": "some recurring issue",
+            "workflows": ["wf-a", "wf-b"],
+            "distinct_workflows": 2,
+            "max_severity": "medium",
+            "evidence": [],
+            "first_seen": "2026-01-01T00:00:00Z",
+            "last_seen": "2026-01-01T00:00:00Z",
+            "status": "candidate",
+            "promoted_skill": None,
+            "rejected_reason": None,
+            "rejected_at_distinct_workflows": None,
+        }],
+    }), encoding="utf-8")
+
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--reject", candidate_id, "--reason", "already documented in patterns.md",
+         "--ledger", str(ledger_path)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result.returncode != 0:
+        fail(name, f"--reject exited {result.returncode}: {result.stderr[:500]}")
+        return
+
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    entry = ledger["candidates"][0]
+    if entry.get("status") != "rejected":
+        fail(name, f"expected status='rejected' after --reject, got {entry.get('status')!r}")
+        return
+    if entry.get("rejected_reason") != "already documented in patterns.md":
+        fail(name, f"expected rejected_reason to be persisted verbatim, got {entry.get('rejected_reason')!r}")
+        return
+    if entry.get("rejected_at_distinct_workflows") != 2:
+        fail(name, f"expected rejected_at_distinct_workflows=2 (snapshot at rejection time), got {entry.get('rejected_at_distinct_workflows')!r}")
+        return
+    ok(name)
+
+
+def test_ledger_reject_unknown_candidate_id_fails_closed(tmp_dir: Path) -> None:
+    name = "skill-ledger/reject-unknown-candidate-id-fails-closed"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    ledger_path = tmp_dir / "skill-candidates.json"
+    ledger_path.write_text(json.dumps({"schema_version": 1, "candidates": []}), encoding="utf-8")
+
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--reject", "nonexistent-id", "--ledger", str(ledger_path)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result.returncode == 0:
+        fail(name, "expected non-zero exit when rejecting a candidate id absent from the ledger")
+        return
+    ok(name)
+
+
+def test_ledger_reject_already_promoted_candidate_fails_closed(tmp_dir: Path) -> None:
+    # HIGH 3 (REM-FIX): a real race exists between the router's gate check and
+    # the user's eventual AskUserQuestion answer -- during that window a
+    # DIFFERENT concurrent workflow could already have run
+    # craftflow_skill_promote.py --approve on the same candidate. --reject
+    # must refuse (exit 1, clear JSON error, no silent status overwrite) when
+    # the candidate is no longer in a rejectable state, mirroring promote.py's
+    # own defensive posture.
+    name = "skill-ledger/reject-already-promoted-candidate-fails-closed"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    ledger_path = tmp_dir / "skill-candidates.json"
+    candidate_id = "promoted1"
+    original = {
+        "schema_version": 1,
+        "candidates": [{
+            "id": candidate_id,
+            "surface": "unscoped",
+            "signature": "some recurring issue",
+            "workflows": ["wf-a", "wf-b"],
+            "distinct_workflows": 2,
+            "max_severity": "medium",
+            "evidence": [],
+            "first_seen": "2026-01-01T00:00:00Z",
+            "last_seen": "2026-01-01T00:00:00Z",
+            "status": "promoted",
+            "promoted_skill": "some-skill",
+            "rejected_reason": None,
+            "rejected_at_distinct_workflows": None,
+        }],
+    }
+    ledger_path.write_text(json.dumps(original), encoding="utf-8")
+
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--reject", candidate_id, "--reason", "too late",
+         "--ledger", str(ledger_path)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result.returncode == 0:
+        fail(name, f"expected non-zero exit when rejecting an already-promoted candidate, got exit 0: {result.stdout!r}")
+        return
+    try:
+        payload = json.loads(result.stderr)
+    except json.JSONDecodeError:
+        fail(name, f"expected a clean JSON error on stderr, got: {result.stderr[:300]!r}")
+        return
+    if "error" not in payload:
+        fail(name, f"expected an 'error' key in the JSON error payload, got: {payload}")
+        return
+
+    ledger_after = json.loads(ledger_path.read_text(encoding="utf-8"))
+    entry_after = ledger_after["candidates"][0]
+    if entry_after.get("status") != "promoted":
+        fail(name, f"expected status to remain 'promoted' (no silent overwrite), got {entry_after.get('status')!r}")
+        return
+    if entry_after.get("promoted_skill") != "some-skill":
+        fail(name, "expected promoted_skill to remain untouched after a refused --reject")
+        return
+    ok(name)
+
+
+def test_ledger_main_wraps_oserror_as_clean_json_not_traceback(tmp_dir: Path) -> None:
+    # MEDIUM (REM-FIX): craftflow_skill_promote.py's main() already wraps
+    # unexpected OSError/UnicodeDecodeError into a clean {"error": ...} JSON
+    # shape (see its own MEDIUM 6 REM-FIX). craftflow_skill_ledger.py's
+    # main() lacked the same top-level wrapping across --reject/--observe/
+    # --prune/--query, so an OS-level failure (e.g. a ledger path whose
+    # parent component is a regular file, not a directory) crashed with a
+    # raw Python traceback instead of this script's documented JSON shape.
+    name = "skill-ledger/main-wraps-oserror-as-clean-json-not-traceback"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    blocker_file = tmp_dir / "blocker.txt"
+    blocker_file.write_text("not a directory", encoding="utf-8")
+    # ledger's parent path component ("blocker.txt") is a FILE, so
+    # Path.mkdir(parents=True) on the real parent ("blocker.txt/sub") raises
+    # NotADirectoryError (an OSError subclass) inside save_ledger_atomic /
+    # the ledger file lock helper.
+    bad_ledger_path = blocker_file / "sub" / "skill-candidates.json"
+
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--prune", "--ledger", str(bad_ledger_path)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result.returncode == 0:
+        fail(name, "expected non-zero exit for an OS-level failure writing the ledger")
+        return
+    if "Traceback (most recent call last)" in result.stderr:
+        fail(name, f"expected a clean JSON error, not a raw Python traceback; stderr={result.stderr[:400]!r}")
+        return
+    try:
+        payload = json.loads(result.stderr.strip())
+    except json.JSONDecodeError:
+        fail(name, f"expected stderr to be a single clean JSON error object, got: {result.stderr[:400]!r}")
+        return
+    if "error" not in payload:
+        fail(name, f"expected an 'error' key in the JSON error payload, got: {payload}")
+        return
+    ok(name)
+
+
+def test_ledger_observe_acquires_and_releases_lock(tmp_dir: Path) -> None:
+    name = "skill-ledger/observe-acquires-and-releases-file-lock"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    state_dir = tmp_dir / ".craftflow" / "state"
+    workflows_dir = state_dir / "workflows"
+    workflows_dir.mkdir(parents=True)
+    ledger_path = state_dir / "project" / "skill-candidates.json"
+    wf_id = "wf-lock-fixture"
+    (workflows_dir / f"{wf_id}.json").write_text(json.dumps({
+        "results": {"reviewer": None, "hunter": None, "verifier": None},
+        "remediation_history": [],
+        "memory_notes": [],
+    }), encoding="utf-8")
+
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--observe", wf_id, "--state-dir", str(state_dir), "--ledger", str(ledger_path)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result.returncode != 0:
+        fail(name, f"--observe exited {result.returncode}: {result.stderr[:500]}")
+        return
+
+    lock_path = ledger_path.with_suffix(ledger_path.suffix + ".lock")
+    if not lock_path.exists():
+        fail(name, f"expected a lock file at {lock_path} to exist after cmd_observe ran under a lock")
+        return
+
+    # If the lock was genuinely released (not leaked/held), a fresh
+    # non-blocking exclusive flock on the same lock file must succeed right now.
+    fd = os.open(str(lock_path), os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError as exc:
+        fail(name, f"lock file appears still held after cmd_observe returned: {exc}")
+        return
+    finally:
+        os.close(fd)
+    ok(name)
+
+
+def test_ledger_observe_identity_pinned_to_wf_id_not_workflow_uuid(tmp_dir: Path) -> None:
+    name = "skill-ledger/observe-identity-pinned-to-wf-id-not-workflow-uuid"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    state_dir = tmp_dir / ".craftflow" / "state"
+    workflows_dir = state_dir / "workflows"
+    workflows_dir.mkdir(parents=True)
+    ledger_path = state_dir / "project" / "skill-candidates.json"
+
+    wf_id = "wf-identity-fixture"
+    artifact_path = workflows_dir / f"{wf_id}.json"
+    (workflows_dir / f"{wf_id}.events.jsonl").write_text("", encoding="utf-8")
+
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+
+    # First observation: workflow_uuid absent on the artifact (identity
+    # would previously fall back to the raw wf_id).
+    artifact_v1 = {
+        "results": {"reviewer": None, "hunter": None, "verifier": None},
+        "remediation_history": [{"reason": "identity pinning regression fixture reason"}],
+        "memory_notes": [],
+    }
+    artifact_path.write_text(json.dumps(artifact_v1), encoding="utf-8")
+    result1 = subprocess.run(
+        [sys.executable, str(script), "--observe", wf_id, "--state-dir", str(state_dir), "--ledger", str(ledger_path)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result1.returncode != 0:
+        fail(name, f"first --observe exited {result1.returncode}: {result1.stderr[:500]}")
+        return
+
+    # Second observation of the SAME physical workflow: workflow_uuid now
+    # present (identity would previously become this self-reported uuid --
+    # a DIFFERENT string from wf_id -- inflating distinct_workflows to 2).
+    artifact_v2 = dict(artifact_v1)
+    artifact_v2["workflow_uuid"] = "some-later-self-reported-uuid"
+    artifact_path.write_text(json.dumps(artifact_v2), encoding="utf-8")
+    result2 = subprocess.run(
+        [sys.executable, str(script), "--observe", wf_id, "--state-dir", str(state_dir), "--ledger", str(ledger_path)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result2.returncode != 0:
+        fail(name, f"second --observe exited {result2.returncode}: {result2.stderr[:500]}")
+        return
+
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    signature = skill_ledger.learn_scan.normalize_reason("identity pinning regression fixture reason")
+    matches = [c for c in ledger["candidates"] if c["signature"] == signature]
+    if len(matches) != 1:
+        fail(name, f"expected exactly 1 candidate cluster, got {len(matches)}")
+        return
+    if matches[0]["distinct_workflows"] != 1:
+        fail(
+            name,
+            f"expected distinct_workflows to stay 1 across both --observe calls of the SAME "
+            f"physical workflow (before/after workflow_uuid appears), got "
+            f"{matches[0]['distinct_workflows']} -- workflows={matches[0]['workflows']}",
+        )
+        return
+    ok(name)
+
+
+def test_ledger_observe_repeat_calls_do_not_duplicate_evidence(tmp_dir: Path) -> None:
+    name = "skill-ledger/observe-repeat-calls-do-not-duplicate-evidence"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    state_dir = tmp_dir / ".craftflow" / "state"
+    workflows_dir = state_dir / "workflows"
+    workflows_dir.mkdir(parents=True)
+    ledger_path = state_dir / "project" / "skill-candidates.json"
+    wf_id = "wf-repeat-fixture"
+    artifact = {
+        "results": {"reviewer": None, "hunter": None, "verifier": None},
+        "remediation_history": [{"reason": "repeat observe evidence dedup fixture reason"}],
+        "memory_notes": [],
+    }
+    (workflows_dir / f"{wf_id}.json").write_text(json.dumps(artifact), encoding="utf-8")
+    (workflows_dir / f"{wf_id}.events.jsonl").write_text("", encoding="utf-8")
+
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+    for _ in range(3):
+        result = subprocess.run(
+            [sys.executable, str(script), "--observe", wf_id, "--state-dir", str(state_dir), "--ledger", str(ledger_path)],
+            capture_output=True, text=True, cwd=str(tmp_dir),
+        )
+        if result.returncode != 0:
+            fail(name, f"--observe exited {result.returncode}: {result.stderr[:500]}")
+            return
+
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    signature = skill_ledger.learn_scan.normalize_reason("repeat observe evidence dedup fixture reason")
+    matches = [c for c in ledger["candidates"] if c["signature"] == signature]
+    if len(matches) != 1:
+        fail(name, f"expected 1 candidate cluster, got {len(matches)}")
+        return
+    evidence = matches[0]["evidence"]
+    if len(evidence) != 1:
+        fail(
+            name,
+            f"expected evidence list to stay at 1 row after 3 repeat --observe calls of the "
+            f"same workflow, got {len(evidence)}: {evidence}",
+        )
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# Skill-candidate ledger: severity-extraction calibration (REM-FIX round 2)
+# ---------------------------------------------------------------------------
+# REM-FIX (found via integration-verifier backtest against 141 real workflow
+# logs in the MAIN state tree): 139/200 real candidates normalized to
+# max_severity="unknown". Root cause, confirmed by reading real
+# results.reviewer / planning_review_findings / remediation_history text in
+# this repo's own history:
+#   1. This project's actual review taxonomy is not just critical/high/
+#      medium/low -- planning_review_findings[].severity also uses
+#      "BLOCKING" and "ADVISORY" (and free text uses "MINOR"), none of which
+#      the old word list recognized at all.
+#   2. The old zero-count guard only excluded a SUFFIX zero
+#      ("critical:0"/"critical=0"), not the far more common PREFIX zero
+#      seen in real reviewer/verifier notes ("0 critical issues", "0
+#      CRITICAL, 0 HIGH") -- these were being misread as an actual CRITICAL
+#      finding, the exact inverse of their meaning (a clean/PASS result).
+#   3. Multi-severity free text ("2 CRITICAL + 3 HIGH", "0 critical, 3
+#      medium non-blocking") needs the HIGHEST-ranked word with a nonzero
+#      count, not just the first word matched in string order.
+#   4. Real remediation_history text also concatenates the word into a
+#      camelCase metric name with a "=" count ("totalCritical=5 >=1 AND
+#      totalHigh=2 >=1") -- a bare \b-bounded word regex never matches
+#      inside "totalCritical".
+# All fixture strings below are copied verbatim (or near-verbatim) from
+# real artifacts under .craftflow/state/workflows/*.json in this repo's
+# history -- not invented shapes.
+
+def test_ledger_severity_recognizes_project_specific_words(tmp_dir: Path) -> None:
+    name = "skill-ledger/severity-recognizes-blocking-advisory-minor"
+    # Real shape: planning_review_findings[].severity in wf-20260723-101837-24eef849.json
+    cases = [("BLOCKING", "critical"), ("ADVISORY", "low"), ("MINOR", "low")]
+    for raw, expected in cases:
+        got = skill_ledger.normalize_severity(raw)
+        if got != expected:
+            fail(name, f"expected normalize_severity({raw!r}) == {expected!r}, got {got!r}")
+            return
+    ok(name)
+
+
+def test_ledger_severity_prefix_zero_count_is_not_that_severity(tmp_dir: Path) -> None:
+    name = "skill-ledger/severity-prefix-zero-count-is-not-that-severity"
+    # Real shapes: results.reviewer / results.verifier note text in
+    # wf-20260717-185354-9631865c.json and wf-20260508-100000-f1e2d3c4.json.
+    cases = [
+        "9/9 scenarios PASS, 0 critical issues — final phase-exit verification",
+        "CLEAN after REM-FIX — 0 CRITICAL, 0 HIGH. Fixed: instanceof guard×2, promise memoization",
+    ]
+    for text in cases:
+        got = skill_ledger.normalize_severity(text)
+        if got == "critical":
+            fail(name, f"expected a '0 critical'/'0 CRITICAL' clean-pass note to NOT normalize to critical, got {got!r} for {text!r}")
+            return
+    ok(name)
+
+
+def test_ledger_severity_picks_highest_nonzero_severity_mentioned(tmp_dir: Path) -> None:
+    name = "skill-ledger/severity-picks-highest-nonzero-severity-mentioned"
+    # Real shape: remediation_history reason text in wf-20260717-203457-81fca684.json
+    got = skill_ledger.normalize_severity("user chose 'Fix all issues' (2 CRITICAL + 2 HIGH)")
+    if got != "critical":
+        fail(name, f"expected '2 CRITICAL + 2 HIGH' to normalize to critical (highest nonzero), got {got!r}")
+        return
+    # Real shape: remediation_history reason text in wf-20260429-100003-a7b8c9d0.json
+    got2 = skill_ledger.normalize_severity(
+        "phase-e: 1 HIGH (trailer missing from HOP_BY_HOP), 3 MEDIUM (process.once, viteProcess orphan, silent swallow), 1 LOW"
+    )
+    if got2 != "high":
+        fail(name, f"expected the phase-e note to normalize to high (highest nonzero of HIGH/MEDIUM/LOW), got {got2!r}")
+        return
+    ok(name)
+
+
+def test_ledger_severity_zero_count_does_not_mask_other_nonzero_mention(tmp_dir: Path) -> None:
+    name = "skill-ledger/severity-zero-count-does-not-mask-other-nonzero-mention"
+    # Real shape: remediation_history reason text in wf-20260508-090652-efd1a414.json
+    got = skill_ledger.normalize_severity("Phase B re-review: 0 critical, 3 medium non-blocking")
+    if got != "medium":
+        fail(name, f"expected '0 critical, 3 medium non-blocking' to normalize to medium (0-critical excluded, 3-medium kept), got {got!r}")
+        return
+    ok(name)
+
+
+def test_ledger_severity_recognizes_camelcase_concatenated_word_with_count(tmp_dir: Path) -> None:
+    name = "skill-ledger/severity-recognizes-camelcase-concatenated-word-with-count"
+    # Real shape: remediation_history trigger text in this repo's own
+    # 1a-SCOPE decision logging ("totalCritical=5 >=1 AND totalHigh=2 >=1").
+    got = skill_ledger.normalize_severity(
+        "scope_decision trigger: 1a-SCOPE rule fired: totalCritical=5 >=1 AND totalHigh=2 >=1 on Phase 1 parallel review"
+    )
+    if got != "critical":
+        fail(name, f"expected camelCase 'totalCritical=5' to normalize to critical, got {got!r}")
+        return
+    ok(name)
+
+
+def test_ledger_severity_word_followed_by_zero_count_still_not_that_severity_regression(tmp_dir: Path) -> None:
+    """Regression guard for the pre-existing sl0b fixture: must still hold
+    after widening the severity word list and rewriting the count logic."""
+    name = "skill-ledger/severity-suffix-zero-count-regression-guard"
+    got = skill_ledger.normalize_severity("critical=0 so 1a-SCOPE auto-proceeds without user checkpoint")
+    if got == "critical":
+        fail(name, f"expected 'critical=0 so ...' to still NOT normalize to critical after the rewrite, got {got!r}")
+        return
+    ok(name)
+
+
+def test_ledger_gate_eligible_two_distinct_workflows_any_severity(tmp_dir: Path) -> None:
+    """Calibrated threshold (REM-FIX round 3, real 141-workflow backtest):
+    distinct_workflows>=2 is now sufficient for gate eligibility regardless
+    of severity. The old >=3 tier and the >=2-plus-critical escalation are
+    both dropped: 196/200 mined candidates on the real corpus were
+    singletons (distinct_workflows=1), a structural corpus property that
+    made the >=3 threshold almost never fire."""
+    name = "skill-ledger/gate-eligible-two-distinct-workflows-any-severity"
+    candidate = {"distinct_workflows": 2, "max_severity": "unknown"}
+    if not skill_ledger.gate_eligible(candidate):
+        fail(name, "expected distinct_workflows=2, severity=unknown to be gate-eligible under the new threshold")
+        return
+    ok(name)
+
+
+def test_ledger_gate_eligible_one_distinct_workflow_still_not_eligible(tmp_dir: Path) -> None:
+    """distinct_workflows=1 must remain NOT gate-eligible even at the
+    highest severity -- the new threshold only lowers the bar from 3 to 2
+    distinct workflows, it does not eliminate the recurrence requirement."""
+    name = "skill-ledger/gate-eligible-one-distinct-workflow-still-not-eligible"
+    candidate = {"distinct_workflows": 1, "max_severity": "critical"}
+    if skill_ledger.gate_eligible(candidate):
+        fail(name, "expected distinct_workflows=1 to remain NOT gate-eligible even at critical severity")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# skill-promote tests (Phase 2: craftflow_skill_promote.py)
+# ---------------------------------------------------------------------------
+
+_VALID_SKILL_MD = """---
+name: {name}
+description: "Use when this exact lesson recurs again. Provides a documented, evidence-backed fix pattern for it."
+allowed-tools: Read Grep Glob Bash
+craftflow-candidate-id: {cid}
+craftflow-evidence-workflows: wf-a, wf-b
+craftflow-referenced-paths: path/a.ts
+craftflow-promoted-at: PENDING_APPROVAL
+craftflow-review-after: PENDING_APPROVAL
+---
+
+# {name}
+
+## Verified Commands
+
+- `grep -n "example" path/a.ts` -> exit 0: shows the pattern at line 12
+"""
+
+
+def _seed_ledger_candidate(ledger_path: Path, candidate_id: str, status: str = "candidate") -> None:
+    """Write a minimal single-candidate ledger to `ledger_path` with the
+    given status. ROUND 3 (REM-FIX): cmd_approve now ALWAYS requires the
+    candidate to be present in whatever `--ledger` points at (no more
+    best-effort bypass for a nonexistent ledger file), so every test that
+    exercises a successful --approve must seed one of these first."""
+    ledger_path.write_text(json.dumps({
+        "schema_version": 1,
+        "candidates": [{
+            "id": candidate_id, "surface": "unscoped", "signature": "some recurring lesson",
+            "workflows": ["wf-a", "wf-b"], "distinct_workflows": 2, "max_severity": "unknown",
+            "evidence": [], "first_seen": "2026-01-01T00:00:00Z", "last_seen": "2026-01-01T00:00:00Z",
+            "status": status, "promoted_skill": None, "rejected_reason": None,
+            "rejected_at_distinct_workflows": None,
+        }],
+    }), encoding="utf-8")
+
+
+def _run_promote(approve: str, proposals_dir: Path, project_root: Path, ledger: Path) -> tuple:
+    """Invoke craftflow_skill_promote.cmd_approve in-process, capturing
+    stdout/stderr. Returns (exit_code, stdout_text, stderr_text)."""
+    ns = argparse.Namespace(
+        approve=approve,
+        proposals_dir=str(proposals_dir),
+        project_root=str(project_root),
+        ledger=str(ledger),
+    )
+    out, err = io.StringIO(), io.StringIO()
+    old_out, old_err = sys.stdout, sys.stderr
+    try:
+        sys.stdout, sys.stderr = out, err
+        code = skill_promote.cmd_approve(ns)
+    finally:
+        sys.stdout, sys.stderr = old_out, old_err
+    return code, out.getvalue(), err.getvalue()
+
+
+def test_promote_refuses_short_description(tmp_dir: Path) -> None:
+    name = "skill-promote/refuses-short-description"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    cand_dir = proposals_dir / "cand1"
+    cand_dir.mkdir(parents=True)
+    bad_content = _VALID_SKILL_MD.format(name="foo-skill", cid="cand1").replace(
+        'description: "Use when this exact lesson recurs again. Provides a documented, evidence-backed fix pattern for it."',
+        'description: "too short"',
+    )
+    (cand_dir / "SKILL.md").write_text(bad_content, encoding="utf-8")
+    code, _out, err = _run_promote("cand1", proposals_dir, project_root, tmp_dir / "ledger.json")
+    if code == 0:
+        fail(name, "expected exit 1 for a description under 40 characters")
+        return
+    if "description" not in err:
+        fail(name, f"expected stderr to explain the description-length failure, got: {err}")
+        return
+    if (project_root / ".claude" / "skills").exists():
+        fail(name, "expected NO canonical write when frontmatter validation fails")
+        return
+    ok(name)
+
+
+def test_promote_refuses_missing_name(tmp_dir: Path) -> None:
+    name = "skill-promote/refuses-missing-name"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    cand_dir = proposals_dir / "cand2"
+    cand_dir.mkdir(parents=True)
+    content = "---\ndescription: \"Use when this recurs again. Provides a documented fix pattern for it.\"\n---\n\n# missing name\n"
+    (cand_dir / "SKILL.md").write_text(content, encoding="utf-8")
+    code, _out, err = _run_promote("cand2", proposals_dir, project_root, tmp_dir / "ledger.json")
+    if code == 0:
+        fail(name, "expected exit 1 when frontmatter has no 'name' field")
+        return
+    if "name" not in err:
+        fail(name, f"expected stderr to explain the missing-name failure, got: {err}")
+        return
+    ok(name)
+
+
+def test_promote_refuses_both_skill_md_and_patch_present(tmp_dir: Path) -> None:
+    name = "skill-promote/refuses-both-skill-md-and-patch-present"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    cand_dir = proposals_dir / "cand3"
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "SKILL.md").write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand3"), encoding="utf-8")
+    (cand_dir / "SKILL.patch").write_text("--- a/x\n+++ b/x\n", encoding="utf-8")
+    code, _out, err = _run_promote("cand3", proposals_dir, project_root, tmp_dir / "ledger.json")
+    if code == 0:
+        fail(name, "expected exit 1 when both SKILL.md and SKILL.patch are present")
+        return
+    if "both" not in err.lower():
+        fail(name, f"expected stderr to name the both-present conflict, got: {err}")
+        return
+    ok(name)
+
+
+def test_promote_refuses_neither_present(tmp_dir: Path) -> None:
+    name = "skill-promote/refuses-neither-present"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    cand_dir = proposals_dir / "cand4"
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "PROPOSAL.md").write_text("rationale only, no skill file", encoding="utf-8")
+    code, _out, err = _run_promote("cand4", proposals_dir, project_root, tmp_dir / "ledger.json")
+    if code == 0:
+        fail(name, "expected exit 1 when neither SKILL.md nor SKILL.patch are present")
+        return
+    if "neither" not in err.lower():
+        fail(name, f"expected stderr to name the neither-present gap, got: {err}")
+        return
+    ok(name)
+
+
+def test_promote_refuses_path_traversal_candidate_id(tmp_dir: Path) -> None:
+    name = "skill-promote/refuses-path-traversal-candidate-id"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    code, _out, err = _run_promote("../../etc", proposals_dir, project_root, tmp_dir / "ledger.json")
+    if code == 0:
+        fail(name, "expected exit 1 for a path-traversal candidate id")
+        return
+    if "unsafe" not in err.lower() and "invalid" not in err.lower():
+        fail(name, f"expected stderr to flag the candidate id as unsafe/invalid, got: {err}")
+        return
+    ok(name)
+
+
+def test_promote_refuses_unsafe_skill_name(tmp_dir: Path) -> None:
+    name = "skill-promote/refuses-unsafe-skill-name"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    cand_dir = proposals_dir / "cand5"
+    cand_dir.mkdir(parents=True)
+    content = _VALID_SKILL_MD.format(name="foo-skill", cid="cand5").replace(
+        "name: foo-skill", "name: ../../escape"
+    )
+    (cand_dir / "SKILL.md").write_text(content, encoding="utf-8")
+    code, _out, err = _run_promote("cand5", proposals_dir, project_root, tmp_dir / "ledger.json")
+    if code == 0:
+        fail(name, "expected exit 1 when frontmatter 'name' is not a filesystem-safe token")
+        return
+    if (project_root / ".claude").exists():
+        fail(name, "expected NO write anywhere when the skill name is path-traversal-shaped")
+        return
+    ok(name)
+
+
+def test_promote_writes_canonical_and_syncs_cursor_symlink(tmp_dir: Path) -> None:
+    name = "skill-promote/writes-canonical-and-syncs-cursor-symlink"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    cand_dir = proposals_dir / "cand6"
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "SKILL.md").write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand6"), encoding="utf-8")
+    (cand_dir / "PROPOSAL.md").write_text("rationale", encoding="utf-8")
+    ledger_path = tmp_dir / "ledger.json"
+    _seed_ledger_candidate(ledger_path, "cand6")
+    code, out, err = _run_promote("cand6", proposals_dir, project_root, ledger_path)
+    if code != 0:
+        fail(name, f"expected exit 0 for a valid proposal, got {code}, stderr={err}")
+        return
+    canonical = project_root / ".claude" / "skills" / "foo-skill" / "SKILL.md"
+    if not canonical.is_file():
+        fail(name, f"expected canonical file at {canonical}")
+        return
+    written = canonical.read_text(encoding="utf-8")
+    if "PENDING_APPROVAL" in written:
+        fail(name, "expected PENDING_APPROVAL placeholders to be replaced with real ISO timestamps")
+        return
+    if "craftflow-promoted-at: 20" not in written:
+        fail(name, f"expected a real ISO craftflow-promoted-at timestamp in written content:\n{written}")
+        return
+    link = project_root / ".cursor" / "skills" / "foo-skill"
+    if not link.is_symlink():
+        fail(name, f"expected {link} to be a symlink into the canonical .claude/skills directory")
+        return
+    if link.resolve() != canonical.parent.resolve():
+        fail(name, f"expected {link} to resolve to {canonical.parent}, got {link.resolve()}")
+        return
+    result = json.loads(out)
+    if result.get("cursor_sync") != "symlinked":
+        fail(name, f"expected cursor_sync='symlinked', got {result.get('cursor_sync')!r}")
+        return
+    ok(name)
+
+
+def test_promote_stale_backup_on_conflicting_cursor_entry(tmp_dir: Path) -> None:
+    name = "skill-promote/stale-backup-on-conflicting-cursor-entry"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    cand_dir = proposals_dir / "cand7"
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "SKILL.md").write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand7"), encoding="utf-8")
+    conflicting = project_root / ".cursor" / "skills" / "foo-skill"
+    conflicting.mkdir(parents=True)
+    (conflicting / "stale.txt").write_text("pre-existing unrelated content", encoding="utf-8")
+    ledger_path = tmp_dir / "ledger.json"
+    _seed_ledger_candidate(ledger_path, "cand7")
+    code, out, err = _run_promote("cand7", proposals_dir, project_root, ledger_path)
+    if code != 0:
+        fail(name, f"expected exit 0, got {code}, stderr={err}")
+        return
+    backups = list((project_root / ".cursor" / "skills").glob("foo-skill.stale-backup-*"))
+    if not backups:
+        fail(name, "expected the pre-existing conflicting directory to be renamed to a .stale-backup-<ts> path")
+        return
+    if not (backups[0] / "stale.txt").is_file():
+        fail(name, "expected the backed-up directory to retain its original content")
+        return
+    link = project_root / ".cursor" / "skills" / "foo-skill"
+    if not link.is_symlink():
+        fail(name, "expected a fresh symlink at the original path after backing up the conflict")
+        return
+    ok(name)
+
+
+def test_promote_dereference_fallback_when_symlink_unavailable(tmp_dir: Path) -> None:
+    name = "skill-promote/dereference-fallback-when-symlink-unavailable"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    cand_dir = proposals_dir / "cand8"
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "SKILL.md").write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand8"), encoding="utf-8")
+    ledger_path = tmp_dir / "ledger.json"
+    _seed_ledger_candidate(ledger_path, "cand8")
+
+    real_symlink = os.symlink
+
+    def boom(*a, **kw):
+        raise OSError("simulated: symlinks not supported on this filesystem")
+
+    os.symlink = boom
+    try:
+        code, out, err = _run_promote("cand8", proposals_dir, project_root, ledger_path)
+    finally:
+        os.symlink = real_symlink
+    if code != 0:
+        fail(name, f"expected exit 0 even when symlink creation fails, got {code}, stderr={err}")
+        return
+    link = project_root / ".cursor" / "skills" / "foo-skill"
+    if link.is_symlink():
+        fail(name, "expected a real (dereferenced) copy, not a symlink, when os.symlink raises")
+        return
+    copied = link / "SKILL.md"
+    if not copied.is_file():
+        fail(name, f"expected a dereferenced copy of SKILL.md at {copied}")
+        return
+    result = json.loads(out)
+    if result.get("cursor_sync") != "copied-fallback":
+        fail(name, f"expected cursor_sync='copied-fallback', got {result.get('cursor_sync')!r}")
+        return
+    ok(name)
+
+
+def test_promote_idempotent_when_already_correctly_linked(tmp_dir: Path) -> None:
+    """ROUND 3 (REM-FIX) note: a second FULL `--approve` of the SAME
+    candidate is now correctly refused once the ledger marks it 'promoted'
+    (see test_promote_refuses_already_rejected_candidate's sibling coverage
+    for the general status-precondition case) -- a promoted candidate can
+    never legitimately be re-approved through the router flow. What this
+    test actually verifies -- that `sync_cursor_skill` itself is idempotent
+    against an already-correct symlink (no spurious stale-backup) -- is
+    still a real, reachable code path (e.g. a crash/partial run leaving the
+    symlink correctly in place before the ledger got marked), so it is
+    exercised directly at the function level rather than via a second
+    (now-refused) full `--approve` call."""
+    name = "skill-promote/idempotent-when-already-correctly-linked"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    cand_dir = proposals_dir / "cand9"
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "SKILL.md").write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand9"), encoding="utf-8")
+    ledger_path = tmp_dir / "ledger.json"
+    _seed_ledger_candidate(ledger_path, "cand9")
+    code1, _out1, err1 = _run_promote("cand9", proposals_dir, project_root, ledger_path)
+    if code1 != 0:
+        fail(name, f"expected first promote to succeed, got {code1}, stderr={err1}")
+        return
+
+    # A second full --approve of the SAME (now-promoted) candidate must be
+    # refused -- the ledger status precondition applies here too.
+    code2, _out2, err2 = _run_promote("cand9", proposals_dir, project_root, ledger_path)
+    if code2 == 0:
+        fail(name, "expected a second --approve of an already-promoted candidate to be refused, got exit 0")
+        return
+
+    # sync_cursor_skill itself must still be idempotent against an
+    # already-correct symlink, independent of the ledger gate above.
+    canonical_dir = project_root / ".claude" / "skills" / "foo-skill"
+    link_path = project_root / ".cursor" / "skills" / "foo-skill"
+    sync_result = skill_promote.sync_cursor_skill(canonical_dir, link_path)
+    if sync_result != "already-linked":
+        fail(name, f"expected sync_cursor_skill to recognize the link is already correct, got {sync_result!r}")
+        return
+    backups = list((project_root / ".cursor" / "skills").glob("foo-skill.stale-backup-*"))
+    if backups:
+        fail(name, f"expected NO stale-backup on a re-sync of an already-correct symlink, found: {backups}")
+        return
+    ok(name)
+
+
+def test_promote_marks_ledger_entry_promoted(tmp_dir: Path) -> None:
+    name = "skill-promote/marks-ledger-entry-promoted"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = tmp_dir / "ledger.json"
+    cand_dir = proposals_dir / "cand10"
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "SKILL.md").write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand10"), encoding="utf-8")
+    seed_ledger = {
+        "schema_version": 1,
+        "candidates": [{
+            "id": "cand10", "surface": "unscoped", "signature": "some recurring lesson",
+            "workflows": ["wf-a", "wf-b"], "distinct_workflows": 2, "max_severity": "unknown",
+            "evidence": [], "first_seen": "2026-01-01T00:00:00Z", "last_seen": "2026-01-01T00:00:00Z",
+            "status": "candidate", "promoted_skill": None, "rejected_reason": None,
+            "rejected_at_distinct_workflows": None,
+        }],
+    }
+    ledger_path.write_text(json.dumps(seed_ledger), encoding="utf-8")
+    code, _out, err = _run_promote("cand10", proposals_dir, project_root, ledger_path)
+    if code != 0:
+        fail(name, f"expected exit 0, got {code}, stderr={err}")
+        return
+    after = json.loads(ledger_path.read_text(encoding="utf-8"))
+    entry = next((c for c in after["candidates"] if c["id"] == "cand10"), None)
+    if entry is None:
+        fail(name, "candidate entry disappeared from the ledger after promotion")
+        return
+    if entry.get("status") != "promoted":
+        fail(name, f"expected ledger entry status='promoted', got {entry.get('status')!r}")
+        return
+    if entry.get("promoted_skill") != "foo-skill":
+        fail(name, f"expected promoted_skill='foo-skill', got {entry.get('promoted_skill')!r}")
+        return
+    ok(name)
+
+
+def test_promote_applies_update_patch_to_existing_skill(tmp_dir: Path) -> None:
+    name = "skill-promote/applies-update-patch-to-existing-skill"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    existing_rel = ".claude/skills/existing-skill/SKILL.md"
+    existing_path = project_root / existing_rel
+    existing_path.parent.mkdir(parents=True)
+    original_content = _VALID_SKILL_MD.format(name="existing-skill", cid="orig").replace(
+        "craftflow-promoted-at: PENDING_APPROVAL", "craftflow-promoted-at: 2026-01-01T00:00:00Z"
+    ).replace(
+        "craftflow-review-after: PENDING_APPROVAL", "craftflow-review-after: 2026-04-01T00:00:00Z"
+    )
+    existing_path.write_text(original_content, encoding="utf-8")
+
+    updated_content = original_content.replace(
+        'description: "Use when this exact lesson recurs again. Provides a documented, evidence-backed fix pattern for it."',
+        'description: "Use when this exact lesson recurs again. Provides an UPDATED, evidence-backed fix pattern for it."',
+    )
+
+    cand_dir = proposals_dir / "cand11"
+    cand_dir.mkdir(parents=True)
+    import difflib
+    diff_lines = list(difflib.unified_diff(
+        original_content.splitlines(keepends=True),
+        updated_content.splitlines(keepends=True),
+        fromfile=f"a/{existing_rel}",
+        tofile=f"b/{existing_rel}",
+    ))
+    (cand_dir / "SKILL.patch").write_text("".join(diff_lines), encoding="utf-8")
+
+    ledger_path = tmp_dir / "ledger.json"
+    _seed_ledger_candidate(ledger_path, "cand11")
+    code, out, err = _run_promote("cand11", proposals_dir, project_root, ledger_path)
+    if code != 0:
+        fail(name, f"expected exit 0 applying a clean update patch, got {code}, stderr={err}")
+        return
+    after = existing_path.read_text(encoding="utf-8")
+    if "UPDATED" not in after:
+        fail(name, f"expected the patched canonical file to contain the updated description, got:\n{after}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# skill-promote REM-FIX regression tests (items 1-4, 6 of the Phase 2
+# remediation pass). Each test targets exactly one reported gap.
+# ---------------------------------------------------------------------------
+
+def test_promote_critical1_rejects_mismatched_patch_target_and_name(tmp_dir: Path) -> None:
+    """CRITICAL 1: the update-patch path must abort (no write anywhere) when
+    the patched frontmatter's own 'name' field diverges from the patch's
+    '+++' target header -- writing would otherwise silently land on a
+    DIFFERENT file than the one the patch was validated against."""
+    name = "skill-promote/critical1-rejects-mismatched-target-and-name"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    existing_rel = ".claude/skills/existing-skill/SKILL.md"
+    existing_path = project_root / existing_rel
+    existing_path.parent.mkdir(parents=True)
+    original_content = _VALID_SKILL_MD.format(name="existing-skill", cid="orig-mismatch").replace(
+        "craftflow-promoted-at: PENDING_APPROVAL", "craftflow-promoted-at: 2026-01-01T00:00:00Z"
+    ).replace(
+        "craftflow-review-after: PENDING_APPROVAL", "craftflow-review-after: 2026-04-01T00:00:00Z"
+    )
+    existing_path.write_text(original_content, encoding="utf-8")
+
+    # Patch's '+++' header still targets existing-skill's own file, but the
+    # patched frontmatter's 'name:' field is changed to a DIFFERENT skill
+    # name -- exactly the divergence CRITICAL 1 must catch before any write.
+    diverged_content = original_content.replace("name: existing-skill", "name: divergent-skill")
+
+    cand_dir = proposals_dir / "cand-mismatch"
+    cand_dir.mkdir(parents=True)
+    import difflib
+    diff_lines = list(difflib.unified_diff(
+        original_content.splitlines(keepends=True),
+        diverged_content.splitlines(keepends=True),
+        fromfile=f"a/{existing_rel}",
+        tofile=f"b/{existing_rel}",
+    ))
+    (cand_dir / "SKILL.patch").write_text("".join(diff_lines), encoding="utf-8")
+
+    code, _out, err = _run_promote("cand-mismatch", proposals_dir, project_root, tmp_dir / "ledger.json")
+    if code == 0:
+        fail(name, "expected exit 1 when the patched frontmatter name diverges from the patch's own target header")
+        return
+    if "does not match" not in err and "canonical" not in err.lower():
+        fail(name, f"expected stderr to explain the target/name mismatch, got: {err}")
+        return
+    if (project_root / ".claude" / "skills" / "divergent-skill").exists():
+        fail(name, "expected NO write to the divergent name's canonical location")
+        return
+    after = existing_path.read_text(encoding="utf-8")
+    if after != original_content:
+        fail(name, "expected the original existing-skill file to remain completely untouched when the mismatch is rejected")
+        return
+    ok(name)
+
+
+def test_promote_high2_rejects_nonexistent_project_root(tmp_dir: Path) -> None:
+    """HIGH 2: --project-root must be validated as an existing directory
+    BEFORE any write; a nonexistent path must never be silently mkdir -p'd."""
+    name = "skill-promote/high2-rejects-nonexistent-project-root"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "does-not-exist-project"
+    cand_dir = proposals_dir / "cand-noroot"
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "SKILL.md").write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand-noroot"), encoding="utf-8")
+    code, _out, err = _run_promote("cand-noroot", proposals_dir, project_root, tmp_dir / "ledger.json")
+    if code == 0:
+        fail(name, "expected exit 1 when --project-root does not exist")
+        return
+    if "does not exist" not in err and "not a directory" not in err:
+        fail(name, f"expected stderr to explain the missing/invalid project root, got: {err}")
+        return
+    if project_root.exists():
+        fail(name, "expected NO directory to be silently created at a nonexistent --project-root")
+        return
+    ok(name)
+
+
+def test_promote_high4_rejects_patch_target_outside_skills_dir(tmp_dir: Path) -> None:
+    """HIGH 4: a SKILL.patch update must only ever be allowed to target an
+    already-promoted skill under .claude/skills/ or .cursor/skills/ -- an
+    arbitrary project file must never be reachable via this path, even if
+    its content happens to carry valid-shaped frontmatter."""
+    name = "skill-promote/high4-rejects-patch-target-outside-skills-dir"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    outside_rel = "docs/some-notes.md"
+    outside_path = project_root / outside_rel
+    outside_path.parent.mkdir(parents=True)
+    original_content = _VALID_SKILL_MD.format(name="foo-skill", cid="orig-outside")
+    outside_path.write_text(original_content, encoding="utf-8")
+
+    updated_content = original_content.replace(
+        'description: "Use when this exact lesson recurs again. Provides a documented, evidence-backed fix pattern for it."',
+        'description: "Use when this exact lesson recurs again. Provides an ATTACKER-CONTROLLED fix pattern for it."',
+    )
+
+    cand_dir = proposals_dir / "cand-outside"
+    cand_dir.mkdir(parents=True)
+    import difflib
+    diff_lines = list(difflib.unified_diff(
+        original_content.splitlines(keepends=True),
+        updated_content.splitlines(keepends=True),
+        fromfile=f"a/{outside_rel}",
+        tofile=f"b/{outside_rel}",
+    ))
+    (cand_dir / "SKILL.patch").write_text("".join(diff_lines), encoding="utf-8")
+
+    code, _out, err = _run_promote("cand-outside", proposals_dir, project_root, tmp_dir / "ledger.json")
+    if code == 0:
+        fail(name, "expected exit 1 for a patch targeting a file outside .claude/skills or .cursor/skills")
+        return
+    if "promoted skill location" not in err and "not a promoted skill" not in err.lower():
+        fail(name, f"expected stderr to explain the target is not a promoted-skill location, got: {err}")
+        return
+    after = outside_path.read_text(encoding="utf-8")
+    if after != original_content:
+        fail(name, "expected the out-of-scope file to remain completely untouched")
+        return
+    ok(name)
+
+
+def test_promote_high3_concurrent_approve_no_traceback(tmp_dir: Path) -> None:
+    """HIGH 3: concurrent `--approve <same-id>` invocations must never crash
+    with an unhandled FileExistsError traceback in sync_cursor_skill's
+    symlink->copytree fallback. Launches several REAL subprocess invocations
+    against the same candidate at (nearly) the same time to exercise the
+    race window.
+
+    ROUND 3 (REM-FIX) note: now that --approve always validates the ledger
+    status precondition, the six concurrent invocations are no longer all
+    expected to exit 0 -- the ledger-status guard now serializes them, so
+    exactly ONE wins the race (transitions candidate -> promoted) and the
+    other five are correctly refused (exit 1, clean JSON error). The
+    original point of this test -- no unhandled traceback under concurrency
+    -- still holds and is asserted for every invocation."""
+    name = "skill-promote/high3-concurrent-approve-no-traceback"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = tmp_dir / "ledger.json"
+    _seed_ledger_candidate(ledger_path, "cand-race")
+    cand_dir = proposals_dir / "cand-race"
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "SKILL.md").write_text(_VALID_SKILL_MD.format(name="race-skill", cid="cand-race"), encoding="utf-8")
+
+    script = SCRIPTS / "craftflow_skill_promote.py"
+    cmd = [
+        sys.executable, str(script),
+        "--approve", "cand-race",
+        "--proposals-dir", str(proposals_dir),
+        "--project-root", str(project_root),
+        "--ledger", str(ledger_path),
+    ]
+    procs = [
+        subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _ in range(6)
+    ]
+    results = [(p.wait(), p.stdout.read(), p.stderr.read()) for p in procs]
+
+    successes = 0
+    for code, _out, err in results:
+        if "Traceback" in err:
+            fail(name, f"expected no raw Python traceback from a concurrent --approve invocation, got: {err}")
+            return
+        if code == 0:
+            successes += 1
+        else:
+            try:
+                json.loads(err)
+            except json.JSONDecodeError:
+                fail(name, f"expected a clean JSON error for a losing concurrent invocation, got: {err}")
+                return
+    if successes != 1:
+        fail(name, f"expected exactly ONE of the six concurrent invocations to win (ledger-status gated), got {successes}")
+        return
+
+    canonical = project_root / ".claude" / "skills" / "race-skill" / "SKILL.md"
+    if not canonical.is_file():
+        fail(name, f"expected canonical file to exist at {canonical} after concurrent promotion")
+        return
+    ok(name)
+
+
+def test_promote_medium6_project_root_is_file_returns_json_not_traceback(tmp_dir: Path) -> None:
+    """MEDIUM 6: --project-root pointing at an existing FILE must degrade to
+    this script's own clean JSON error shape, never a raw Python traceback.
+    Invoked via the real CLI (subprocess) so main()'s own try/except wrapper
+    is genuinely exercised, not just cmd_approve() in-process."""
+    name = "skill-promote/medium6-project-root-file-returns-json"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project-root-is-a-file"
+    project_root.write_text("not a directory", encoding="utf-8")
+    cand_dir = proposals_dir / "cand-fileroot"
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "SKILL.md").write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand-fileroot"), encoding="utf-8")
+
+    script = SCRIPTS / "craftflow_skill_promote.py"
+    cmd = [
+        sys.executable, str(script),
+        "--approve", "cand-fileroot",
+        "--proposals-dir", str(proposals_dir),
+        "--project-root", str(project_root),
+        "--ledger", str(tmp_dir / "ledger.json"),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        fail(name, "expected exit 1 when --project-root points at an existing file")
+        return
+    if "Traceback" in result.stderr:
+        fail(name, f"expected no raw Python traceback in stderr, got: {result.stderr}")
+        return
+    try:
+        parsed = json.loads(result.stderr.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        fail(name, f"expected a clean JSON error on stderr, got: {result.stderr!r}")
+        return
+    if "error" not in parsed:
+        fail(name, f"expected JSON error shape with an 'error' key, got: {parsed}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# skill-promote: REM-FIX round 2 (--approve status-precondition, symmetric to
+# --reject's own HIGH 3 guard). A human-rejected candidate re-approved via a
+# stale/concurrent workflow must fail closed, not silently flip the ledger
+# back to "promoted" and write the canonical skill file anyway.
+# ---------------------------------------------------------------------------
+
+def test_promote_refuses_already_rejected_candidate(tmp_dir: Path) -> None:
+    """Symmetric to skill-ledger's test_ledger_reject_already_promoted_candidate_fails_closed:
+    --approve must refuse (exit 1, no canonical write, no ledger status flip)
+    when the ledger already records this candidate as 'rejected' -- e.g. a
+    human rejected it, then the SAME staged proposal is approved (a stale
+    client, a concurrent workflow, or an operator error)."""
+    name = "skill-promote/refuses-already-rejected-candidate"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = tmp_dir / "ledger.json"
+    candidate_id = "cand-rejected"
+    cand_dir = proposals_dir / candidate_id
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "SKILL.md").write_text(
+        _VALID_SKILL_MD.format(name="test-skill-y", cid=candidate_id), encoding="utf-8"
+    )
+    seed_ledger = {
+        "schema_version": 1,
+        "candidates": [{
+            "id": candidate_id, "surface": "unscoped", "signature": "some recurring issue",
+            "workflows": ["wf-a", "wf-b"], "distinct_workflows": 2, "max_severity": "medium",
+            "evidence": [], "first_seen": "2026-01-01T00:00:00Z", "last_seen": "2026-01-01T00:00:00Z",
+            "status": "rejected", "promoted_skill": None,
+            "rejected_reason": "already documented in patterns.md",
+            "rejected_at_distinct_workflows": 2,
+        }],
+    }
+    ledger_path.write_text(json.dumps(seed_ledger), encoding="utf-8")
+
+    code, _out, err = _run_promote(candidate_id, proposals_dir, project_root, ledger_path)
+    if code == 0:
+        fail(name, f"expected exit 1 when approving an already-rejected candidate, got exit 0: {_out!r}")
+        return
+    try:
+        payload = json.loads(err)
+    except json.JSONDecodeError:
+        fail(name, f"expected a clean JSON error on stderr, got: {err[:300]!r}")
+        return
+    if "error" not in payload:
+        fail(name, f"expected an 'error' key in the JSON error payload, got: {payload}")
+        return
+    if (project_root / ".claude" / "skills" / "test-skill-y").exists():
+        fail(name, "expected NO canonical write when the candidate is already rejected")
+        return
+    if (project_root / ".cursor" / "skills" / "test-skill-y").exists():
+        fail(name, "expected NO cursor sync when the candidate is already rejected")
+        return
+
+    ledger_after = json.loads(ledger_path.read_text(encoding="utf-8"))
+    entry_after = ledger_after["candidates"][0]
+    if entry_after.get("status") != "rejected":
+        fail(name, f"expected ledger status to remain 'rejected' (no silent flip back to 'promoted'), got {entry_after.get('status')!r}")
+        return
+    if entry_after.get("rejected_reason") != "already documented in patterns.md":
+        fail(name, "expected the original rejected_reason to remain untouched after a refused --approve")
+        return
+    ok(name)
+
+
+def test_promote_refuses_candidate_not_in_ledger(tmp_dir: Path) -> None:
+    """When a ledger IS in use (the file exists and tracks other candidates)
+    but the candidate id being approved is simply absent from it, --approve
+    must fail closed rather than silently promoting an untracked candidate
+    (previously mark_ledger_promoted returned False and cmd_approve still
+    exited 0, still writing the canonical file)."""
+    name = "skill-promote/refuses-candidate-not-in-ledger"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = tmp_dir / "ledger.json"
+    candidate_id = "cand-untracked"
+    cand_dir = proposals_dir / candidate_id
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "SKILL.md").write_text(
+        _VALID_SKILL_MD.format(name="untracked-skill", cid=candidate_id), encoding="utf-8"
+    )
+    seed_ledger = {
+        "schema_version": 1,
+        "candidates": [{
+            "id": "some-other-candidate", "surface": "unscoped", "signature": "unrelated issue",
+            "workflows": ["wf-c"], "distinct_workflows": 2, "max_severity": "medium",
+            "evidence": [], "first_seen": "2026-01-01T00:00:00Z", "last_seen": "2026-01-01T00:00:00Z",
+            "status": "candidate", "promoted_skill": None, "rejected_reason": None,
+            "rejected_at_distinct_workflows": None,
+        }],
+    }
+    ledger_path.write_text(json.dumps(seed_ledger), encoding="utf-8")
+
+    code, _out, err = _run_promote(candidate_id, proposals_dir, project_root, ledger_path)
+    if code == 0:
+        fail(name, f"expected exit 1 when the candidate id is absent from an in-use ledger, got exit 0: {_out!r}")
+        return
+    try:
+        payload = json.loads(err)
+    except json.JSONDecodeError:
+        fail(name, f"expected a clean JSON error on stderr, got: {err[:300]!r}")
+        return
+    if "error" not in payload:
+        fail(name, f"expected an 'error' key in the JSON error payload, got: {payload}")
+        return
+    if (project_root / ".claude" / "skills" / "untracked-skill").exists():
+        fail(name, "expected NO canonical write when the candidate is not tracked in an in-use ledger")
+        return
+    ok(name)
+
+
+def test_promote_fails_closed_when_ledger_flag_points_to_never_created_sibling_path(tmp_dir: Path) -> None:
+    """ROUND 3 repro: a REAL ledger elsewhere already records this candidate
+    as 'rejected', but --approve is invoked with --ledger pointing at a
+    SIBLING path (same directory) that was never created -- a typo, stale
+    automation, or wrong cwd, not a code difference. The round-2 fix's
+    `if ledger_path.exists(): <guarded> else: <unguarded best-effort>` took
+    the unguarded else branch here and wrote the canonical skill file with
+    ZERO ledger validation, regardless of the real ledger's 'rejected'
+    status. cmd_approve must fail closed against whatever --ledger points
+    at: load_ledger already tolerates a missing file (returns an empty
+    ledger), so an unseeded --ledger path simply means 'candidate not found'
+    -- exit 1, no write -- exactly like cmd_reject has always behaved."""
+    name = "skill-promote/fails-closed-on-ledger-flag-pointing-to-never-created-sibling"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    candidate_id = "cand-was-rejected"
+    cand_dir = proposals_dir / candidate_id
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "SKILL.md").write_text(
+        _VALID_SKILL_MD.format(name="was-rejected-skill", cid=candidate_id), encoding="utf-8"
+    )
+
+    real_ledger_path = tmp_dir / "real-ledger.json"
+    seed_ledger = {
+        "schema_version": 1,
+        "candidates": [{
+            "id": candidate_id, "surface": "unscoped", "signature": "some recurring issue",
+            "workflows": ["wf-a", "wf-b"], "distinct_workflows": 2, "max_severity": "medium",
+            "evidence": [], "first_seen": "2026-01-01T00:00:00Z", "last_seen": "2026-01-01T00:00:00Z",
+            "status": "rejected", "promoted_skill": None,
+            "rejected_reason": "already documented in patterns.md",
+            "rejected_at_distinct_workflows": 2,
+        }],
+    }
+    real_ledger_path.write_text(json.dumps(seed_ledger), encoding="utf-8")
+
+    # A sibling path in the SAME directory as the real ledger, never created.
+    never_created_sibling_path = tmp_dir / "sibling-ledger-never-created.json"
+    if never_created_sibling_path.exists():
+        fail(name, "test setup invariant violated: sibling ledger path must not exist before the call")
+        return
+
+    code, _out, err = _run_promote(candidate_id, proposals_dir, project_root, never_created_sibling_path)
+    if code == 0:
+        fail(name, f"expected exit 1 when --ledger points at a path that was never created, got exit 0: {_out!r}")
+        return
+    if (project_root / ".claude" / "skills" / "was-rejected-skill").exists():
+        fail(
+            name,
+            "expected NO canonical write when the --ledger path doesn't exist "
+            "(fail-closed, no best-effort bypass for a rejected candidate)",
+        )
+        return
+    if never_created_sibling_path.exists():
+        fail(name, "expected the nonexistent --ledger path to remain nonexistent (no silent ledger creation)")
+        return
+    real_after = json.loads(real_ledger_path.read_text(encoding="utf-8"))
+    if real_after["candidates"][0].get("status") != "rejected":
+        fail(
+            name,
+            f"expected the REAL ledger's rejected status to remain untouched, "
+            f"got {real_after['candidates'][0].get('status')!r}",
+        )
+        return
+    ok(name)
+
+
+def test_promote_and_reject_share_equivalent_status_precondition_shape() -> None:
+    """Structural regression guard: --approve (craftflow_skill_promote.py)
+    and --reject (craftflow_skill_ledger.py) must both gate on the ledger
+    candidate's current status via an equivalent precondition ('status not
+    in (candidate/proposed)' plus a message naming a possible concurrent
+    reject/promote) BEFORE any write. Catches future asymmetric fixes where
+    one command's guard rots while the other's doesn't -- exactly the gap
+    that let --approve silently re-promote an already-rejected candidate."""
+    name = "skill-promote/promote-and-reject-share-status-precondition-shape"
+    promote_src = (SCRIPTS / "craftflow_skill_promote.py").read_text(encoding="utf-8")
+    ledger_src = (SCRIPTS / "craftflow_skill_ledger.py").read_text(encoding="utf-8")
+
+    def extract_fn(src: str, fn_name: str) -> str:
+        m = re.search(rf"^def {fn_name}\(.*?(?=^def |\Z)", src, re.S | re.M)
+        return m.group(0) if m else ""
+
+    approve_body = extract_fn(promote_src, "cmd_approve")
+    reject_body = extract_fn(ledger_src, "cmd_reject")
+
+    if not approve_body:
+        fail(name, "could not locate cmd_approve in craftflow_skill_promote.py")
+        return
+    if not reject_body:
+        fail(name, "could not locate cmd_reject in craftflow_skill_ledger.py")
+        return
+
+    status_check_re = re.compile(r'status.{0,40}not in\s*\(\s*["\']candidate["\']\s*,\s*["\']proposed["\']\s*\)')
+    # Tolerates the adjacent string literal being split across lines/f-string
+    # boundaries (both cmd_approve and cmd_reject wrap this message across
+    # several concatenated string literals in source).
+    concurrent_msg_re = re.compile(r"a\s+concurrent[\"'\s]*workflow\s+may\s+have\s+already", re.S)
+
+    if not status_check_re.search(approve_body):
+        fail(name, "cmd_approve is missing the 'status not in (\"candidate\", \"proposed\")' precondition check")
+        return
+    if not status_check_re.search(reject_body):
+        fail(name, "cmd_reject is missing the 'status not in (\"candidate\", \"proposed\")' precondition check")
+        return
+    if not concurrent_msg_re.search(approve_body):
+        fail(name, "cmd_approve's status-precondition error message doesn't name a concurrent-workflow cause")
+        return
+    if not concurrent_msg_re.search(reject_body):
+        fail(name, "cmd_reject's status-precondition error message doesn't name a concurrent-workflow cause")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# skill-promote tests (REM-FIX round 5): the fresh-SKILL.md (new skill)
+# branch of cmd_approve had no cross-candidate name-collision protection --
+# the canonical write target is derived PURELY from the proposal's own
+# `name:` frontmatter field, never from candidate_id, so two entirely
+# unrelated candidates can declare the same `name`. candA promotes
+# "shared-skill-name" successfully; candB (unrelated, own legitimate
+# "candidate" status, never rejected) is then approved with a fresh
+# SKILL.md that happens to declare the SAME name -- this silently overwrote
+# candA's canonical file (and its .cursor/skills symlink target), exited 0,
+# and left the ledger recording BOTH candidates as promoted with the same
+# promoted_skill. No error, no warning, no collision trace.
+# ---------------------------------------------------------------------------
+
+def test_promote_refuses_cross_candidate_name_collision(tmp_dir: Path) -> None:
+    """Live repro of the round-5 gap: candA already promoted 'shared-skill-name'.
+    candB is a separate, never-rejected candidate whose own staged SKILL.md
+    happens to declare the same name. Approving candB must refuse (exit 1,
+    clean JSON error naming candA) rather than silently overwriting candA's
+    already-promoted canonical file."""
+    name = "skill-promote/refuses-cross-candidate-name-collision"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = tmp_dir / "ledger.json"
+
+    shared_name = "shared-skill-name"
+    cand_a = "cand-a-promoted"
+    cand_b = "cand-b-candidate"
+
+    # candA's already-promoted canonical file, established independently of
+    # this test's --approve call (mirrors a prior, separate --approve run).
+    canonical_dir = project_root / ".claude" / "skills" / shared_name
+    canonical_dir.mkdir(parents=True)
+    original_content = (
+        _VALID_SKILL_MD.format(name=shared_name, cid=cand_a)
+        .replace("craftflow-promoted-at: PENDING_APPROVAL", "craftflow-promoted-at: 2026-01-01T00:00:00Z")
+        .replace("craftflow-review-after: PENDING_APPROVAL", "craftflow-review-after: 2026-04-01T00:00:00Z")
+    )
+    (canonical_dir / "SKILL.md").write_text(original_content, encoding="utf-8")
+
+    # candB's staged proposal declares the SAME name as candA's promoted skill.
+    cand_b_dir = proposals_dir / cand_b
+    cand_b_dir.mkdir(parents=True)
+    (cand_b_dir / "SKILL.md").write_text(
+        _VALID_SKILL_MD.format(name=shared_name, cid=cand_b), encoding="utf-8"
+    )
+
+    seed_ledger = {
+        "schema_version": 1,
+        "candidates": [
+            {
+                "id": cand_a, "surface": "unscoped", "signature": "signature-a",
+                "workflows": ["wf-a"], "distinct_workflows": 2, "max_severity": "medium",
+                "evidence": [], "first_seen": "2026-01-01T00:00:00Z", "last_seen": "2026-01-01T00:00:00Z",
+                "status": "promoted", "promoted_skill": shared_name,
+                "rejected_reason": None, "rejected_at_distinct_workflows": None,
+            },
+            {
+                "id": cand_b, "surface": "unscoped", "signature": "signature-b",
+                "workflows": ["wf-b", "wf-c"], "distinct_workflows": 2, "max_severity": "medium",
+                "evidence": [], "first_seen": "2026-01-02T00:00:00Z", "last_seen": "2026-01-02T00:00:00Z",
+                "status": "candidate", "promoted_skill": None,
+                "rejected_reason": None, "rejected_at_distinct_workflows": None,
+            },
+        ],
+    }
+    ledger_path.write_text(json.dumps(seed_ledger), encoding="utf-8")
+
+    code, _out, err = _run_promote(cand_b, proposals_dir, project_root, ledger_path)
+    if code == 0:
+        fail(name, f"expected exit 1 when candB's proposal collides with candA's already-promoted skill name, got exit 0: {_out!r}")
+        return
+    try:
+        payload = json.loads(err)
+    except json.JSONDecodeError:
+        fail(name, f"expected a clean JSON error on stderr, got: {err[:300]!r}")
+        return
+    if "error" not in payload:
+        fail(name, f"expected an 'error' key in the JSON error payload, got: {payload}")
+        return
+    if cand_a not in payload["error"]:
+        fail(name, f"expected the conflicting candidate id {cand_a!r} to be named in the error, got: {payload['error']!r}")
+        return
+
+    after_content = (canonical_dir / "SKILL.md").read_text(encoding="utf-8")
+    if after_content != original_content:
+        fail(name, "expected candA's canonical file content to remain UNTOUCHED after the refused collision")
+        return
+
+    ledger_after = json.loads(ledger_path.read_text(encoding="utf-8"))
+    entry_b_after = next(c for c in ledger_after["candidates"] if c["id"] == cand_b)
+    if entry_b_after.get("status") != "candidate":
+        fail(name, f"expected candB's ledger status to remain 'candidate' (no silent flip to 'promoted'), got {entry_b_after.get('status')!r}")
+        return
+    entry_a_after = next(c for c in ledger_after["candidates"] if c["id"] == cand_a)
+    if entry_a_after.get("status") != "promoted" or entry_a_after.get("promoted_skill") != shared_name:
+        fail(name, "expected candA's ledger entry to remain untouched")
+        return
+    ok(name)
+
+
+def test_promote_reapproving_same_already_promoted_candidate_still_refused(tmp_dir: Path) -> None:
+    """Regression guard for the round-5 fix: re-approving the SAME candidate
+    id against its OWN already-promoted canonical file must remain a clean
+    no-op refusal via the pre-existing status precondition (candidate's own
+    status is already 'promoted', so the check fires before the new
+    cross-candidate collision check is ever reached) -- not newly broken or
+    miscategorized by the round-5 fix."""
+    name = "skill-promote/reapproving-same-already-promoted-candidate-still-refused"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = tmp_dir / "ledger.json"
+
+    skill_name = "self-reapprove-skill"
+    candidate_id = "cand-self"
+
+    canonical_dir = project_root / ".claude" / "skills" / skill_name
+    canonical_dir.mkdir(parents=True)
+    original_content = (
+        _VALID_SKILL_MD.format(name=skill_name, cid=candidate_id)
+        .replace("craftflow-promoted-at: PENDING_APPROVAL", "craftflow-promoted-at: 2026-01-01T00:00:00Z")
+        .replace("craftflow-review-after: PENDING_APPROVAL", "craftflow-review-after: 2026-04-01T00:00:00Z")
+    )
+    (canonical_dir / "SKILL.md").write_text(original_content, encoding="utf-8")
+
+    cand_dir = proposals_dir / candidate_id
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "SKILL.md").write_text(
+        _VALID_SKILL_MD.format(name=skill_name, cid=candidate_id), encoding="utf-8"
+    )
+
+    seed_ledger = {
+        "schema_version": 1,
+        "candidates": [{
+            "id": candidate_id, "surface": "unscoped", "signature": "some recurring issue",
+            "workflows": ["wf-a", "wf-b"], "distinct_workflows": 2, "max_severity": "medium",
+            "evidence": [], "first_seen": "2026-01-01T00:00:00Z", "last_seen": "2026-01-01T00:00:00Z",
+            "status": "promoted", "promoted_skill": skill_name,
+            "rejected_reason": None, "rejected_at_distinct_workflows": None,
+        }],
+    }
+    ledger_path.write_text(json.dumps(seed_ledger), encoding="utf-8")
+
+    code, _out, err = _run_promote(candidate_id, proposals_dir, project_root, ledger_path)
+    if code == 0:
+        fail(name, f"expected exit 1 re-approving an already-promoted candidate against its own file, got exit 0: {_out!r}")
+        return
+    try:
+        payload = json.loads(err)
+    except json.JSONDecodeError:
+        fail(name, f"expected a clean JSON error on stderr, got: {err[:300]!r}")
+        return
+    if "error" not in payload:
+        fail(name, f"expected an 'error' key in the JSON error payload, got: {payload}")
+        return
+    after_content = (canonical_dir / "SKILL.md").read_text(encoding="utf-8")
+    if after_content != original_content:
+        fail(name, "expected the candidate's own canonical file content to remain untouched")
+        return
+    ok(name)
+
+
+def test_promote_refuses_case_fold_collision_across_candidates(tmp_dir: Path) -> None:
+    """Live repro of the round-6 gap: the round-5 cross-candidate
+    name-collision guard compares `c.get("promoted_skill") == name` with
+    exact, case-SENSITIVE string equality, but `canonical_path` is a real
+    filesystem path and this host's filesystem (macOS APFS, and Windows
+    NTFS) is case-INSENSITIVE-but-case-preserving. candA promotes
+    'Foo-Skill' successfully first. candB then promotes a *different*,
+    otherwise-legitimate candidate whose own staged SKILL.md declares
+    'foo-skill' (same name, different case only). Without the case-fold
+    fix, the string compare 'Foo-Skill' == 'foo-skill' is False, so the
+    conflicting-entry lookup finds nothing and candB's approval proceeds --
+    silently overwriting candA's already-promoted canonical file on disk
+    (same physical directory, different logical ledger name) even though
+    `canonical_path.exists()` was already True (the real filesystem already
+    knows these are the same entry). This must actually create both
+    directories and rely on the real host's case-folding behavior, not a
+    mocked comparison, since the bug is a filesystem-semantics gap."""
+    name = "skill-promote/refuses-case-fold-collision-across-candidates"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = tmp_dir / "ledger.json"
+
+    cand_a = "cand-a-casefold"
+    cand_b = "cand-b-casefold"
+
+    # candA: fresh promotion of "Foo-Skill" via the real --approve path (not
+    # pre-seeded out of band), so the canonical directory that actually
+    # lands on disk is however the real host's filesystem stores it.
+    cand_a_dir = proposals_dir / cand_a
+    cand_a_dir.mkdir(parents=True)
+    (cand_a_dir / "SKILL.md").write_text(
+        _VALID_SKILL_MD.format(name="Foo-Skill", cid=cand_a), encoding="utf-8"
+    )
+    _seed_ledger_candidate(ledger_path, cand_a, status="candidate")
+    # Add candB alongside candA in the same ledger (own distinct, never-
+    # rejected candidate entry) before candA's own --approve call runs.
+    seed = json.loads(ledger_path.read_text(encoding="utf-8"))
+    seed["candidates"].append({
+        "id": cand_b, "surface": "unscoped", "signature": "a different recurring issue",
+        "workflows": ["wf-x", "wf-y"], "distinct_workflows": 2, "max_severity": "medium",
+        "evidence": [], "first_seen": "2026-01-02T00:00:00Z", "last_seen": "2026-01-02T00:00:00Z",
+        "status": "candidate", "promoted_skill": None,
+        "rejected_reason": None, "rejected_at_distinct_workflows": None,
+    })
+    ledger_path.write_text(json.dumps(seed), encoding="utf-8")
+
+    code_a, out_a, err_a = _run_promote(cand_a, proposals_dir, project_root, ledger_path)
+    if code_a != 0:
+        fail(name, f"setup: expected candA's own promotion of 'Foo-Skill' to succeed, got exit {code_a}: {err_a}")
+        return
+
+    canonical_dir = project_root / ".claude" / "skills" / "Foo-Skill"
+    if not (canonical_dir / "SKILL.md").is_file():
+        fail(name, "setup: candA's canonical SKILL.md was not written where expected")
+        return
+    original_content = (canonical_dir / "SKILL.md").read_text(encoding="utf-8")
+
+    # candB: a separate, never-rejected candidate whose own staged SKILL.md
+    # declares the SAME skill name, differing only in case.
+    cand_b_dir = proposals_dir / cand_b
+    cand_b_dir.mkdir(parents=True)
+    (cand_b_dir / "SKILL.md").write_text(
+        _VALID_SKILL_MD.format(name="foo-skill", cid=cand_b), encoding="utf-8"
+    )
+
+    code_b, out_b, err_b = _run_promote(cand_b, proposals_dir, project_root, ledger_path)
+    if code_b == 0:
+        fail(name, f"expected exit 1 when candB's 'foo-skill' collides case-insensitively with candA's already-promoted 'Foo-Skill', got exit 0: {out_b!r}")
+        return
+    try:
+        payload = json.loads(err_b)
+    except json.JSONDecodeError:
+        fail(name, f"expected a clean JSON error on stderr, got: {err_b[:300]!r}")
+        return
+    if "error" not in payload:
+        fail(name, f"expected an 'error' key in the JSON error payload, got: {payload}")
+        return
+    if cand_a not in payload["error"]:
+        fail(name, f"expected the conflicting candidate id {cand_a!r} to be named in the error, got: {payload['error']!r}")
+        return
+
+    # candA's canonical file (the one real physical directory both names
+    # resolve to on this host) must remain byte-for-byte untouched.
+    after_content = (canonical_dir / "SKILL.md").read_text(encoding="utf-8")
+    if after_content != original_content:
+        fail(name, "expected candA's canonical file content to remain UNTOUCHED after the refused case-fold collision")
+        return
+
+    ledger_after = json.loads(ledger_path.read_text(encoding="utf-8"))
+    entry_b_after = next(c for c in ledger_after["candidates"] if c["id"] == cand_b)
+    if entry_b_after.get("status") != "candidate":
+        fail(name, f"expected candB's ledger status to remain 'candidate' (no silent flip to 'promoted'), got {entry_b_after.get('status')!r}")
+        return
+    ok(name)
+
+
+def test_promote_malformed_non_dict_ledger_entry_returns_json_error(tmp_dir: Path) -> None:
+    """MEDIUM (round 5): a ledger corrupted to contain a non-dict candidate
+    entry (e.g. a bare string, number, or null -- as could result from
+    hand-edited or partially-migrated ledger JSON) must degrade to this
+    script's documented {"error": ...} JSON shape when cmd_approve's lookup
+    iterates over it, never an uncaught AttributeError traceback. Still
+    fails closed (exit 1, no write) either way -- this is a error-contract
+    consistency fix, not a security bypass."""
+    name = "skill-promote/malformed-non-dict-ledger-entry-returns-json-error"
+    proposals_dir = tmp_dir / "proposals"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = tmp_dir / "ledger.json"
+    candidate_id = "cand-malformed"
+    cand_dir = proposals_dir / candidate_id
+    cand_dir.mkdir(parents=True)
+    (cand_dir / "SKILL.md").write_text(
+        _VALID_SKILL_MD.format(name="malformed-ledger-skill", cid=candidate_id), encoding="utf-8"
+    )
+    ledger_path.write_text(json.dumps({
+        "schema_version": 1,
+        "candidates": ["not-a-dict-entry", 42, None],
+    }), encoding="utf-8")
+
+    code, _out, err = _run_promote(candidate_id, proposals_dir, project_root, ledger_path)
+    if code == 0:
+        fail(name, f"expected exit 1 against a ledger with malformed non-dict candidate entries, got exit 0: {_out!r}")
+        return
+    try:
+        payload = json.loads(err)
+    except json.JSONDecodeError:
+        fail(name, f"expected a clean JSON error on stderr (not a raw traceback), got: {err[:500]!r}")
+        return
+    if "error" not in payload:
+        fail(name, f"expected an 'error' key in the JSON error payload, got: {payload}")
+        return
+    if (project_root / ".claude" / "skills" / "malformed-ledger-skill").exists():
+        fail(name, "expected NO canonical write against a malformed ledger")
+        return
+    ok(name)
+
+
+def test_ledger_reject_malformed_non_dict_ledger_entry_returns_json_error(tmp_dir: Path) -> None:
+    """MEDIUM (round 5): mirrors test_promote_malformed_non_dict_ledger_entry_returns_json_error
+    for cmd_reject (craftflow_skill_ledger.py) -- a non-dict candidate entry
+    in the ledger must never surface as a raw Python traceback."""
+    name = "skill-ledger/reject-malformed-non-dict-ledger-entry-returns-json-error"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    ledger_path = tmp_dir / "skill-candidates.json"
+    ledger_path.write_text(json.dumps({
+        "schema_version": 1,
+        "candidates": ["not-a-dict-entry", 42, None],
+    }), encoding="utf-8")
+
+    script = SCRIPTS / "craftflow_skill_ledger.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--reject", "some-id", "--ledger", str(ledger_path)],
+        capture_output=True, text=True, cwd=str(tmp_dir),
+    )
+    if result.returncode == 0:
+        fail(name, f"expected non-zero exit against a malformed ledger, got 0: {result.stdout[:300]!r}")
+        return
+    try:
+        payload = json.loads(result.stderr)
+    except json.JSONDecodeError:
+        fail(name, f"expected a clean JSON error on stderr (not a raw traceback), got: {result.stderr[:500]!r}")
+        return
+    if "error" not in payload:
+        fail(name, f"expected an 'error' key in the JSON error payload, got: {payload}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# skill-propose tests (REM-FIX round 4: craftflow_skill_propose.py --
+# architectural fix so the guard can protect the ENTIRE skill-proposals tree
+# unconditionally, instead of inferring trust from file existence).
+# ---------------------------------------------------------------------------
+
+def _run_propose(
+    candidate_id: str,
+    skill_md_file: Path,
+    proposal_md_file,
+    state_dir: Path,
+    project_root: Path,
+    overwrite: bool = False,
+) -> tuple:
+    """Invoke craftflow_skill_propose.cmd_propose in-process, capturing
+    stdout/stderr. Returns (exit_code, stdout_text, stderr_text)."""
+    ns = argparse.Namespace(
+        candidate_id=candidate_id,
+        skill_md_file=str(skill_md_file),
+        proposal_md_file=str(proposal_md_file) if proposal_md_file is not None else None,
+        state_dir=str(state_dir),
+        project_root=str(project_root),
+        overwrite=overwrite,
+    )
+    out, err = io.StringIO(), io.StringIO()
+    old_out, old_err = sys.stdout, sys.stderr
+    try:
+        sys.stdout, sys.stderr = out, err
+        code = skill_propose.cmd_propose(ns)
+    finally:
+        sys.stdout, sys.stderr = old_out, old_err
+    return code, out.getvalue(), err.getvalue()
+
+
+def _seed_propose_ledger(ledger_path: Path, candidate_id: str, status: str = "candidate") -> None:
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "candidates": [{
+                "id": candidate_id, "surface": "unscoped", "signature": "some recurring lesson",
+                "workflows": ["wf-a", "wf-b"], "distinct_workflows": 2, "max_severity": "unknown",
+                "evidence": [], "first_seen": "2026-01-01T00:00:00Z", "last_seen": "2026-01-01T00:00:00Z",
+                "status": status, "promoted_skill": None, "rejected_reason": None,
+                "rejected_at_distinct_workflows": None,
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+
+def test_propose_refuses_unsafe_candidate_id(tmp_dir: Path) -> None:
+    name = "skill-propose/refuses-unsafe-candidate-id"
+    state_dir = tmp_dir / "state"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    scratch = tmp_dir / "scratch.md"
+    scratch.write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="x"), encoding="utf-8")
+    code, _out, err = _run_propose("../../etc", scratch, None, state_dir, project_root)
+    if code == 0:
+        fail(name, "expected exit 1 for a path-traversal candidate id")
+        return
+    if "unsafe" not in err.lower() and "invalid" not in err.lower():
+        fail(name, f"expected stderr to flag the candidate id as unsafe/invalid, got: {err}")
+        return
+    if (state_dir / "project" / "skill-proposals").exists():
+        fail(name, "expected NO write anywhere for an unsafe candidate id")
+        return
+    ok(name)
+
+
+def test_propose_refuses_candidate_not_in_ledger(tmp_dir: Path) -> None:
+    name = "skill-propose/refuses-candidate-not-in-ledger"
+    state_dir = tmp_dir / "state"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    scratch = tmp_dir / "scratch.md"
+    scratch.write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand-missing"), encoding="utf-8")
+    # No ledger seeded at all -- load_ledger() degrades to an empty ledger.
+    code, _out, err = _run_propose("cand-missing", scratch, None, state_dir, project_root)
+    if code == 0:
+        fail(name, "expected exit 1 when the candidate id has no ledger entry")
+        return
+    if "no ledger candidate" not in err.lower():
+        fail(name, f"expected stderr to explain the missing-candidate failure, got: {err}")
+        return
+    ok(name)
+
+
+def test_propose_refuses_terminal_status_rejected(tmp_dir: Path) -> None:
+    name = "skill-propose/refuses-terminal-status-rejected"
+    state_dir = tmp_dir / "state"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = state_dir / "project" / "skill-candidates.json"
+    _seed_propose_ledger(ledger_path, "cand-rej", status="rejected")
+    scratch = tmp_dir / "scratch.md"
+    scratch.write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand-rej"), encoding="utf-8")
+    code, _out, err = _run_propose("cand-rej", scratch, None, state_dir, project_root)
+    if code == 0:
+        fail(name, "expected exit 1 for a candidate with terminal status 'rejected'")
+        return
+    if "rejected" not in err:
+        fail(name, f"expected stderr to name the actual status 'rejected', got: {err}")
+        return
+    if (state_dir / "project" / "skill-proposals").exists():
+        fail(name, "expected NO write for a rejected candidate")
+        return
+    ok(name)
+
+
+def test_propose_refuses_terminal_status_promoted(tmp_dir: Path) -> None:
+    name = "skill-propose/refuses-terminal-status-promoted"
+    state_dir = tmp_dir / "state"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = state_dir / "project" / "skill-candidates.json"
+    _seed_propose_ledger(ledger_path, "cand-promo", status="promoted")
+    scratch = tmp_dir / "scratch.md"
+    scratch.write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand-promo"), encoding="utf-8")
+    code, _out, err = _run_propose("cand-promo", scratch, None, state_dir, project_root)
+    if code == 0:
+        fail(name, "expected exit 1 for a candidate with terminal status 'promoted'")
+        return
+    if "promoted" not in err:
+        fail(name, f"expected stderr to name the actual status 'promoted', got: {err}")
+        return
+    ok(name)
+
+
+def test_propose_refuses_invalid_frontmatter(tmp_dir: Path) -> None:
+    name = "skill-propose/refuses-invalid-frontmatter"
+    state_dir = tmp_dir / "state"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = state_dir / "project" / "skill-candidates.json"
+    _seed_propose_ledger(ledger_path, "cand-bad-fm")
+    scratch = tmp_dir / "scratch.md"
+    bad = _VALID_SKILL_MD.format(name="foo-skill", cid="cand-bad-fm").replace(
+        'description: "Use when this exact lesson recurs again. Provides a documented, evidence-backed fix pattern for it."',
+        'description: "too short"',
+    )
+    scratch.write_text(bad, encoding="utf-8")
+    code, _out, err = _run_propose("cand-bad-fm", scratch, None, state_dir, project_root)
+    if code == 0:
+        fail(name, "expected exit 1 for a description under 40 characters")
+        return
+    if "description" not in err:
+        fail(name, f"expected stderr to explain the description-length failure, got: {err}")
+        return
+    if (state_dir / "project" / "skill-proposals").exists():
+        fail(name, "expected NO write when frontmatter validation fails")
+        return
+    ledger_after = json.loads(ledger_path.read_text(encoding="utf-8"))
+    if ledger_after["candidates"][0]["status"] != "candidate":
+        fail(name, "expected the ledger status to remain 'candidate' when the draft is rejected")
+        return
+    ok(name)
+
+
+def test_propose_stages_valid_candidate_and_updates_ledger_status(tmp_dir: Path) -> None:
+    name = "skill-propose/stages-valid-candidate-and-updates-ledger-status"
+    state_dir = tmp_dir / "state"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = state_dir / "project" / "skill-candidates.json"
+    _seed_propose_ledger(ledger_path, "cand-ok")
+    scratch_skill = tmp_dir / "scratch-skill.md"
+    scratch_skill.write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand-ok"), encoding="utf-8")
+    scratch_proposal = tmp_dir / "scratch-proposal.md"
+    scratch_proposal.write_text("# Proposal rationale\n\nEvidence trail.\n", encoding="utf-8")
+
+    code, out, err = _run_propose("cand-ok", scratch_skill, scratch_proposal, state_dir, project_root)
+    if code != 0:
+        fail(name, f"expected exit 0 for a valid propose, got {code}, stderr={err}")
+        return
+
+    candidate_dir = state_dir / "project" / "skill-proposals" / "cand-ok"
+    skill_md = candidate_dir / "SKILL.md"
+    proposal_md = candidate_dir / "PROPOSAL.md"
+    if not skill_md.is_file():
+        fail(name, f"expected staged SKILL.md at {skill_md}")
+        return
+    if skill_md.read_text(encoding="utf-8") != scratch_skill.read_text(encoding="utf-8"):
+        fail(name, "expected the staged SKILL.md content to exactly match the scratch draft")
+        return
+    if not proposal_md.is_file():
+        fail(name, f"expected staged PROPOSAL.md at {proposal_md}")
+        return
+    if "Evidence trail." not in proposal_md.read_text(encoding="utf-8"):
+        fail(name, "expected the staged PROPOSAL.md to contain the drafted content")
+        return
+
+    result = json.loads(out)
+    if result.get("proposed") != "cand-ok":
+        fail(name, f"expected proposed='cand-ok' in JSON result, got: {result}")
+        return
+    if result.get("skill_md_path") != str(skill_md):
+        fail(name, f"expected skill_md_path={skill_md} in JSON result, got: {result.get('skill_md_path')}")
+        return
+
+    ledger_after = json.loads(ledger_path.read_text(encoding="utf-8"))
+    entry = ledger_after["candidates"][0]
+    if entry["status"] != "proposed":
+        fail(name, f"expected ledger candidate status to become 'proposed', got: {entry['status']!r}")
+        return
+    ok(name)
+
+
+def test_propose_refuses_overwrite_without_flag(tmp_dir: Path) -> None:
+    name = "skill-propose/refuses-overwrite-without-flag"
+    state_dir = tmp_dir / "state"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = state_dir / "project" / "skill-candidates.json"
+    _seed_propose_ledger(ledger_path, "cand-dup")
+    scratch = tmp_dir / "scratch.md"
+    scratch.write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand-dup"), encoding="utf-8")
+
+    code1, _out1, err1 = _run_propose("cand-dup", scratch, None, state_dir, project_root)
+    if code1 != 0:
+        fail(name, f"expected first propose to succeed, got {code1}, stderr={err1}")
+        return
+
+    # Re-seed the ledger back to "candidate" (the first run already flipped it
+    # to "proposed" -- this test targets the overwrite guard specifically, not
+    # the status-gating check already proven above).
+    _seed_propose_ledger(ledger_path, "cand-dup")
+    code2, _out2, err2 = _run_propose("cand-dup", scratch, None, state_dir, project_root)
+    if code2 == 0:
+        fail(name, "expected exit 1 on a second propose for the same candidate id without --overwrite")
+        return
+    if "overwrite" not in err2.lower():
+        fail(name, f"expected stderr to mention --overwrite, got: {err2}")
+        return
+    ok(name)
+
+
+def test_propose_allows_overwrite_with_flag(tmp_dir: Path) -> None:
+    name = "skill-propose/allows-overwrite-with-flag"
+    state_dir = tmp_dir / "state"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = state_dir / "project" / "skill-candidates.json"
+    _seed_propose_ledger(ledger_path, "cand-ov")
+    scratch = tmp_dir / "scratch.md"
+    scratch.write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand-ov"), encoding="utf-8")
+
+    code1, _out1, err1 = _run_propose("cand-ov", scratch, None, state_dir, project_root)
+    if code1 != 0:
+        fail(name, f"expected first propose to succeed, got {code1}, stderr={err1}")
+        return
+
+    _seed_propose_ledger(ledger_path, "cand-ov")
+    scratch2 = tmp_dir / "scratch2.md"
+    scratch2.write_text(_VALID_SKILL_MD.format(name="foo-skill-v2", cid="cand-ov"), encoding="utf-8")
+    code2, _out2, err2 = _run_propose("cand-ov", scratch2, None, state_dir, project_root, overwrite=True)
+    if code2 != 0:
+        fail(name, f"expected the --overwrite re-propose to succeed, got {code2}, stderr={err2}")
+        return
+    staged = (state_dir / "project" / "skill-proposals" / "cand-ov" / "SKILL.md").read_text(encoding="utf-8")
+    if "foo-skill-v2" not in staged:
+        fail(name, "expected the --overwrite re-propose to replace the staged content")
+        return
+    ok(name)
+
+
+def test_propose_holds_ledger_lock_for_the_write_sequence(tmp_dir: Path) -> None:
+    name = "skill-propose/holds-ledger-lock-for-the-write-sequence"
+    state_dir = tmp_dir / "state"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    ledger_path = state_dir / "project" / "skill-candidates.json"
+    _seed_propose_ledger(ledger_path, "cand-lock")
+    scratch = tmp_dir / "scratch.md"
+    scratch.write_text(_VALID_SKILL_MD.format(name="foo-skill", cid="cand-lock"), encoding="utf-8")
+    code, _out, err = _run_propose("cand-lock", scratch, None, state_dir, project_root)
+    if code != 0:
+        fail(name, f"expected propose to succeed, got {code}, stderr={err}")
+        return
+    lock_path = ledger_path.with_suffix(ledger_path.suffix + ".lock")
+    if not lock_path.exists():
+        fail(
+            name,
+            f"expected the ledger lock file at {lock_path} created by "
+            "_ledger_file_lock() during the atomic write+mark sequence",
+        )
+        return
+    ok(name)
+
+
+def test_propose_refuses_missing_skill_md_file(tmp_dir: Path) -> None:
+    name = "skill-propose/refuses-missing-skill-md-file"
+    state_dir = tmp_dir / "state"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    missing = tmp_dir / "does-not-exist.md"
+    code, _out, err = _run_propose("cand-x", missing, None, state_dir, project_root)
+    if code == 0:
+        fail(name, "expected exit 1 when --skill-md-file does not exist")
+        return
+    if "skill-md-file" not in err.lower():
+        fail(name, f"expected stderr to name --skill-md-file, got: {err}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# skill-author / skill-distillation structural presence tests
+# ---------------------------------------------------------------------------
+
+def test_skill_author_agent_present() -> None:
+    name = "skill-author/agent-file-present"
+    path = PLUGIN_ROOT / "agents" / "skill-author.md"
+    if not path.exists():
+        fail(name, f"skill-author.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    fm_match = re.match(r"^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)", content)
+    if not fm_match:
+        fail(name, "skill-author.md has no leading frontmatter block")
+        return
+    frontmatter = fm_match.group(1)
+    if "\ntools: " not in ("\n" + frontmatter):
+        fail(name, "skill-author.md frontmatter missing 'tools: ' key")
+        return
+    if "\nallowed-tools: " in ("\n" + frontmatter):
+        fail(name, "skill-author.md frontmatter still uses legacy 'allowed-tools:' key")
+        return
+    if "craftflow:skill-distillation" not in content:
+        fail(name, "skill-author.md missing 'craftflow:skill-distillation' in its skills list")
+        return
+    for marker in ("STAGED", "never write", ".claude/skills/", ".cursor/skills/"):
+        if marker not in content:
+            fail(name, f"skill-author.md missing expected marker: {marker!r}")
+            return
+    ok(name)
+
+
+def test_skill_author_agent_documents_propose_script_invocation() -> None:
+    # REM-FIX round 4: skill-author must no longer document a direct `Write`
+    # to the staging path -- confirms it documents invoking
+    # craftflow_skill_propose.py via Bash instead (grep-based structural
+    # test, matching this repo's existing convention for checking agent-file
+    # documented behavior, e.g. test_skill_author_agent_present() above).
+    name = "skill-author/agent-documents-propose-script-invocation"
+    path = PLUGIN_ROOT / "agents" / "skill-author.md"
+    if not path.exists():
+        fail(name, f"skill-author.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    for marker in ("craftflow_skill_propose.py", "--candidate-id", "--skill-md-file", "scratch", "trusted script"):
+        if marker not in content:
+            fail(name, f"skill-author.md missing expected marker: {marker!r}")
+            return
+    if "Bash" not in content:
+        fail(name, "skill-author.md unexpectedly has no 'Bash' mentions at all")
+        return
+    ok(name)
+
+
+def test_skill_distillation_skill_present() -> None:
+    name = "skill-distillation/skill-file-present"
+    path = PLUGIN_ROOT / "skills" / "skill-distillation" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"skill-distillation SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    for marker in ("STATUS: SKIPPED", "SKIP_REASON", "user-invocable: false"):
+        if marker not in content:
+            fail(name, f"skill-distillation SKILL.md missing expected marker: {marker!r}")
+            return
+    ok(name)
+
+
+def test_rubric_documents_three_rejection_cases() -> None:
+    name = "skill-distillation/rubric-documents-three-rejection-cases"
+    path = PLUGIN_ROOT / "skills" / "skill-distillation" / "references" / "rubric.md"
+    if not path.exists():
+        fail(name, f"rubric.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    for marker in ("Already-in-gotchas", "no executable artifact", "Duplicate of an existing skill"):
+        if marker not in content:
+            fail(name, f"rubric.md missing expected rejection-case marker: {marker!r}")
+            return
+    ok(name)
+
+
+def test_skill_promote_script_present() -> None:
+    name = "skill-promote/script-present"
+    path = SCRIPTS / "craftflow_skill_promote.py"
+    if not path.exists():
+        fail(name, f"craftflow_skill_promote.py not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    for marker in ("--approve", "PENDING_APPROVAL", "stale-backup", "dereference"):
+        if marker not in content:
+            fail(name, f"craftflow_skill_promote.py missing expected marker: {marker!r}")
+            return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: router wiring (skill-distill phase + learn-distill dead-wiring fix)
+# ---------------------------------------------------------------------------
+
+def test_router_phase_enum_registers_skill_distill_learn_distill_doubt_verify() -> None:
+    name = "router/phase-enum-registers-skill-distill-learn-distill-doubt-verify"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    match = re.search(r"^phase:\{[^}]*\}$", content, re.MULTILINE)
+    if not match:
+        fail(name, "SKILL.md missing the 'phase:{...}' Task Metadata Contract enum line")
+        return
+    enum_line = match.group(0)
+    for phase in ("skill-distill", "learn-distill", "doubt-verify"):
+        if phase not in enum_line:
+            fail(name, f"phase:{{...}} enum line missing {phase!r}: {enum_line}")
+            return
+    ok(name)
+
+
+def test_router_dispatcher_table_includes_skill_distill() -> None:
+    name = "router/dispatcher-table-includes-skill-distill"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    if "| skill-distill | craftflow:skill-author |" not in content and \
+       "| `skill-distill` | `craftflow:skill-author` |" not in content:
+        fail(name, "Explicit dispatcher table missing 'skill-distill -> craftflow:skill-author' row")
+        return
+    ok(name)
+
+
+def test_router_effort_dispatch_includes_skill_distill_low() -> None:
+    name = "router/effort-dispatch-includes-skill-distill-low"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    match = re.search(r"^-\s.*`learn-distill`.*(?:->|→)\s*`low`\s*$", content, re.MULTILINE)
+    if not match or "skill-distill" not in match.group(0):
+        fail(name, "Effort Dispatch Rule list missing 'skill-distill' on the same low-effort line as learn-distill")
+        return
+    ok(name)
+
+
+def test_router_contract_overrides_includes_skill_author() -> None:
+    name = "router/contract-overrides-includes-skill-author"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    match = re.search(r"^\|\s*skill-author\s*\|.*\|$", content, re.MULTILINE)
+    if not match:
+        fail(name, "Contract overrides table missing a 'skill-author' row")
+        return
+    row = match.group(0)
+    for marker in ("PROPOSAL_PATH", "CANDIDATE_ID", "SKIP_REASON", "passing state"):
+        if marker not in row:
+            fail(name, f"skill-author contract override row missing expected marker {marker!r}: {row}")
+            return
+    ok(name)
+
+
+def test_router_memory_finalization_calls_ledger_observe() -> None:
+    name = "router/memory-finalization-calls-ledger-observe"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    if "craftflow_skill_ledger.py --observe {workflow_uuid}" not in content:
+        fail(name, "## 13. Memory Finalization missing the deterministic 'craftflow_skill_ledger.py --observe {workflow_uuid}' call")
+        return
+    if "--state-dir" not in content.split("craftflow_skill_ledger.py --observe {workflow_uuid}")[1][:80]:
+        fail(name, "craftflow_skill_ledger.py --observe call missing --state-dir flag")
+        return
+    ok(name)
+
+
+def test_router_memory_finalization_calls_ledger_prune() -> None:
+    # Phase 4: wires a real caller for --prune into the same memory-finalize
+    # step that already unconditionally runs --observe (SKILL.md ## 13,
+    # single non-duplicated location applying to every workflow type).
+    name = "router/memory-finalization-calls-ledger-prune"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    if "craftflow_skill_ledger.py --prune" not in content:
+        fail(name, "## 13. Memory Finalization missing the deterministic 'craftflow_skill_ledger.py --prune' call")
+        return
+    tail = content.split("craftflow_skill_ledger.py --prune")[1][:120]
+    if "--state-dir" not in tail:
+        fail(name, "craftflow_skill_ledger.py --prune call missing --state-dir flag")
+        return
+    if "--project-root" not in tail:
+        fail(name, "craftflow_skill_ledger.py --prune call missing --project-root flag")
+        return
+    if "needs_review" not in content:
+        fail(name, "prune step documentation missing needs_review rot-flag explanation")
+        return
+    ok(name)
+
+
+def test_router_hard_rules_includes_skill_distill_skip() -> None:
+    name = "router/hard-rules-includes-skill-distill-skip"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    if "SKILL_DISTILL: skip" not in content:
+        fail(name, "## 14. Hard Rules missing 'SKILL_DISTILL: skip' rule")
+        return
+    if "skill-distill" not in content.split("SKILL_DISTILL: skip")[1][:200]:
+        fail(name, "'SKILL_DISTILL: skip' rule does not reference the 'skill-distill' phase it disables")
+        return
+    ok(name)
+
+
+def test_router_documents_skill_distill_approval_flow() -> None:
+    name = "router/skill-distill-approval-flow-documented"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    for marker in (
+        "AskUserQuestion", "Approve + register in SKILL_HINTS", "Reject", "Defer",
+        "craftflow_skill_promote.py", "--approve", "craftflow_skill_ledger.py --reject",
+        "STATUS: SKIPPED", "STATUS: COMPLETE",
+    ):
+        if marker not in content:
+            fail(name, f"Skill-Distill Approval Flow section missing expected marker: {marker!r}")
+            return
+    ok(name)
+
+
+def test_build_workflow_wires_learn_distill_taskcreate() -> None:
+    name = "build-workflow/wires-learn-distill-taskcreate"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "build-workflow.md"
+    if not path.exists():
+        fail(name, f"build-workflow.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    if "phase:learn-distill" not in content:
+        fail(name, "build-workflow.md missing a TaskCreate with 'phase:learn-distill' -- learn-distill dead-wiring gap not fixed")
+        return
+    if "craftflow:learn-distiller" not in content and "learn-distiller" not in content:
+        fail(name, "build-workflow.md learn-distill TaskCreate does not reference the learn-distiller agent")
+        return
+    ok(name)
+
+
+def test_build_workflow_wires_skill_distill_taskcreate() -> None:
+    name = "build-workflow/wires-skill-distill-taskcreate"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "build-workflow.md"
+    if not path.exists():
+        fail(name, f"build-workflow.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    if "phase:skill-distill" not in content:
+        fail(name, "build-workflow.md missing a TaskCreate with 'phase:skill-distill'")
+        return
+    if "gate_eligible" not in content:
+        fail(name, "build-workflow.md skill-distill task graph missing gate_eligible gating reference")
+        return
+    if "memory_task_id" not in content.split("phase:skill-distill")[0][-2000:] and \
+       "addBlockedBy: [skill_distill_task_id]" not in content:
+        fail(name, "memory_task_id does not appear repointed to depend on the skill-distill task")
+        return
+    ok(name)
+
+
+def test_build_workflow_fast_path_graph_wires_learn_and_skill_distill() -> None:
+    name = "build-workflow/fast-path-graph-wires-learn-and-skill-distill"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "build-workflow.md"
+    if not path.exists():
+        fail(name, f"build-workflow.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    fast_path_idx = content.find("### BUILD task graph — fast path")
+    if fast_path_idx == -1:
+        fail(name, "build-workflow.md missing '### BUILD task graph — fast path' section")
+        return
+    fast_path_section = content[fast_path_idx:]
+    for marker in ("phase:learn-distill", "phase:skill-distill"):
+        if marker not in fast_path_section:
+            fail(name, f"fast-path BUILD task graph section missing {marker!r}")
+            return
+    ok(name)
+
+
+def test_debug_workflow_documents_skill_distill_reasoning() -> None:
+    name = "debug-workflow/documents-skill-distill-reasoning"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "debug-workflow.md"
+    if not path.exists():
+        fail(name, f"debug-workflow.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    if "skill-distill" not in content:
+        fail(name, "debug-workflow.md has no 'skill-distill' reference or insertion-reasoning note")
+        return
+    ok(name)
+
+
+def test_fast_path_agent_dispatch_table_includes_skill_distill() -> None:
+    name = "fast-path/agent-dispatch-table-includes-skill-distill"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "fast-path.md"
+    if not path.exists():
+        fail(name, f"fast-path.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    match = re.search(r"^\|\s*`skill-distill`\s*\|.*\|$", content, re.MULTILINE)
+    if not match:
+        fail(name, "Agent Dispatch Table missing a 'skill-distill' row")
+        return
+    row = match.group(0)
+    if "skill-author" not in row:
+        fail(name, f"skill-distill dispatch table row missing 'skill-author' agent reference: {row}")
+        return
+    if row.count("gated") < 2:
+        fail(name, f"skill-distill dispatch table row expected gated on both standard and fast path: {row}")
+        return
+    ok(name)
+
+
+def test_fast_path_escalated_gate_wiring_reconciled() -> None:
+    # CRITICAL 1 (REM-FIX): the Agent Dispatch Table's Escalated column had
+    # said "skip" for learn-distill/skill-distill while the Gate Table (and
+    # the prose) said "conditional" for the same two phases -- a direct
+    # contradiction. Both tables must now agree: Escalated is "conditional"
+    # for both phases in both tables.
+    name = "fast-path/escalated-gate-wiring-reconciled"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "fast-path.md"
+    if not path.exists():
+        fail(name, f"fast-path.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+
+    dispatch_rows = {}
+    for phase in ("learn-distill", "skill-distill"):
+        match = re.search(rf"^\|\s*`{re.escape(phase)}`\s*\|.*\|$", content, re.MULTILINE)
+        if not match:
+            fail(name, f"Agent Dispatch Table missing a {phase!r} row")
+            return
+        cells = [c.strip() for c in match.group(0).strip("|").split("|")]
+        if len(cells) < 5:
+            fail(name, f"Agent Dispatch Table {phase!r} row has fewer than 5 columns: {cells}")
+            return
+        dispatch_rows[phase] = cells[4]  # Escalated column (Phase|Agent|Standard|Fast path|Escalated|Effort)
+
+    gate_rows = {}
+    for gate in ("learn_distill_gate", "skill_distill_gate"):
+        match = re.search(rf"^\|\s*`{re.escape(gate)}`\s*\|.*\|$", content, re.MULTILINE)
+        if not match:
+            fail(name, f"Gate Table missing a {gate!r} row")
+            return
+        cells = [c.strip() for c in match.group(0).strip("|").split("|")]
+        if len(cells) < 4:
+            fail(name, f"Gate Table {gate!r} row has fewer than 4 columns: {cells}")
+            return
+        gate_rows[gate] = cells[3]  # Escalated column (Gate/Rule|Standard|Fast path|Escalated)
+
+    pairs = (("learn-distill", "learn_distill_gate"), ("skill-distill", "skill_distill_gate"))
+    for dispatch_phase, gate_name in pairs:
+        dispatch_escalated = dispatch_rows[dispatch_phase]
+        gate_escalated = gate_rows[gate_name]
+        if "skip" in dispatch_escalated.lower():
+            fail(
+                name,
+                f"Agent Dispatch Table Escalated column for {dispatch_phase!r} still says "
+                f"'skip' ({dispatch_escalated!r}), contradicting Gate Table's {gate_escalated!r}",
+            )
+            return
+        if "conditional" not in dispatch_escalated.lower():
+            fail(name, f"Agent Dispatch Table Escalated column for {dispatch_phase!r} must say 'conditional', got {dispatch_escalated!r}")
+            return
+        if "conditional" not in gate_escalated.lower():
+            fail(name, f"Gate Table Escalated column for {gate_name!r} must say 'conditional', got {gate_escalated!r}")
+            return
+    ok(name)
+
+
+def test_fast_path_documents_skill_distill_gate() -> None:
+    name = "fast-path/skill-distill-gate-section-present"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "fast-path.md"
+    if not path.exists():
+        fail(name, f"fast-path.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    if "#### Skill-Distill Gate" not in content:
+        fail(name, "fast-path.md missing '#### Skill-Distill Gate' section")
+        return
+    section = content.split("#### Skill-Distill Gate", 1)[1]
+    for marker in ("gate_eligible", "promoted", "rejected", "memory-finalize"):
+        if marker not in section[:2000]:
+            fail(name, f"Skill-Distill Gate section missing expected marker: {marker!r}")
+            return
+    ok(name)
+
+
+def test_workflow_artifact_policy_registers_skill_distill_events() -> None:
+    name = "workflow-artifact-policy/registers-skill-distill-events"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "workflow-artifact-and-hook-policy.md"
+    if not path.exists():
+        fail(name, f"workflow-artifact-and-hook-policy.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    for event in (
+        "skill_candidates_observed",
+        "skill_proposed",
+        "skill_promoted",
+        "skill_rejected",
+        "skill_distill_skipped",
+        "skill_distill_failed",
+    ):
+        if event not in content:
+            fail(name, f"workflow-artifact-and-hook-policy.md missing event registration: {event!r}")
+            return
+    ok(name)
+
+
+def test_craftflow_state_mdc_documents_skill_distillation_paths() -> None:
+    name = "craftflow-state-mdc/documents-skill-distillation-paths"
+    path = PLUGIN_ROOT / "rules" / "craftflow-state.mdc"
+    if not path.exists():
+        fail(name, f"craftflow-state.mdc not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    for marker in ("skill-candidates.json", "skill-proposals"):
+        if marker not in content:
+            fail(name, f"craftflow-state.mdc missing expected path reference: {marker!r}")
+            return
+    ok(name)
+
+
+def test_cursor_router_wires_skill_distill_gate() -> None:
+    # Renamed from "cursor-router/documents-skill-distill". The old test only
+    # asserted the substring "skill-distill" appeared ANYWHERE in the file --
+    # it passed equally whether the phase was fully wired or explicitly
+    # documented as "deferred to v2" with zero dispatch/state-tracking logic.
+    # This is why the gap survived 5 REM-FIX rounds undetected (doubt-verify
+    # caught it). This test instead proves real gate+dispatch+approval wiring
+    # exists: it asserts the OLD deferred-to-v2 text is GONE (would fail
+    # against the pre-fix file) and that the concrete mechanics -- ledger
+    # query, skill-author Task dispatch, the plain-text approval exchange,
+    # the cursor-wf.json pending-state field, the fail-closed default, and
+    # the promote/reject script invocations -- are all present (passes only
+    # against real wiring).
+    name = "cursor-router/wires-skill-distill-gate"
+    path = PLUGIN_ROOT / "skills" / "cursor-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"cursor-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+
+    # Proves the old toothless test would have failed here: the deferred
+    # bullet this feature replaces must be gone, not just supplemented.
+    if "Skill-distill phase (deferred to v2)" in content:
+        fail(name, "cursor-router SKILL.md still carries the old 'Skill-distill phase "
+                    "(deferred to v2)' bullet -- gate was never actually wired")
+        return
+
+    if "## 5a. Skill-Distill Gate" not in content:
+        fail(name, "cursor-router SKILL.md missing '## 5a. Skill-Distill Gate' section")
+        return
+    gate_section = content.split("## 5a. Skill-Distill Gate", 1)[1]
+    gate_section = gate_section.split("## 6. Post-Agent Validation", 1)[0]
+
+    for marker in (
+        "craftflow_skill_ledger.py",
+        "--query",
+        "distinct_workflows >= 2",
+        'status == "candidate"',
+        "Task` ONCE",
+        "skill-author.md",
+        "STATUS: SKIPPED",
+        "STATUS: COMPLETE",
+        "STATUS: FAIL",
+        "AskUserQuestion",
+        "pending_skill_approval",
+        "Choose one:",
+        "craftflow_skill_promote.py",
+        "--approve",
+        "--reject {candidate_id}",
+        "AUTO_PROCEED: true",
+        "fail-closed default is **Defer**",
+        "Resume behavior",
+    ):
+        if marker not in gate_section:
+            fail(name, f"Skill-Distill Gate section (§ 5a) missing expected marker: {marker!r}")
+            return
+
+    if "| skill-author | `tools/craftflow-plugin/plugins/craftflow/agents/skill-author.md` |" not in content:
+        fail(name, "cursor-router SKILL.md Agent File Paths table missing skill-author row")
+        return
+
+    if "pending_skill_approval" not in content.split("## 3. Workflow Preparation", 1)[1].split("## 4. Workflow Artifact Creation", 1)[0]:
+        fail(name, "cursor-router SKILL.md § 3 Workflow Preparation resume check does not "
+                    "mention pending_skill_approval")
+        return
+
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -6729,6 +11072,22 @@ def main() -> int:
         print("[ pretooluse-guard: REM-FIX (doubt-verify cycle 3: missing-key mode.get() defaults) ]")
         test_pretooluse_guard_bash_write_denied_when_protected_writes_key_missing(tmp / "g50")
         test_pretooluse_guard_memory_write_allowed_when_memory_writes_key_missing(tmp / "g51")
+
+        print()
+        print("[ pretooluse-guard: REM-FIX round 5 (cp/mv/ln/dd destination-argument bypass) ]")
+        test_pretooluse_guard_denies_bash_cp_write_to_skill_proposal_file(tmp / "g52")
+        test_pretooluse_guard_denies_bash_cp_write_to_skill_ledger(tmp / "g53")
+        test_pretooluse_guard_denies_bash_mv_write_to_skill_proposal_file(tmp / "g54")
+        test_pretooluse_guard_denies_bash_ln_write_to_memory_md(tmp / "g55")
+        test_pretooluse_guard_denies_bash_mv_write_to_inflight_skill_promotion_path(tmp / "g56")
+        test_pretooluse_guard_denies_bash_cp_target_directory_form_write_to_skill_proposals(tmp / "g57")
+        test_pretooluse_guard_allows_bash_cp_unrelated_elsewhere(tmp / "g58")
+        test_pretooluse_guard_allows_bash_mv_unrelated_elsewhere(tmp / "g59")
+
+        print()
+        print("[ skill-propose / skill-promote: REM-FIX round 5 (non-UTF-8 draft content) ]")
+        test_skill_propose_non_utf8_skill_md_file_returns_json_error(tmp / "g60")
+        test_skill_promote_non_utf8_skill_md_returns_json_error(tmp / "g61")
 
         print()
         print("[ pretooluse-bash-guard ]")
@@ -6983,6 +11342,179 @@ def main() -> int:
         test_selfcheck_discovery_itself_bounded_by_timeout(tmp / "hc6")
         test_selfcheck_main_emits_distinct_warning_when_discovery_times_out(tmp / "hc7")
 
+        print()
+        print("[ skill-ledger ]")
+        test_ledger_bare_verdict_strings_are_not_candidates(tmp / "sl0a")
+        test_ledger_severity_word_followed_by_zero_count_is_not_that_severity(tmp / "sl0b")
+        test_ledger_distinct_workflow_counts_not_raw_events(tmp / "sl1")
+        test_ledger_distinct_workflow_counts_two_separate_workflows(tmp / "sl2")
+        test_ledger_lru_eviction_at_200_cap(tmp / "sl3")
+        test_ledger_rejected_stays_rejected_below_doubling_threshold(tmp / "sl4")
+        test_ledger_rejected_revives_once_distinct_workflows_double(tmp / "sl5")
+        test_ledger_atomic_write_survives_os_replace_failure(tmp / "sl6")
+        test_ledger_prune_removes_stale_candidate_only(tmp / "sl7")
+        test_ledger_prune_refuses_to_overwrite_corrupt_ledger_file(tmp / "sl7b")
+        test_ledger_backtest_never_mutates_real_ledger_file(tmp / "sl8")
+
+        print()
+        print("[ skill-ledger: --prune promoted-entry rot check (Phase 4: post-implementation gate) ]")
+        test_ledger_prune_rejected_tombstone_untouched(tmp / "sl29")
+        test_ledger_prune_promoted_healthy_no_needs_review(tmp / "sl30")
+        test_ledger_prune_promoted_missing_referenced_path_flags_stale_path(tmp / "sl31")
+        test_ledger_prune_promoted_elapsed_review_after_flags_review_after_elapsed(tmp / "sl32")
+        test_ledger_prune_promoted_missing_skill_md_flags_stale_path_no_crash(tmp / "sl33")
+
+        print()
+        print("[ skill-ledger: REM-FIX (task #59, code-reviewer + silent-failure-hunter re-pass) ]")
+        test_ledger_prune_promoted_missing_name_flags_missing_promoted_skill_name(tmp / "sl34")
+        test_ledger_prune_promoted_blank_name_flags_missing_promoted_skill_name(tmp / "sl35")
+        test_ledger_prune_promoted_unparseable_review_after_flags_unparseable(tmp / "sl36")
+        test_ledger_prune_promoted_referenced_path_escapes_project_root_flags_stale_path(tmp / "sl37")
+        test_ledger_prune_promoted_name_escapes_project_root_flags_stale_path(tmp / "sl38")
+        test_ledger_prune_multi_entry_malformed_promoted_entry_does_not_affect_healthy_entry(tmp / "sl40")
+        test_ledger_prune_honors_state_dir_when_ledger_flag_left_at_default(tmp / "sl39")
+
+        print()
+        print("[ skill-ledger: REM-FIX (1a-SCOPE code-reviewer + silent-failure-hunter findings) ]")
+        test_ledger_lru_eviction_exempts_rejected_and_promoted_at_200_cap(tmp / "sl9")
+        test_ledger_observe_rejects_relative_traversal_wf_id(tmp / "sl10")
+        test_ledger_observe_rejects_absolute_path_wf_id(tmp / "sl11")
+        test_ledger_observe_tolerates_non_utf8_events_file(tmp / "sl12")
+        test_ledger_observe_acquires_and_releases_lock(tmp / "sl13")
+        test_ledger_observe_tolerates_malformed_entries_missing_fields(tmp / "sl28")
+        test_ledger_observe_identity_pinned_to_wf_id_not_workflow_uuid(tmp / "sl14")
+        test_ledger_observe_repeat_calls_do_not_duplicate_evidence(tmp / "sl15")
+
+        print()
+        print("[ skill-ledger: severity-extraction calibration (REM-FIX round 2) ]")
+        test_ledger_severity_recognizes_project_specific_words(tmp / "sl16")
+        test_ledger_severity_prefix_zero_count_is_not_that_severity(tmp / "sl17")
+        test_ledger_severity_picks_highest_nonzero_severity_mentioned(tmp / "sl18")
+        test_ledger_severity_zero_count_does_not_mask_other_nonzero_mention(tmp / "sl19")
+        test_ledger_severity_recognizes_camelcase_concatenated_word_with_count(tmp / "sl20")
+        test_ledger_severity_word_followed_by_zero_count_still_not_that_severity_regression(tmp / "sl21")
+
+        print()
+        print("[ skill-ledger: gate threshold calibration (REM-FIX round 3) ]")
+        test_ledger_gate_eligible_two_distinct_workflows_any_severity(tmp / "sl22")
+        test_ledger_gate_eligible_one_distinct_workflow_still_not_eligible(tmp / "sl23")
+
+        print()
+        print("[ skill-ledger: --reject flag (Phase 3: router approval-flow wiring) ]")
+        test_ledger_reject_sets_status_and_reason(tmp / "sl24")
+        test_ledger_reject_unknown_candidate_id_fails_closed(tmp / "sl25")
+
+        print()
+        print("[ skill-ledger: --reject status guard (REM-FIX: concurrent-promote race) ]")
+        test_ledger_reject_already_promoted_candidate_fails_closed(tmp / "sl26")
+
+        print()
+        print("[ skill-ledger: main() OSError wrapping (REM-FIX: MEDIUM, mirrors skill_promote.py) ]")
+        test_ledger_main_wraps_oserror_as_clean_json_not_traceback(tmp / "sl27")
+
+        print()
+        print("[ skill-promote (Phase 2: craftflow_skill_promote.py) ]")
+        test_promote_refuses_short_description(tmp / "sp1")
+        test_promote_refuses_missing_name(tmp / "sp2")
+        test_promote_refuses_both_skill_md_and_patch_present(tmp / "sp3")
+        test_promote_refuses_neither_present(tmp / "sp4")
+        test_promote_refuses_path_traversal_candidate_id(tmp / "sp5")
+        test_promote_refuses_unsafe_skill_name(tmp / "sp6")
+        test_promote_writes_canonical_and_syncs_cursor_symlink(tmp / "sp7")
+        test_promote_stale_backup_on_conflicting_cursor_entry(tmp / "sp8")
+        test_promote_dereference_fallback_when_symlink_unavailable(tmp / "sp9")
+        test_promote_idempotent_when_already_correctly_linked(tmp / "sp10")
+        test_promote_marks_ledger_entry_promoted(tmp / "sp11")
+        test_promote_applies_update_patch_to_existing_skill(tmp / "sp12")
+
+        print()
+        print("[ skill-promote: REM-FIX (items 1-4, 6 of Phase 2 remediation) ]")
+        test_promote_critical1_rejects_mismatched_patch_target_and_name(tmp / "sp13")
+        test_promote_high2_rejects_nonexistent_project_root(tmp / "sp14")
+        test_promote_high4_rejects_patch_target_outside_skills_dir(tmp / "sp15")
+        test_promote_high3_concurrent_approve_no_traceback(tmp / "sp16")
+        test_promote_medium6_project_root_is_file_returns_json_not_traceback(tmp / "sp17")
+
+        print()
+        print("[ skill-promote: REM-FIX round 2 (--approve status precondition, symmetric to --reject) ]")
+        test_promote_refuses_already_rejected_candidate(tmp / "sp18")
+        test_promote_refuses_candidate_not_in_ledger(tmp / "sp19")
+        test_promote_and_reject_share_equivalent_status_precondition_shape()
+
+        print()
+        print(
+            "[ skill-promote: REM-FIX round 3 (--ledger pointing at a never-created "
+            "sibling path must fail closed, not silently best-effort-succeed) ]"
+        )
+        test_promote_fails_closed_when_ledger_flag_points_to_never_created_sibling_path(tmp / "sp20")
+
+        print()
+        print(
+            "[ skill-promote: REM-FIX round 5 (cross-candidate name-collision "
+            "protection + malformed non-dict ledger entry fail-closed) ]"
+        )
+        test_promote_refuses_cross_candidate_name_collision(tmp / "sp21")
+        test_promote_reapproving_same_already_promoted_candidate_still_refused(tmp / "sp22")
+        test_promote_malformed_non_dict_ledger_entry_returns_json_error(tmp / "sp23")
+        test_ledger_reject_malformed_non_dict_ledger_entry_returns_json_error(tmp / "sp24")
+
+        print()
+        print(
+            "[ skill-promote: REM-FIX round 6 (case-fold cross-candidate collision "
+            "guard + upsert_candidates malformed-dict-missing-fields degradation) ]"
+        )
+        test_promote_refuses_case_fold_collision_across_candidates(tmp / "sp25")
+
+        print()
+        print("[ skill-propose (REM-FIX round 4: craftflow_skill_propose.py) ]")
+        test_propose_refuses_unsafe_candidate_id(tmp / "spp1")
+        test_propose_refuses_candidate_not_in_ledger(tmp / "spp2")
+        test_propose_refuses_terminal_status_rejected(tmp / "spp3")
+        test_propose_refuses_terminal_status_promoted(tmp / "spp4")
+        test_propose_refuses_invalid_frontmatter(tmp / "spp5")
+        test_propose_stages_valid_candidate_and_updates_ledger_status(tmp / "spp6")
+        test_propose_refuses_overwrite_without_flag(tmp / "spp7")
+        test_propose_allows_overwrite_with_flag(tmp / "spp8")
+        test_propose_holds_ledger_lock_for_the_write_sequence(tmp / "spp9")
+        test_propose_refuses_missing_skill_md_file(tmp / "spp10")
+
+        print()
+        print("[ pretooluse-guard: REM-FIX (item 5, skill-promotion-path protection) ]")
+        test_pretooluse_guard_denies_edit_write_to_claude_skills_skill_md(tmp / "pg1")
+        test_pretooluse_guard_denies_edit_write_to_cursor_skills_skill_md(tmp / "pg2")
+        test_pretooluse_guard_denies_bash_redirect_to_claude_skills_skill_md(tmp / "pg3")
+
+        print()
+        print("[ pretooluse-guard: REM-FIX round 2 (narrow skill-promotion-path to in-flight ledger candidates) ]")
+        test_pretooluse_guard_allows_unrelated_hand_authored_skill_write_no_ledger(tmp / "pg4")
+        test_pretooluse_guard_denies_python_oneliner_write_to_inflight_skill(tmp / "pg5")
+        test_pretooluse_guard_denies_python_os_system_write_to_inflight_skill(tmp / "pg6")
+        test_pretooluse_guard_denies_python_heredoc_write_to_inflight_skill(tmp / "pg7")
+
+        print()
+        print(
+            "[ pretooluse-guard: REM-FIX round 3 (ledger/proposal tamper protection "
+            "+ fail-closed on ledger corruption) ]"
+        )
+        test_pretooluse_guard_denies_tamper_then_write_via_ledger_write(tmp / "pg8")
+        test_pretooluse_guard_denies_write_to_skill_proposal_file(tmp / "pg9")
+        test_pretooluse_guard_denies_write_to_not_yet_existing_proposal_path(tmp / "pg9b")
+        test_pretooluse_guard_denies_bash_redirect_to_skill_ledger(tmp / "pg10")
+        test_pretooluse_guard_denies_write_when_ledger_json_is_malformed(tmp / "pg11")
+        test_pretooluse_guard_denies_any_skill_write_when_ledger_malformed_no_matching_candidate(tmp / "pg12")
+
+        print()
+        print(
+            "[ pretooluse-guard: REM-FIX round 4 (unconditional skill-proposals-tree "
+            "protection + malformed-candidate-entry fail-closed) ]"
+        )
+        test_pretooluse_guard_denies_bash_redirect_to_not_yet_existing_proposal_path(tmp / "pg13")
+        test_pretooluse_guard_denies_python_oneliner_write_to_not_yet_existing_proposal_path(tmp / "pg14")
+        test_inflight_skill_promotion_paths_fails_closed_on_malformed_candidate_missing_status(tmp / "pg15")
+        test_inflight_skill_promotion_paths_fails_closed_on_malformed_candidate_missing_id(tmp / "pg16")
+        test_inflight_skill_promotion_paths_still_skips_legitimately_terminal_candidates(tmp / "pg17")
+        test_pretooluse_guard_fails_closed_when_candidate_entry_missing_status(tmp / "pg18")
+
     print()
     print("[ structural ]")
     test_anti_rationalization_tables_present()
@@ -7002,6 +11534,35 @@ def main() -> int:
     test_statusline_script_present()
     test_router_uses_workflow_id_helper()
     test_learn_distiller_uses_tools_key_not_allowed_tools()
+
+    print()
+    print("[ structural: skill-author / skill-distillation (Phase 2) ]")
+    test_skill_author_agent_present()
+    test_skill_author_agent_documents_propose_script_invocation()
+    test_skill_distillation_skill_present()
+    test_rubric_documents_three_rejection_cases()
+    test_skill_promote_script_present()
+
+    print()
+    print("[ structural: skill-distill router wiring (Phase 3) ]")
+    test_router_phase_enum_registers_skill_distill_learn_distill_doubt_verify()
+    test_router_dispatcher_table_includes_skill_distill()
+    test_router_effort_dispatch_includes_skill_distill_low()
+    test_router_contract_overrides_includes_skill_author()
+    test_router_memory_finalization_calls_ledger_observe()
+    test_router_memory_finalization_calls_ledger_prune()
+    test_router_hard_rules_includes_skill_distill_skip()
+    test_router_documents_skill_distill_approval_flow()
+    test_build_workflow_wires_learn_distill_taskcreate()
+    test_build_workflow_wires_skill_distill_taskcreate()
+    test_build_workflow_fast_path_graph_wires_learn_and_skill_distill()
+    test_debug_workflow_documents_skill_distill_reasoning()
+    test_fast_path_agent_dispatch_table_includes_skill_distill()
+    test_fast_path_escalated_gate_wiring_reconciled()
+    test_fast_path_documents_skill_distill_gate()
+    test_workflow_artifact_policy_registers_skill_distill_events()
+    test_craftflow_state_mdc_documents_skill_distillation_paths()
+    test_cursor_router_wires_skill_distill_gate()
 
     print()
     if _errors:

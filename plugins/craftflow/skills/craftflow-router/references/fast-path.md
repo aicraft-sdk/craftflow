@@ -41,7 +41,8 @@ Values:
 | `build-hunt` | silent-failure-hunter | ✓ | ✗ skip | ✓ | medium |
 | `build-verify` | integration-verifier | ✓ | ✓ | ✓ (re-verify) | high |
 | `build-doc-sync` | doc-syncer | ✓ | ✗ skip | ✗ skip | low |
-| `learn-distill` | learn-distiller | ✓ (gated) | ✓ (gated) | ✗ skip | low |
+| `learn-distill` | learn-distiller | ✓ (gated) | ✓ (gated) | conditional (gated) | low |
+| `skill-distill` | skill-author | ✓ (gated) | ✓ (gated) | conditional (gated) | low |
 | `memory-finalize` | (inline) | ✓ | ✓ | ✓ | low |
 
 #### Effort Steering Directives
@@ -66,6 +67,21 @@ When gated in: run `craftflow_learn_scan.py` via Bash, pass output to learn-dist
 
 Fast-path note: fast-path BUILD with a clean verifier pass never enters the gate (empty `remediation_history`). Fast-path BUILD that escalated (verifier fail → escalation → re-verify) will have `remediation_history` populated and runs `learn-distill` exactly like standard BUILD.
 
+#### Skill-Distill Gate
+
+`skill-distill` is dispatched at the end of BUILD (standard and fast-path) ONLY when the skill-candidate ledger has at least one new `gate_eligible` candidate not already `promoted`/`rejected`. This is a separate, more specific gate than Learn-Distill's above — it does not depend on `remediation_history` at all, and it can fire on a clean pass (no remediation needed) if the ledger has an eligible candidate left over from prior workflows.
+
+**Gate check:** `python3 {plugin_root}/scripts/craftflow_skill_ledger.py --query --ledger .craftflow/state/project/skill-candidates.json`. A candidate qualifies when `distinct_workflows >= 2` (`gate_eligible()`'s own threshold — plain `--query` does not pre-filter, so the router applies this filter itself) AND `status == "candidate"` (excludes `proposed`, `promoted`, `rejected`). Note: `status` is one of `candidate|proposed|promoted|rejected` only — "stale" is never an assignable status value; stale `candidate` entries (>90 days, no new evidence) are instead pruned (deleted outright) by `--prune`, never transitioned to a "stale" status.
+
+**When gated out** (no qualifying candidate): skip `skill-distill` entirely, proceed to `learn-distill`'s own gate check (if not already evaluated) or directly to `memory-finalize` if that gate is also gated out.
+
+**When gated in:** dispatch `skill-author` with the chosen candidate id. After it returns:
+- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`craftflow-router/SKILL.md` § 8) — `AskUserQuestion` with Approve / Approve + register in SKILL_HINTS / Reject / Defer — before proceeding to `memory-finalize`. Append `skill_proposed` to the event log, then `skill_promoted` or `skill_rejected` once the user's choice is executed (no event for Defer — the candidate is unchanged). Under `JUST_GO=true`, this gate is a de facto REVERT-class gate (fail-closed default `Defer`) — see `SKILL.md` § 8's JUST_GO carve-out; never auto-select Approve or Approve + SKILL_HINTS.
+- `STATUS: SKIPPED` → passing state, append `skill_distill_skipped` (if not already logged this workflow) and proceed straight to `memory-finalize`, no `AskUserQuestion`. (Distinct from `skill_candidates_observed`, which is reserved for the unconditional `--observe` step at memory-finalize — see `SKILL.md` § 13.)
+- `STATUS: FAIL` or no return (stuck/timeout) → `skill-author` is NOT a `kind:remfix` origin (no code-defect remediation applies to a proposal-authoring failure). Do not create a REM-FIX task and do not block the chain. Append `skill_distill_failed` to the event log with the failure reason if available, leave the candidate's ledger status unchanged (still `candidate`, so it is flagged for retry the next time this gate fires on a future workflow), and proceed straight to `memory-finalize` using `chain_tail_task_id` as it stood before this gate fired.
+
+Runs identically on standard BUILD and both fast-path variants (clean and escalated) — the gate check itself has no fast-path-specific behavior, unlike Learn-Distill's `remediation_history` dependency.
+
 #### Gate Table
 
 | Gate / Rule | Standard | Fast path | Escalated |
@@ -75,6 +91,8 @@ Fast-path note: fast-path BUILD with a clean verifier pass never enters the gate
 | `memory_sync_gate` | ✓ | ✓ | ✓ |
 | `1a-SCOPE rule` | ✓ | ✗ dropped | ✓ RESTORED |
 | `doubt_verify_gate` | conditional | ✗ | ✗ |
+| `learn_distill_gate` | conditional | conditional | conditional |
+| `skill_distill_gate` | conditional | conditional | conditional |
 
 `1a-SCOPE rule`: dropped on fast path (no reviewer/hunter findings to scope); RESTORED on escalated path. On escalated fast path, `1a-SCOPE` applies using the same CRITICAL+HIGH threshold (at least one CRITICAL and at least one HIGH in the escalated reviewer+hunter output) as the standard parallel review phase. Rationale: the escalated spawn produces equivalent output to the standard parallel review phase — same agents, same output shape.
 

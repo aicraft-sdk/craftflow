@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import re
+import sys
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import craftflow_pretooluse_bash_guard as bash_guard  # noqa: E402
+import craftflow_skill_ledger as skill_ledger  # noqa: E402
+import craftflow_skill_promote as skill_promote  # noqa: E402
 
 from craftflow_hooklib import (
     MEMORY_FINALIZE_PERMIT_LITERAL,
@@ -12,9 +22,11 @@ from craftflow_hooklib import (
     load_input,
     load_mode,
     log_event,
+    looks_dynamic,
     matches_memory_finalize_permit_shape,
     memory_finalize_permit_path,
     pretool_deny,
+    project_dir,
     project_state_dir,
     resolve_confinement,
     resolve_toggle_decision,
@@ -236,6 +248,333 @@ def _protected_memory_paths() -> set:
     return paths
 
 
+# HIGH 5 (REM-FIX, skill-distillation Phase 2 remediation): a skill can only
+# ever be legitimately promoted by running craftflow_skill_promote.py's
+# `--approve` path (the script's own internal Python file I/O -- os.replace()/
+# open() -- which this hook never intercepts, since PreToolUse only sees the
+# Bash tool call INVOKING the script, not the writes the script performs on
+# its own once running). No raw Edit/Write/Bash-redirect tool call should ever
+# be able to reach `.claude/skills/<name>/SKILL.md` or
+# `.cursor/skills/<name>/SKILL.md` directly -- skill-author.md's "never write
+# to .claude/skills or .cursor/skills directly" constraint was previously
+# prompt-only, unlike the PROTECTED_MEMORY_FILES pattern above.
+#
+# CRITICAL 1 (REM-FIX round 2): the original implementation matched by SHAPE
+# alone (any `.claude/skills/<name>/SKILL.md` or `.cursor/skills/<name>/
+# SKILL.md`), project-root-wide, with no override. That path shape is the
+# STANDARD Claude Code/Cursor project-skill convention, not craftflow-
+# exclusive -- an ordinary hand-authored skill (e.g. via the built-in
+# `skill-development` skill) was silently blocked in every project this
+# plugin is active in. Narrowed to protect ONLY a skill `<name>` that is
+# ACTIVELY IN-FLIGHT in the skill-distillation pipeline right now: a ledger
+# candidate (`.craftflow/state/project/skill-candidates.json`, see
+# `craftflow_skill_ledger.py`) with `status` `"candidate"` or `"proposed"`
+# that additionally has a matching staged proposal
+# (`.craftflow/state/project/skill-proposals/<id>/SKILL.md` or
+# `SKILL.patch`) naming this exact `<name>` -- the only name<->path linkage
+# that exists before promotion (the ledger carries no `name` field itself;
+# `promoted_skill` is set only AFTER promotion). A brand-new skill name with
+# no existing file yet is still protected as soon as its proposal is staged
+# (the shape match is still evaluated by construction of the path set below,
+# not by globbing existing files) -- but an unrelated name with no in-flight
+# ledger+proposal pairing, or no ledger file at all (the common case), is
+# NOT protected here and must be allowed to proceed normally.
+#
+# MEDIUM (REM-FIX round 3): "proposed" is reserved for a not-yet-implemented
+# producer -- no code path in this codebase currently writes that status
+# onto a ledger candidate (only "candidate", "rejected", and "promoted" are
+# ever set by craftflow_skill_ledger.py). Kept here so this check is already
+# correct the day a producer starts emitting "proposed", instead of needing
+# a second REM-FIX to add it.
+_INFLIGHT_LEDGER_STATUSES = ("candidate", "proposed")
+
+
+def _load_ledger_safe(ledger_path: Path) -> tuple:
+    """Load the skill-candidate ledger's raw JSON, distinguishing "file does
+    not exist" (benign -- returns an empty ledger, ledger_corrupt=False) from
+    "file exists but failed to parse, or has an invalid top-level schema
+    shape" (security-relevant -- CRITICAL 2, REM-FIX round 3: returns an
+    empty ledger, ledger_corrupt=True).
+
+    `skill_ledger.load_ledger()` itself cannot be reused for this
+    distinction: it catches `(OSError, ValueError)` on malformed JSON (and
+    also degrades on a wrong top-level shape) and silently returns an empty
+    ledger either way -- exactly the ambiguity this function exists to
+    remove, since the caller needs to fail CLOSED on corruption but stay
+    fail-OPEN (business as usual) on a simply-absent ledger file (the common
+    case for most projects, and the one round 2 explicitly protected).
+
+    Live-reproduced bypass this closes: truncate `skill-candidates.json` to
+    invalid JSON while a legitimate in-flight candidate + staged proposal
+    exist -- before this fix, `_inflight_skill_promotion_paths()` silently
+    protected zero candidates (indistinguishable from "no ledger file"), so
+    a direct Write to that candidate's SKILL.md was ALLOWED with nothing
+    logged to `craftflow-hook-events.log`."""
+    if not ledger_path.exists():
+        return {"schema_version": skill_ledger.SCHEMA_VERSION, "candidates": []}, False
+    try:
+        with open(ledger_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {"schema_version": skill_ledger.SCHEMA_VERSION, "candidates": []}, True
+    if not isinstance(data, dict) or not isinstance(data.get("candidates"), list):
+        return {"schema_version": skill_ledger.SCHEMA_VERSION, "candidates": []}, True
+    return data, False
+
+
+def _inflight_skill_promotion_paths(root: Path) -> tuple:
+    """Resolve the set of canonical `.claude/skills/<name>/SKILL.md` and
+    `.cursor/skills/<name>/SKILL.md` paths for every skill `<name>` that is
+    ACTIVELY IN-FLIGHT in the skill-distillation pipeline right now (see the
+    CRITICAL 1 comment block above). Returns `(paths, ledger_corrupt)`.
+
+    CRITICAL 2 (REM-FIX round 3): `ledger_corrupt` is True ONLY when the
+    ledger file EXISTS but its content could not be trusted (parse failure
+    or invalid top-level shape, per `_load_ledger_safe()` above) -- `paths`
+    is always empty in that case, since no candidate in an unparseable file
+    can be trusted either. The caller (`_is_protected_skill_promotion_path`)
+    uses this flag to fail CLOSED instead of silently treating "corrupt
+    ledger" the same as "no ledger file at all." A missing ledger file (the
+    common case for most projects) still yields `(set(), False)` -- business
+    as usual, matching round 2's fix. Any OTHER error reading the proposals
+    directory, or a single candidate's own proposal file/frontmatter,
+    degrades to skipping that one candidate only -- never a hard failure,
+    never treated as ledger_corrupt -- unchanged from the pre-existing
+    behavior.
+
+    CRITICAL (REM-FIX round 4): a structurally malformed PER-CANDIDATE entry
+    (missing its own `"status"` or `"id"` key) is ALSO treated as
+    `ledger_corrupt=True` (empty `paths`, distinguishable
+    `skill_ledger_candidate_malformed` log event) rather than silently
+    skipped the same way a legitimately-terminal (`"rejected"`/`"promoted"`)
+    entry is -- see the in-loop comment below for why treating those two
+    cases identically was itself a silent, unlogged under-protection bug."""
+    paths: set = set()
+    try:
+        ledger_path = root / skill_ledger.DEFAULT_LEDGER_PATH
+        ledger, ledger_corrupt = _load_ledger_safe(ledger_path)
+    except Exception:
+        return paths, False
+    if ledger_corrupt:
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "skill_ledger_unreadable",
+                "ledger_path": str(ledger_path),
+                "reason": "ledger_exists_but_failed_to_parse_or_invalid_shape",
+                "decision": "fail_closed_skill_promotion_path",
+            },
+        )
+        return paths, True
+
+    candidates = ledger.get("candidates") if isinstance(ledger, dict) else None
+    if not isinstance(candidates, list):
+        return paths, False
+
+    proposals_dir = root / skill_promote.DEFAULT_PROPOSALS_DIR
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+
+        # CRITICAL (REM-FIX round 4, hunter's 2nd finding last round): a
+        # structurally malformed per-candidate entry -- missing its own
+        # "status" or "id" key entirely -- was previously treated IDENTICALLY
+        # to "legitimately not in-flight" (e.g. a real "rejected"/"promoted"
+        # entry): `candidate.get("status") not in _INFLIGHT_LEDGER_STATUSES`
+        # is True for a missing key exactly the same as for a terminal
+        # status, so the loop silently `continue`d with ZERO log line either
+        # way. That is indistinguishable from "nothing to see here" in
+        # `craftflow-hook-events.log`, even though a malformed entry means
+        # this function cannot actually prove anything about whether that
+        # candidate is in-flight or not. Fail closed the same way whole-file
+        # corruption already does above -- empty path set, ledger_corrupt
+        # True, a distinguishable logged event -- rather than silently
+        # under-protecting.
+        if "status" not in candidate or "id" not in candidate:
+            log_event(
+                "plugin_pretooluse_guard",
+                {
+                    "event": "skill_ledger_candidate_malformed",
+                    "ledger_path": str(ledger_path),
+                    "candidate_surface": candidate.get("surface"),
+                    "reason": "candidate_entry_missing_status_or_id",
+                    "decision": "fail_closed_skill_promotion_path",
+                },
+            )
+            return set(), True
+
+        if candidate.get("status") not in _INFLIGHT_LEDGER_STATUSES:
+            continue
+        cid = candidate.get("id")
+        if not isinstance(cid, str) or not cid:
+            continue
+
+        name = None
+        try:
+            proposal_dir = proposals_dir / cid
+            md_path = proposal_dir / "SKILL.md"
+            patch_path = proposal_dir / "SKILL.patch"
+            if md_path.is_file():
+                fm = skill_promote.parse_frontmatter(md_path.read_text(encoding="utf-8"))
+                candidate_name = fm.get("name") if isinstance(fm, dict) else None
+                if isinstance(candidate_name, str) and candidate_name.strip():
+                    name = candidate_name.strip()
+            elif patch_path.is_file():
+                target_rel = skill_promote._extract_patch_target(
+                    patch_path.read_text(encoding="utf-8")
+                )
+                target_match = skill_promote._SKILL_TARGET_RE.match(target_rel) if target_rel else None
+                if target_match:
+                    name = target_match.group(2)
+        except (OSError, ValueError):
+            continue
+
+        if not name:
+            continue
+        for family in (".claude", ".cursor"):
+            try:
+                paths.add((root / family / "skills" / name / "SKILL.md").resolve())
+            except Exception:
+                continue
+    return paths, False
+
+
+def _skill_promotion_path_shape_match(root: Path, path: Path) -> bool:
+    """Shape-only match (no ledger lookup at all) for
+    `<root>/.claude/skills/<name>/SKILL.md` or
+    `<root>/.cursor/skills/<name>/SKILL.md`. Used ONLY as the CRITICAL 2
+    (REM-FIX round 3) fail-closed fallback inside
+    `_is_protected_skill_promotion_path()` below, when the ledger cannot be
+    trusted -- NOT used on the normal (ledger-readable) path, where
+    protection stays narrowed to actually in-flight candidates (round 2's
+    fix, and its own regression test
+    `test_pretooluse_guard_allows_unrelated_hand_authored_skill_write_no_ledger`,
+    remain intact for the common case)."""
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return False
+    parts = rel.parts
+    return (
+        len(parts) == 4
+        and parts[0] in (".claude", ".cursor")
+        and parts[1] == "skills"
+        and parts[3] == "SKILL.md"
+    )
+
+
+def _is_protected_skill_promotion_path(path: Path) -> bool:
+    """True if `path` (already resolved to an absolute path) is exactly
+    `<project-root>/.claude/skills/<name>/SKILL.md` or
+    `<project-root>/.cursor/skills/<name>/SKILL.md` for a skill `<name>`
+    that is ACTIVELY IN-FLIGHT in the skill-distillation pipeline right now
+    (CRITICAL 1, REM-FIX round 2 -- see `_inflight_skill_promotion_paths()`).
+    Any error resolving `path` relative to the project root (e.g. the two
+    are on different drives on some platform) degrades to False -- this is
+    an ADDITIONAL protection layered on top of the pre-existing
+    memory-write/confinement checks, never a reason to skip those.
+
+    CRITICAL 2 (REM-FIX round 3): when the ledger EXISTS but cannot be
+    trusted (unparseable JSON or invalid shape --
+    `_inflight_skill_promotion_paths()`'s `ledger_corrupt` flag), this
+    degrades to a SHAPE-only match instead of silently allowing (the
+    pre-fix bug): the guard cannot prove the write is safe, so it fails
+    CLOSED for any path matching the general skill-promotion-path shape --
+    not just previously-known in-flight candidates, since a corrupt ledger
+    means "previously known" cannot be trusted either. This is a rare,
+    operator-actionable scenario (a corrupted ledger file), not the common
+    "no ledger"/"unrelated hand-authored skill" case round 2 fixed for, so
+    failing closed here does not reintroduce round 2's over-broad-blocking
+    regression."""
+    try:
+        root = project_dir().resolve()
+        path.relative_to(root)
+    except (OSError, ValueError):
+        return False
+    try:
+        inflight, ledger_corrupt = _inflight_skill_promotion_paths(root)
+    except Exception:
+        return False
+    if ledger_corrupt:
+        return _skill_promotion_path_shape_match(root, path)
+    return path in inflight
+
+
+def _protected_skill_ledger_and_proposal_paths(root: Path) -> tuple:
+    """Resolved `(ledger_path, proposals_dir)` for the skill-candidate
+    ledger and its staged-proposal directory (CRITICAL 1, REM-FIX round 3)
+    -- the untrusted data source `_is_protected_skill_promotion_path()`
+    above reads on every invocation to decide which SKILL.md paths are
+    currently protected."""
+    ledger_path = (root / skill_ledger.DEFAULT_LEDGER_PATH).resolve()
+    proposals_dir = (root / skill_promote.DEFAULT_PROPOSALS_DIR).resolve()
+    return ledger_path, proposals_dir
+
+
+def _is_protected_skill_ledger_or_proposal_path(path: Path) -> bool:
+    """True if `path` is exactly the skill-candidate ledger file
+    (`.craftflow/state/project/skill-candidates.json`) or ANY path under its
+    staged-proposals directory (`.craftflow/state/project/skill-proposals/`)
+    -- existing or not (REM-FIX round 4, architectural fix).
+
+    Live-reproduced tamper sequence this closes (originally CRITICAL 1,
+    REM-FIX round 3): stage an in-flight candidate, confirm a `Write` to its
+    `.claude/skills/<name>/SKILL.md` is denied -- then `Write` the ledger file
+    itself (replacing `candidates` with `[]`), which was previously ALLOWED
+    (not itself protected) -- then retry the SAME write to the SKILL.md,
+    previously now ALLOWED too, since `_is_protected_skill_promotion_path()`
+    re-reads the (now-tampered) ledger on every call and sees zero in-flight
+    candidates.
+
+    Why the round-3 fix's own `path.exists()` scoping for the proposals
+    directory was itself a bypass (found across three subsequent REM-FIX
+    rounds): `candidate_id()` is a deterministic `sha1(surface+signature)`
+    hash, precomputable OFFLINE with no observation needed, and the ledger is
+    freely readable via `--query`. Scoping protection to "already exists on
+    disk" let an attacker precompute a future legitimate candidate's exact
+    id and plant a file there FIRST, before the real candidate ever reaches
+    that id -- the round-3 fix's own "protect existing files, allow first
+    writes" trade-off was exploitable purely from public, offline
+    information. No amount of narrowing the existence check (mtime windows,
+    ledger-status cross-checks, etc.) closes this: the hash is deterministic
+    and precomputable regardless of timing.
+
+    The architectural fix (user-approved, round 4): `skill-author` no longer
+    writes proposal files directly via `Write` at all. It drafts content to a
+    scratch location, then invokes `craftflow_skill_propose.py` (the sole
+    authorized writer of this tree, mirroring `craftflow_skill_promote.py`'s
+    own sole-authorized-writer status for `.claude/skills/`) to atomically
+    stage it, gated on the candidate's ledger status. Since there is no
+    longer a legitimate direct-`Write`-to-this-tree caller to protect
+    "first writes" for, the entire tree can be protected UNCONDITIONALLY --
+    exactly like the ledger file itself already is -- removing both the
+    existence check and its precompute-squat exposure entirely. This is
+    SIMPLER than the round-3 guard, not more complex: the complexity moved
+    into `craftflow_skill_propose.py`'s validated, atomic, locked write path
+    instead of living in the guard's trust-inference logic.
+
+    Denied by both callers below (mirrors worktree-confinement/
+    skill-promotion-path's own unconditional treatment in
+    `_handle_edit_write`/`_handle_bash` -- never lifted by
+    memoryWrites/protectedWrites gating), since this data source backs a
+    security decision, not routine project state. Degrades to False on any
+    path-resolution error (matches this module's established fail-open-on-
+    resolution-error posture -- distinct from the ledger-CONTENT corruption
+    handled separately by CRITICAL 2 above)."""
+    try:
+        root = project_dir().resolve()
+        ledger_path, proposals_dir = _protected_skill_ledger_and_proposal_paths(root)
+    except Exception:
+        return False
+    if path == ledger_path:
+        return True
+    try:
+        path.relative_to(proposals_dir)
+    except ValueError:
+        return False
+    return True
+
+
 def _protected_bash_write_paths() -> set:
     """Protected-path set for the NEW Bash-write-inspection layer only
     (Task 4.2 step 2): reuses `_protected_memory_paths()` (the 3 .md files
@@ -285,6 +624,79 @@ def _bash_write_targets_in_tokens(tokens: list) -> list:
                 if not t.startswith("-"):
                     targets.append(t)
     return targets
+
+
+# SYSTEMIC GAP (REM-FIX round 5): `_bash_write_targets_in_tokens()` above
+# (and `extract_redirect_targets()`/the python-write detectors it sits
+# alongside) recognize ONLY `>`/`>>`/`tee` redirect syntax and python-internal
+# write APIs -- ZERO detection existed for ordinary shell file-copy/move/link
+# commands using plain positional arguments. Live-reproduced bypass (all 3
+# silently ALLOWED, zero `log_event` call, before this fix):
+#   cp /tmp/evil.md .craftflow/state/project/skill-proposals/<id>/SKILL.md
+#   cp /tmp/forged.json .craftflow/state/project/skill-candidates.json
+#   mv /tmp/staged.md .craftflow/state/project/skill-proposals/<id>/SKILL.md
+# Reuses `craftflow_pretooluse_bash_guard.py`'s own `_split_command_name()` /
+# `_positional_targets()` flag-parsing (built for a DIFFERENT purpose --
+# cwd-escape detection on rm/mv/shred/truncate -- but the exact same
+# flag/`--`/`--target-directory=`/extglob/brace-aware token-skipping shape
+# this needs) rather than re-implementing that parsing a second time.
+_CP_MV_LIKE_COMMANDS = ("cp", "mv", "ln", "install", "rsync")
+
+
+def _cp_mv_like_write_targets(tokens: list) -> list:
+    """Detect the destination-argument write target(s) of an ordinary
+    cp/mv/ln/install/rsync invocation. These commands have no `>`/`>>`/`tee`
+    redirect syntax at all, yet still WRITE to their final positional
+    argument (or `-t DIR`/`--target-directory=DIR`) exactly like a redirect
+    would.
+
+    When `--target-directory=DIR`/`-tDIR` is present, every OTHER positional
+    token is a source copied/moved/linked INTO that directory -- the actual
+    write target for each source is `DIR/basename(source)`. Otherwise, the
+    LAST positional token is the destination (the standard `cmd SRC... DEST`
+    shape). A single leftover positional token (e.g. a bare `ln -s target`
+    with no link name given) is ambiguous/incomplete and yields no
+    destination -- matching this module's fail-open-on-unresolvable-shape
+    posture elsewhere, not a reason to guess."""
+    command_name, rest = bash_guard._split_command_name(tokens)
+    if command_name not in _CP_MV_LIKE_COMMANDS:
+        return []
+    paths, _unresolvable = bash_guard._positional_targets(rest)
+    if not paths:
+        return []
+
+    target_dir = None
+    for token in rest:
+        if token.startswith("-") and token != "-":
+            match = (
+                bash_guard._TARGET_DIRECTORY_RE.match(token)
+                or bash_guard._TARGET_DIRECTORY_SHORT_RE.match(token)
+            )
+            if match and not looks_dynamic(match.group(1)):
+                target_dir = match.group(1)
+                break
+
+    if target_dir is not None:
+        return [
+            str(Path(target_dir) / Path(source).name)
+            for source in paths
+            if source != target_dir
+        ]
+    if len(paths) < 2:
+        return []
+    return [paths[-1]]
+
+
+def _dd_write_targets(tokens: list) -> list:
+    """dd's overwrite target is the key=value `of=<path>` argument, not a
+    positional token -- reuses bash_guard's own `_dd_target()` (already
+    built for dd's traversal-escape check) rather than re-implementing the
+    same `of=` parsing a second time."""
+    command_name, _rest = bash_guard._split_command_name(tokens)
+    if command_name != "dd":
+        return []
+    paths, _unresolvable = bash_guard._dd_target(tokens)
+    return paths
 
 
 def _python_script_write_targets(command: str) -> list:
@@ -406,6 +818,22 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     if path in protected_memory:
         violations.append("memory-write")
 
+    # HIGH 5 (REM-FIX): skill promotion must never happen via a raw Edit/Write
+    # tool call -- the sole authorized writer of a promoted skill's SKILL.md
+    # is craftflow_skill_promote.py's own internal file I/O. Independent
+    # violation type, always denied (see the unconditional-deny block below),
+    # never lifted by the memory-finalize permit or gated by memoryWrites.
+    if _is_protected_skill_promotion_path(path):
+        violations.append("skill-promotion-path")
+
+    # CRITICAL 1 (REM-FIX round 3): the skill-candidate ledger and its
+    # staged proposals are the untrusted data source the skill-promotion-path
+    # check above trusts -- protect them the same unconditional way, or the
+    # ledger itself becomes the tamper vector (see
+    # `_is_protected_skill_ledger_or_proposal_path()`'s own docstring).
+    if _is_protected_skill_ledger_or_proposal_path(path):
+        violations.append("skill-ledger-write")
+
     # Worktree confinement (Task 4.2 step 3): an independent violation type
     # that applies to every Edit/Write target, denied regardless of
     # protected-memory-path status. Any internal parsing exception here
@@ -451,10 +879,17 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
         workflow = {}
     wf_uuid = workflow.get("workflow_uuid") or workflow.get("workflow_id")
 
-    # Worktree-confinement is denied unconditionally -- it is an independent
-    # violation type (Behavior Contract rule 7), never lifted by the
-    # memory-finalize permit or gated by memoryWrites mode.
-    if "worktree-confinement" in violations:
+    # Worktree-confinement, skill-promotion-path, and skill-ledger-write are
+    # all denied unconditionally -- independent violation types (Behavior
+    # Contract rule 7; HIGH 5 REM-FIX extends the same unconditional
+    # treatment to skill-promotion-path; CRITICAL 1 REM-FIX round 3 extends
+    # it again to skill-ledger-write), never lifted by the memory-finalize
+    # permit or gated by memoryWrites mode.
+    unconditional_violations = [
+        v for v in violations
+        if v in ("worktree-confinement", "skill-promotion-path", "skill-ledger-write")
+    ]
+    if unconditional_violations:
         log_event(
             "plugin_pretooluse_guard",
             {
@@ -470,9 +905,12 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
             },
         )
         pretool_deny(
-            "CRAFTFLOW plugin hook blocked an Edit/Write target outside the "
-            "session's confined cwd/worktree (reason: worktree-confinement). "
-            "If this is intentional, run it manually outside the agent session."
+            "CRAFTFLOW plugin hook blocked an Edit/Write target (reason: "
+            + ",".join(unconditional_violations) + "). Skill promotion must go through "
+            "craftflow_skill_promote.py --approve and skill proposals must be staged through "
+            "craftflow_skill_propose.py, never a raw Edit/Write; the skill-candidate ledger and "
+            "its staged proposals must never be modified directly either; if this is otherwise "
+            "intentional, run it manually outside the agent session."
         )
         return 0
 
@@ -650,17 +1088,165 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         )
         confinement_violations = []
 
-    if not protected_write_violations and not confinement_violations:
+    # HIGH 5 (REM-FIX): skill promotion must never happen via a Bash
+    # redirect/tee -- the sole authorized writer of a promoted skill's
+    # SKILL.md is craftflow_skill_promote.py's own internal file I/O. Scoped
+    # to the same redirect/tee target extraction already used for the
+    # worktree-confinement check above (a NEW independent violation type,
+    # never a fixed-path glob like `_protected_bash_write_paths()`, since a
+    # brand-new skill name has no existing file to glob-match yet).
+    #
+    # CRITICAL 2 (REM-FIX round 2): this lane used to ONLY scan
+    # `extract_redirect_targets(command)` (`>`, `>>`, `tee`) -- it was NEVER
+    # cross-checked against the python-write-mechanism detectors
+    # (`_python_script_write_targets`, `_python_suspicious_mechanism_targets`)
+    # this same function already builds and uses for memory-file protection
+    # above. Live-reproduced bypass (all 3 previously a silent ALLOW, zero
+    # `log_event` call): a python -c one-liner using open().write(), a
+    # python -c os.system('... > path') call, and a heredoc/stdin-fed
+    # script -- all now cross-checked through the SAME narrowed,
+    # ledger-scoped `_is_protected_skill_promotion_path()` check (CRITICAL 1)
+    # rather than a blanket path-shape match.
+    skill_promotion_violations: list = []
+    try:
+        for target in extract_redirect_targets(command):
+            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            if _is_protected_skill_promotion_path(resolved):
+                skill_promotion_violations.append(str(resolved))
+
+        # `open(...)`/`Path(...).write_text(...)` targets (`-c` one-liners
+        # AND heredoc/stdin-fed scripts) -- same detector, same whole-
+        # command-text scan already used for memory-file protection above.
+        for target in _python_script_write_targets(command):
+            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            if _is_protected_skill_promotion_path(resolved):
+                skill_promotion_violations.append(str(resolved))
+
+        # `os.system(`/`subprocess.*(`/`shutil.*(`/`os.rename|replace(` (and
+        # their import-aliased forms) co-occurring, in the SAME statement,
+        # with a literal spelling of an in-flight skill's SKILL.md path --
+        # a shape-based literal check, mirroring exactly how the
+        # memory-file protection lane above uses this same function against
+        # `protected_paths`. Skill-promotion targets have no fixed existing-
+        # file glob to check against (a brand-new skill name may not exist
+        # on disk yet), so the "protected paths" fed in here are the
+        # resolved canonical paths for every ledger-in-flight skill name
+        # instead.
+        inflight_skill_paths, _ledger_corrupt_unused = _inflight_skill_promotion_paths(project_dir().resolve())
+        if inflight_skill_paths:
+            skill_promotion_violations.extend(
+                _python_suspicious_mechanism_targets(command, inflight_skill_paths, cwd)
+            )
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "bash_skill_promotion_path_check",
+                "error": repr(exc),
+                "reason": "skipped_bash_skill_promotion_path_check",
+            },
+        )
+        skill_promotion_violations = []
+
+    # CRITICAL 1 (REM-FIX round 3): the skill-candidate ledger and its
+    # staged proposals are the untrusted data source the skill-promotion-path
+    # checks above (both here and in `_handle_edit_write`) trust on every
+    # invocation. Protect them unconditionally too, via a Bash redirect/tee
+    # AND the same python-write detectors already built above -- otherwise
+    # the ledger itself is the tamper vector (see
+    # `_is_protected_skill_ledger_or_proposal_path()`'s own docstring for the
+    # live-reproduced tamper-then-write sequence this closes). The
+    # suspicious-mechanism (`os.system(`/`subprocess.*(`/`shutil.*(`) lane
+    # is scoped to the ledger file's own literal spelling only (not every
+    # path under the proposals directory, which isn't enumerable ahead of
+    # time) -- a disclosed, narrow residual gap matching this module's
+    # established pattern of disclosing scope limits rather than claiming
+    # exhaustive coverage.
+    skill_ledger_violations: list = []
+    try:
+        for target in extract_redirect_targets(command):
+            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            if _is_protected_skill_ledger_or_proposal_path(resolved):
+                skill_ledger_violations.append(str(resolved))
+
+        for target in _python_script_write_targets(command):
+            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            if _is_protected_skill_ledger_or_proposal_path(resolved):
+                skill_ledger_violations.append(str(resolved))
+
+        ledger_root = project_dir().resolve()
+        ledger_path, _proposals_dir_unused = _protected_skill_ledger_and_proposal_paths(ledger_root)
+        skill_ledger_violations.extend(
+            _python_suspicious_mechanism_targets(command, {ledger_path}, cwd)
+        )
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "bash_skill_ledger_write_check",
+                "error": repr(exc),
+                "reason": "skipped_bash_skill_ledger_write_check",
+            },
+        )
+        skill_ledger_violations = []
+
+    # cp/mv/ln/install/rsync/dd destination-argument write detection
+    # (REM-FIX round 5, systemic gap -- see `_cp_mv_like_write_targets()`
+    # and `_dd_write_targets()` above for the live-reproduced bypass this
+    # closes). Cross-checked against ALL THREE protected-path classes at
+    # once in this one loop -- memory files/workflow JSON (`protected_paths`),
+    # the skill-promotion path, AND the skill ledger/proposals tree -- the
+    # same three lanes the redirect/tee and python-write detectors above
+    # already cover, not just the newest one. `protected_write_violations`
+    # entries feed the pre-existing `protectedWrites`-gated decision below
+    # unchanged; `skill_promotion_violations`/`skill_ledger_violations`
+    # entries stay unconditional, exactly like their redirect/python-write
+    # counterparts above.
+    try:
+        for tokens in split_subcommands(command):
+            for target in _cp_mv_like_write_targets(tokens) + _dd_write_targets(tokens):
+                _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+                if resolved in protected_paths:
+                    protected_write_violations.append(str(resolved))
+                if _is_protected_skill_promotion_path(resolved):
+                    skill_promotion_violations.append(str(resolved))
+                if _is_protected_skill_ledger_or_proposal_path(resolved):
+                    skill_ledger_violations.append(str(resolved))
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "bash_cp_mv_like_write_check",
+                "error": repr(exc),
+                "reason": "skipped_bash_cp_mv_like_write_check",
+            },
+        )
+
+    if (
+        not protected_write_violations
+        and not confinement_violations
+        and not skill_promotion_violations
+        and not skill_ledger_violations
+    ):
         return 0
 
-    # Worktree-confinement is denied unconditionally -- it is an independent
-    # violation type (mirrors the Edit/Write handler's own treatment of
-    # "worktree-confinement" above), never gated by `protectedWrites`.
-    if confinement_violations:
+    # Worktree-confinement, skill-promotion-path, and skill-ledger-write are
+    # all denied unconditionally -- independent violation types (mirrors the
+    # Edit/Write handler's own treatment above), never gated by
+    # `protectedWrites`.
+    if confinement_violations or skill_promotion_violations or skill_ledger_violations:
         reason_parts = []
         if protected_write_violations:
             reason_parts.append(f"bash-write-protected-path:{','.join(protected_write_violations)}")
-        reason_parts.append(f"worktree-confinement:{','.join(confinement_violations)}")
+        if confinement_violations:
+            reason_parts.append(f"worktree-confinement:{','.join(confinement_violations)}")
+        if skill_promotion_violations:
+            reason_parts.append(f"skill-promotion-path:{','.join(skill_promotion_violations)}")
+        if skill_ledger_violations:
+            reason_parts.append(f"skill-ledger-write:{','.join(skill_ledger_violations)}")
         reason = "; ".join(reason_parts)
 
         log_event(
@@ -676,7 +1262,10 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         )
         pretool_deny(
             f"CRAFTFLOW plugin hook blocked a Bash write to a protected path (reason: {reason}). "
-            "If this is intentional, run it manually outside the agent session."
+            "Skill promotion must go through craftflow_skill_promote.py --approve and skill "
+            "proposals must be staged through craftflow_skill_propose.py, never a Bash redirect; "
+            "the skill-candidate ledger and its staged proposals must never be modified directly "
+            "either; other violations must be run manually outside the agent session if intentional."
         )
         return 0
 

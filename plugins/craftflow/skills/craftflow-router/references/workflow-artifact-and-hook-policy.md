@@ -193,6 +193,13 @@ Workflow event log:
   - `workflow_failed`
   - `contract_invalid`
   - `learn_distilled`
+  - `skill_candidates_observed`
+  - `skill_candidates_pruned`
+  - `skill_proposed`
+  - `skill_promoted`
+  - `skill_rejected`
+  - `skill_distill_skipped`
+  - `skill_distill_failed`
 
 Hook policy:
 - CRAFTFLOW plugin hooks live in the plugin bundle under `hooks/hooks.json` and should stay minimal:

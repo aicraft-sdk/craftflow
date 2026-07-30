@@ -57,8 +57,30 @@ All agent .md files live under:
 | integration-verifier | `tools/craftflow-plugin/plugins/craftflow/agents/integration-verifier.md` |
 | planner | `tools/craftflow-plugin/plugins/craftflow/agents/planner.md` |
 | plan-gap-reviewer | `tools/craftflow-plugin/plugins/craftflow/agents/plan-gap-reviewer.md` |
+| skill-author | `tools/craftflow-plugin/plugins/craftflow/agents/skill-author.md` |
 
 ## 1. Intent Routing
+
+**Pending-answer precedence check — run this before anything below, on EVERY incoming
+message** (mirrors § 2 Memory Load's "Run this before routing" note): read
+`.craftflow/state/cursor-wf.json` first, before evaluating any keyword below.
+
+- If `pending_skill_approval` is non-null, do NOT run Intent Routing on this message.
+  Treat the incoming message as the answer to that pending Skill-Distill Gate question
+  and process it per § 5a Step 4.4 (match one of the 4 options, or re-ask verbatim if it
+  doesn't clearly match). Skip Intent Routing entirely for this turn.
+- If `pending_gate` is non-null (set by § 6 "When a phase fails" while awaiting a
+  retry/skip/stop answer — the same kind of pending-question state, used analogously),
+  treat the incoming message as the answer to that question instead and process it per
+  § 6's own options ((a) retry, (b) skip, (c) stop), re-asking verbatim on a
+  non-matching reply. Skip Intent Routing entirely for this turn.
+- This precedence rule applies uniformly whether the pending state was set moments ago
+  in this same live session or is being read back after a session restart — there is no
+  separate "same session" vs "resumed session" code path. A router turn that receives a
+  reply while `pending_skill_approval` (or `pending_gate`) is still non-null must never
+  fall through to Intent Routing below and start a new workflow from that reply's text.
+- Only when both `pending_skill_approval` and `pending_gate` are null does Intent
+  Routing below apply to the incoming message.
 
 Route using the first matching signal:
 
@@ -133,6 +155,13 @@ Before starting any workflow:
 Resume check: If cursor-wf.json exists with `"status"` entries that are not all
 `"completed"`, you have an in-progress workflow. Resume it by reading the phase list
 and cursor position, then continue from the first non-completed phase.
+
+If cursor-wf.json's `pending_skill_approval` field is non-null, a Skill-Distill Gate
+approval question (§ 5a) was left unanswered when the prior session ended — re-ask it
+per § 5a's "Resume behavior" before continuing any further workflow progress. This is
+the session-restart instance of § 1's general "Pending-answer precedence check" — that
+same check also applies to a live reply arriving within the current session, not only
+to session resume.
 
 Intent Readiness Gate (PLAN and BUILD only):
 Before executing, verify:
@@ -474,7 +503,12 @@ For each phase in workflow chain:
        this phase's dispatch prompt, and wait for its result.
   4. Capture the Router Contract YAML from each dispatched subagent's final message
   5. Validate the contract(s) (see § 6)
-  6. Update cursor-wf.json: set phase status to "completed" (or "failed")
+  6. Update cursor-wf.json: set phase status to "completed", "failed", or "skipped".
+     "skipped" is a third valid phase-status value (see § 6 "When a phase fails" →
+     Resolution → (b) Skip) written when the user answers a failed-phase gate question
+     with "skip" — it is written by that resolution step, not by this loop iteration
+     itself, but this loop's Post-Agent Validation (step 5, below) is what routed the
+     phase into "failed" in the first place.
      Update ".craftflow/state/cursor-wf.json" → set status["{phase}"] = "completed"
      and cursor = cursor + 1 (once per phase, twice in one step for a parallel pair)
   7. Emit PHASE-COMPLETE progress block (see § 7)
@@ -497,6 +531,11 @@ In v1 Cursor Task-Dispatch Mode, the following Claude Code features are NOT supp
 - Doubt-verifier cycle (deferred to v2)
 - Research orchestration (deferred to v2)
 - Doc-syncer phase (deferred to v2)
+- Learn-distill phase (deferred to v2) — Claude Code's `learn-distill` gate
+  (`craftflow-router/references/fast-path.md`'s Learn-Distill Gate section) has no
+  Cursor equivalent yet. Same deferral status as doc-syncer above; not added here because
+  neither `learn-distiller` nor its agent file appear anywhere in this file's § "Agent File
+  Paths" table.
 - Effort steering (deferred to v2) — the canonical Claude Code Task Context scaffold
   includes an `Effort Directive` field driven by `references/fast-path.md`'s Effort
   Dispatch Rule (per-phase low/medium/high steering). Cursor has no equivalent Effort
@@ -512,8 +551,185 @@ Cursor's own native worktree feature (`/worktree`, the Agents Window's per-tab w
 to `Task`-dispatched subagents, so this file self-manages its own worktree lifecycle
 directly via the plain Shell tool instead.
 
+Skill-distill phase is now SUPPORTED (see § 5a) — it is no longer on this deferred list.
+`skill-author` has an Agent File Paths table entry above, and § 5a documents a
+synchronous, plain-text confirmation exchange in the router's own turn as the Cursor
+substitute for Claude Code's `AskUserQuestion` gate (Cursor has no equivalent tool).
+Learn-distill and doc-syncer remain deferred above; § 5a's gate does not depend on
+either.
+
 These features are deferred — not removed. When they are implemented, they will be
 added to this file without touching Claude Code files.
+
+## 5a. Skill-Distill Gate (Sequential BUILD-Tail Step)
+
+This section wires the post-implementation skill-distillation feature's `skill-distill`
+phase into Cursor's task-dispatch model, replacing the "deferred to v2" status this file
+previously carried. It mirrors Claude Code's `references/build-workflow.md` "#### Skill-
+Distill Gate" and `craftflow-router/SKILL.md` "### Skill-Distill Approval Flow" in intent,
+using this file's own established mechanisms instead of `TaskCreate`/`AskUserQuestion`
+(neither exists in Cursor): a real `Task` dispatch (§ 5's dispatch loop) for the
+gate-check body, and a router-own-turn plain-text question/answer exchange for the
+approval decision — a dispatched `generalPurpose` subagent has no channel back to the
+real user, the same reasoning § 4b gives for why brainstorming runs inline instead of
+dispatched.
+
+Learn-distill and doc-syncer remain deferred to v2 in this file (§ 5's Simplified
+Execution Model). This gate does not depend on either and does not wire them.
+
+### When this runs
+
+After the BUILD (or DEBUG) chain's final phase — `integration-verifier` — completes and
+passes § 6 Post-Agent Validation, and BEFORE § 8 Memory Finalization. If a worktree was
+created (§ 4a), complete § 4a Step 5 (merge + cleanup) first; this gate still runs before
+Memory Finalization, after any worktree merge.
+
+**Session Settings opt-out:** Before Step 1, read `activeContext.md ## Session
+Settings`. If `SKILL_DISTILL: skip` is present (this setting is shared with Claude Code
+via the common `.craftflow/state/` memory tier), skip this entire gate — do not run the
+ledger query, do not dispatch `skill-author` — and proceed directly to § 8 Memory
+Finalization.
+
+### Step 1 — Gate check (router's own turn, no dispatch)
+
+Run via the Shell tool:
+```bash
+python3 tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_skill_ledger.py \
+  --query --ledger .craftflow/state/project/skill-candidates.json
+```
+Parse the returned `candidates` array. A candidate is gate-eligible when BOTH:
+- `distinct_workflows >= 2`
+- `status == "candidate"` (not `"proposed"`, `"promoted"`, or `"rejected"`)
+
+- **Zero eligible candidates** → skip this entire gate. Proceed directly to § 8 Memory
+  Finalization. Do not dispatch `skill-author`; do not touch `cursor-wf.json`'s
+  `pending_skill_approval` field.
+- **One or more eligible** → pick the one with the highest `distinct_workflows` (ties
+  broken by earliest `first_seen`) and continue to Step 2.
+
+### Step 2 — Dispatch `skill-author` via a real `Task` call
+
+Build the § 5 dispatch prompt exactly per the standard template, with:
+- `{agent-name}` = `skill-author`
+- Agent file: `tools/craftflow-plugin/plugins/craftflow/agents/skill-author.md` (see this
+  file's own Agent File Paths table)
+- Task Phase: `skill-distill`
+- `## Requirements`: `Candidate id: {candidate_id}. Read this candidate from the ledger
+  at .craftflow/state/project/skill-candidates.json, apply the anti-slop rubric, and
+  stage a proposal or emit STATUS: SKIPPED per your own agent contract.`
+
+Invoke `Task` ONCE (`subagent_type: generalPurpose`, foreground/blocking) — the same
+single-agent invocation shape § 5's execution loop uses for any non-parallel phase. Wait
+for its result and validate the returned Router Contract per § 6's contract-extraction
+rules (a missing or malformed contract is a BLOCKED case, same as any other phase).
+
+### Step 3 — Handle the result
+
+- `STATUS: SKIPPED` (requires non-empty `SKIP_REASON`) → passing state. Advance directly
+  to § 8 Memory Finalization. No question is asked.
+- `STATUS: FAIL`, or the `Task` call itself fails/times out (§ 6's "tool-call-level
+  failure" case) → do NOT block the workflow tail. A failed proposal attempt is not a
+  code defect — `skill-author` output is a proposal-authoring/availability signal, not a
+  correctness signal for the current BUILD/DEBUG phase. Note the failure in this
+  workflow's memory notes, leave the candidate's ledger status untouched (it will be
+  retried the next time this gate fires on a future workflow), and proceed directly to
+  § 8 Memory Finalization.
+- `STATUS: COMPLETE` (requires non-empty `PROPOSAL_PATH` and `CANDIDATE_ID`) → continue
+  to Step 4. This is the only outcome that pauses the workflow for a human answer.
+
+### Step 4 — Synchronous confirmation-based approval (router's own turn)
+
+Cursor has no `AskUserQuestion` tool. This step runs in the router's OWN main-session
+turn — never inside a dispatched `Task` subagent, which has no channel back to the real
+user (see § 4b's identical reasoning for why brainstorming is not dispatched).
+
+1. Read `PROPOSAL.md` from the staged proposal directory
+   (`.craftflow/state/project/skill-proposals/{candidate_id}/PROPOSAL.md`) to build the
+   evidence-trail summary.
+2. Before asking, persist the pending state to `cursor-wf.json` — the same file this
+   file already uses to self-track in-progress phase state ad hoc (see § 6 "When a phase
+   fails", which writes `pending_gate` into `cursor-wf.json` the same way):
+   ```json
+   "pending_skill_approval": {
+     "candidate_id": "{candidate_id}",
+     "proposal_path": ".craftflow/state/project/skill-proposals/{candidate_id}/"
+   }
+   ```
+   This is what lets a resumed/interrupted session pick the flow back up correctly — see
+   "Resume behavior" below.
+3. In your OWN response text (not a `Task` dispatch), present the evidence-trail summary
+   and ask the user to choose exactly one of these four options, worded plainly since
+   there is no structured-choice tool:
+   ```
+   Skill-Distill proposal ready for candidate {candidate_id}:
+   {evidence-trail summary from PROPOSAL.md}
+
+   Choose one:
+   1) Approve — promote this skill now
+   2) Approve + register in SKILL_HINTS — promote AND add to patterns.md ## Project SKILL_HINTS
+   3) Reject — discard this proposal permanently (revivable only if recurrence doubles)
+   4) Defer — leave it staged, ask again next time this gate fires
+   ```
+   End your turn here and wait for the user's next message as the answer — the Cursor
+   substitute for `AskUserQuestion`: a plain synchronous question in chat, with the reply
+   arriving as the next user turn.
+4. **Non-matching reply:** if the user's next message does not clearly match one of the
+   four options (exact label, number, or unambiguous restatement), re-ask the same
+   question verbatim. Never guess, never silently fall through to a default — same rule
+   Claude Code's `AskUserQuestion` gate uses.
+5. On a clear answer, take the matching action and then clear `pending_skill_approval`
+   back to `null` in `cursor-wf.json`:
+   - **Approve** → run:
+     ```bash
+     python3 tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_skill_promote.py \
+       --approve {candidate_id} --project-root "$(git rev-parse --show-toplevel)" \
+       --ledger .craftflow/state/project/skill-candidates.json \
+       --proposals-dir .craftflow/state/project/skill-proposals
+     ```
+     Exit 0 → the skill now exists at `.claude/skills/{name}/SKILL.md` (synced to
+     `.cursor/skills/{name}`); the ledger entry is marked `promoted`. Non-zero exit → do
+     NOT clear `pending_skill_approval`; surface the script's stderr to the user and
+     stop.
+   - **Approve + register in SKILL_HINTS** → run the identical promote command above,
+     PLUS add the new skill's id to `.craftflow/state/project/patterns.md ## Project
+     SKILL_HINTS` as part of § 8 Memory Finalization's normal persistence step (never a
+     direct ad hoc edit outside that flow).
+   - **Reject** → do NOT run the promote script. Run:
+     ```bash
+     python3 tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_skill_ledger.py \
+       --reject {candidate_id} --reason "{user-stated or inferred reason}" \
+       --ledger .craftflow/state/project/skill-candidates.json
+     ```
+   - **Defer** → no script action. Leave the candidate's ledger `status` unchanged
+     (`proposed`/`candidate`); it remains gate-eligible and resurfaces next time this
+     gate fires.
+6. Proceed to § 8 Memory Finalization only after the approval decision is resolved.
+   Approve, Approve+SKILL_HINTS, Reject, and Defer all resolve it — Defer resolves it by
+   explicitly choosing to leave the candidate as-is; it does not mean "skip the
+   decision."
+
+### Fail-closed default (JUST_GO-equivalent)
+
+This file's JUST_GO-equivalent is `AUTO_PROCEED: true` in `activeContext.md ## Session
+Settings` (§ 2 Memory Load's JUST_GO rule). Same fail-closed default as Claude Code's
+`AskUserQuestion` gate:
+- **Never** auto-select **Approve** or **Approve + register in SKILL_HINTS** under
+  `AUTO_PROCEED: true` — both require an explicit human answer regardless of this
+  setting.
+- Auto-select **Reject** only when a router-derivable reason exists (the candidate
+  signature duplicates an already-`promoted`/`rejected` ledger entry, or another
+  objective, router-checkable rubric condition). Log the derived reason in
+  `activeContext.md ## Decisions`.
+- Otherwise, the fail-closed default is **Defer** — never silently Approve. Log the
+  auto-Defer in `activeContext.md ## Decisions`.
+
+### Resume behavior
+
+If `cursor-wf.json` has a non-null `pending_skill_approval` when a session resumes (§ 3
+Workflow Preparation's resume check), re-surface the exact same evidence-trail question
+from Step 4.3 before continuing any further workflow progress. Do not silently drop the
+pending approval and do not silently re-dispatch `skill-author` again for the same
+`candidate_id` while an approval decision is still pending.
 
 ## 6. Post-Agent Validation
 
@@ -550,6 +766,7 @@ silently retry the `Task` call more than once before surfacing BLOCKED to the us
 | integration-verifier | `## Verification: PASS` (scenario totals reconcile with evidence) |
 | planner | `STATUS=PLAN_CREATED` or `STATUS=DECISION_RFC_CREATED`, `GATE_PASSED=true`, `OPEN_DECISIONS=[]` |
 | plan-gap-reviewer | `BLOCKING_FINDINGS_COUNT=0`, `REPLAN_NEEDED=false` |
+| skill-author | `STATUS=COMPLETE` (non-empty `PROPOSAL_PATH` + `CANDIDATE_ID`) or `STATUS=SKIPPED` (non-empty `SKIP_REASON`, a passing state) — see § 5a for the full gate + approval flow |
 
 ### Override rules
 
@@ -564,6 +781,57 @@ silently retry the `Task` call more than once before surfacing BLOCKED to the us
    `status["{phase}"] = "failed"`, `pending_gate = "phase_{phase}_failed"`
 3. Ask the user: "Phase {phase} failed. Options: (a) retry this phase, (b) skip and continue, (c) stop workflow"
 4. Do NOT auto-remediate without user direction in v1
+
+### Non-matching reply (pending_gate answers)
+
+If the user's next message does not clearly match one of Step 3's three options (exact
+label, letter, or unambiguous restatement — e.g. "retry", "(a)", "try it again" all match
+retry; "skip it" matches skip; "abort"/"halt" match stop), re-ask the same Step 3
+question verbatim. Never guess, never silently fall through to a default — the same rule
+§ 5a Step 4.4 uses for `pending_skill_approval` replies.
+
+### Resolution (Step 5 — mirrors § 5a Step 4.5's `pending_skill_approval` resolution)
+
+On a clear answer, take the matching action below. In EVERY one of the three cases,
+clear `pending_gate` back to `null` in cursor-wf.json as part of taking that action — a
+non-null `pending_gate` must never persist past the answer that resolves it, otherwise
+the router would re-ask the same question on every subsequent turn forever.
+
+- **(a) Retry** → clear `pending_gate` to `null`. Do NOT advance `cursor` — re-invoke
+  `Task` for the SAME phase, at the same cursor position, rebuilding the identical § 5
+  dispatch prompt (same `## Task Context`, `## Requirements`, `## Memory Summary`, etc.)
+  that was used for the failed attempt. Feed the retry's result back through this same
+  § 6 Post-Agent Validation: pass → `status["{phase}"] = "completed"`, `cursor = cursor +
+  1`, resume the § 5 execution loop from the next phase; fail again → repeat this entire
+  "When a phase fails" procedure from Step 1 (re-emit BLOCKED, re-set `pending_gate`,
+  re-ask Step 3 — there is no retry-attempt cap in v1, the user is asked again each time).
+
+- **(b) Skip** → clear `pending_gate` to `null`. Set `status["{phase}"] = "skipped"` — a
+  third valid phase-status value alongside `"completed"`/`"failed"` (§ 5's execution loop
+  Step 6 recognizes and writes this value the same way it writes `"completed"`/
+  `"failed"`). Advance `cursor = cursor + 1` past the skipped phase and resume the § 5
+  execution loop from the next phase.
+  - **Downstream impact when the skipped phase is `code-reviewer` or
+    `silent-failure-hunter`:** `integration-verifier`'s "Previous Agent Findings
+    handoff" (§ 5) still applies, but the skipped agent's sub-block must read
+    `**Verdict:** Skipped (user chose skip after failure)` / `**Critical Issues:**
+    Skipped — phase not run` instead of a real verdict or "None". This is NOT the same
+    case as the fast-path omission (no reviewer/hunter scheduled this round) — silently
+    omitting the section here would read as "no findings" when the truth is "never
+    checked." Always include the section, with an explicit `Skipped` marker, whenever a
+    scheduled reviewer/hunter phase was skipped this round, so `integration-verifier`
+    and the user can see the coverage gap instead of a false-confidence "clean" read.
+
+- **(c) Stop** → clear `pending_gate` to `null`. Halt the remaining phase chain
+  entirely: do not dispatch any further phases and do not advance `cursor` past the
+  failed phase. § 8 Memory Finalization **still runs** on this partially-completed
+  workflow — this is an explicit, intentional choice: write whatever `MEMORY_NOTES` were
+  collected from phases that did complete before the stop, and record in
+  `activeContext.md ## Blockers` (or the workflow-scoped `activeContext.md` if a
+  `workflow_uuid` is known) that the workflow was stopped early by user direction at
+  phase `{phase}`, so partial progress and the stop reason are never silently lost. Do
+  not skip Memory Finalization merely because the chain never reached
+  `integration-verifier`.
 
 ## 7. Progress Blocks
 
@@ -697,6 +965,12 @@ When an agent file contains `TaskList()`, `TaskGet()`, or `Agent(...)` calls:
   the `Task` tool per § 5.
 - ALWAYS write cursor-wf.json after each phase completes
 - ALWAYS write the main workflow artifact for hook and resume compatibility
+- NEVER auto-select Approve or Approve + register in SKILL_HINTS for the § 5a
+  Skill-Distill Gate under `AUTO_PROCEED: true` — both require an explicit human
+  answer regardless of that setting; the fail-closed default is Defer.
+- `SKILL_DISTILL: skip` in `activeContext.md ## Session Settings` disables the § 5a
+  Skill-Distill Gate entirely — never run the ledger query, never dispatch
+  `skill-author`, when present.
 - If context window grows too large (150K+ tokens), warn in progress block:
   "⚠️ Context is large — consider breaking this request into smaller phases"
   Then ask the user whether to continue or stop. Note: since each phase's actual work

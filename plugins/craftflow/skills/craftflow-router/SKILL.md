@@ -78,6 +78,9 @@ JUST_GO:
 - Read `activeContext.md ## Session Settings`.
 - If `AUTO_PROCEED: true`, set `JUST_GO=true`.
 - While `JUST_GO=true`, auto-default all non-REVERT AskUserQuestion gates to the recommended option and log the choice in `## Decisions`.
+- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (§ 8) is carved out as a de
+  facto REVERT-class gate under JUST_GO — see its own "JUST_GO carve-out" for the fail-closed
+  default (`Defer`, never `Approve`).
 
 v10 trust rule:
 - `JUST_GO` never overrides explicit user/project standards, open plan decisions, or failure-stop gates.
@@ -102,7 +105,7 @@ Every CRAFTFLOW task description starts with normalized metadata lines:
 wf:{workflow_uuid}
 kind:{workflow|agent|remfix|memory|reverify|research}
 origin:{router|component-builder|bug-investigator|code-reviewer|silent-failure-hunter|integration-verifier|planner}
-phase:{build|build-implement|build-review|build-hunt|build-verify|build-doc-sync|debug|debug-investigate|debug-review|debug-verify|review|review-audit|plan|plan-create|plan-review-gap-1|plan-review-gap-2|memory-finalize|re-review|re-hunt|re-verify|re-plan|research-web|research-github}
+phase:{build|build-implement|build-review|build-hunt|build-verify|build-doc-sync|learn-distill|skill-distill|debug|debug-investigate|debug-review|debug-verify|doubt-verify|review|review-audit|plan|plan-create|plan-review-gap-1|plan-review-gap-2|memory-finalize|re-review|re-hunt|re-verify|re-plan|research-web|research-github}
 plan:{path|N/A}
 scope:{ALL_ISSUES|CRITICAL_ONLY|N/A}
 reason:{short reason or N/A}
@@ -579,7 +582,14 @@ Only create child tasks after the v10 artifact and state directory exist.
 | `kind:remfix` + `origin:bug-investigator` | `craftflow:bug-investigator` |
 | `build-doc-sync` | `craftflow:doc-syncer` |
 | `learn-distill` | `craftflow:learn-distiller` |
+| `skill-distill` | `craftflow:skill-author` |
 | `kind:remfix` + `origin:code-reviewer|silent-failure-hunter|integration-verifier|router` | `craftflow:component-builder` |
+
+`skill-author` is deliberately NOT a `kind:remfix` origin. A `skill-distill` task returning
+`STATUS: FAIL` (or never returning) is not a code defect for `component-builder` to fix — it
+is a proposal-authoring/availability issue. See `## 6. Workflow Task Graphs` (Skill-Distill
+Gate) for the exact non-blocking handling: no REM-FIX is created, the chain is never stalled
+waiting on this agent.
 
 ### Prompt scaffold for every agent
 
@@ -638,7 +648,7 @@ Before dispatching each agent, look up the phase in the `references/fast-path.md
 - `build-review`, `build-hunt` → `medium`
 - `build-verify`, all re-verify → `high`
 - `planner`, `plan-gap-reviewer`, `doubt-verifier`, `bug-investigator` → `high`
-- `build-doc-sync`, `memory-finalize`, `learn-distill` → `low`
+- `build-doc-sync`, `memory-finalize`, `learn-distill`, `skill-distill` → `low`
 - All research tasks → `medium`
 
 Record the assigned effort in `telemetry.effort.{agent}` in the workflow artifact and in the `agent_started` event log entry.
@@ -839,11 +849,71 @@ If present:
 | integration-verifier | `PASS` + critical issues becomes `FAIL`; scenario totals must reconcile with the scenario table and evidence array; every counted scenario must map to a concrete evidence row; every scenario row must contain non-empty `Expected` and `Actual` values |
 | planner | `PLAN_CREATED` or `DECISION_RFC_CREATED` requires non-empty `PLAN_FILE`, explicit `PLAN_MODE`, explicit `VERIFICATION_RIGOR`, `CONFIDENCE>=50`, `GATE_PASSED=true`, a non-empty `SCENARIOS` array, `OPEN_DECISIONS=[]`, and `DIFFERENCES_FROM_AGREEMENT` explicitly present. `PLAN_MODE=decision_rfc` also requires non-empty `ALTERNATIVES` and `DRAWBACKS`; `VERIFICATION_RIGOR=critical_path` requires non-empty `PROVABLE_PROPERTIES`. |
 | doc-syncer | `STATUS=COMPLETE` requires `DOC_LAYERS_EVALUATED` non-empty and at least one entry in `DOC_FILES_UPDATED` or `AUDIT_DOCS_CREATED`; `STATUS=SKIPPED` requires non-empty `SKIP_REASON` — `DOC_LAYERS_EVALUATED` MAY be empty (fast-path classifier exits before per-layer evaluation when `IMPACT_LEVEL=none` is detected immediately); `STATUS=PARTIAL` requires at least one entry in `DOC_FILES_UPDATED` or `AUDIT_DOCS_CREATED` and at least one layer in `DOC_LAYERS_EVALUATED` — router advances to Memory Update and persists `doc_sync_partial=true` in `results.doc_syncer`; `STATUS=FAIL` blocks workflow. |
+| skill-author | `STATUS=COMPLETE` requires non-empty `PROPOSAL_PATH` and non-empty `CANDIDATE_ID`; `STATUS=SKIPPED` requires non-empty `SKIP_REASON` — `SKIPPED` is explicitly a passing state (never blocks workflow advance), matching the doc-syncer `SKIPPED` precedent exactly; `STATUS=FAIL` blocks workflow. |
 | plan-gap-reviewer | `PASS` requires `BLOCKING_FINDINGS_COUNT=0` and `REPLAN_NEEDED=false`; `FINDINGS` requires explicit finding buckets and a non-empty `REPLAN_REASON` when blocking findings exist. |
 
 Convergence rule:
 - If evidence is incomplete, contradictory, or missing for a required pass path, do not advance the workflow.
 - Set the workflow artifact `quality.convergence_state` to `needs_iteration` and stop on the appropriate remediation or clarification gate instead of treating the task as good enough.
+
+### Skill-Distill Approval Flow
+
+After `craftflow:skill-author` (the `skill-distill` task) returns `STATUS: COMPLETE`
+(meaning it staged a real proposal under `.craftflow/state/project/skill-proposals/{candidate_id}/`),
+the router must surface it to the user via `AskUserQuestion` before doing anything else —
+before doc-sync, before Memory Update, before any other pending task in the chain. Read
+`PROPOSAL.md` from the staged proposal directory to build the evidence-trail summary shown
+to the user. Present exactly these four options:
+
+- **Approve** → run:
+  ```bash
+  python3 {plugin_root}/scripts/craftflow_skill_promote.py --approve {candidate_id} --project-root {project_root} --ledger {state_root}/project/skill-candidates.json --proposals-dir {state_root}/project/skill-proposals
+  ```
+  On exit 0, the canonical skill now exists at `.claude/skills/{name}/SKILL.md` (synced to
+  `.cursor/skills/{name}`) and the ledger candidate is marked `promoted`. On non-zero exit,
+  do not advance the workflow — surface the script's stderr to the user and stop.
+- **Approve + register in SKILL_HINTS** → run the identical promote command above, PLUS emit
+  a `MEMORY_NOTES` entry (routed through the normal memory-finalize persistence path, never a
+  direct edit) adding the new skill's id to `patterns.md ## Project SKILL_HINTS` so future
+  craftflow-dispatched subagents pick it up automatically.
+- **Reject** → the router does NOT call `craftflow_skill_promote.py` for this option. It runs:
+  ```bash
+  python3 {plugin_root}/scripts/craftflow_skill_ledger.py --reject {candidate_id} --reason "{user-stated or inferred reason}" --ledger {state_root}/project/skill-candidates.json
+  ```
+  This tombstones the candidate (`status: rejected`, permanent unless `distinct_workflows`
+  at least doubles from the value recorded at rejection time — enforced by the ledger's own
+  revival logic in `--observe`, not by the router).
+- **Defer** → take no script action. Leave the candidate as `status: proposed`/`candidate`
+  as-is; it remains gate-eligible and will be re-surfaced the next time `skill-distill` gates
+  in for a future workflow.
+
+**Non-matching reply:** If the user's reply does not clearly match one of these four options
+(exact label or an unambiguous restatement), re-issue the same `AskUserQuestion` with the same
+four options. Never guess, never fall through to a default on an ambiguous reply — only the
+JUST_GO carve-out below is permitted to auto-select without an explicit human answer.
+
+**JUST_GO carve-out:** This `AskUserQuestion` gate is treated as a de facto REVERT-class gate
+for JUST_GO purposes, overriding the general "auto-default all non-REVERT `AskUserQuestion`
+gates to the recommended option" rule in `## 2. Memory Load And Template Validation` — there is
+no textual "recommended option" signal for this gate, and the highest-consequence misread
+(auto-Approve) would promote an LLM-authored skill into `.claude/skills` with zero human
+review. Under `JUST_GO=true` (`AUTO_PROCEED: true`):
+- **Never** auto-select **Approve** or **Approve + register in SKILL_HINTS** — both require an
+  explicit human answer regardless of `AUTO_PROCEED`.
+- Auto-select **Reject** only when a router-derivable reason exists (e.g., the proposal fails
+  an objective, router-checkable rubric condition, or the candidate signature duplicates an
+  already-`promoted`/`rejected` entry). Log the derived reason in `## Decisions`.
+- Otherwise (no router-derivable reject reason), the fail-closed default is **Defer**. Log the
+  auto-Defer in `## Decisions`.
+
+If `skill-distill` returns `STATUS: SKIPPED`, this is a passing state — advance directly to
+Memory Update, no `AskUserQuestion`. If it returns `STATUS: FAIL`, or does not return at all
+(stuck/timeout): `skill-author` is NOT a `kind:remfix` origin (see `## 7. Dispatcher And Agent
+Prompt Contract`) — do not create a REM-FIX task and do not block the remaining chain tail
+(doc-sync/Memory Update). Append a `skill_distill_failed` event to the workflow event log with
+the failure reason if available, leave the candidate's ledger status unchanged (still
+`candidate`, flagged for manual retry the next time this gate fires), and advance directly to
+Memory Update.
 
 ## 9. Remediation And Workflow Rules
 
@@ -980,6 +1050,52 @@ Cross-workflow promotion rule: If a `learnings` item is a project-wide constrain
 Use judgment: workflow-local observations stay in `workflows/{wf}/`; durable project
 truths belong in `project/`.
 
+Skill-candidate observe step (required before any markdown persistence below):
+- Before writing any `.md` memory file, run the deterministic ledger observe call for
+  every workflow (BUILD, DEBUG, REVIEW, and PLAN alike — this is cheap, deterministic
+  Python and runs unconditionally, independent of whether `skill-distill` itself was
+  gated in for this workflow):
+  ```bash
+  python3 {plugin_root}/scripts/craftflow_skill_ledger.py --observe {workflow_uuid} --state-dir .craftflow/state
+  ```
+- This mines this workflow's own artifact/event log into
+  `.craftflow/state/project/skill-candidates.json`, feeding future `skill-distill` gate
+  checks on later workflows even when this workflow's own candidate count never crossed
+  the recurrence threshold.
+- A non-zero exit from this call is non-blocking for the workflow itself (log a
+  `skill_candidates_observed` event with the error and continue to memory persistence) —
+  the ledger is best-effort telemetry, never a gate on workflow completion.
+- **Explicit resolution:** this `--observe` call runs unconditionally even when the
+  `SKILL_DISTILL: skip` Session Setting disables the `skill-distill` phase (gate check +
+  `skill-author` dispatch, per `## 14. Hard Rules`) — that toggle never disables this observe
+  step, which stays cheap, deterministic, and preserves future calibration value if the
+  toggle is later removed.
+
+Skill-candidate prune step (required before any markdown persistence below, runs immediately
+after the observe step above, same unconditional cadence — every workflow, BUILD, DEBUG, REVIEW,
+and PLAN alike, independent of whether `skill-distill` itself was gated in):
+- Immediately after the observe call above, run the ledger's anti-rot pass:
+  ```bash
+  python3 {plugin_root}/scripts/craftflow_skill_ledger.py --prune --state-dir .craftflow/state --project-root .
+  ```
+- This purges stale `candidate` entries (>90 days, no new evidence) outright, leaves `rejected`
+  entries untouched (permanent tombstone), and NEVER deletes or changes `status` for `promoted`
+  entries. Instead it checks each `promoted` entry for rot: whether its canonical
+  `.claude/skills/{name}/SKILL.md` still exists, whether every path listed in that file's
+  `craftflow-referenced-paths` frontmatter still exists on disk, and (if present) whether its
+  `craftflow-review-after` date has not yet elapsed, and whether the entry's `promoted_skill`
+  name itself is present. Any rot found sets `needs_review: true` / `needs_review_reason`
+  (`missing_promoted_skill_name`, `stale_path`, `review_after_elapsed`, or
+  `unparseable_review_after`) on the ledger entry in place — never a status transition, never a
+  delete.
+- A non-zero exit from this call is non-blocking for the workflow itself (log a
+  `skill_candidates_pruned` event with the error and continue to memory persistence) — same
+  best-effort-telemetry posture as the observe step; never a gate on workflow completion.
+- **Explicit resolution:** this `--prune` call runs unconditionally even when the
+  `SKILL_DISTILL: skip` Session Setting disables the `skill-distill` phase, for the same reason
+  the observe step is exempt — anti-rot maintenance of the ledger is independent of whether this
+  workflow itself dispatches `skill-author`.
+
 Memory finalization permit (required before any `.md` memory write):
 - The `craftflow_pretooluse_guard.py` hook blocks direct writes to protected memory files.
 - Before writing the first memory file, create the permit token:
@@ -1029,5 +1145,6 @@ For DEBUG:
 - Agents must never inherit raw conversation context. They receive only the structured scaffold from the dispatcher. Leaking conversation history into agent prompts causes scope pollution and non-reproducible behavior.
 - Maintain professional objectivity in all routing decisions. Do not rationalize a failing workflow as "close enough" or downgrade critical findings to avoid remediation. The router exists to enforce quality, not to please.
 - `DIFF_DRIVEN_DOCS: skip` in Session Settings disables doc-syncer for projects that manage documentation separately; when present, skip `build-doc-sync` task creation and block Memory Update on `verifier_task_id` directly.
+- `SKILL_DISTILL: skip` in Session Settings disables the `skill-distill` phase entirely; when present, never run the ledger gate check, never create the `skill-distill` task, and block Memory Update on whatever task it would otherwise have depended on (`learn-distill` if gated in, otherwise `doc_sync_task_id`/`verifier_task_id` per the normal chain). This toggle does NOT disable the unconditional `--observe` step in `## 13. Memory Finalization` — that call still runs every workflow regardless of this setting (cheap, deterministic, preserves future calibration value).
 - Agents must never reference or read internal skill files from other agents or skills (e.g., component-builder must never read code-review-patterns/SKILL.md). Cross-agent knowledge flows exclusively through router-mediated scaffolds and workflow artifacts.
 - Never use EnterPlanMode. Claude Code's native plan mode is incompatible with Craftflow. Planning requests go through the Craftflow PLAN workflow (brainstorming → planner → bounded fresh review → memory finalization), which provides orchestration state, workflow artifacts, intent contracts, and verification. Native plan mode provides none of these.

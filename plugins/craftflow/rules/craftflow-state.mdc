@@ -52,6 +52,28 @@ These files are managed by hooks and must not be deleted or manually modified:
 - `workflows/<wf-id>.json` — workflow execution artifact
 - `workflows/<wf-id>.events.jsonl` — event log for the workflow
 
+## Skill-Distillation State (Project Tier)
+
+Two additional project-tier paths back the post-implementation skill-distillation feature:
+
+- `project/skill-candidates.json` — the deterministic skill-candidate ledger
+  (`craftflow_skill_ledger.py`). Tracks mined recurring failure/finding signatures across
+  workflows (`status: candidate|proposed|promoted|rejected`). Written only via
+  `--observe`/`--prune`/`--reject` (atomic writes); read via `--query`/`--backtest`. Stale
+  candidates (`status: candidate`, >90 days with no new evidence) are pruned (deleted
+  outright) by `--prune`, never transitioned to a "stale" status — "stale" is not an
+  assignable status value. `promoted` entries are never deleted or status-changed by `--prune`;
+  instead it checks each for rot (missing `promoted_skill` name, missing canonical `SKILL.md`,
+  a missing `craftflow-referenced-paths` entry, or an elapsed/unparseable
+  `craftflow-review-after`) and sets `needs_review: true` / `needs_review_reason` on the entry
+  in place (cleared back to `false`/`null` once healthy again).
+- `project/skill-proposals/<candidate-id>/` — STAGED skill proposals (`SKILL.md` or
+  `SKILL.patch` + `PROPOSAL.md`) written only by `craftflow_skill_propose.py`, never
+  directly by the `skill-author` agent. Promoted out of staging into
+  `<project-root>/.claude/skills/<name>/SKILL.md` (synced to `.cursor/skills/<name>`) only
+  by `craftflow_skill_promote.py --approve`, on explicit user approval via the router's
+  Skill-Distill Approval Flow.
+
 ## Schema Version
 
 The internal schema version is tracked in `.craftflow/state/.schema-version` (JSON: `{"version":"v10"}`). Do not modify this file manually — it is written by the migration script on first run.

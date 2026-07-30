@@ -48,6 +48,94 @@ It validates the publication-critical contract:
 - key router headings still exist for invariant coverage
 - router-consumed task metadata and agent contract fields are still present
 
+## Skill Candidate Ledger (router-invoked, not a registered hook)
+
+Phase 1 of `docs/plans/2026-07-29-craftflow-skill-distillation-plan.md` ships
+a standalone recurrence miner. As of Phase 3, both `craftflow-router/SKILL.md`
+(the Skill-Distill Approval Flow's Gate check and the unconditional
+`--observe` step in Memory Finalization) and `cursor-router/SKILL.md` (§ 5a
+Skill-Distill Gate) invoke it directly via Bash — it is still not registered
+as a `hooks.json` entry, but it is no longer merely a standalone CLI:
+
+```bash
+python3 plugins/craftflow/scripts/craftflow_skill_ledger.py --observe <wf-id>
+python3 plugins/craftflow/scripts/craftflow_skill_ledger.py --query
+python3 plugins/craftflow/scripts/craftflow_skill_ledger.py --prune
+python3 plugins/craftflow/scripts/craftflow_skill_ledger.py --backtest
+```
+
+It reads `.craftflow/state/workflows/*.json`/`*.events.jsonl`, mines
+candidate skill-worthy signatures, and upserts them into
+`.craftflow/state/project/skill-candidates.json`. The recurrence gate
+(`distinct_workflows >= 2`) was empirically calibrated against this
+project's real workflow corpus — see
+`docs/2026-07-29-craftflow-skill-distillation-threshold-calibration-decision.md`.
+
+Phase 4 adds anti-rot maintenance to `--prune`, also wired unconditionally into
+`SKILL.md § 13. Memory Finalization` immediately after `--observe` (both run on every workflow,
+independent of `SKILL_DISTILL: skip`): stale `candidate` entries (>90 days, no new evidence) are
+removed outright; `rejected` entries are left untouched as permanent tombstones; and `promoted`
+entries are never removed or status-changed, but are checked for rot (missing/blank
+`promoted_skill` name, a missing canonical `SKILL.md`, a missing `craftflow-referenced-paths`
+entry, or an elapsed/unparseable `craftflow-review-after`) and flagged with
+`needs_review`/`needs_review_reason` in place. A corrupt-but-existing ledger file now fails closed
+(`LedgerCorruptError`) rather than being silently treated as absent and overwritten — see
+`docs/2026-07-30-craftflow-skill-distill-anti-rot-decision.md`.
+
+## Skill Authoring + Promotion (staging-only; wired into the router in Phase 3)
+
+Phase 2 of the same plan adds a `skill-author` agent
+(`plugins/craftflow/agents/skill-author.md`, loading the
+`craftflow:skill-distillation` skill) that reads one gate-eligible ledger
+candidate, applies the anti-slop rubric
+(`skills/skill-distillation/references/rubric.md`), and — only if it
+survives — stages a proposal. Phase 3 wires this into both routers:
+`craftflow-router/SKILL.md`'s Skill-Distill Approval Flow (`AskUserQuestion`
+with Approve / Approve + register in SKILL_HINTS / Reject / Defer) and
+`cursor-router/SKILL.md` § 5a (a synchronous plain-text confirmation
+exchange, since Cursor has no `AskUserQuestion` equivalent). Neither script
+is registered in `hooks.json` — both are invoked directly via Bash by the
+router during the `skill-distill` phase.
+
+The agent never writes proposal files directly; staging goes through a
+trusted script:
+
+```bash
+python3 plugins/craftflow/scripts/craftflow_skill_propose.py \
+  --candidate-id <id> \
+  --skill-md-file <scratch-path-to-SKILL.md-draft> \
+  --proposal-md-file <scratch-path-to-PROPOSAL.md-draft> \
+  --state-dir .craftflow/state
+```
+
+which atomically writes
+`.craftflow/state/project/skill-proposals/<candidate-id>/{SKILL.md,PROPOSAL.md}`
+and flips the ledger candidate's `status` to `proposed`. Promotion out of
+staging (on explicit user approval only) goes through a separate script:
+
+```bash
+python3 plugins/craftflow/scripts/craftflow_skill_promote.py --approve <candidate-id>
+```
+
+which writes the canonical `.claude/skills/<name>/SKILL.md` (synced to
+`.cursor/skills/<name>`) and marks the ledger entry `promoted`. Both scripts'
+write-path safety (approve/reject symmetry, a ledger-file-absent bypass,
+cross-candidate name collisions including a case-folding variant, and
+malformed-ledger-entry degradation) went through 5 REM-FIX hardening rounds
+as part of Phase 3 router wiring — see
+`docs/2026-07-30-craftflow-skill-distill-router-wiring-decision.md`.
+
+`craftflow_pretooluse_guard.py` now unconditionally protects
+`.claude/skills/`, `.cursor/skills/`, the skill-candidate ledger, and
+`.craftflow/state/project/skill-proposals/` against any raw Edit/Write/Bash
+write — only the two scripts above are authorized writers. This protection
+went through 5 REM-FIX hardening rounds; a final review found 7 further
+undetected bypasses in the underlying command-name-enumeration approach
+(also affecting the pre-existing memory-file guard). These gaps are
+accepted and disclosed, not fixed, pending a future effect-based
+write-detection redesign — see
+`docs/2026-07-30-craftflow-guard-write-detection-limitations-decision.md`.
+
 ## Optional Git Pre-Commit Hook
 
 This is separate from Claude Code plugin hooks. Install it only if you want
