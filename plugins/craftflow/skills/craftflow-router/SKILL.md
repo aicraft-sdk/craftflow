@@ -32,6 +32,89 @@ Rules:
 - BUILD uses fast path (builder → verifier → memory) by default when no risk keywords are detected in the request. Full chain (builder → reviewer → hunter → verifier → memory) is used when risk keywords match. See `references/fast-path.md` for detection rules.
 - Before execution, output one line: `-> {WORKFLOW} workflow (signals: {matched keywords})`
 
+## 0. Resolve Project Root
+
+[EASY TO MISS: `## 0.` sits between `## 1.` and `## 2.` intentionally — a literal "0"
+heading, not a full renumber of `## 2.`-`## 7.`, matching the approved design's own "§0"
+terminology and minimizing blast radius on an already 1000+-line file.]
+
+1. At the start of every workflow (PLAN/DEBUG/REVIEW/BUILD), before any
+   `.craftflow/state/...` path is touched, resolve the project root:
+   ```bash
+   PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+   TOPLEVEL_EXIT=$?
+   ```
+   [EASY TO MISS: Use `git rev-parse --show-toplevel` for the absolute path — never a bare
+   `~/.claude/worktrees/` because `~` may not expand correctly in all shell contexts, and a
+   relative path resolves against cwd, not the project root.]
+
+   - **If `TOPLEVEL_EXIT == 0`**: `PROJECT_ROOT` is set — this is the unchanged single-repo
+     path. `PROJECT_ROOT` is now set for the remainder of this session — every later step in
+     this document (memory load, workflow-artifact creation, resume, and — for BUILD only —
+     worktree creation) consumes this same value. Skip step 1a.
+   - **If `TOPLEVEL_EXIT != 0`**: cwd itself is not a git repo. This happens when a session is
+     launched at a multi-repo workspace root (a directory that is not itself a git repo but
+     contains several independently git-initialized nested repos, e.g. `ai-infra/` containing
+     `ai-platform-core/`, `genai-platform-dev/`, etc.). Run **step 1a** below before deciding
+     whether to proceed.
+
+   **1a. Multi-repo workspace root resolution** (only reached when `TOPLEVEL_EXIT != 0`):
+   ```bash
+   CRAFTFLOW_INSTALL=$(python3 -c "
+   import json, pathlib
+   reg = json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())
+   print(reg['plugins']['craftflow@craftflow'][0]['installPath'])
+   ")
+   CRAFTFLOW_INSTALL_EXIT=$?
+   RESOLVE_RESULT=$(python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_resolve_workspace_root.py" \
+     --cwd "$(pwd)" \
+     --request "USER_REQUEST_SHELL_ESCAPED")
+   RESOLVE_EXIT=$?
+   ```
+   (A non-zero `CRAFTFLOW_INSTALL_EXIT` here is not handled as a separate branch — it surfaces
+   downstream as a non-zero `RESOLVE_EXIT` from the next command, an empty/unusable
+   `$CRAFTFLOW_INSTALL` path, which the existing `RESOLVE_EXIT != 0` handling below already
+   catches.)
+   Replace `USER_REQUEST_SHELL_ESCAPED` with the actual user request, properly shell-quoted
+   (same convention as **Parent workflow creation** step 1). The script never mutates git or
+   filesystem state — it only reads cwd's immediate child directories and runs non-mutating
+   `git rev-parse --show-toplevel` calls.
+
+   - **If `RESOLVE_EXIT != 0`** (the script itself could not complete the scan, e.g. cwd
+     unreadable): do not parse `$RESOLVE_RESULT`. Treat identically to `NO_REPO_FOUND` below.
+   - **Otherwise**, parse the outcome:
+     ```bash
+     RESOLVE_OUTCOME=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin)['outcome'])")
+     ```
+     - **`DETERMINISTIC`** (exactly one candidate nested repo exists, or the request text
+       uniquely names one among several):
+       ```bash
+       PROJECT_ROOT=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin)['project_root'])")
+       ```
+       `PROJECT_ROOT` is now set for the remainder of this session — every later step in this
+       document (memory load, workflow-artifact creation, resume, and — for BUILD only —
+       worktree creation) consumes this same value.
+     - **`AMBIGUOUS`** (2+ candidate nested repos exist and the request text does not uniquely
+       name one): ask the user once via `AskUserQuestion`, with one option per path in the
+       `candidates` array from `$RESOLVE_RESULT` (optionally enrich each option's label with
+       that repo's `git -C <candidate> log -1 --format=%s` first line, if available). Set
+       `PROJECT_ROOT` to the chosen candidate's absolute path. `PROJECT_ROOT` is now set for
+       the remainder of this session — every later step in this document (memory load,
+       workflow-artifact creation, resume, and — for BUILD only — worktree creation) consumes
+       this same value.
+       [EASY TO MISS: this `AskUserQuestion` gate is NEVER auto-defaulted under `JUST_GO=true`
+       (§ 2 `JUST_GO` rule) — cross-repo routing has no safe "recommended" default the way an
+       ordinary implementation-choice gate does, so it is treated the same as an unresolved
+       plan **Open Decision**: always stop and ask, even in `JUST_GO` mode.]
+     - **`NO_REPO_FOUND`** (or `RESOLVE_EXIT != 0` above): no git-repo children exist under
+       cwd at all (or the resolver script itself could not complete the scan). Set
+       `PROJECT_ROOT=$(pwd)` as the fallback and append
+       `{"event":"project_root_resolution_fallback","reason":"NO_REPO_FOUND"|"RESOLVE_SCRIPT_ERROR"}`
+       to the event log — use `reason:"NO_REPO_FOUND"` when the resolver itself returned that
+       outcome, or `reason:"RESOLVE_SCRIPT_ERROR"` when `RESOLVE_EXIT != 0` (the script could
+       not complete the scan at all). This is an event, not a `pending_gate` — there is
+       nothing to resume or retry. The router continues immediately with this fallback value.
+
 ## 2. Memory Load And Template Validation
 
 Always run this before routing or resuming. Memory is organized in two tiers:
@@ -39,20 +122,20 @@ Always run this before routing or resuming. Memory is organized in two tiers:
 - **workflows/{wf-id}/** — per-workflow isolated state (current focus, active phase, in-flight tasks). Load only when a `workflow_uuid` is already known (resume path).
 
 ```text
-1. Bash("mkdir -p .craftflow/state/project")
-2. Read(".craftflow/state/project/activeContext.md")
-3. Read(".craftflow/state/project/patterns.md")
-4. Read(".craftflow/state/project/progress.md")
-5. Read(".craftflow/state/project/constitution.md") — skip gracefully if absent; when present, MUST constraints are active for this session
+1. Bash("mkdir -p \"$PROJECT_ROOT/.craftflow/state/project\"")
+2. Read("$PROJECT_ROOT/.craftflow/state/project/activeContext.md")
+3. Read("$PROJECT_ROOT/.craftflow/state/project/patterns.md")
+4. Read("$PROJECT_ROOT/.craftflow/state/project/progress.md")
+5. Read("$PROJECT_ROOT/.craftflow/state/project/constitution.md") — skip gracefully if absent; when present, MUST constraints are active for this session
 6. If workflow_uuid is known (resume path):
-   a. Bash("mkdir -p .craftflow/state/workflows/{workflow_uuid}")
-   b. Read(".craftflow/state/workflows/{workflow_uuid}/activeContext.md")
-   c. Read(".craftflow/state/workflows/{workflow_uuid}/patterns.md")
-   d. Read(".craftflow/state/workflows/{workflow_uuid}/progress.md")
+   a. Bash("mkdir -p \"$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}\"")
+   b. Read("$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md")
+   c. Read("$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/patterns.md")
+   d. Read("$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md")
    Merge: workflow-scoped values override project-scoped for current-focus
    fields (## Current Focus, ## Next Steps, ## Tasks) only.
 7. Fallback: If project/ files are missing or empty, also read the root-flat
-   files (.craftflow/state/activeContext.md etc.) and merge content into project/
+   files ($PROJECT_ROOT/.craftflow/state/activeContext.md etc.) and merge content into project/
    before proceeding. Root-flat files are the backward-compat layer.
 ```
 
@@ -86,8 +169,8 @@ v10 trust rule:
 ## 2a. Workflow Artifact And Hook Policy
 
 Core law:
-- Durable router state lives under `.craftflow/state/workflows/{workflow_uuid}.json`
-- Companion event log lives under `.craftflow/state/workflows/{workflow_uuid}.events.jsonl`
+- Durable router state lives under `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json`
+- Companion event log lives under `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.events.jsonl`
 - Router-owned gates still include `plan_trust_gate`, `phase_exit_gate`, `failure_stop_gate`, `memory_sync_gate`, and `skill_precedence_gate`
 
 Mandatory reference read:
@@ -165,10 +248,10 @@ Safety rules:
 ### Shared preparation
 
 Before creating a new workflow:
-- Read `activeContext.md ## References` to discover `Plan`, `Design`, and prior `Research` files.
-- Read `activeContext.md ## Decisions` for prior planner/build clarifications.
-- Read `progress.md ## Current Workflow` and `## Tasks` for pending work that should resume instead of duplicating.
-- Read the latest `.craftflow/state/workflows/*.json` artifact if one exists for the current conversation.
+- Read `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References` to discover `Plan`, `Design`, and prior `Research` files.
+- Read `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Decisions` for prior planner/build clarifications.
+- Read `$PROJECT_ROOT/.craftflow/state/project/progress.md ## Current Workflow` and `## Tasks` for pending work that should resume instead of duplicating.
+- Read the latest `$PROJECT_ROOT/.craftflow/state/workflows/*.json` artifact if one exists for the current conversation.
 
 **Intent Readiness Gate (MANDATORY before PLAN or BUILD):**
 Before dispatching to planner or builder, verify the intent contract meets three conditions:
@@ -207,80 +290,17 @@ Perform `risk_keyword_scan`:
 
 Every new BUILD workflow attempts to isolate file writes in a dedicated git worktree:
 
-1. At BUILD start (before any child task creation), resolve the project root:
-   ```bash
-   PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-   TOPLEVEL_EXIT=$?
-   ```
-   [EASY TO MISS: Use `git rev-parse --show-toplevel` for the absolute path — never a bare
-   `~/.claude/worktrees/` because `~` may not expand correctly in all shell contexts, and a
-   relative path resolves against cwd, not the project root.]
+1. At BUILD start, `PROJECT_ROOT` was already resolved once by `## 0. Resolve Project Root`
+   at session start — reuse it directly. Do not re-run `git rev-parse --show-toplevel` or
+   invoke the workspace-root resolver script a second time.
 
-   - **If `TOPLEVEL_EXIT == 0`**: `PROJECT_ROOT` is set — this is the unchanged single-repo
-     path. Skip directly to the `mkdir`/`git worktree add` block below (skip step 1a).
-   - **If `TOPLEVEL_EXIT != 0`**: cwd itself is not a git repo. This happens when a session is
-     launched at a multi-repo workspace root (a directory that is not itself a git repo but
-     contains several independently git-initialized nested repos, e.g. `ai-infra/` containing
-     `ai-platform-core/`, `genai-platform-dev/`, etc.). Run **step 1a** below before deciding
-     whether to proceed.
+   [EASY TO MISS: if `## 0.` fell back to `NO_REPO_FOUND`/`RESOLVE_SCRIPT_ERROR` (no git-repo
+   children under cwd, or the resolver script itself failed), `PROJECT_ROOT` is already set to
+   `$(pwd)` from that fallback — Worktree Isolation still proceeds with the `mkdir`/`git
+   worktree add` block below using that same fallback value, exactly like the single-repo
+   path. There is no separate NO_REPO_FOUND branch here anymore; `## 0.` already handled it.]
 
-   **1a. Multi-repo workspace root resolution** (only reached when `TOPLEVEL_EXIT != 0`):
-   ```bash
-   CRAFTFLOW_INSTALL=$(python3 -c "
-   import json, pathlib
-   reg = json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())
-   print(reg['plugins']['craftflow@craftflow'][0]['installPath'])
-   ")
-   CRAFTFLOW_INSTALL_EXIT=$?
-   RESOLVE_RESULT=$(python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_resolve_workspace_root.py" \
-     --cwd "$(pwd)" \
-     --request "USER_REQUEST_SHELL_ESCAPED")
-   RESOLVE_EXIT=$?
-   ```
-   (A non-zero `CRAFTFLOW_INSTALL_EXIT` here is not handled as a separate branch — it surfaces
-   downstream as a non-zero `RESOLVE_EXIT` from the next command, an empty/unusable
-   `$CRAFTFLOW_INSTALL` path, which the existing `RESOLVE_EXIT != 0` handling below already
-   catches.)
-   Replace `USER_REQUEST_SHELL_ESCAPED` with the actual user request, properly shell-quoted
-   (same convention as **Parent workflow creation** step 1). The script never mutates git or
-   filesystem state — it only reads cwd's immediate child directories and runs non-mutating
-   `git rev-parse --show-toplevel` calls.
-
-   - **If `RESOLVE_EXIT != 0`** (the script itself could not complete the scan, e.g. cwd
-     unreadable): do not parse `$RESOLVE_RESULT`. Treat identically to `NO_REPO_FOUND` below.
-   - **Otherwise**, parse the outcome:
-     ```bash
-     RESOLVE_OUTCOME=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin)['outcome'])")
-     ```
-     - **`DETERMINISTIC`** (exactly one candidate nested repo exists, or the request text
-       uniquely names one among several):
-       ```bash
-       PROJECT_ROOT=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin)['project_root'])")
-       ```
-       `PROJECT_ROOT` is now set — proceed to the `mkdir`/`git worktree add` block below,
-       exactly as the single-repo path does.
-     - **`AMBIGUOUS`** (2+ candidate nested repos exist and the request text does not uniquely
-       name one): ask the user once via `AskUserQuestion`, with one option per path in the
-       `candidates` array from `$RESOLVE_RESULT` (optionally enrich each option's label with
-       that repo's `git -C <candidate> log -1 --format=%s` first line, if available). Set
-       `PROJECT_ROOT` to the chosen candidate's absolute path, then proceed to the
-       `mkdir`/`git worktree add` block below.
-       [EASY TO MISS: this `AskUserQuestion` gate is NEVER auto-defaulted under `JUST_GO=true`
-       (§ 2 `JUST_GO` rule) — cross-repo routing has no safe "recommended" default the way an
-       ordinary implementation-choice gate does, so it is treated the same as an unresolved
-       plan **Open Decision**: always stop and ask, even in `JUST_GO` mode.]
-     - **`NO_REPO_FOUND`** (or `RESOLVE_EXIT != 0` above): no git-repo children exist under
-       cwd at all. Do NOT set `PROJECT_ROOT` and do NOT run the `mkdir`/`git worktree add`
-       block below — skip directly to step 3 ("On failure") further down this section, using
-       that step's `{"event":"worktree_fallback","reason":"..."}` entry with a pinned literal
-       reason string so future sessions never diverge on what gets logged for the same
-       condition: `reason:"NO_REPO_FOUND"` when the resolver itself returned that outcome, or
-       `reason:"RESOLVE_SCRIPT_ERROR"` when `RESOLVE_EXIT != 0` (the script could not complete
-       the scan at all). Both cases get identical fallback behavior — only the logged reason
-       string differs. This reuses the existing, already-tested no-isolation fallback verbatim;
-       it is reached via a new path, not a new failure mode.
-
-   Once `PROJECT_ROOT` is set (either path above), capture both commands' output and exit code,
+   With `PROJECT_ROOT` reused from `## 0.` above, capture both commands' output and exit code,
    mirroring the `MERGE_EXIT`/`COPY_FALLBACK_EXIT`/`WORKTREE_REMOVE_EXIT` pattern used later in
    this section — never leave either command's exit code unchecked:
    ```bash
@@ -725,11 +745,11 @@ TaskCreate({
 
 ```text
 Write(
-  file_path=".craftflow/state/workflows/{workflow_uuid}.json",
+  file_path="$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json",
   content="{\"workflow_uuid\":\"{workflow_uuid}\",\"workflow_id\":\"{workflow_uuid}\",\"workflow_type\":\"{WORKFLOW}\",\"state_root\":\".craftflow/state\",\"user_request\":\"{request}\",\"plan_file\":null,\"design_file\":null,\"research_files\":[],\"approved_decisions\":[],\"plan_mode\":null,\"verification_rigor\":\"standard\",\"proof_status\":\"gaps_found\",\"traceability\":{\"requirements\":[],\"phases\":[],\"verification\":[],\"remediation\":[]},\"intent\":{\"goal\":null,\"non_goals\":[],\"constraints\":[],\"acceptance_criteria\":[],\"open_decisions\":[]},\"normalized_phases\":[],\"phase_cursor\":null,\"capabilities\":{\"brightdata_available\":\"unknown\",\"octocode_available\":\"unknown\",\"websearch_available\":\"unknown\",\"webfetch_available\":\"unknown\"},\"research_rounds\":[],\"research_backend_history\":[],\"research_quality\":{\"web\":\"none\",\"github\":\"none\",\"overall\":\"none\"},\"task_ids\":{\"planner_create\":null,\"planning_review_pass1\":null,\"planner_replan\":null,\"planning_review_pass2\":null,\"memory_finalize\":null},\"phase_status\":{},\"results\":{\"builder\":null,\"investigator\":null,\"reviewer\":null,\"hunter\":null,\"verifier\":null,\"planner\":null,\"planning_reviewer\":null,\"research\":{\"web\":null,\"github\":null,\"synthesis\":null}},\"evidence\":{\"builder\":[],\"investigator\":[],\"reviewer\":[],\"hunter\":[],\"verifier\":[],\"planning_reviewer\":[]},\"telemetry\":{\"task_metrics_available\":\"unknown\",\"workflow_wall_clock_seconds\":0,\"agent_wall_clock_seconds\":{\"builder\":0,\"investigator\":0,\"reviewer\":0,\"hunter\":0,\"verifier\":0,\"planner\":0},\"loop_counts\":{\"re_review\":0,\"re_hunt\":0,\"re_verify\":0},\"verifier\":{\"phase_exit_proof_runs\":0,\"extended_audit_runs\":0,\"workload_seconds\":{\"tests\":0,\"build\":0,\"scan\":0,\"reconcile\":0,\"reasoning\":0}}},\"quality\":{\"confidence\":null,\"evidence_complete\":false,\"scenario_coverage\":0,\"research_quality\":\"none\",\"convergence_state\":\"pending\"},\"planning_review_runs\":0,\"planning_review_findings\":[],\"planning_review_status\":\"not_started\",\"build_mode\":null,\"fast_path_risk_signals\":[],\"fast_path_escalated\":false,\"worktree_mode\":null,\"worktree_path\":null,\"worktree_branch\":null,\"memory_notes\":[],\"pending_gate\":null,\"status_history\":[{\"event\":\"workflow_started\",\"ts\":\"{iso_timestamp}\",\"phase\":\"{build|debug|review|plan}\"}],\"remediation_history\":[],\"created_at\":\"{iso_timestamp}\",\"updated_at\":\"{iso_timestamp}\"}"
 )
 Write(
-  file_path=".craftflow/state/workflows/{workflow_uuid}.events.jsonl",
+  file_path="$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.events.jsonl",
   content="{\"ts\":\"{iso_timestamp}\",\"wf\":\"{workflow_uuid}\",\"event\":\"workflow_started\",\"phase\":\"{build|debug|review|plan}\",\"task_id\":\"{parent_task_id}\",\"agent\":\"router\",\"decision\":\"start\",\"reason\":\"User request\"}\n"
 )
 ```
@@ -737,7 +757,7 @@ Write(
 4. Immediately after artifact creation, initialize the per-workflow state directory:
 
 ```text
-Bash("mkdir -p .craftflow/state/workflows/{workflow_uuid}")
+Bash("mkdir -p \"$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}\"")
 ```
 
 This directory is where the memory-finalize task will write workflow-scoped
