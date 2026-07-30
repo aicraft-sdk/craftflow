@@ -280,15 +280,25 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
        string differs. This reuses the existing, already-tested no-isolation fallback verbatim;
        it is reached via a new path, not a new failure mode.
 
-   Once `PROJECT_ROOT` is set (either path above):
+   Once `PROJECT_ROOT` is set (either path above), capture both commands' output and exit code,
+   mirroring the `MERGE_EXIT`/`COPY_FALLBACK_EXIT`/`WORKTREE_REMOVE_EXIT` pattern used later in
+   this section — never leave either command's exit code unchecked:
    ```bash
-   mkdir -p "$PROJECT_ROOT/.claude/worktrees"
-   git worktree add "$PROJECT_ROOT/.claude/worktrees/{worktree_dir}" -b {worktree_branch}
+   MKDIR_OUTPUT=$(mkdir -p "$PROJECT_ROOT/.claude/worktrees" 2>&1)
+   MKDIR_EXIT=$?
+   WORKTREE_ADD_OUTPUT=$(git worktree add "$PROJECT_ROOT/.claude/worktrees/{worktree_dir}" -b {worktree_branch} 2>&1)
+   WORKTREE_ADD_EXIT=$?
    ```
    where `worktree_dir` and `worktree_branch` come from the `craftflow_workflow_id.py` helper
    output (see step 1 of **Parent workflow creation** above).
    The trailing 8-hex suffix in both names ties the worktree back to the workflow id,
    guaranteeing concurrent same-feature workflows always get distinct dirs/branches.
+
+   - **If `MKDIR_EXIT != 0` OR `WORKTREE_ADD_EXIT != 0`**: proceed to step 3 ("On failure") below.
+     Use `$MKDIR_OUTPUT` as the `{error}` value if `MKDIR_EXIT != 0`; otherwise use
+     `$WORKTREE_ADD_OUTPUT`.
+   - **Otherwise** (`MKDIR_EXIT == 0` AND `WORKTREE_ADD_EXIT == 0`): proceed to step 2 ("On
+     success") below.
 
 2. On success:
    - Set `worktree_mode: "auto_created"` in the workflow artifact
