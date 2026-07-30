@@ -1266,7 +1266,7 @@ For PLAN:
 - If a plan exists, set `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Next Steps` to `1. Execute plan: {plan_file}` unless the workflow ended in clarification-needed state.
 
 For DEBUG:
-- Preserve the latest `[DEBUG-RESET: wf:{workflow_task_id}]` section in `## Recent Changes` and summarize the final result beneath it.
+- Preserve the latest `[DEBUG-RESET: wf:{workflow_uuid}]` section in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## Recent Changes` and summarize the final result beneath it.
 
 ## 14. Hard Rules
 
