@@ -108,12 +108,26 @@ terminology and minimizing blast radius on an already 1000+-line file.]
        plan **Open Decision**: always stop and ask, even in `JUST_GO` mode.]
      - **`NO_REPO_FOUND`** (or `RESOLVE_EXIT != 0` above): no git-repo children exist under
        cwd at all (or the resolver script itself could not complete the scan). Set
-       `PROJECT_ROOT=$(pwd)` as the fallback and append
+       `PROJECT_ROOT=$(pwd)` as the fallback — this raw-cwd value still resolves correctly for
+       the intended purpose; the single-repo case was already handled above, and this branch
+       only covers a workspace root with no nested git repos, or a scan failure, where cwd is
+       the only available candidate.
+       [EASY TO MISS: `## 0.` runs BEFORE `workflow_uuid` is minted (minted later, at
+       **Parent workflow creation** in `## 6.`), so no per-workflow event log
+       (`$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.events.jsonl`) can exist yet
+       at this point — it is filename-keyed on `workflow_uuid`, which literally cannot exist
+       yet. Do not append an event to "the event log" here; there is nothing to append to.
+       Instead, keep `reason:"NO_REPO_FOUND"` (resolver returned that outcome) or
+       `reason:"RESOLVE_SCRIPT_ERROR"` (`RESOLVE_EXIT != 0`) in-session, and fold it into
+       `## 6.`'s own initial `status_history`/event-log write once the workflow artifact is
+       created — e.g.
        `{"event":"project_root_resolution_fallback","reason":"NO_REPO_FOUND"|"RESOLVE_SCRIPT_ERROR"}`
-       to the event log — use `reason:"NO_REPO_FOUND"` when the resolver itself returned that
-       outcome, or `reason:"RESOLVE_SCRIPT_ERROR"` when `RESOLVE_EXIT != 0` (the script could
-       not complete the scan at all). This is an event, not a `pending_gate` — there is
-       nothing to resume or retry. The router continues immediately with this fallback value.
+       alongside `workflow_started`. This is necessarily a best-effort, undurable signal at
+       this early stage: `PROJECT_ROOT` is already correctly resolved via the raw-cwd fallback
+       regardless of whether the reason is ever durably recorded, so nothing functional is lost
+       if a workflow artifact never ends up being created (e.g. the session ends before `## 6.`
+       runs).] This is an event, not a `pending_gate` — there is nothing to resume or retry.
+       The router continues immediately with this fallback `PROJECT_ROOT` value.
 
 ## 2. Memory Load And Template Validation
 
@@ -822,7 +836,7 @@ Only create child tasks after the v10 artifact and state directory exist.
 - Task Phase: {phase}
 - Plan File: {plan_file or 'None'}
 - Workflow Scope: wf:{workflow_uuid}
-- Workflow Artifact: .craftflow/state/workflows/{workflow_uuid}.json
+- Workflow Artifact: $PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json
 - Effort Directive: {low|medium|high — from fast-path.md dispatch table; append one-line steering per §4 Effort Steering Directives}
 
 ## User Request
@@ -1108,7 +1122,7 @@ Convergence rule:
 3. If the runnable task kind is memory:
    - execute inline in the main context
    - persist workflow artifact results + Memory Notes from the task description
-   - append `memory_finalized` to `.craftflow/state/workflows/{wf}.events.jsonl`
+   - append `memory_finalized` to `$PROJECT_ROOT/.craftflow/state/workflows/{wf}.events.jsonl`
    - clean up the matching [craftflow-internal] memory_task_id entry
    - mark the memory task completed
    - mark the parent workflow task completed
@@ -1167,7 +1181,7 @@ If any answer is "no" or "unknown", treat as incomplete and apply the fallback v
 4. Memory payload was already captured in step 0:
    - READ-ONLY agents: append extracted notes to the memory task description.
    - WRITE agents: append deferred or supplemental payload needed by the memory task.
-5. Update `.craftflow/state/workflows/{workflow_uuid}.json` with:
+5. Update `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json` with:
    - intent contract fields from planner output when available
    - task ids
    - phase status
@@ -1202,25 +1216,27 @@ Memory is written to two tiers. Route each `MEMORY_NOTES` field as follows:
 
 | MEMORY_NOTES field | Write destination | Rationale |
 |--------------------|-------------------|-----------|
-| `learnings` | `workflows/{workflow_uuid}/activeContext.md ## Learnings` | Workflow-specific causal insights |
-| `patterns` | `project/patterns.md ## Common Gotchas` | Durable conventions that apply to all future workflows |
-| `verification` | `workflows/{workflow_uuid}/progress.md ## Verification` | Proof evidence scoped to this build/debug/review run |
-| `deferred` | `workflows/{workflow_uuid}/activeContext.md` as `[Deferred]: ...` | Non-blocking follow-ups scoped to this workflow |
+| `learnings` | `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## Learnings` | Workflow-specific causal insights |
+| `patterns` | `$PROJECT_ROOT/.craftflow/state/project/patterns.md ## Common Gotchas` | Durable conventions that apply to all future workflows |
+| `verification` | `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md ## Verification` | Proof evidence scoped to this build/debug/review run |
+| `deferred` | `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md` as `[Deferred]: ...` | Non-blocking follow-ups scoped to this workflow |
 
 Cross-workflow promotion rule: If a `learnings` item is a project-wide constraint
-(not specific to the current task), also copy it to `project/activeContext.md ## Learnings`.
-Use judgment: workflow-local observations stay in `workflows/{wf}/`; durable project
-truths belong in `project/`.
+(not specific to the current task), also copy it to
+`$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Learnings`.
+Use judgment: workflow-local observations stay in
+`$PROJECT_ROOT/.craftflow/state/workflows/{wf}/`; durable project truths belong in
+`$PROJECT_ROOT/.craftflow/state/project/`.
 
 Memory finalization permit (required before any `.md` memory write):
 - The `craftflow_pretooluse_guard.py` hook blocks direct writes to protected memory files.
 - Before writing the first memory file, create the permit token:
   ```
-  Bash("printf '%s' '{workflow_uuid}' > .craftflow/state/.memory-finalize")
+  Bash("printf '%s' '{workflow_uuid}' > \"$PROJECT_ROOT/.craftflow/state/.memory-finalize\"")
   ```
 - After all memory files are written, clear the permit:
   ```
-  Bash("rm -f .craftflow/state/.memory-finalize")
+  Bash("rm -f \"$PROJECT_ROOT/.craftflow/state/.memory-finalize\"")
   ```
 - If workflow_uuid is unavailable (fallback path), omit the permit steps — the guard will audit-log but not block in that case.
 
@@ -1232,8 +1248,8 @@ The memory task also:
 - If any artifact or memory write fails, stop immediately (clear the permit first). Never advance the workflow after a failed persistence write.
 
 Fallback: If `workflow_uuid` is unavailable, write to root-flat files
-(`.craftflow/state/activeContext.md`, `.craftflow/state/patterns.md`, `.craftflow/state/progress.md`)
-as in prior versions.
+(`$PROJECT_ROOT/.craftflow/state/activeContext.md`, `$PROJECT_ROOT/.craftflow/state/patterns.md`,
+`$PROJECT_ROOT/.craftflow/state/progress.md`) as in prior versions.
 
 For PLAN:
 - Ensure `- Plan: {plan_file}` remains correct in `activeContext.md ## References`.
