@@ -407,6 +407,97 @@ def test_router_dispatches_intent_interview() -> None:
     ok(name)
 
 
+def test_section_0_precedes_memory_load() -> None:
+    name = "router/section-0-precedes-memory-load"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    idx_0 = content.find("## 0. Resolve Project Root")
+    idx_2 = content.find("## 2. Memory Load And Template Validation")
+    if idx_0 == -1:
+        fail(name, "## 0. Resolve Project Root heading not found")
+        return
+    if idx_2 == -1:
+        fail(name, "## 2. Memory Load And Template Validation heading not found")
+        return
+    if not (idx_0 < idx_2):
+        fail(name, f"expected ## 0. ({idx_0}) before ## 2. ({idx_2})")
+        return
+    ok(name)
+
+
+def test_memory_load_anchored_to_project_root() -> None:
+    name = "router/memory-load-anchored-to-project-root"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    start = content.find("## 2. Memory Load And Template Validation")
+    end = content.find("\n## 2a.", start)
+    if start == -1 or end == -1:
+        fail(name, "could not bound ## 2. section")
+        return
+    section = content[start:end]
+    if '$PROJECT_ROOT/.craftflow/state/project/activeContext.md' not in section:
+        fail(name, "anchored activeContext.md reference not found in ## 2.")
+        return
+    if '"activeContext.md"' in section or 'Read(".craftflow/state/project/activeContext.md")' in section:
+        fail(name, "bare unanchored activeContext.md reference still present in ## 2.")
+        return
+    ok(name)
+
+
+def test_parent_workflow_creation_anchored_to_project_root() -> None:
+    name = "router/parent-workflow-creation-anchored"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    start = content.find("### Parent workflow creation")
+    end = content.find("\n### BUILD task graph", start)
+    if start == -1 or end == -1:
+        fail(name, "could not bound ### Parent workflow creation section")
+        return
+    section = content[start:end]
+    if 'file_path="$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json"' not in section:
+        fail(name, "anchored workflow artifact Write() not found")
+        return
+    if 'file_path=".craftflow/state/workflows/{workflow_uuid}.json"' in section:
+        fail(name, "bare unanchored workflow artifact Write() still present")
+        return
+    ok(name)
+
+
+def test_shared_preparation_anchored_to_project_root() -> None:
+    name = "router/shared-preparation-anchored"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    start = content.find("### Shared preparation")
+    end = content.find("\n**Intent Readiness Gate", start)
+    if start == -1 or end == -1:
+        fail(name, "could not bound ### Shared preparation section")
+        return
+    section = content[start:end]
+    if section.count("$PROJECT_ROOT/.craftflow/state/") < 4:
+        fail(name, "expected at least 4 $PROJECT_ROOT-anchored references in Shared preparation")
+        return
+    ok(name)
+
+
+def test_worktree_isolation_reuses_project_root_no_duplicate_resolution() -> None:
+    name = "router/worktree-isolation-reuses-project-root"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    if content.count("craftflow_resolve_workspace_root.py") != 1:
+        fail(name, f"expected exactly 1 reference to the resolver script, found {content.count('craftflow_resolve_workspace_root.py')}")
+        return
+    start = content.find("### Worktree Isolation (BUILD Default)")
+    next_heading = content.find("\n### DEBUG preparation", start)
+    section = content[start: next_heading if next_heading != -1 else None]
+    if "was already resolved once by" not in section:
+        fail(name, "expected reuse sentence not found in Worktree Isolation section")
+        return
+    if "TOPLEVEL_EXIT=$?" in section:
+        fail(name, "Worktree Isolation section still contains its own TOPLEVEL_EXIT assignment")
+        return
+    ok(name)
+
+
 def test_workflow_id_script_present() -> None:
     name = "scripts/craftflow_workflow_id-present"
     path = SCRIPTS / "craftflow_workflow_id.py"
@@ -6999,6 +7090,11 @@ def main() -> int:
     test_root_hooks_json_registers_selfcheck_sessionstart()
     test_selfcheck_internal_budget_stays_under_registered_hook_timeout()
     test_workflow_id_script_present()
+    test_section_0_precedes_memory_load()
+    test_memory_load_anchored_to_project_root()
+    test_parent_workflow_creation_anchored_to_project_root()
+    test_shared_preparation_anchored_to_project_root()
+    test_worktree_isolation_reuses_project_root_no_duplicate_resolution()
     test_statusline_script_present()
     test_router_uses_workflow_id_helper()
     test_learn_distiller_uses_tools_key_not_allowed_tools()
