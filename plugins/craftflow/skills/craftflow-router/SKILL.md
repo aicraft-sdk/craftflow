@@ -1260,10 +1260,10 @@ Fallback: If `workflow_uuid` is unavailable, write to root-flat files
 `$PROJECT_ROOT/.craftflow/state/progress.md`) as in prior versions.
 
 For PLAN:
-- Ensure `- Plan: {plan_file}` remains correct in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## References`.
-- Ensure `- Design: {design_file}` remains correct in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## References` when a design exists.
-- If a plan exists, record `Plan saved: {plan_file}` in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## Recent Changes`.
-- If a plan exists, set `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## Next Steps` to `1. Execute plan: {plan_file}` unless the workflow ended in clarification-needed state.
+- Ensure `- Plan: {plan_file}` remains correct in `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References`.
+- Ensure `- Design: {design_file}` remains correct in `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References` when a design exists.
+- If a plan exists, record `Plan saved: {plan_file}` in `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Recent Changes`.
+- If a plan exists, set `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Next Steps` to `1. Execute plan: {plan_file}` unless the workflow ended in clarification-needed state.
 
 For DEBUG:
 - Preserve the latest `[DEBUG-RESET: wf:{workflow_task_id}]` section in `## Recent Changes` and summarize the final result beneath it.
