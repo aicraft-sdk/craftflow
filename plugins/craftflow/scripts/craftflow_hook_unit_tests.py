@@ -473,9 +473,50 @@ def test_shared_preparation_anchored_to_project_root() -> None:
         fail(name, "could not bound ### Shared preparation section")
         return
     section = content[start:end]
-    if section.count("$PROJECT_ROOT/.craftflow/state/") < 4:
-        fail(name, "expected at least 4 $PROJECT_ROOT-anchored references in Shared preparation")
-        return
+    positive_checks = [
+        (
+            "$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References",
+            "anchored activeContext.md ## References read not found in Shared preparation",
+        ),
+        (
+            "$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Decisions",
+            "anchored activeContext.md ## Decisions read not found in Shared preparation",
+        ),
+        (
+            "$PROJECT_ROOT/.craftflow/state/project/progress.md ## Current Workflow",
+            "anchored progress.md ## Current Workflow read not found in Shared preparation",
+        ),
+        (
+            "$PROJECT_ROOT/.craftflow/state/workflows/*.json",
+            "anchored workflows/*.json artifact read not found in Shared preparation",
+        ),
+    ]
+    for needle, reason in positive_checks:
+        if needle not in section:
+            fail(name, reason)
+            return
+    negative_checks = [
+        (
+            "Read `activeContext.md ## References`",
+            "bare unanchored activeContext.md ## References read still present in Shared preparation",
+        ),
+        (
+            "Read `activeContext.md ## Decisions`",
+            "bare unanchored activeContext.md ## Decisions read still present in Shared preparation",
+        ),
+        (
+            "Read `progress.md ## Current Workflow`",
+            "bare unanchored progress.md ## Current Workflow read still present in Shared preparation",
+        ),
+        (
+            "latest `.craftflow/state/workflows/*.json` artifact",
+            "bare unanchored workflows/*.json artifact read still present in Shared preparation",
+        ),
+    ]
+    for needle, reason in negative_checks:
+        if needle in section:
+            fail(name, reason)
+            return
     ok(name)
 
 
@@ -494,6 +535,47 @@ def test_worktree_isolation_reuses_project_root_no_duplicate_resolution() -> Non
         return
     if "TOPLEVEL_EXIT=$?" in section:
         fail(name, "Worktree Isolation section still contains its own TOPLEVEL_EXIT assignment")
+        return
+    ok(name)
+
+
+def test_memory_finalization_for_plan_anchored_to_project_tier() -> None:
+    name = "router/memory-finalization-for-plan-anchored-to-project-tier"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    start = content.find("For PLAN:")
+    end = content.find("For DEBUG:", start)
+    if start == -1 or end == -1:
+        fail(name, "could not bound the For PLAN: block in ## 13. Memory Finalization")
+        return
+    section = content[start:end]
+    if "$PROJECT_ROOT/.craftflow/state/project/activeContext.md" not in section:
+        fail(name, "expected project-tier activeContext.md reference not found in For PLAN: block")
+        return
+    if "$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md" in section:
+        fail(name, "For PLAN: block writes to the wrong (workflow-tier) activeContext.md")
+        return
+    ok(name)
+
+
+def test_memory_finalization_for_debug_anchored_and_uses_workflow_uuid() -> None:
+    name = "router/memory-finalization-for-debug-anchored-uses-workflow-uuid"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    start = content.find("For DEBUG:")
+    end = content.find("## 14. Hard Rules", start)
+    if start == -1 or end == -1:
+        fail(name, "could not bound the For DEBUG: block in ## 13. Memory Finalization")
+        return
+    section = content[start:end]
+    if "$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md" not in section:
+        fail(name, "expected workflow-tier activeContext.md reference not found in For DEBUG: block")
+        return
+    if "[DEBUG-RESET: wf:{workflow_uuid}]" not in section:
+        fail(name, "expected {workflow_uuid} in the [DEBUG-RESET: wf:...] marker reference")
+        return
+    if "workflow_task_id" in section:
+        fail(name, "For DEBUG: block still references undefined workflow_task_id")
         return
     ok(name)
 
@@ -7095,6 +7177,8 @@ def main() -> int:
     test_parent_workflow_creation_anchored_to_project_root()
     test_shared_preparation_anchored_to_project_root()
     test_worktree_isolation_reuses_project_root_no_duplicate_resolution()
+    test_memory_finalization_for_plan_anchored_to_project_tier()
+    test_memory_finalization_for_debug_anchored_and_uses_workflow_uuid()
     test_statusline_script_present()
     test_router_uses_workflow_id_helper()
     test_learn_distiller_uses_tools_key_not_allowed_tools()
