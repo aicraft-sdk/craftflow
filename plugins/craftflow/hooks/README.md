@@ -3,33 +3,44 @@
 This directory now serves two different purposes:
 
 1. **Plugin runtime hooks** via `hooks.json`
-   - `PreToolUse` — protected writes guard (Edit, Write, and now Bash matchers; Read events are not intercepted) — the Bash matcher inspects write-shaped commands (redirects, `tee`, python `open()`/`write_text()`/`os.system`/`subprocess`/`shutil`/`os.rename` writes) for protected-path targets, closing a prior bypass where Bash-only agents could overwrite memory files undetected; destructive-command guard (Bash matcher — denies destructive commands whose resolved target is in-cwd (e.g. `rm -rf packages/agent-cli`, `rm -rf .`) as well as ones that escape the session's own cwd/worktree, e.g. a worktree relative-path escape; covers `rm`, `rmdir`, `mv`, `shred`, `truncate`, `dd`, `chmod`, `find -exec`/`-execdir`/`-ok`/`-okdir`/`-delete`, `git clean`/`reset --hard`/`push --force`, with fail-closed handling of dynamic ($/backtick) targets; see `docs/incidents/2026-07-25-phase3-verifier-rm-attempt.md`)
+   - `PreToolUse` — protected writes guard (Edit, Write, and now Bash matchers; Read events are not intercepted) — the Bash matcher inspects write-shaped commands (redirects, `tee`, python `open()`/`write_text()`/`os.system`/`subprocess`/`shutil`/`os.rename` writes) for protected-path targets, closing a prior bypass where Bash-only agents could overwrite memory files undetected; destructive-command guard (Bash matcher — denies destructive commands whose resolved target is in-cwd (e.g. `rm -rf packages/agent-cli`, `rm -rf .`) as well as ones that escape the session's own cwd/worktree, e.g. a worktree relative-path escape; covers `rm`, `rmdir`, `mv`, `shred`, `truncate`, `dd`, `chmod`, `find -exec`/`-execdir`/`-ok`/`-okdir`/`-delete`, `git clean`/`reset --hard`/`push --force`, with fail-closed handling of dynamic ($/backtick) targets; see `docs/incidents/2026-07-25-phase3-verifier-rm-attempt.md`); catastrophic-command guard (Bash matcher — `craftflow_safe_shell_guard.py`, an absolute denylist for `rm -rf /`, `mkfs`, and fork-bomb patterns regardless of path, plus an opt-in recursive-grep-against-a-broad-path advisory; concept ported from `xai-org/grok-build`, see this plugin's `NOTICE`)
    - `SessionStart` — workflow resume context; hook import self-check
    - `PostToolUse` — workflow artifact integrity audit and memory placeholder restore (defensive, fires on Edit/Write)
    - `TaskCompleted` — task metadata validation (enforced: block mode)
    - `PostCompact` — compaction event capture
    - `SubagentStop` — agent contract presence audit and memory placeholder restore
    - `PreCompact` — workflow state snapshot before compaction
-   - `Stop` — workflow state snapshot and memory placeholder restore on session stop
+   - `Stop` — workflow state snapshot and memory placeholder restore on session stop; opt-in stop-verify gate (`craftflow_stop_verify.py` — inert unless `config/stop-verify.json` sets `{"enabled": true, "command": "..."}`; concept ported from `xai-org/grok-build`, see this plugin's `NOTICE`)
    - `StopFailure` — API error logging (async)
    - `InstructionsLoaded` — instruction file load audit (async)
 2. **Optional git pre-commit helper** via `pre-commit`
+
+## Composable Trust Gate (not wired to a hook event)
+
+`craftflow_hook_trust.py` is a standalone CLI (`check` / `update` subcommands),
+not registered in `hooks.json`. It fail-closed refuses to vouch for a
+repo-local hook script that isn't listed in `.craftflow/hook-trust.json`'s
+sha256 manifest, or whose content no longer matches its manifested hash.
+Intended for a future caller (e.g. repo-conductor's sandbox spawner) to
+invoke before executing a less-trusted repo-local hook script. Concept
+ported from `xai-org/grok-build`'s `trust.rs`; see this plugin's `NOTICE`.
 
 ## Plugin Runtime Hooks
 
 When CRAFTFLOW is installed as a Claude Code plugin, Claude Code reads `hooks/hooks.json`
 from the plugin bundle and runs the referenced scripts from `${CLAUDE_PLUGIN_ROOT}/scripts`.
 
-The shipped runtime hooks are intentionally minimal. Most hooks operate in audit mode; `memoryWrites`, `protectedWrites`, `taskMetadata`, and `bashDestructiveTraversal` are enforced in block mode (config: `config/hook-mode.json`; each toggle enum-validates its value and fails closed — block — on a missing or malformed config, via the shared `resolve_toggle_decision()` helper in `craftflow_hooklib.py`):
+The shipped runtime hooks are intentionally minimal. Most hooks operate in audit mode; `memoryWrites`, `protectedWrites`, `taskMetadata`, `bashDestructiveTraversal`, and `safeShellGuard` are enforced in block mode (config: `config/hook-mode.json`; each toggle enum-validates its value and fails closed — block — on a missing or malformed config, via the shared `resolve_toggle_decision()` helper in `craftflow_hooklib.py`):
 - protect and enforce direct memory markdown writes on Edit/Write (block mode, `memoryWrites`)
 - protect the same memory files, the `.memory-finalize` permit, and workflow JSON artifacts against Bash-write bypasses — redirects, `tee`, and python-script writes (block mode, `protectedWrites`)
 - deny destructive Bash commands (in-cwd or cwd/worktree-escaping) across a widened command vocabulary (block mode, `bashDestructiveTraversal`)
+- deny an absolute denylist of catastrophic Bash commands — `rm -rf /`, `mkfs`, fork bombs (block mode, `safeShellGuard`; concept ported from `xai-org/grok-build`, see `NOTICE`)
 - inject workflow resume context
 - self-check that every sibling hook script still imports cleanly under python3, warning (not blocking) on failure
 - audit workflow artifact integrity after writes
 - validate and enforce CRAFTFLOW task metadata on completion (block mode)
 - restore memory placeholders after Edit/Write and on SubagentStop and Stop
-- snapshot workflow state before compaction and on session stop
+- snapshot workflow state before compaction and on session stop; optionally block session completion until a configured verify command passes (opt-in, off by default; concept ported from `xai-org/grok-build`, see `NOTICE`)
 - log API failures and instruction file loads for telemetry
 
 ## Internal Publication Audit

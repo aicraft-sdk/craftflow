@@ -1,0 +1,28 @@
+craftflow-plugin
+
+Concepts (not code) in the following modules are ported from grok-build:
+
+  https://github.com/xai-org/grok-build
+  Copyright (c) xAI
+  Apache License 2.0
+
+- `plugins/craftflow/scripts/craftflow_safe_shell_guard.py` — ported from
+  `xai-grok-hooks`'s example guard pack (`safe-shell-guard.sh` +
+  `no-recursive-grep-guard.py`): an absolute denylist of catastrophic shell
+  command patterns (`rm -rf /`, `mkfs`, fork bombs) plus an opt-in
+  recursive-grep-against-a-broad-path advisory check.
+- `plugins/craftflow/scripts/craftflow_stop_verify.py` — ported from
+  `xai-grok-hooks`'s stop-verify guard example concept: an opt-in Stop-hook
+  gate that blocks session completion until a configured verify command
+  passes.
+- `plugins/craftflow/scripts/craftflow_hook_trust.py` — ported from
+  `xai-grok-hooks`'s `trust.rs` concept: a hash-manifest-based
+  provenance/trust gate that fail-closed refuses an unmanifested or
+  hash-mismatched repo-local hook script.
+
+No upstream Rust source was copied — all three are original Python
+implementations built on this plugin's own existing conventions
+(`craftflow_hooklib.py`'s stdin-JSON/hook-decision helpers, and
+`craftflow_hook_selfcheck.py`'s subprocess-only/never-import-the-checked-
+script isolation pattern). Deliberately NOT ported: grok's HTTP hook runner
+(`runner/http.rs`) — deferred, out of this phase's scope.

@@ -28,20 +28,21 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_pretooluse_bash_guard.py\"",
-            "timeout": 10,
-            "statusMessage": "CRAFTFLOW destructive-command traversal guard"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_pretooluse_guard.py\"",
             "timeout": 10,
             "statusMessage": "CRAFTFLOW protected-write guard (Bash)"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_pretooluse_bash_guard.py\"",
+            "timeout": 10,
+            "statusMessage": "CRAFTFLOW destructive-command traversal guard"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_safe_shell_guard.py\"",
+            "timeout": 10,
+            "statusMessage": "CRAFTFLOW safe-shell catastrophic-command guard"
           }
         ]
       }
@@ -179,6 +180,12 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_memory_protect_restore.py\"",
             "timeout": 5,
             "statusMessage": "CRAFTFLOW memory placeholder restore"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_stop_verify.py\"",
+            "timeout": 125,
+            "statusMessage": "CRAFTFLOW opt-in stop-verify gate (inert unless config/stop-verify.json enables it)"
           }
         ]
       }
