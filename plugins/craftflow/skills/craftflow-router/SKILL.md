@@ -947,7 +947,7 @@ Memory Update.
    - execute inline in the main context
    - persist workflow artifact results + Memory Notes from the task description
    - append `memory_finalized` to `.craftflow/state/workflows/{wf}.events.jsonl`
-   - clean up the matching [craftflow-internal] memory_task_id entry
+   - clean up the matching [craftflow-internal] or legacy [cc10x-internal] memory_task_id entry
    - mark the memory task completed
    - mark the parent workflow task completed
    - continue
@@ -1022,7 +1022,7 @@ If any answer is "no" or "unknown", treat as incomplete and apply the fallback v
    - quality/convergence state
    - status_history and remediation_history entries when decisions change workflow state
    - pending gate if waiting on user input
-6. Persist `[craftflow-internal] memory_task_id: {memory_task_id} wf:{workflow_uuid}` only if it matches the active workflow.
+6. Persist `[craftflow-internal] memory_task_id: {memory_task_id} wf:{workflow_uuid}` only if it matches the active workflow; first remove any existing matching `[craftflow-internal]` or legacy `[cc10x-internal]` `memory_task_id` line to avoid duplicate orphans.
 
 ### Verifier findings handoff
 
@@ -1112,7 +1112,7 @@ The memory task also:
 - Replaces `workflows/{workflow_uuid}/progress.md ## Tasks` with the active workflow snapshot.
 - Keeps only the most recent 10 items in `workflows/{workflow_uuid}/progress.md ## Completed`.
 - Updates `project/progress.md ## Completed` with a one-line summary of the finished workflow.
-- Removes the matching `[craftflow-internal] memory_task_id` line from `project/activeContext.md ## References`.
+- Removes the matching `[craftflow-internal]` or legacy `[cc10x-internal]` `memory_task_id` line from `project/activeContext.md ## References`.
 - If any artifact or memory write fails, stop immediately (clear the permit first). Never advance the workflow after a failed persistence write.
 
 Fallback: If `workflow_uuid` is unavailable, write to root-flat files

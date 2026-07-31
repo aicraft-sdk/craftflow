@@ -48,7 +48,7 @@ The router memory-finalize step:
 - persists learnings to `activeContext.md ## Learnings`
 - persists reusable gotchas to `patterns.md ## Common Gotchas`
 - persists verification truth to `progress.md ## Verification`
-- writes deferred items as `[Deferred]: ...` under `patterns.md ## Common Gotchas`
+- writes deferred items as `[Deferred]: ...` under `workflows/{workflow_uuid}/activeContext.md` (workflow-scoped, per SKILL.md Section 13's routing table — NOT `patterns.md`)
 - refreshes `progress.md ## Tasks`
 - trims `progress.md ## Completed`
 - removes the matching `[craftflow-internal] memory_task_id` line
