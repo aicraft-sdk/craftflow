@@ -529,6 +529,8 @@ End loop → proceed to § 8 Memory Finalization
 
 In v1 Cursor Task-Dispatch Mode, the following Claude Code features are NOT supported:
 - Doubt-verifier cycle (deferred to v2)
+- Fix-verify cycle (deferred to v2, same rationale as the doubt-verifier cycle above — no
+  Cursor Task-Dispatch equivalent yet for either `doubt-verifier` contract)
 - Research orchestration (deferred to v2)
 - Doc-syncer phase (deferred to v2)
 - Learn-distill phase (deferred to v2) — Claude Code's `learn-distill` gate
