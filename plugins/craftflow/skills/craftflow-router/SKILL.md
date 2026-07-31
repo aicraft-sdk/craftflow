@@ -575,6 +575,7 @@ Only create child tasks after the v10 artifact and state directory exist.
 | `build-hunt`, `re-hunt` | `craftflow:silent-failure-hunter` |
 | `build-verify`, `debug-verify`, `re-verify` | `craftflow:integration-verifier` |
 | `doubt-verify` | `craftflow:doubt-verifier` |
+| `fix-verify` | `craftflow:doubt-verifier` |
 | `plan-create`, `re-plan` | `craftflow:planner` |
 | `plan-review-gap-1`, `plan-review-gap-2` | `craftflow:plan-gap-reviewer` |
 | `research-web` | `craftflow:web-researcher` |
@@ -717,6 +718,64 @@ TaskCreate({
 
 **Doubt cycle counter:** Track in workflow artifact under `telemetry.loop_counts.doubt_verify`. Max 3 cycles; router enforces the hard stop.
 
+### Fix-Verify Dispatch Rule
+
+After `integration-verifier` returns PASS, evaluate `fix_verify_gate` independently of
+`doubt_verify_gate` above — either, both, or neither may fire for the same phase. Unlike
+`doubt_verify_gate`, `fix_verify_gate` is NOT restricted to `build_mode: "standard"` — it fires
+on fast-path and escalated BUILD too (see `references/fast-path.md → Gate Table`).
+
+**DEBUG workflows:** always fires. A DEBUG workflow is by definition fixing a demonstrated bug
+— `bug-investigator`'s own contract already requires a reproduced `Regression:` scenario with
+`ROOT_CAUSE`, so a pre-fix state to compare against always exists.
+
+**BUILD workflows:** fires only when the current phase is fixing an existing defect, not
+adding new functionality. Determine this via `fix_verify_keyword_scan`
+(`references/fast-path.md → fix_verify_keyword_scan — Keyword Table`):
+1. If a plan exists (`plan_file != null`): scan `normalized_phases[phase_cursor].objective`
+   (case-insensitive) against the keyword table.
+2. If `plan:N/A`: scan the workflow artifact's own `user_request` field — the same text
+   `risk_keyword_scan` already scans at BUILD prep. There is no separate phase-objective
+   structure to read when no plan exists (`normalized_phases` is empty).
+3. If the text to scan (from either source) is empty, missing, or otherwise unreadable:
+   default to **not** firing. This is a fail-safe default, not fail-open: a false negative here
+   just means today's existing verification level still applies (no regression); a false
+   positive would add unnecessary review cost to genuine new-feature BUILD work.
+4. A keyword match fires the gate; no match does not.
+
+**Fix-verify task shape:**
+```text
+TaskCreate({
+  subject: "CRAFTFLOW doubt-verifier: Fix-verification cycle {N}",
+  description: "wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:fix-verify\nplan:{plan_file or 'N/A'}\nscope:N/A\nreason:Prove the fix is load-bearing and scan for dormant sibling defects\n\nCycle: {N}\n\n## Artifact\n{diff summary or files changed in this phase}\n\n## Original Defect\n{DEBUG: bug-investigator's ROOT_CAUSE + reproduced Regression scenario. BUILD: the phase objective/exit-criteria text that matched fix_verify_keyword_scan.}\n\n## Contract\nReproduce the pre-fix state against the exact reported reproduction input and confirm it exhibits the defect; confirm the post-fix state closes it on the same input; search for other reachable call sites of the same root-cause logic.",
+  activeForm: "Verifying fix is load-bearing"
+})
+```
+
+**After doubt-verifier returns** (see `agents/doubt-verifier.md → ## Fix-Verify Contract`):
+- `FIX_VERDICT: LOAD_BEARING` → advance phase cursor, continue workflow.
+- `FIX_VERDICT: NOT_LOAD_BEARING` or `SIBLING_FOUND` → create a REM-FIX task (same shape as any
+  other verification failure — `origin:router`, `phase:fix-verify`), increment
+  `telemetry.loop_counts.fix_verify`.
+- Contract-override check (`## 8. Post-Agent Validation → Contract overrides`): a claimed
+  `FIX_VERDICT: LOAD_BEARING` where `PRE_FIX_OUTPUT` does not actually differ from
+  `POST_FIX_OUTPUT` in the direction the fix claims is downgraded to `NOT_LOAD_BEARING` before
+  the router acts on it.
+- If `doubt_verify_gate` also fired on this same phase, the two verdicts are independent —
+  treat the stricter of the two as authoritative (existing Hard Rule, `## 12. Chain Execution
+  Loop` step 6, "if two agents in the same phase return contradictory verdicts... treat the
+  stricter verdict as authoritative"). Either a `DOUBT_VERDICT: REFUTED` or a
+  `FIX_VERDICT: NOT_LOAD_BEARING`/`SIBLING_FOUND` blocks phase-exit; never average or reconcile
+  the two contracts into one.
+- When both gates fire for the same phase, dispatch sequentially — fix-verify first, then
+  doubt-verify — never in parallel. `doubt-verifier` has not previously been parallelized
+  against itself; both dispatches are read-only and cheap enough to run in sequence, and
+  introducing a new same-agent parallel-dispatch pattern is out of scope for this change.
+
+**Fix-verify cycle counter:** Track in workflow artifact under
+`telemetry.loop_counts.fix_verify`. Max 3 cycles; router enforces the hard stop (same rule as
+`doubt_verify`'s own counter above).
+
 ### Task metrics and timing telemetry
 
 Timing telemetry is measurement only. It must never bypass gates, phase exit, or remediation rules.
@@ -752,6 +811,7 @@ Fallback heading on line 2:
 - `## Review: Approve|Changes Requested`
 - `## Error Handling Audit: CLEAN|ISSUES_FOUND`
 - `## Verification: PASS|FAIL`
+- `## Fix Verification: LOAD_BEARING|NOT_LOAD_BEARING|SIBLING_FOUND`
 - `## Planning Review: Pass|Findings`
 
 Verdict extraction:
@@ -851,6 +911,7 @@ If present:
 | doc-syncer | `STATUS=COMPLETE` requires `DOC_LAYERS_EVALUATED` non-empty and at least one entry in `DOC_FILES_UPDATED` or `AUDIT_DOCS_CREATED`; `STATUS=SKIPPED` requires non-empty `SKIP_REASON` — `DOC_LAYERS_EVALUATED` MAY be empty (fast-path classifier exits before per-layer evaluation when `IMPACT_LEVEL=none` is detected immediately); `STATUS=PARTIAL` requires at least one entry in `DOC_FILES_UPDATED` or `AUDIT_DOCS_CREATED` and at least one layer in `DOC_LAYERS_EVALUATED` — router advances to Memory Update and persists `doc_sync_partial=true` in `results.doc_syncer`; `STATUS=FAIL` blocks workflow. |
 | skill-author | `STATUS=COMPLETE` requires non-empty `PROPOSAL_PATH` and non-empty `CANDIDATE_ID`; `STATUS=SKIPPED` requires non-empty `SKIP_REASON` — `SKIPPED` is explicitly a passing state (never blocks workflow advance), matching the doc-syncer `SKIPPED` precedent exactly; `STATUS=FAIL` blocks workflow. |
 | plan-gap-reviewer | `PASS` requires `BLOCKING_FINDINGS_COUNT=0` and `REPLAN_NEEDED=false`; `FINDINGS` requires explicit finding buckets and a non-empty `REPLAN_REASON` when blocking findings exist. |
+| doubt-verifier (phase:fix-verify) | `FIX_VERDICT: LOAD_BEARING` requires `PRE_FIX_COMMAND`, `PRE_FIX_OUTPUT`, `POST_FIX_COMMAND`, `POST_FIX_OUTPUT`, `SIBLING_SCAN_COMMAND`, `SIBLING_SCAN_RESULT` all non-empty; a `PRE_FIX_OUTPUT` that does not demonstrate the original defect (i.e., is not meaningfully different from `POST_FIX_OUTPUT` in the direction the fix claims to close) is downgraded to `NOT_LOAD_BEARING` regardless of the agent's own claim — mirrors the existing "APPROVE + critical issues becomes CHANGES_REQUESTED" override pattern. This is a distinct contract from `doubt-verifier`'s own `DOUBT_VERDICT` contract (`phase:doubt-verify`), which is unchanged and carries no override row of its own (pre-existing, out of scope for this plan). |
 
 Convergence rule:
 - If evidence is incomplete, contradictory, or missing for a required pass path, do not advance the workflow.

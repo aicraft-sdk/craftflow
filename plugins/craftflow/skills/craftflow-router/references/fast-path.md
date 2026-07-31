@@ -15,6 +15,24 @@ Scans request text (case-insensitive). Returns matched keywords. Empty array = f
 
 **Conservative principle:** When in doubt, add the keyword to the list. The cost of a false positive (full chain on a simple request) is wasted tokens. The cost of a false negative (fast path on auth code) is a missed review.
 
+#### fix_verify_keyword_scan — Keyword Table
+
+Scans phase-objective text (or, for `plan:N/A` BUILDs, the workflow artifact's own
+`user_request` field) case-insensitively. Used only by BUILD workflows to decide whether the
+current phase is fixing an existing defect (fires `fix_verify_gate`) versus adding new
+functionality (does not fire). DEBUG workflows never need this scan — `fix_verify_gate` always
+fires for DEBUG (see `SKILL.md § 7 → Fix-Verify Dispatch Rule`).
+
+| Group | Keywords |
+|-------|----------|
+| Fix-indicating language | `fix`, `close`, `patch`, `vulnerability`, `bug`, `defect`, `corrupt` |
+
+**Fail-safe principle (the opposite of `risk_keyword_scan`'s conservative-add principle
+above):** when the text to scan is missing or empty, default to **not** firing
+`fix_verify_gate`. A false negative here costs nothing (today's existing verification level
+still applies); a false positive would add unnecessary review overhead to genuine new-feature
+BUILD work.
+
 #### Workflow Artifact Fields
 
 Three fields are added to the artifact schema and initialized at workflow creation:
@@ -93,8 +111,17 @@ Runs identically on standard BUILD and both fast-path variants (clean and escala
 | `doubt_verify_gate` | conditional | ✗ | ✗ |
 | `learn_distill_gate` | conditional | conditional | conditional |
 | `skill_distill_gate` | conditional | conditional | conditional |
+| `fix_verify_gate` | conditional | conditional | conditional |
 
 `1a-SCOPE rule`: dropped on fast path (no reviewer/hunter findings to scope); RESTORED on escalated path. On escalated fast path, `1a-SCOPE` applies using the same CRITICAL+HIGH threshold (at least one CRITICAL and at least one HIGH in the escalated reviewer+hunter output) as the standard parallel review phase. Rationale: the escalated spawn produces equivalent output to the standard parallel review phase — same agents, same output shape.
+
+`fix_verify_gate`: unlike `doubt_verify_gate` (Standard-only), this gate's eligibility does not
+depend on `build_mode` at all — it can fire on fast-path and escalated BUILD exactly as on
+standard BUILD, since a fast-path BUILD can just as easily be a small, otherwise-low-risk bug
+fix (the exact incident that motivated this gate's own existence,
+`wf-dormant-legacy-section-text-relo-20260731-160917-cbe203b6`, was itself a user-approved
+fast-path BUILD). Its trigger condition is `fix_verify_keyword_scan` above (BUILD) or
+unconditional (DEBUG), evaluated independently of `build_mode`.
 
 #### Escalation Cap
 
