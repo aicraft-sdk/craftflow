@@ -25,6 +25,8 @@ import argparse
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,6 +64,93 @@ def _resolve_project_root(explicit: str | None) -> Path | None:
 
     # Fall back to whatever hooklib resolves (respects CLAUDE_PROJECT_DIR)
     return hl.project_dir()
+
+
+# ---------------------------------------------------------------------------
+# Context usage (Thread E — craftflow's own context awareness)
+# ---------------------------------------------------------------------------
+# Best-effort bridge to @ai-craft/tokentracker's `context --json` (the sole
+# source of truth for a measured context %; no duplicate measurement logic
+# here). Mirrors craftflow_hook_selfcheck.py's check_script() pattern: any
+# failure (not installed, timeout, non-zero exit, malformed JSON, unexpected
+# shape) degrades silently to None. Not a registered hook by itself — this
+# module's own --statusline/--json/--verbose paths are interactive UX only —
+# but its callers in craftflow_precompact_state.py (PreCompact) and
+# craftflow_postcompact_context.py (PostCompact) ARE registered hooks and
+# must pass a tighter timeout; see each file's own budget constant + the
+# drift-guard tests in craftflow_hook_unit_tests.py.
+
+# Mirrors packages/tokentracker/src/context-usage.ts's own exported
+# constants. Hardcoded here (not imported) because this is Python calling a
+# TS package via CLI shell-out, not a shared module — documented mirror,
+# keep in sync if the TS side ever changes.
+CONTEXT_WARN_THRESHOLD = 0.70
+CONTEXT_CRITICAL_THRESHOLD = 0.90
+
+# Not a registered hook (this module's own --statusline/--json/--verbose
+# paths) — bounded only for interactive UX, generous margin is fine.
+CONTEXT_USAGE_DEFAULT_TIMEOUT_SECONDS = 2
+
+
+def _context_usage(timeout: float = CONTEXT_USAGE_DEFAULT_TIMEOUT_SECONDS) -> dict[str, Any] | None:
+    """Best-effort tokentracker context %, via a bounded CLI shell-out.
+
+    Returns None on ANY failure: tokentracker not installed, subprocess
+    timeout, non-zero exit, malformed JSON, or an unexpected/missing shape.
+    Never raises. On success returns
+    {"percent_full": float, "total": int|None, "model_context": int|None}.
+    """
+    binary = shutil.which("tokentracker")
+    if not binary:
+        return None
+    try:
+        result = subprocess.run(
+            [binary, "context", "--json", "--source", "claude"],
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        parsed = json.loads(result.stdout)
+    except Exception:
+        return None
+    views = parsed.get("views") if isinstance(parsed, dict) else None
+    if not isinstance(views, list) or not views:
+        return None
+    view = views[0]
+    if not isinstance(view, dict):
+        return None
+    percent_full = view.get("percentFull")
+    if not isinstance(percent_full, (int, float)) or isinstance(percent_full, bool):
+        return None
+    return {
+        "percent_full": percent_full,
+        "total": view.get("total"),
+        "model_context": view.get("modelContext"),
+    }
+
+
+_ANSI_RESET = "\033[0m"
+_ANSI_YELLOW = "\033[33m"
+_ANSI_RED = "\033[31m"
+
+
+def _format_ctx_segment(ctx: dict[str, Any] | None) -> str:
+    """Return a ' · ctx:NN%' statusline segment (colored at warn/critical),
+    or '' when no measured context usage is available."""
+    if ctx is None:
+        return ""
+    pct = round(ctx["percent_full"] * 100)
+    text = f"ctx:{pct}%"
+    if ctx["percent_full"] >= CONTEXT_CRITICAL_THRESHOLD:
+        text = f"{_ANSI_RED}{text}{_ANSI_RESET}"
+    elif ctx["percent_full"] >= CONTEXT_WARN_THRESHOLD:
+        text = f"{_ANSI_YELLOW}{text}{_ANSI_RESET}"
+    return f" · {text}"
 
 
 # ---------------------------------------------------------------------------
@@ -521,8 +610,9 @@ def _report_statusline(wf_id: str, payload: dict[str, Any]) -> str:
 
     tail = f" ({done}/{total})" if total > 0 else ""
     phase_part = f"{icon} {cursor}{tail}" if cursor else f"{icon}{tail}"
+    ctx_segment = _format_ctx_segment(_context_usage())
 
-    return f"⚡ {label} {pct}% · {phase_part}"
+    return f"⚡ {label} {pct}% · {phase_part}{ctx_segment}"
 
 
 # ---------------------------------------------------------------------------
@@ -569,6 +659,9 @@ def _report_one(wf_id: str, payload: dict[str, Any], verbose: bool) -> list[str]
     lines.append(f"  convergence:   {q.get('convergence_state') or '—'}")
     lines.append(f"  confidence:    {q.get('confidence') or '—'}")
     lines.append(f"  loop counts:   {json.dumps(loops) if loops else '—'}")
+    ctx = _context_usage()
+    ctx_str = f"{round(ctx['percent_full'] * 100)}%" if ctx else "— (tokentracker unavailable)"
+    lines.append(f"  context used:  {ctx_str}")
 
     lines += ["", "  ── Event Timeline (last 12) ────────────────────────────"]
     lines.extend(_tail_events(wf_id))
@@ -725,6 +818,7 @@ def _build_json_output(wf_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         "last_event":     _last_event_line(wf_id),
         "results":        payload.get("results") or {},
         "telemetry":      payload.get("telemetry") or {},
+        "context_usage":  _context_usage(),
     }
 
 

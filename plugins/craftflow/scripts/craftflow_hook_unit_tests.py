@@ -32,6 +32,9 @@ import craftflow_pretooluse_guard as pretooluse_guard  # noqa: E402
 import craftflow_skill_ledger as skill_ledger  # noqa: E402
 import craftflow_skill_promote as skill_promote  # noqa: E402
 import craftflow_skill_propose as skill_propose  # noqa: E402
+import craftflow_status_report as status_report  # noqa: E402
+import craftflow_precompact_state as precompact_state  # noqa: E402
+import craftflow_postcompact_context as postcompact_context  # noqa: E402
 
 _errors: list[str] = []
 _passes: int = 0
@@ -11984,6 +11987,311 @@ def test_hook_trust_never_imports_hooklib_directly() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Context usage (Thread E — craftflow's own context awareness)
+# ---------------------------------------------------------------------------
+
+def test_context_usage_returns_none_when_tokentracker_not_installed() -> None:
+    name = "context-usage/none-when-not-installed"
+    real_which = status_report.shutil.which
+    status_report.shutil.which = lambda _name: None
+    try:
+        result = status_report._context_usage()
+    finally:
+        status_report.shutil.which = real_which
+    if result is not None:
+        fail(name, f"expected None when tokentracker is not on PATH; got {result!r}")
+        return
+    ok(name)
+
+
+def test_context_usage_returns_percent_full_on_installed_success() -> None:
+    name = "context-usage/parses-percent-full-on-success"
+    real_which = status_report.shutil.which
+    real_run = status_report.subprocess.run
+    status_report.shutil.which = lambda _name: "/usr/local/bin/tokentracker"
+
+    class _FakeResult:
+        returncode = 0
+        stdout = json.dumps({"views": [{"percentFull": 0.42, "total": 84000, "modelContext": 200000}]})
+        stderr = ""
+
+    status_report.subprocess.run = lambda *a, **kw: _FakeResult()
+    try:
+        result = status_report._context_usage()
+    finally:
+        status_report.shutil.which = real_which
+        status_report.subprocess.run = real_run
+    if result != {"percent_full": 0.42, "total": 84000, "model_context": 200000}:
+        fail(name, f"expected parsed percent_full/total/model_context; got {result!r}")
+        return
+    ok(name)
+
+
+def test_context_usage_returns_none_on_timeout() -> None:
+    name = "context-usage/none-on-timeout"
+    real_which = status_report.shutil.which
+    real_run = status_report.subprocess.run
+    status_report.shutil.which = lambda _name: "/usr/local/bin/tokentracker"
+
+    def _raise_timeout(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="tokentracker", timeout=2)
+
+    status_report.subprocess.run = _raise_timeout
+    try:
+        result = status_report._context_usage()
+    finally:
+        status_report.shutil.which = real_which
+        status_report.subprocess.run = real_run
+    if result is not None:
+        fail(name, f"expected None on subprocess timeout; got {result!r}")
+        return
+    ok(name)
+
+
+def test_context_usage_returns_none_on_non_zero_exit() -> None:
+    name = "context-usage/none-on-non-zero-exit"
+    real_which = status_report.shutil.which
+    real_run = status_report.subprocess.run
+    status_report.shutil.which = lambda _name: "/usr/local/bin/tokentracker"
+
+    class _FakeResult:
+        returncode = 1
+        stdout = ""
+        stderr = "tokentracker: no active session"
+
+    status_report.subprocess.run = lambda *a, **kw: _FakeResult()
+    try:
+        result = status_report._context_usage()
+    finally:
+        status_report.shutil.which = real_which
+        status_report.subprocess.run = real_run
+    if result is not None:
+        fail(name, f"expected None on non-zero exit; got {result!r}")
+        return
+    ok(name)
+
+
+def test_context_usage_returns_none_on_malformed_json() -> None:
+    name = "context-usage/none-on-malformed-json"
+    real_which = status_report.shutil.which
+    real_run = status_report.subprocess.run
+    status_report.shutil.which = lambda _name: "/usr/local/bin/tokentracker"
+
+    class _FakeResult:
+        returncode = 0
+        stdout = "not valid json {{{"
+        stderr = ""
+
+    status_report.subprocess.run = lambda *a, **kw: _FakeResult()
+    try:
+        result = status_report._context_usage()
+    finally:
+        status_report.shutil.which = real_which
+        status_report.subprocess.run = real_run
+    if result is not None:
+        fail(name, f"expected None on malformed JSON stdout; got {result!r}")
+        return
+    ok(name)
+
+
+def test_precompact_context_usage_budget_stays_under_registered_hook_timeout() -> None:
+    # Drift-guard, mirroring craftflow_hook_selfcheck.py's own
+    # test_selfcheck_internal_budget_stays_under_registered_hook_timeout: ties
+    # craftflow_precompact_state.py's own subprocess-timeout budget to the
+    # REAL registered PreCompact timeout in hooks/hooks.json, so a future
+    # change to either side without updating the other fails the suite
+    # instead of silently reopening a hook-timeout-exceeding risk.
+    name = "precompact-state/context-usage-budget-under-registered-timeout"
+    path = PLUGIN_ROOT / "hooks" / "hooks.json"
+    if not path.exists():
+        fail(name, f"hooks.json not found at {path}")
+        return
+    hooks = json.loads(path.read_text(encoding="utf-8"))
+    precompact_hooks = hooks.get("hooks", {}).get("PreCompact", [])
+    registered_timeout = None
+    for entry in precompact_hooks:
+        for h in entry.get("hooks", []):
+            if "craftflow_precompact_state" in h.get("command", ""):
+                registered_timeout = h.get("timeout")
+    if registered_timeout is None:
+        fail(name, "could not find a registered timeout for craftflow_precompact_state in hooks/hooks.json")
+        return
+    budget = precompact_state.PRECOMPACT_CONTEXT_USAGE_TIMEOUT_SECONDS
+    min_margin_seconds = 1
+    if budget + min_margin_seconds > registered_timeout:
+        fail(
+            name,
+            f"context-usage subprocess budget ({budget}s) leaves less than {min_margin_seconds}s "
+            f"margin under the registered PreCompact hook timeout ({registered_timeout}s)",
+        )
+        return
+    ok(name)
+
+
+def test_postcompact_context_usage_budget_stays_under_registered_hook_timeout() -> None:
+    # Companion drift-guard for the PostCompact side.
+    name = "postcompact-context/context-usage-budget-under-registered-timeout"
+    path = PLUGIN_ROOT / "hooks" / "hooks.json"
+    if not path.exists():
+        fail(name, f"hooks.json not found at {path}")
+        return
+    hooks = json.loads(path.read_text(encoding="utf-8"))
+    postcompact_hooks = hooks.get("hooks", {}).get("PostCompact", [])
+    registered_timeout = None
+    for entry in postcompact_hooks:
+        for h in entry.get("hooks", []):
+            if "craftflow_postcompact_context" in h.get("command", ""):
+                registered_timeout = h.get("timeout")
+    if registered_timeout is None:
+        fail(name, "could not find a registered timeout for craftflow_postcompact_context in hooks/hooks.json")
+        return
+    budget = postcompact_context.POSTCOMPACT_CONTEXT_USAGE_TIMEOUT_SECONDS
+    min_margin_seconds = 1
+    if budget + min_margin_seconds > registered_timeout:
+        fail(
+            name,
+            f"context-usage subprocess budget ({budget}s) leaves less than {min_margin_seconds}s "
+            f"margin under the registered PostCompact hook timeout ({registered_timeout}s)",
+        )
+        return
+    ok(name)
+
+
+def test_report_statusline_appends_ctx_segment_when_available() -> None:
+    name = "status-report/statusline-appends-ctx-when-available"
+    real_ctx = status_report._context_usage
+    status_report._context_usage = lambda *a, **kw: {"percent_full": 0.42, "total": 84000, "model_context": 200000}
+    try:
+        line = status_report._report_statusline("wf-test-ctx-1", {"phase_cursor": "phase_1"})
+    finally:
+        status_report._context_usage = real_ctx
+    if "ctx:42%" not in line:
+        fail(name, f"expected 'ctx:42%' segment in statusline; got {line!r}")
+        return
+    ok(name)
+
+
+def test_report_statusline_omits_ctx_segment_when_unavailable() -> None:
+    name = "status-report/statusline-omits-ctx-when-unavailable"
+    real_ctx = status_report._context_usage
+    status_report._context_usage = lambda *a, **kw: None
+    try:
+        line = status_report._report_statusline("wf-test-ctx-2", {"phase_cursor": "phase_1"})
+    finally:
+        status_report._context_usage = real_ctx
+    if "ctx:" in line:
+        fail(name, f"expected no ctx segment when unavailable; got {line!r}")
+        return
+    ok(name)
+
+
+def test_report_statusline_colors_ctx_segment_red_at_critical() -> None:
+    name = "status-report/statusline-colors-ctx-red-at-critical"
+    real_ctx = status_report._context_usage
+    status_report._context_usage = lambda *a, **kw: {"percent_full": 0.95, "total": 190000, "model_context": 200000}
+    try:
+        line = status_report._report_statusline("wf-test-ctx-3", {"phase_cursor": "phase_1"})
+    finally:
+        status_report._context_usage = real_ctx
+    if status_report._ANSI_RED not in line:
+        fail(name, f"expected red ANSI code for critical ctx%; got {line!r}")
+        return
+    ok(name)
+
+
+def test_build_json_output_includes_context_usage_key() -> None:
+    name = "status-report/json-output-includes-context-usage"
+    real_ctx = status_report._context_usage
+    status_report._context_usage = lambda *a, **kw: {"percent_full": 0.5, "total": 100000, "model_context": 200000}
+    try:
+        out = status_report._build_json_output("wf-test-ctx-4", {"phase_cursor": "phase_1"})
+    finally:
+        status_report._context_usage = real_ctx
+    if out.get("context_usage") != {"percent_full": 0.5, "total": 100000, "model_context": 200000}:
+        fail(name, f"expected context_usage key with parsed value; got {out.get('context_usage')!r}")
+        return
+    ok(name)
+
+
+def test_build_json_output_context_usage_none_when_unavailable() -> None:
+    name = "status-report/json-output-context-usage-none-when-unavailable"
+    real_ctx = status_report._context_usage
+    status_report._context_usage = lambda *a, **kw: None
+    try:
+        out = status_report._build_json_output("wf-test-ctx-5", {"phase_cursor": "phase_1"})
+    finally:
+        status_report._context_usage = real_ctx
+    if out.get("context_usage") is not None:
+        fail(name, f"expected context_usage=None when unavailable; got {out.get('context_usage')!r}")
+        return
+    ok(name)
+
+
+def test_precompact_build_snapshot_includes_context_usage_when_available() -> None:
+    name = "precompact-state/build-snapshot-includes-context-usage"
+    payload = {
+        "workflow_uuid": "wf-test-pc-1",
+        "workflow_type": "BUILD",
+        "phase_cursor": "phase_1",
+        "phase_status": {},
+        "plan_file": None,
+    }
+    ctx = {"percent_full": 0.71, "total": 142000, "model_context": 200000}
+    snapshot = precompact_state._build_snapshot(payload, "auto", ctx)
+    if snapshot.get("context_usage") != ctx:
+        fail(name, f"expected context_usage={ctx!r} in snapshot; got {snapshot.get('context_usage')!r}")
+        return
+    if snapshot.get("workflow_uuid") != "wf-test-pc-1":
+        fail(name, f"expected workflow_uuid preserved; got {snapshot.get('workflow_uuid')!r}")
+        return
+    ok(name)
+
+
+def test_precompact_build_snapshot_context_usage_none_when_unavailable() -> None:
+    name = "precompact-state/build-snapshot-context-usage-none-when-unavailable"
+    payload = {
+        "workflow_uuid": "wf-test-pc-2",
+        "workflow_type": "BUILD",
+        "phase_cursor": "phase_1",
+        "phase_status": {},
+        "plan_file": None,
+    }
+    snapshot = precompact_state._build_snapshot(payload, "auto", None)
+    if snapshot.get("context_usage") is not None:
+        fail(name, f"expected context_usage=None; got {snapshot.get('context_usage')!r}")
+        return
+    if snapshot.get("trigger") != "auto":
+        fail(name, f"expected trigger preserved; got {snapshot.get('trigger')!r}")
+        return
+    ok(name)
+
+
+def test_postcompact_build_event_includes_context_usage_when_available() -> None:
+    name = "postcompact-context/build-event-includes-context-usage"
+    ctx = {"percent_full": 0.15, "total": 30000, "model_context": 200000}
+    event = postcompact_context._build_event("wf-test-po-1", "auto", "compacted 3 turns", ctx)
+    if event.get("context_usage") != ctx:
+        fail(name, f"expected context_usage={ctx!r} in event; got {event.get('context_usage')!r}")
+        return
+    if event.get("details") != "compacted 3 turns":
+        fail(name, f"expected details preserved; got {event.get('details')!r}")
+        return
+    ok(name)
+
+
+def test_postcompact_build_event_context_usage_none_when_unavailable() -> None:
+    name = "postcompact-context/build-event-context-usage-none-when-unavailable"
+    event = postcompact_context._build_event("wf-test-po-2", "auto", "", None)
+    if event.get("context_usage") is not None:
+        fail(name, f"expected context_usage=None; got {event.get('context_usage')!r}")
+        return
+    if event.get("event") != "compact_occurred":
+        fail(name, f"expected event type preserved; got {event.get('event')!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -12673,6 +12981,25 @@ def main() -> int:
     test_workflow_artifact_policy_registers_skill_distill_events()
     test_craftflow_state_mdc_documents_skill_distillation_paths()
     test_cursor_router_wires_skill_distill_gate()
+
+    print()
+    print("[ context-usage (Thread E — craftflow's own context awareness) ]")
+    test_context_usage_returns_none_when_tokentracker_not_installed()
+    test_context_usage_returns_percent_full_on_installed_success()
+    test_context_usage_returns_none_on_timeout()
+    test_context_usage_returns_none_on_non_zero_exit()
+    test_context_usage_returns_none_on_malformed_json()
+    test_precompact_context_usage_budget_stays_under_registered_hook_timeout()
+    test_postcompact_context_usage_budget_stays_under_registered_hook_timeout()
+    test_report_statusline_appends_ctx_segment_when_available()
+    test_report_statusline_omits_ctx_segment_when_unavailable()
+    test_report_statusline_colors_ctx_segment_red_at_critical()
+    test_build_json_output_includes_context_usage_key()
+    test_build_json_output_context_usage_none_when_unavailable()
+    test_precompact_build_snapshot_includes_context_usage_when_available()
+    test_precompact_build_snapshot_context_usage_none_when_unavailable()
+    test_postcompact_build_event_includes_context_usage_when_available()
+    test_postcompact_build_event_context_usage_none_when_unavailable()
 
     print()
     if _errors:

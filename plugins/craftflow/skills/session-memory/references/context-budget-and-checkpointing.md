@@ -27,12 +27,18 @@ memory-first workflow.
 
 ## Degradation Tiers
 
-| Tier | Signal | Behavior |
-|------|--------|----------|
-| clear | context feels crisp | normal operation |
-| warming | many file reads / growing chat | tighten reads and favor references |
-| degrading | vague thinking, skipped checks, repeated rereads | checkpoint immediately |
-| fragile | contradictory recall or missing thread | stop expanding scope; restore from durable artifacts |
+These tiers are self-assessed (qualitative) — they still matter when `tokentracker` isn't
+installed, or for agents without direct token visibility. When a measured context % *is*
+available (via `craftflow status`'s `ctx:NN%` segment, `--json`'s `context_usage`, or
+`--verbose`'s "context used" line — all best-effort, sourced from `tokentracker context
+--json`), treat it as quantitative corroboration of the tier, not a replacement for it.
+
+| Tier | Signal | Behavior | Quantitative corroboration (when measured ctx% is available) |
+|------|--------|----------|----------------------------------------------------------|
+| clear | context feels crisp | normal operation | ctx% below 70% |
+| warming | many file reads / growing chat | tighten reads and favor references | ctx% at or above 70% |
+| degrading | vague thinking, skipped checks, repeated rereads | checkpoint immediately | ctx% at or above 90% |
+| fragile | contradictory recall or missing thread | stop expanding scope; restore from durable artifacts | ctx% at or above 90%, treat as fragile regardless of subjective signals |
 
 ## Early Warning Signs
 
