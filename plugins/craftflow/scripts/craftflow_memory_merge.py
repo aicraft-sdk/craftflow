@@ -13,7 +13,7 @@ section boundary instead of trusting an LLM-supplied span):
       "file_text": "full content of the memory file",
       "section": "Common Gotchas",
       "notes": [
-        {"text": "new insight", "confidence": 0.9}
+        {"text": "new insight", "confidence": 0.9, "provenance": "imported"}
       ],
       "retractions": ["old note to remove"],
       "max_bullets": 60
@@ -26,7 +26,7 @@ kept working for callers that have not yet migrated to section-anchored):
     {
       "section_text": "current content of the target ## section",
       "notes": [
-        {"text": "new insight", "confidence": 0.9}
+        {"text": "new insight", "confidence": 0.9, "provenance": "imported"}
       ],
       "retractions": ["old note to remove"],
       "max_bullets": 60
@@ -35,6 +35,11 @@ kept working for callers that have not yet migrated to section-anchored):
 
 "max_bullets" is optional in both modes; when present, the bullet list is
 capped post-merge with oldest-first eviction.
+
+Each note's "provenance" field is optional: "organic" | "imported", defaults to "imported" when
+absent or unrecognized (fail-safe — an incoming note is never treated as organic unless
+explicitly marked). An existing bullet marked organic is never auto-replaced by an incoming
+note, regardless of confidence; the incoming note is appended as a new bullet instead.
 
 Exit 0 on success, 1 on error.
 """
@@ -46,35 +51,56 @@ from craftflow_hooklib import extract_bullets, normalize_bullet
 
 
 def parse_confidence(line: str) -> float:
-    """Extract (conf: N.N) suffix from a bullet line. Returns float or 0.8 if absent."""
-    match = re.search(r"\(conf:\s*([\d.]+)\)\s*$", line)
+    """Extract (conf: N.N[, organic]) suffix from a bullet line. Returns float or 0.8 if absent."""
+    match = re.search(r"\(conf:\s*([\d.]+)(?:,\s*organic)?\)\s*$", line)
     if match:
         return float(match.group(1))
     return 0.8
 
 
+def parse_provenance(line: str) -> str:
+    """Extract provenance from a bullet's suffix. Returns 'organic' when the line ends with
+    '(conf: N.N, organic)'; otherwise 'imported' -- the safe default for unmarked legacy bullets
+    (see design Questions Resolved: an unmarked bullet must NOT silently gain organic
+    supersede-immunity)."""
+    match = re.search(r"\(conf:\s*[\d.]+,\s*organic\)\s*$", line)
+    return "organic" if match else "imported"
+
+
 def strip_confidence_suffix(line: str) -> str:
-    """Remove ' (conf: N.N)' suffix if present. Returns clean text."""
-    return re.sub(r"\s*\(conf:\s*[\d.]+\)\s*$", "", line)
+    """Remove ' (conf: N.N[, organic])' suffix if present. Returns clean text."""
+    return re.sub(r"\s*\(conf:\s*[\d.]+(?:,\s*organic)?\)\s*$", "", line)
 
 
-def merge_bullet(existing_bullets: list, new_text: str, confidence: float) -> list:
+def _render_bullet(text: str, confidence: float, provenance: str) -> str:
+    """Render a bullet line. The provenance marker is included only for organic notes --
+    imported stays the existing unmarked '(conf: x)' shape so every pre-existing bullet in every
+    managed file remains valid and unchanged (backward compatibility)."""
+    if provenance == "organic":
+        return f"- {text} (conf: {confidence}, organic)"
+    return f"- {text} (conf: {confidence})"
+
+
+def merge_bullet(existing_bullets: list, new_text: str, confidence: float, provenance: str = "imported") -> list:
     """
     Merge a new note into the existing bullet list with confidence-aware superseding.
 
     - confidence < 0.7: drop (return existing unchanged)
     - If normalize_bullet match found:
-        - new confidence >= existing confidence: replace existing line
-        - new confidence < existing confidence: skip (keep old)
-    - If no match: append new bullet with (conf: x) suffix
+        - existing bullet is marked organic: NEVER replaced, regardless of confidence --
+          the incoming note is appended as a new bullet instead (supersede-immunity guard;
+          closes the hand-edited-bullet-overwrite risk).
+        - existing bullet is imported (default for unmarked legacy bullets):
+          new confidence >= existing confidence -> replace; else skip (keep old)
+    - If no match: append new bullet with (conf: x[, organic]) suffix
     """
     if confidence < 0.7:
         return existing_bullets
 
-    # Strip any pre-existing confidence suffix from new_text before normalizing
-    # or formatting — symmetric with how existing bullets are handled below.
-    # Without this, an already-suffixed note (e.g. text ending "(conf: 0.9)")
-    # never matches its existing counterpart and acquires a second suffix.
+    # Strip any pre-existing confidence/provenance suffix from new_text before normalizing
+    # or formatting -- symmetric with how existing bullets are handled below. Without this,
+    # an already-suffixed note never matches its existing counterpart and acquires a second
+    # suffix.
     clean_new = strip_confidence_suffix(new_text)
     norm_new = normalize_bullet(clean_new)
     result = list(existing_bullets)
@@ -83,14 +109,20 @@ def merge_bullet(existing_bullets: list, new_text: str, confidence: float) -> li
         existing_clean = strip_confidence_suffix(bullet)
         norm_existing = normalize_bullet(existing_clean)
         if norm_existing == norm_new:
+            if parse_provenance(bullet) == "organic":
+                # Supersede-immunity: never overwrite an organic bullet. Append the
+                # incoming note as a distinct new bullet instead -- never silently
+                # dropped, never silently overwritten.
+                result.append(_render_bullet(clean_new, confidence, provenance))
+                return result
             existing_conf = parse_confidence(bullet)
             if confidence >= existing_conf:
-                result[i] = f"- {clean_new} (conf: {confidence})"
-            # If new confidence < existing, keep old — do nothing
+                result[i] = _render_bullet(clean_new, confidence, provenance)
+            # If new confidence < existing, keep old -- do nothing
             return result
 
-    # No match found — append
-    result.append(f"- {clean_new} (conf: {confidence})")
+    # No match found -- append
+    result.append(_render_bullet(clean_new, confidence, provenance))
     return result
 
 
@@ -162,16 +194,24 @@ def apply_cap(bullets: list, max_bullets) -> list:
     return [bullet for i, bullet in enumerate(bullets) if i not in evict_indices]
 
 
+def _normalize_provenance(value) -> str:
+    """Fail-safe: only the literal string 'organic' grants organic protection. Anything else
+    (missing, None, unrecognized string) normalizes to 'imported' -- never crash on malformed
+    payload shape, and never silently grant organic protection to untrusted input."""
+    return "organic" if value == "organic" else "imported"
+
+
 def _normalize_notes(raw_notes: list) -> list:
-    """Normalize raw note entries (plain strings or dicts) to {"text", "confidence"} dicts."""
+    """Normalize raw note entries (plain strings or dicts) to {"text", "confidence", "provenance"} dicts."""
     notes = []
     for item in raw_notes:
         if isinstance(item, str):
-            notes.append({"text": item, "confidence": 0.8})
+            notes.append({"text": item, "confidence": 0.8, "provenance": "imported"})
         elif isinstance(item, dict):
             notes.append({
                 "text": item.get("text", ""),
                 "confidence": float(item.get("confidence", 0.8)),
+                "provenance": _normalize_provenance(item.get("provenance")),
             })
     return notes
 
@@ -190,7 +230,7 @@ def _merge_notes_into_body(
     current_bullets = extract_bullets(section_body) if section_body else []
 
     for note in notes:
-        current_bullets = merge_bullet(current_bullets, note["text"], note["confidence"])
+        current_bullets = merge_bullet(current_bullets, note["text"], note["confidence"], note["provenance"])
 
     if max_bullets is not None:
         current_bullets = apply_cap(current_bullets, max_bullets)

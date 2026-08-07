@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../scripts"))
 
 from craftflow_memory_merge import (
     parse_confidence,
+    parse_provenance,
     strip_confidence_suffix,
     merge_bullet,
     apply_retractions,
@@ -214,6 +215,94 @@ check(
     "cap trims oldest bullet, preserves non-bullet lines and other sections",
     result,
     expected_cap,
+)
+
+# --- parse_provenance ---
+print("\n[parse_provenance]")
+check("parses organic marker", parse_provenance("- insight (conf: 0.9, organic)"), "organic")
+check("defaults to imported when absent", parse_provenance("- insight (conf: 0.9)"), "imported")
+check("defaults to imported on plain bullet with no suffix", parse_provenance("- plain bullet"), "imported")
+
+# --- merge_bullet: organic supersede-immunity guard ---
+print("\n[merge_bullet: organic supersede-immunity]")
+result = merge_bullet(
+    ["- hand-verified rule (conf: 0.9, organic)"], "hand-verified rule", 1.0, "imported"
+)
+check(
+    "organic bullet is never replaced, even by higher-confidence imported note; note appended instead",
+    result,
+    ["- hand-verified rule (conf: 0.9, organic)", "- hand-verified rule (conf: 1.0)"],
+)
+
+result = merge_bullet(
+    ["- legacy unmarked rule (conf: 0.8)"], "legacy unmarked rule", 0.9, "imported"
+)
+check(
+    "unmarked legacy bullet defaults to imported -- still supersedes normally (regression)",
+    result,
+    ["- legacy unmarked rule (conf: 0.9)"],
+)
+
+result = merge_bullet([], "hand-verified new fact", 0.9, "organic")
+check(
+    "new organic note renders with explicit organic suffix",
+    result,
+    ["- hand-verified new fact (conf: 0.9, organic)"],
+)
+
+result = merge_bullet(["- plain (conf: 0.8)"], "plain", 0.9)
+check(
+    "merge_bullet remains callable with 3 positional args -- provenance defaults to imported (back-compat)",
+    result,
+    ["- plain (conf: 0.9)"],
+)
+
+# --- merge_section_anchored: organic protection end-to-end + fail-safe provenance ---
+print("\n[merge_section_anchored: organic protection + fail-safe provenance]")
+file_text_organic = (
+    "## Gotchas\n"
+    "- always seed before migrating (conf: 0.9, organic)\n"
+    "## Other\n"
+    "untouched\n"
+)
+result = merge_section_anchored(
+    file_text_organic,
+    "Gotchas",
+    [{"text": "always seed before migrating", "confidence": 1.0, "provenance": "imported"}],
+)
+expected_organic = (
+    "## Gotchas\n"
+    "- always seed before migrating (conf: 0.9, organic)\n"
+    "- always seed before migrating (conf: 1.0)\n"
+    "## Other\n"
+    "untouched\n"
+)
+check(
+    "organic bullet survives a matching imported note end-to-end; note appended instead of overwriting",
+    result,
+    expected_organic,
+)
+
+result = merge_section_anchored(
+    "## Gotchas\n- existing (conf: 0.8)\n",
+    "Gotchas",
+    [{"text": "existing", "confidence": 0.95, "provenance": "bogus-unrecognized-value"}],
+)
+check(
+    "unrecognized provenance value on incoming note fails safe to imported",
+    result,
+    "## Gotchas\n- existing (conf: 0.95)\n",
+)
+
+result = merge_section_anchored(
+    "## Gotchas\n- existing (conf: 0.8)\n",
+    "Gotchas",
+    [{"text": "existing", "confidence": 0.95}],
+)
+check(
+    "notes without a provenance key at all remain fully backward compatible",
+    result,
+    "## Gotchas\n- existing (conf: 0.95)\n",
 )
 
 # --- Summary ---
