@@ -21,6 +21,7 @@ from craftflow_memory_merge import (
     apply_retractions,
     apply_cap,
     merge_section_anchored,
+    _normalize_notes,
 )
 
 PASS = 0
@@ -87,6 +88,15 @@ check("confidence < 0.7 drops note", result, [])
 
 result = merge_bullet(["- existing (conf: 0.9)"], "guess", 0.6)
 check("confidence < 0.7 does not modify existing", result, ["- existing (conf: 0.9)"])
+
+stderr_capture_lowconf = io.StringIO()
+with contextlib.redirect_stderr(stderr_capture_lowconf):
+    merge_bullet([], "guess", 0.5)
+check(
+    "dropping a note below the confidence threshold emits a non-silent stderr warning",
+    "confidence" in stderr_capture_lowconf.getvalue().lower(),
+    True,
+)
 
 # --- merge_bullet: append when no match ---
 print("\n[merge_bullet: append]")
@@ -353,6 +363,20 @@ check(
     ["- hand-verified rule (conf: 0.9, organic)", "- hand-verified rule (conf: 1.0)"],
 )
 
+# --- merge_bullet: organic-match branch must not accumulate duplicate ORGANIC bullets on repeat calls ---
+print("\n[merge_bullet: organic-match repeat-call duplicate accumulation (organic incoming)]")
+result = merge_bullet(
+    ["- hand-verified rule (conf: 0.9, organic)"], "hand-verified rule", 1.0, "organic"
+)
+result = merge_bullet(
+    result, "hand-verified rule", 1.0, "organic"
+)
+check(
+    "repeat merge of the same organic-matching note with organic incoming provenance supersedes the existing duplicate instead of appending a second one",
+    result,
+    ["- hand-verified rule (conf: 0.9, organic)", "- hand-verified rule (conf: 1.0, organic)"],
+)
+
 # --- merge_section_anchored: organic protection end-to-end + fail-safe provenance ---
 print("\n[merge_section_anchored: organic protection + fail-safe provenance]")
 file_text_organic = (
@@ -399,6 +423,22 @@ check(
     "notes without a provenance key at all remain fully backward compatible",
     result,
     "## Gotchas\n- existing (conf: 0.95)\n",
+)
+
+# --- _normalize_notes: malformed entries are not silently dropped ---
+print("\n[_normalize_notes: malformed entry warning]")
+stderr_capture_malformed = io.StringIO()
+with contextlib.redirect_stderr(stderr_capture_malformed):
+    notes = _normalize_notes([None, 42, ["nested", "list"], {"text": "ok", "confidence": 0.9}])
+check(
+    "malformed entries are dropped but well-formed entries still normalize",
+    notes,
+    [{"text": "ok", "confidence": 0.9, "provenance": "imported"}],
+)
+check(
+    "dropping a malformed note entry emits a non-silent stderr warning",
+    "malformed" in stderr_capture_malformed.getvalue().lower(),
+    True,
 )
 
 # --- Summary ---

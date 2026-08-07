@@ -103,7 +103,9 @@ def merge_bullet(existing_bullets: list, new_text: str, confidence: float, prove
     """
     Merge a new note into the existing bullet list with confidence-aware superseding.
 
-    - confidence < 0.7: drop (return existing unchanged)
+    - confidence < 0.7: drop (return existing unchanged), emitting a non-silent stderr
+      warning -- a dropped note (including an organic one) must never disappear without
+      signal.
     - If normalize_bullet match found:
         - existing bullet is marked organic: NEVER replaced, regardless of confidence --
           the incoming note is appended as a new bullet instead (supersede-immunity guard;
@@ -113,6 +115,9 @@ def merge_bullet(existing_bullets: list, new_text: str, confidence: float, prove
     - If no match: append new bullet with (conf: x[, organic]) suffix
     """
     if confidence < 0.7:
+        sys.stderr.write(
+            f"Warning: dropping note below confidence threshold (0.7): {new_text!r} (confidence={confidence})\n"
+        )
         return existing_bullets
 
     # Strip any pre-existing confidence/provenance suffix from new_text before normalizing
@@ -128,19 +133,23 @@ def merge_bullet(existing_bullets: list, new_text: str, confidence: float, prove
         norm_existing = normalize_bullet(existing_clean)
         if norm_existing == norm_new:
             if parse_provenance(bullet) == "organic":
-                # Supersede-immunity: never overwrite an organic bullet. But before
-                # unconditionally appending a new imported duplicate, check whether an
-                # imported duplicate from a PREVIOUS call already exists later in the
-                # list -- if so, apply the normal confidence-based supersede/skip logic
-                # to THAT entry instead. Without this check, repeat merges of the same
-                # organic-matching note accumulate unbounded imported duplicates, and
-                # oldest-first cap eviction would evict the original organic bullet
-                # first, defeating the supersede-immunity guard entirely.
+                # Supersede-immunity: never overwrite an organic bullet -- but this
+                # protection applies only to the FIRST occurrence (i, found above).
+                # Before unconditionally appending a new duplicate, check whether a
+                # duplicate from a PREVIOUS call already exists later in the list --
+                # regardless of THAT duplicate's own provenance (it may itself be
+                # organic-marked if a prior call's incoming note carried
+                # provenance="organic") -- and if so, apply the normal confidence-based
+                # supersede/skip logic to THAT entry instead. Without this check, repeat
+                # merges of the same organic-matching note accumulate unbounded
+                # duplicates (imported OR organic-marked), and oldest-first cap eviction
+                # would evict the original organic bullet first, defeating the
+                # supersede-immunity guard entirely.
                 for j in range(i + 1, len(result)):
                     other_clean = strip_confidence_suffix(result[j])
                     if (
                         normalize_bullet(other_clean) == norm_new
-                        and parse_provenance(result[j]) == "imported"
+                        and parse_provenance(result[j]) in ("imported", "organic")
                     ):
                         other_conf = parse_confidence(result[j])
                         if confidence >= other_conf:
@@ -257,7 +266,13 @@ def _normalize_provenance(value) -> str:
 
 
 def _normalize_notes(raw_notes: list) -> list:
-    """Normalize raw note entries (plain strings or dicts) to {"text", "confidence", "provenance"} dicts."""
+    """Normalize raw note entries (plain strings or dicts) to {"text", "confidence", "provenance"} dicts.
+
+    A malformed entry (neither str nor dict -- e.g. None, a number, a nested list) is dropped,
+    but never silently: a stderr warning is emitted first, matching apply_retractions' existing
+    warn-on-organic-loss pattern in this file. Well-formed entries in the same list are still
+    normalized normally.
+    """
     notes = []
     for item in raw_notes:
         if isinstance(item, str):
@@ -268,6 +283,8 @@ def _normalize_notes(raw_notes: list) -> list:
                 "confidence": float(item.get("confidence", 0.8)),
                 "provenance": _normalize_provenance(item.get("provenance")),
             })
+        else:
+            sys.stderr.write(f"Warning: dropping malformed note entry (not str/dict): {item!r}\n")
     return notes
 
 
@@ -375,26 +392,35 @@ def main() -> int:
     raw_notes = payload.get("notes", [])
     retractions = payload.get("retractions", [])
     max_bullets = payload.get("max_bullets")
-    notes = _normalize_notes(raw_notes)
 
-    file_text = payload.get("file_text")
-    section = payload.get("section")
+    try:
+        notes = _normalize_notes(raw_notes)
 
-    if file_text is not None and section:
-        result = merge_section_anchored(
-            file_text, section, notes, retractions, max_bullets
-        )
-        if result is None:
-            sys.stderr.write(f"Error: section '{section}' not found in file_text\n")
-            return 1
+        file_text = payload.get("file_text")
+        section = payload.get("section")
+
+        if file_text is not None and section:
+            result = merge_section_anchored(
+                file_text, section, notes, retractions, max_bullets
+            )
+            if result is None:
+                sys.stderr.write(f"Error: section '{section}' not found in file_text\n")
+                return 1
+            print(result)
+            return 0
+
+        # Legacy path: section_text field, caller-supplied span.
+        section_text = payload.get("section_text", "")
+        result = _merge_notes_into_body(section_text, notes, retractions, max_bullets)
         print(result)
         return 0
-
-    # Legacy path: section_text field, caller-supplied span.
-    section_text = payload.get("section_text", "")
-    result = _merge_notes_into_body(section_text, notes, retractions, max_bullets)
-    print(result)
-    return 0
+    except (TypeError, ValueError) as exc:
+        # Malformed field types (e.g. a non-numeric "confidence" value that fails
+        # float() in _normalize_notes, or a non-integer "max_bullets" that fails
+        # apply_cap's comparison) must fail cleanly like every other error branch
+        # in this function, not crash with a raw unhandled traceback.
+        sys.stderr.write(f"Error: invalid payload field: {exc}\n")
+        return 1
 
 
 if __name__ == "__main__":

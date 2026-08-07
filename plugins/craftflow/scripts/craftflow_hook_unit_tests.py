@@ -12315,6 +12315,57 @@ def test_memory_merge_cli_accepts_provenance_field_on_notes() -> None:
     ok(name)
 
 
+def test_memory_merge_cli_non_numeric_confidence_fails_cleanly() -> None:
+    name = "memory-merge/cli-non-numeric-confidence-fails-cleanly"
+    payload = {
+        "section_text": "- old (conf: 0.8)",
+        "notes": [{"text": "new", "confidence": "high"}],
+    }
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=os.environ,
+    )
+    if result.returncode != 1:
+        fail(name, f"exit code {result.returncode}; expected 1. stderr={result.stderr!r}")
+        return
+    if "Error:" not in result.stderr:
+        fail(name, f"expected a clean 'Error:' message on stderr, got: {result.stderr!r}")
+        return
+    if "Traceback" in result.stderr:
+        fail(name, f"expected no raw traceback on stderr, got: {result.stderr!r}")
+        return
+    ok(name)
+
+
+def test_memory_merge_cli_non_integer_max_bullets_fails_cleanly() -> None:
+    name = "memory-merge/cli-non-integer-max-bullets-fails-cleanly"
+    payload = {
+        "section_text": "- one (conf: 0.8)\n- two (conf: 0.8)",
+        "notes": [],
+        "max_bullets": "five",
+    }
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=os.environ,
+    )
+    if result.returncode != 1:
+        fail(name, f"exit code {result.returncode}; expected 1. stderr={result.stderr!r}")
+        return
+    if "Error:" not in result.stderr:
+        fail(name, f"expected a clean 'Error:' message on stderr, got: {result.stderr!r}")
+        return
+    if "Traceback" in result.stderr:
+        fail(name, f"expected no raw traceback on stderr, got: {result.stderr!r}")
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -13028,6 +13079,8 @@ def main() -> int:
     print()
     print("[ craftflow_memory_merge: CLI-level provenance smoke test ]")
     test_memory_merge_cli_accepts_provenance_field_on_notes()
+    test_memory_merge_cli_non_numeric_confidence_fails_cleanly()
+    test_memory_merge_cli_non_integer_max_bullets_fails_cleanly()
 
     print()
     if _errors:
