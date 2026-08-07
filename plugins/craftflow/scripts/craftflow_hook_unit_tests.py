@@ -12366,6 +12366,71 @@ def test_memory_merge_cli_non_integer_max_bullets_fails_cleanly() -> None:
     ok(name)
 
 
+def test_memory_merge_cli_empty_section_with_file_text_fails_cleanly() -> None:
+    name = "memory-merge/cli-empty-section-with-file-text-fails-cleanly"
+    payload = {
+        "file_text": "## Gotchas\n- existing (conf: 0.8)\n",
+        "section": "",
+        "notes": [{"text": "new note", "confidence": 0.9}],
+    }
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=os.environ,
+    )
+    if result.returncode != 1:
+        fail(
+            name,
+            f"exit code {result.returncode}; expected 1 (empty 'section' must not silently "
+            f"fall back to the legacy branch and discard file_text). stdout={result.stdout!r}",
+        )
+        return
+    if "Error:" not in result.stderr:
+        fail(name, f"expected a clean 'Error:' message on stderr, got: {result.stderr!r}")
+        return
+    if "section" not in result.stderr.lower():
+        fail(name, f"expected error message to mention 'section', got: {result.stderr!r}")
+        return
+    if "## Gotchas" in result.stdout or "existing" in result.stdout:
+        fail(name, f"expected no stdout output on error, but file_text content leaked through: {result.stdout!r}")
+        return
+    ok(name)
+
+
+def test_memory_merge_cli_nan_confidence_fails_cleanly() -> None:
+    name = "memory-merge/cli-nan-confidence-fails-cleanly"
+    payload = {
+        "section_text": "- old (conf: 0.8)",
+        "notes": [{"text": "new", "confidence": float("nan")}],
+    }
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=os.environ,
+    )
+    if result.returncode != 1:
+        fail(
+            name,
+            f"exit code {result.returncode}; expected 1 (NaN confidence must not bypass the "
+            f"0.7 drop threshold). stdout={result.stdout!r}",
+        )
+        return
+    if "Error:" not in result.stderr:
+        fail(name, f"expected a clean 'Error:' message on stderr, got: {result.stderr!r}")
+        return
+    if "Traceback" in result.stderr:
+        fail(name, f"expected no raw traceback on stderr, got: {result.stderr!r}")
+        return
+    if "nan" in result.stdout.lower():
+        fail(name, f"NaN confidence must never be embedded in persisted output: {result.stdout!r}")
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -13081,6 +13146,8 @@ def main() -> int:
     test_memory_merge_cli_accepts_provenance_field_on_notes()
     test_memory_merge_cli_non_numeric_confidence_fails_cleanly()
     test_memory_merge_cli_non_integer_max_bullets_fails_cleanly()
+    test_memory_merge_cli_empty_section_with_file_text_fails_cleanly()
+    test_memory_merge_cli_nan_confidence_fails_cleanly()
 
     print()
     if _errors:

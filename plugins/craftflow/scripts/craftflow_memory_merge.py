@@ -190,6 +190,8 @@ def apply_retractions(section_body: str, retractions: list) -> str:
     """
     if not retractions or not section_body:
         return section_body
+    if not isinstance(retractions, list):
+        raise TypeError(f"'retractions' must be a list, got {type(retractions).__name__}")
 
     norm_retractions = {normalize_bullet(r) for r in retractions}
     lines = section_body.split("\n")
@@ -242,6 +244,8 @@ def apply_cap(bullets: list, max_bullets) -> list:
     - max_bullets is None: no-op, return bullets unchanged
     - len(bullets) <= max_bullets: no-op, return bullets unchanged
     - An organic bullet is only evicted once zero imported bullets remain to evict instead.
+    - Evicting an organic-marked bullet emits a stderr warning (never silent), matching
+      apply_retractions' existing warn-on-organic-loss pattern in this file.
     """
     if max_bullets is None or len(bullets) <= max_bullets:
         return bullets
@@ -255,6 +259,14 @@ def apply_cap(bullets: list, max_bullets) -> list:
     ]
     evict_order = imported_indices + organic_indices
     evict_indices = set(evict_order[:excess])
+
+    # Consistent with every other removal path in this file (apply_retractions):
+    # evicting an organic-marked bullet must never be silent, even though eviction
+    # only reaches an organic bullet once no imported alternative remains.
+    for i in sorted(evict_indices):
+        if parse_provenance(bullets[i]) == "organic":
+            sys.stderr.write(f"Warning: cap eviction removed organic-marked bullet: {bullets[i].strip()}\n")
+
     return [bullet for i, bullet in enumerate(bullets) if i not in evict_indices]
 
 
@@ -272,14 +284,27 @@ def _normalize_notes(raw_notes: list) -> list:
     but never silently: a stderr warning is emitted first, matching apply_retractions' existing
     warn-on-organic-loss pattern in this file. Well-formed entries in the same list are still
     normalized normally.
+
+    raw_notes itself must be a list -- a string value (e.g. a caller typo omitting the "[...]"
+    wrapper) would otherwise be silently iterated character-by-character, injecting one garbage
+    bullet per character with zero warning.
     """
+    if not isinstance(raw_notes, list):
+        raise TypeError(f"'notes' must be a list, got {type(raw_notes).__name__}")
+
     notes = []
     for item in raw_notes:
         if isinstance(item, str):
             notes.append({"text": item, "confidence": 0.8, "provenance": "imported"})
         elif isinstance(item, dict):
+            text = item.get("text", "")
+            if not isinstance(text, str) or not text.strip():
+                sys.stderr.write(
+                    f"Warning: dropping malformed note entry (missing/empty text): {item!r}\n"
+                )
+                continue
             notes.append({
-                "text": item.get("text", ""),
+                "text": text,
                 "confidence": float(item.get("confidence", 0.8)),
                 "provenance": _normalize_provenance(item.get("provenance")),
             })
@@ -362,6 +387,14 @@ def merge_section_anchored(
     return file_text[:body_start] + merged_body + "\n" + file_text[body_end:]
 
 
+def _reject_json_constant(constant: str):
+    """json.loads' parse_constant hook -- called for the non-standard NaN/Infinity/-Infinity
+    tokens it accepts by default. Raising here (instead of returning float('nan')/float('inf'))
+    stops a NaN confidence value from ever reaching merge_bullet, where `nan < 0.7` is always
+    False and would silently bypass the drop threshold."""
+    raise ValueError(f"invalid numeric literal in JSON: {constant}")
+
+
 def main() -> int:
     """
     CLI entry point: read JSON from stdin, write merged output to stdout.
@@ -384,8 +417,12 @@ def main() -> int:
         return 1
 
     try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
+        # allow_nan is on by default in json.loads, which would let a NaN/Infinity
+        # confidence value silently bypass merge_bullet's `< 0.7` drop threshold
+        # (nan < 0.7 is always False) and get embedded verbatim in persisted output.
+        # Reject those non-standard tokens at the JSON boundary instead.
+        payload = json.loads(raw, parse_constant=_reject_json_constant)
+    except (json.JSONDecodeError, ValueError) as exc:
         sys.stderr.write(f"Error: invalid JSON: {exc}\n")
         return 1
 
@@ -394,14 +431,21 @@ def main() -> int:
     max_bullets = payload.get("max_bullets")
 
     try:
-        notes = _normalize_notes(raw_notes)
-
         file_text = payload.get("file_text")
         section = payload.get("section")
 
-        if file_text is not None and section:
+        if file_text is not None:
+            # Require section explicitly rather than a truthy check: an empty-string
+            # "section" combined with a present "file_text" must fail cleanly, not
+            # silently fall through to the legacy section_text path (which would
+            # discard file_text's content entirely on output).
+            if not isinstance(section, str) or not section.strip():
+                sys.stderr.write(
+                    "Error: 'section' must be a non-empty string when 'file_text' is provided\n"
+                )
+                return 1
             result = merge_section_anchored(
-                file_text, section, notes, retractions, max_bullets
+                file_text, section, raw_notes, retractions, max_bullets
             )
             if result is None:
                 sys.stderr.write(f"Error: section '{section}' not found in file_text\n")
@@ -409,7 +453,10 @@ def main() -> int:
             print(result)
             return 0
 
-        # Legacy path: section_text field, caller-supplied span.
+        # Legacy path: section_text field, caller-supplied span. Only this path
+        # needs the separately-normalized notes list -- merge_section_anchored
+        # above normalizes raw_notes itself.
+        notes = _normalize_notes(raw_notes)
         section_text = payload.get("section_text", "")
         result = _merge_notes_into_body(section_text, notes, retractions, max_bullets)
         print(result)

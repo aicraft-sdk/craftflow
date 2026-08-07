@@ -7,6 +7,7 @@ Run from the plugin root:
 """
 import contextlib
 import io
+import json
 import sys
 import os
 
@@ -439,6 +440,98 @@ check(
     "dropping a malformed note entry emits a non-silent stderr warning",
     "malformed" in stderr_capture_malformed.getvalue().lower(),
     True,
+)
+
+# --- _normalize_notes: raw_notes must be a list, not silently iterated char-by-char ---
+print("\n[_normalize_notes: raw_notes type guard]")
+try:
+    _normalize_notes("hi")
+    check("non-list 'notes' raises TypeError instead of char-by-char iteration", "no exception raised", "TypeError")
+except TypeError:
+    check("non-list 'notes' raises TypeError instead of char-by-char iteration", "TypeError", "TypeError")
+
+# --- apply_retractions: retractions must be a list, not silently iterated char-by-char ---
+print("\n[apply_retractions: retractions type guard]")
+try:
+    apply_retractions("- old (conf: 0.8)", "hi")
+    check("non-list 'retractions' raises TypeError instead of char-by-char iteration", "no exception raised", "TypeError")
+except TypeError:
+    check("non-list 'retractions' raises TypeError instead of char-by-char iteration", "TypeError", "TypeError")
+
+# --- apply_cap: evicting an organic-marked bullet emits a non-silent stderr warning ---
+print("\n[apply_cap: organic-eviction warning]")
+stderr_capture_cap_organic = io.StringIO()
+with contextlib.redirect_stderr(stderr_capture_cap_organic):
+    apply_cap(all_organic, 1)
+check(
+    "evicting an organic-marked bullet under cap emits a non-silent stderr warning",
+    "organic" in stderr_capture_cap_organic.getvalue().lower(),
+    True,
+)
+
+stderr_capture_cap_imported = io.StringIO()
+with contextlib.redirect_stderr(stderr_capture_cap_imported):
+    apply_cap(bullets, 2)
+check(
+    "evicting only imported bullets under cap emits no warning",
+    stderr_capture_cap_imported.getvalue(),
+    "",
+)
+
+# --- _normalize_notes: dict note with missing/empty/whitespace-only text is dropped, not defaulted to blank ---
+print("\n[_normalize_notes: blank-text dict entries are dropped, not defaulted to '']")
+stderr_capture_blank_text = io.StringIO()
+with contextlib.redirect_stderr(stderr_capture_blank_text):
+    notes_blank = _normalize_notes([
+        {"confidence": 0.9},                # missing "text" entirely
+        {"text": "", "confidence": 0.9},    # empty text
+        {"text": "   ", "confidence": 0.9},  # whitespace-only text
+        {"text": "valid", "confidence": 0.9},
+    ])
+check(
+    "missing/empty/whitespace-only text entries are dropped, well-formed entry kept",
+    notes_blank,
+    [{"text": "valid", "confidence": 0.9, "provenance": "imported"}],
+)
+check(
+    "dropping each blank-text note entry emits a non-silent stderr warning",
+    stderr_capture_blank_text.getvalue().lower().count("warning"),
+    3,
+)
+
+# --- main(): notes normalized exactly once on the section-anchored path (no double-normalization) ---
+print("\n[main: single-normalization on section-anchored path]")
+import craftflow_memory_merge as _mm_module
+
+_normalize_calls = []
+_original_normalize_notes = _mm_module._normalize_notes
+
+
+def _counting_normalize_notes(raw_notes):
+    _normalize_calls.append(raw_notes)
+    return _original_normalize_notes(raw_notes)
+
+
+_mm_module._normalize_notes = _counting_normalize_notes
+old_stdin = sys.stdin
+sys.stdin = io.StringIO(json.dumps({
+    "file_text": "## Gotchas\n- existing (conf: 0.8)\n",
+    "section": "Gotchas",
+    "notes": [{"text": "new note", "confidence": 0.9}],
+}))
+stdout_capture_main = io.StringIO()
+try:
+    with contextlib.redirect_stdout(stdout_capture_main):
+        exit_code_main = _mm_module.main()
+finally:
+    sys.stdin = old_stdin
+    _mm_module._normalize_notes = _original_normalize_notes
+
+check("main() exits 0 on section-anchored path", exit_code_main, 0)
+check(
+    "_normalize_notes is called exactly once on the section-anchored path (no double-normalization)",
+    len(_normalize_calls),
+    1,
 )
 
 # --- Summary ---
