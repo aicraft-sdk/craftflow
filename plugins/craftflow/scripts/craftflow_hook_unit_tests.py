@@ -35,6 +35,7 @@ import craftflow_skill_propose as skill_propose  # noqa: E402
 import craftflow_status_report as status_report  # noqa: E402
 import craftflow_precompact_state as precompact_state  # noqa: E402
 import craftflow_postcompact_context as postcompact_context  # noqa: E402
+import craftflow_memory_merge as memory_merge  # noqa: E402
 
 _errors: list[str] = []
 _passes: int = 0
@@ -12292,6 +12293,29 @@ def test_postcompact_build_event_context_usage_none_when_unavailable() -> None:
 
 
 # ---------------------------------------------------------------------------
+# craftflow_memory_merge: CLI-level provenance smoke test
+# ---------------------------------------------------------------------------
+
+def test_memory_merge_cli_accepts_provenance_field_on_notes() -> None:
+    name = "memory-merge/cli-accepts-provenance-field"
+    payload = {
+        "section_text": "- Existing hand-verified rule (conf: 0.9, organic)",
+        "notes": [{"text": "Existing hand-verified rule", "confidence": 1.0, "provenance": "imported"}],
+    }
+    code, out = run_hook("craftflow_memory_merge.py", payload)
+    if code != 0:
+        fail(name, f"exit code {code}; expected 0")
+        return
+    if "(conf: 0.9, organic)" not in out:
+        fail(name, f"organic bullet not preserved via CLI: {out}")
+        return
+    if out.count("Existing hand-verified rule") != 2:
+        fail(name, f"expected organic original kept + imported note appended separately, got: {out}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -13000,6 +13024,10 @@ def main() -> int:
     test_precompact_build_snapshot_context_usage_none_when_unavailable()
     test_postcompact_build_event_includes_context_usage_when_available()
     test_postcompact_build_event_context_usage_none_when_unavailable()
+
+    print()
+    print("[ craftflow_memory_merge: CLI-level provenance smoke test ]")
+    test_memory_merge_cli_accepts_provenance_field_on_notes()
 
     print()
     if _errors:
