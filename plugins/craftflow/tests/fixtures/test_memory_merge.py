@@ -5,6 +5,8 @@ Fixture-based unit tests for craftflow_memory_merge.py
 Run from the plugin root:
     python3 tests/fixtures/test_memory_merge.py
 """
+import contextlib
+import io
 import sys
 import os
 
@@ -49,6 +51,34 @@ print("\n[strip_confidence_suffix]")
 check("strips (conf: 0.9)", strip_confidence_suffix("- insight (conf: 0.9)"), "- insight")
 check("no-op when absent", strip_confidence_suffix("- plain bullet"), "- plain bullet")
 check("handles trailing space before suffix", strip_confidence_suffix("- text (conf: 0.8)"), "- text")
+
+# --- malformed organic suffix: stray whitespace before comma, case variance ---
+print("\n[malformed organic suffix: whitespace-tolerant, case-insensitive]")
+check(
+    "parse_confidence tolerates stray space before comma",
+    parse_confidence("- insight (conf: 0.9 , organic)"),
+    0.9,
+)
+check(
+    "parse_provenance tolerates stray space before comma",
+    parse_provenance("- insight (conf: 0.9 , organic)"),
+    "organic",
+)
+check(
+    "strip_confidence_suffix tolerates stray space before comma",
+    strip_confidence_suffix("- insight (conf: 0.9 , organic)"),
+    "- insight",
+)
+check(
+    "parse_provenance is case-insensitive on Organic",
+    parse_provenance("- insight (conf: 0.9, Organic)"),
+    "organic",
+)
+check(
+    "strip_confidence_suffix is case-insensitive on Organic",
+    strip_confidence_suffix("- insight (conf: 0.9, Organic)"),
+    "- insight",
+)
 
 # --- merge_bullet: drop low confidence ---
 print("\n[merge_bullet: low confidence drop]")
@@ -96,6 +126,33 @@ body = ""
 result = apply_retractions(body, ["anything"])
 check("no-op on empty section", result, "")
 
+# --- apply_retractions: organic bullet retraction is non-silent ---
+print("\n[apply_retractions: organic-provenance warning]")
+stderr_capture = io.StringIO()
+with contextlib.redirect_stderr(stderr_capture):
+    body_organic = "- hand-verified rule (conf: 0.9, organic)\n- keep this (conf: 0.8)"
+    result = apply_retractions(body_organic, ["hand-verified rule"])
+check(
+    "retracting an organic bullet still removes it",
+    result,
+    "- keep this (conf: 0.8)",
+)
+check(
+    "retracting an organic bullet emits a non-silent stderr warning",
+    "organic" in stderr_capture.getvalue().lower(),
+    True,
+)
+
+stderr_capture_imported = io.StringIO()
+with contextlib.redirect_stderr(stderr_capture_imported):
+    body_imported = "- ordinary note (conf: 0.8)\n- keep this (conf: 0.8)"
+    apply_retractions(body_imported, ["ordinary note"])
+check(
+    "retracting an imported (non-organic) bullet emits no warning",
+    stderr_capture_imported.getvalue(),
+    "",
+)
+
 # --- merge_bullet: already-suffixed note must not double-suffix (bug fix) ---
 print("\n[merge_bullet: already-suffixed note matches existing]")
 result = merge_bullet(
@@ -131,6 +188,31 @@ check(
     ["- three (conf: 0.8)"],
 )
 check("no-op when max_bullets is None", apply_cap(bullets, None), bullets)
+
+# --- apply_cap: provenance-aware eviction, organic bullets protected while imported alternatives exist ---
+print("\n[apply_cap: organic-provenance-aware eviction]")
+bullets_mixed = [
+    "- oldest organic (conf: 0.9, organic)",
+    "- old imported (conf: 0.8)",
+    "- new imported (conf: 0.8)",
+]
+result = apply_cap(bullets_mixed, 2)
+check(
+    "organic bullet (even though oldest) survives cap eviction when an imported alternative exists to evict instead",
+    result,
+    ["- oldest organic (conf: 0.9, organic)", "- new imported (conf: 0.8)"],
+)
+
+all_organic = [
+    "- organic old (conf: 0.9, organic)",
+    "- organic new (conf: 0.9, organic)",
+]
+result = apply_cap(all_organic, 1)
+check(
+    "organic bullet is only evicted (oldest-first) when zero imported bullets remain to evict instead",
+    result,
+    ["- organic new (conf: 0.9, organic)"],
+)
 
 # --- merge_section_anchored: no relocation past next heading (root-cause regression) ---
 print("\n[merge_section_anchored: no relocation past next heading]")
@@ -255,6 +337,20 @@ check(
     "merge_bullet remains callable with 3 positional args -- provenance defaults to imported (back-compat)",
     result,
     ["- plain (conf: 0.9)"],
+)
+
+# --- merge_bullet: organic-match branch must not accumulate duplicate imported bullets on repeat calls ---
+print("\n[merge_bullet: organic-match repeat-call duplicate accumulation]")
+result = merge_bullet(
+    ["- hand-verified rule (conf: 0.9, organic)"], "hand-verified rule", 1.0, "imported"
+)
+result = merge_bullet(
+    result, "hand-verified rule", 1.0, "imported"
+)
+check(
+    "repeat merge of the same organic-matching note supersedes the existing imported duplicate instead of appending a second one",
+    result,
+    ["- hand-verified rule (conf: 0.9, organic)", "- hand-verified rule (conf: 1.0)"],
 )
 
 # --- merge_section_anchored: organic protection end-to-end + fail-safe provenance ---

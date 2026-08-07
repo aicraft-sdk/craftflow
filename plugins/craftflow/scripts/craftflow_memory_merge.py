@@ -41,6 +41,11 @@ absent or unrecognized (fail-safe — an incoming note is never treated as organ
 explicitly marked). An existing bullet marked organic is never auto-replaced by an incoming
 note, regardless of confidence; the incoming note is appended as a new bullet instead.
 
+Known limitation: a bullet whose own prose legitimately ends with a substring shaped like the
+confidence/provenance suffix (e.g. "...(conf: 0.9, organic)") will be mis-parsed as carrying
+that confidence/provenance — this is an inherent residual risk of encoding metadata as a suffix
+within the same string as the bullet's text, not a structural defect worth fixing here.
+
 Exit 0 on success, 1 on error.
 """
 import json
@@ -51,8 +56,14 @@ from craftflow_hooklib import extract_bullets, normalize_bullet
 
 
 def parse_confidence(line: str) -> float:
-    """Extract (conf: N.N[, organic]) suffix from a bullet line. Returns float or 0.8 if absent."""
-    match = re.search(r"\(conf:\s*([\d.]+)(?:,\s*organic)?\)\s*$", line)
+    """Extract (conf: N.N[, organic]) suffix from a bullet line. Returns float or 0.8 if absent.
+
+    Whitespace-tolerant around the comma and case-insensitive on "organic" so a malformed
+    suffix (stray space before the comma, or unexpected capitalization) is still recognized
+    consistently with parse_provenance/strip_confidence_suffix -- an unrecognized suffix shape
+    would otherwise fail to strip, causing duplicate-bullet accumulation via a different root
+    cause than the organic-match branch bug."""
+    match = re.search(r"\(conf:\s*([\d.]+)(?:\s*,\s*organic)?\)\s*$", line, re.IGNORECASE)
     if match:
         return float(match.group(1))
     return 0.8
@@ -60,16 +71,23 @@ def parse_confidence(line: str) -> float:
 
 def parse_provenance(line: str) -> str:
     """Extract provenance from a bullet's suffix. Returns 'organic' when the line ends with
-    '(conf: N.N, organic)'; otherwise 'imported' -- the safe default for unmarked legacy bullets
+    '(conf: N.N, organic)' (whitespace-tolerant around the comma, case-insensitive on
+    "organic"); otherwise 'imported' -- the safe default for unmarked legacy bullets
     (see design Questions Resolved: an unmarked bullet must NOT silently gain organic
     supersede-immunity)."""
-    match = re.search(r"\(conf:\s*[\d.]+,\s*organic\)\s*$", line)
+    match = re.search(r"\(conf:\s*[\d.]+\s*,\s*organic\)\s*$", line, re.IGNORECASE)
     return "organic" if match else "imported"
 
 
 def strip_confidence_suffix(line: str) -> str:
-    """Remove ' (conf: N.N[, organic])' suffix if present. Returns clean text."""
-    return re.sub(r"\s*\(conf:\s*[\d.]+(?:,\s*organic)?\)\s*$", "", line)
+    """Remove ' (conf: N.N[, organic])' suffix if present. Returns clean text.
+
+    Whitespace-tolerant around the comma and case-insensitive on "organic", matching
+    parse_confidence/parse_provenance -- keeps all three suffix-parsing functions consistent
+    on the same malformed-suffix shapes."""
+    return re.sub(
+        r"\s*\(conf:\s*[\d.]+(?:\s*,\s*organic)?\)\s*$", "", line, flags=re.IGNORECASE
+    )
 
 
 def _render_bullet(text: str, confidence: float, provenance: str) -> str:
@@ -110,9 +128,27 @@ def merge_bullet(existing_bullets: list, new_text: str, confidence: float, prove
         norm_existing = normalize_bullet(existing_clean)
         if norm_existing == norm_new:
             if parse_provenance(bullet) == "organic":
-                # Supersede-immunity: never overwrite an organic bullet. Append the
-                # incoming note as a distinct new bullet instead -- never silently
-                # dropped, never silently overwritten.
+                # Supersede-immunity: never overwrite an organic bullet. But before
+                # unconditionally appending a new imported duplicate, check whether an
+                # imported duplicate from a PREVIOUS call already exists later in the
+                # list -- if so, apply the normal confidence-based supersede/skip logic
+                # to THAT entry instead. Without this check, repeat merges of the same
+                # organic-matching note accumulate unbounded imported duplicates, and
+                # oldest-first cap eviction would evict the original organic bullet
+                # first, defeating the supersede-immunity guard entirely.
+                for j in range(i + 1, len(result)):
+                    other_clean = strip_confidence_suffix(result[j])
+                    if (
+                        normalize_bullet(other_clean) == norm_new
+                        and parse_provenance(result[j]) == "imported"
+                    ):
+                        other_conf = parse_confidence(result[j])
+                        if confidence >= other_conf:
+                            result[j] = _render_bullet(clean_new, confidence, provenance)
+                        # If new confidence < existing imported duplicate, keep old -- do nothing
+                        return result
+                # No pre-existing imported duplicate found -- append as a distinct new
+                # bullet, never silently dropped, never silently overwritten.
                 result.append(_render_bullet(clean_new, confidence, provenance))
                 return result
             existing_conf = parse_confidence(bullet)
@@ -134,6 +170,14 @@ def apply_retractions(section_body: str, retractions: list) -> str:
     - For each bullet line, normalize its text (strip confidence suffix first)
     - If it matches any retraction's normalized form, remove the line
     - Rejoin with newline and return
+
+    Provenance awareness: dropping a bullet whose provenance is 'organic' emits a
+    stderr warning so the removal is never silent -- this script is invoked by
+    craftflow-router's own Memory Finalization step against real production memory
+    files, and a permanent, unsignaled deletion of a hand-verified note is a real risk.
+    The bullet is still removed either way; this is a non-blocking warning, not a
+    guard (retractions are an explicit, caller-requested removal, unlike merge_bullet's
+    supersede path).
     """
     if not retractions or not section_body:
         return section_body
@@ -145,6 +189,10 @@ def apply_retractions(section_body: str, retractions: list) -> str:
         if line.lstrip().startswith("- "):
             clean = normalize_bullet(strip_confidence_suffix(line))
             if clean in norm_retractions:
+                if parse_provenance(line) == "organic":
+                    sys.stderr.write(
+                        f"Warning: retracting organic-marked bullet: {line.strip()}\n"
+                    )
                 continue
         kept.append(line)
 
@@ -172,25 +220,32 @@ def _reconstruct_section(section_text: str, merged_bullets: list) -> str:
 
 def apply_cap(bullets: list, max_bullets) -> list:
     """
-    Trim a bullet list to at most max_bullets entries, evicting oldest-first.
+    Trim a bullet list to at most max_bullets entries, evicting oldest-first --
+    provenance-aware: imported bullets are evicted before any organic bullet, so
+    routine section growth never silently breaks the organic supersede-immunity
+    guarantee when a non-organic alternative is available to evict instead.
 
     Bullets are stored in chronological (oldest-first) order — earlier
-    entries were added first, later entries appended after. Eviction removes
-    from the front of the list. On ties in age (not possible given unique
-    list positions, but kept for determinism), lowest confidence is evicted
-    first.
+    entries were added first, later entries appended after. Within each
+    provenance group (imported, then organic), eviction removes from the
+    front of that group.
 
     - max_bullets is None: no-op, return bullets unchanged
     - len(bullets) <= max_bullets: no-op, return bullets unchanged
+    - An organic bullet is only evicted once zero imported bullets remain to evict instead.
     """
     if max_bullets is None or len(bullets) <= max_bullets:
         return bullets
 
     excess = len(bullets) - max_bullets
-    indexed = sorted(
-        range(len(bullets)), key=lambda i: (i, parse_confidence(bullets[i]))
-    )
-    evict_indices = set(indexed[:excess])
+    imported_indices = [
+        i for i, bullet in enumerate(bullets) if parse_provenance(bullet) != "organic"
+    ]
+    organic_indices = [
+        i for i, bullet in enumerate(bullets) if parse_provenance(bullet) == "organic"
+    ]
+    evict_order = imported_indices + organic_indices
+    evict_indices = set(evict_order[:excess])
     return [bullet for i, bullet in enumerate(bullets) if i not in evict_indices]
 
 
