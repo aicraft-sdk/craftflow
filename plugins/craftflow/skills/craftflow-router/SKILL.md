@@ -32,6 +32,103 @@ Rules:
 - BUILD uses fast path (builder → verifier → memory) by default when no risk keywords are detected in the request. Full chain (builder → reviewer → hunter → verifier → memory) is used when risk keywords match. See `references/fast-path.md` for detection rules.
 - Before execution, output one line: `-> {WORKFLOW} workflow (signals: {matched keywords})`
 
+## 0. Resolve Project Root
+
+[EASY TO MISS: `## 0.` sits between `## 1.` and `## 2.` intentionally — a literal "0"
+heading, not a full renumber of `## 2.`-`## 7.`, matching the approved design's own "§0"
+terminology and minimizing blast radius on an already 1000+-line file.]
+
+1. At the start of every workflow (PLAN/DEBUG/REVIEW/BUILD), before any
+   `.craftflow/state/...` path is touched, resolve the project root:
+   ```bash
+   PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+   TOPLEVEL_EXIT=$?
+   ```
+   [EASY TO MISS: Use `git rev-parse --show-toplevel` for the absolute path — never a bare
+   `~/.claude/worktrees/` because `~` may not expand correctly in all shell contexts, and a
+   relative path resolves against cwd, not the project root.]
+
+   - **If `TOPLEVEL_EXIT == 0`**: `PROJECT_ROOT` is set — this is the unchanged single-repo
+     path. `PROJECT_ROOT` is now set for the remainder of this session — every later step in
+     this document (memory load, workflow-artifact creation, resume, and — for BUILD only —
+     worktree creation) consumes this same value. Skip step 1a.
+   - **If `TOPLEVEL_EXIT != 0`**: cwd itself is not a git repo. This happens when a session is
+     launched at a multi-repo workspace root (a directory that is not itself a git repo but
+     contains several independently git-initialized nested repos, e.g. `ai-infra/` containing
+     `ai-platform-core/`, `genai-platform-dev/`, etc.). Run **step 1a** below before deciding
+     whether to proceed.
+
+   **1a. Multi-repo workspace root resolution** (only reached when `TOPLEVEL_EXIT != 0`):
+   ```bash
+   CRAFTFLOW_INSTALL=$(python3 -c "
+   import json, pathlib
+   reg = json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())
+   print(reg['plugins']['craftflow@craftflow'][0]['installPath'])
+   ")
+   CRAFTFLOW_INSTALL_EXIT=$?
+   RESOLVE_RESULT=$(python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_resolve_workspace_root.py" \
+     --cwd "$(pwd)" \
+     --request "USER_REQUEST_SHELL_ESCAPED")
+   RESOLVE_EXIT=$?
+   ```
+   (A non-zero `CRAFTFLOW_INSTALL_EXIT` here is not handled as a separate branch — it surfaces
+   downstream as a non-zero `RESOLVE_EXIT` from the next command, an empty/unusable
+   `$CRAFTFLOW_INSTALL` path, which the existing `RESOLVE_EXIT != 0` handling below already
+   catches.)
+   Replace `USER_REQUEST_SHELL_ESCAPED` with the actual user request, properly shell-quoted
+   (same convention as **Parent workflow creation** step 1). The script never mutates git or
+   filesystem state — it only reads cwd's immediate child directories and runs non-mutating
+   `git rev-parse --show-toplevel` calls.
+
+   - **If `RESOLVE_EXIT != 0`** (the script itself could not complete the scan, e.g. cwd
+     unreadable): do not parse `$RESOLVE_RESULT`. Treat identically to `NO_REPO_FOUND` below.
+   - **Otherwise**, parse the outcome:
+     ```bash
+     RESOLVE_OUTCOME=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin)['outcome'])")
+     ```
+     - **`DETERMINISTIC`** (exactly one candidate nested repo exists, or the request text
+       uniquely names one among several):
+       ```bash
+       PROJECT_ROOT=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin)['project_root'])")
+       ```
+       `PROJECT_ROOT` is now set for the remainder of this session — every later step in this
+       document (memory load, workflow-artifact creation, resume, and — for BUILD only —
+       worktree creation) consumes this same value.
+     - **`AMBIGUOUS`** (2+ candidate nested repos exist and the request text does not uniquely
+       name one): ask the user once via `AskUserQuestion`, with one option per path in the
+       `candidates` array from `$RESOLVE_RESULT` (optionally enrich each option's label with
+       that repo's `git -C <candidate> log -1 --format=%s` first line, if available). Set
+       `PROJECT_ROOT` to the chosen candidate's absolute path. `PROJECT_ROOT` is now set for
+       the remainder of this session — every later step in this document (memory load,
+       workflow-artifact creation, resume, and — for BUILD only — worktree creation) consumes
+       this same value.
+       [EASY TO MISS: this `AskUserQuestion` gate is NEVER auto-defaulted under `JUST_GO=true`
+       (§ 2 `JUST_GO` rule) — cross-repo routing has no safe "recommended" default the way an
+       ordinary implementation-choice gate does, so it is treated the same as an unresolved
+       plan **Open Decision**: always stop and ask, even in `JUST_GO` mode.]
+     - **`NO_REPO_FOUND`** (or `RESOLVE_EXIT != 0` above): no git-repo children exist under
+       cwd at all (or the resolver script itself could not complete the scan). Set
+       `PROJECT_ROOT=$(pwd)` as the fallback — this raw-cwd value still resolves correctly for
+       the intended purpose; the single-repo case was already handled above, and this branch
+       only covers a workspace root with no nested git repos, or a scan failure, where cwd is
+       the only available candidate.
+       [EASY TO MISS: `## 0.` runs BEFORE `workflow_uuid` is minted (minted later, at
+       **Parent workflow creation** in `## 6.`), so no per-workflow event log
+       (`$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.events.jsonl`) can exist yet
+       at this point — it is filename-keyed on `workflow_uuid`, which literally cannot exist
+       yet. Do not append an event to "the event log" here; there is nothing to append to.
+       Instead, keep `reason:"NO_REPO_FOUND"` (resolver returned that outcome) or
+       `reason:"RESOLVE_SCRIPT_ERROR"` (`RESOLVE_EXIT != 0`) in-session, and fold it into
+       `## 6.`'s own initial `status_history`/event-log write once the workflow artifact is
+       created — e.g.
+       `{"event":"project_root_resolution_fallback","reason":"NO_REPO_FOUND"|"RESOLVE_SCRIPT_ERROR"}`
+       alongside `workflow_started`. This is necessarily a best-effort, undurable signal at
+       this early stage: `PROJECT_ROOT` is already correctly resolved via the raw-cwd fallback
+       regardless of whether the reason is ever durably recorded, so nothing functional is lost
+       if a workflow artifact never ends up being created (e.g. the session ends before `## 6.`
+       runs).] This is an event, not a `pending_gate` — there is nothing to resume or retry.
+       The router continues immediately with this fallback `PROJECT_ROOT` value.
+
 ## 2. Memory Load And Template Validation
 
 Always run this before routing or resuming. Memory is organized in two tiers:
@@ -39,20 +136,20 @@ Always run this before routing or resuming. Memory is organized in two tiers:
 - **workflows/{wf-id}/** — per-workflow isolated state (current focus, active phase, in-flight tasks). Load only when a `workflow_uuid` is already known (resume path).
 
 ```text
-1. Bash("mkdir -p .craftflow/state/project")
-2. Read(".craftflow/state/project/activeContext.md")
-3. Read(".craftflow/state/project/patterns.md")
-4. Read(".craftflow/state/project/progress.md")
-5. Read(".craftflow/state/project/constitution.md") — skip gracefully if absent; when present, MUST constraints are active for this session
+1. Bash("mkdir -p \"$PROJECT_ROOT/.craftflow/state/project\"")
+2. Read("$PROJECT_ROOT/.craftflow/state/project/activeContext.md")
+3. Read("$PROJECT_ROOT/.craftflow/state/project/patterns.md")
+4. Read("$PROJECT_ROOT/.craftflow/state/project/progress.md")
+5. Read("$PROJECT_ROOT/.craftflow/state/project/constitution.md") — skip gracefully if absent; when present, MUST constraints are active for this session
 6. If workflow_uuid is known (resume path):
-   a. Bash("mkdir -p .craftflow/state/workflows/{workflow_uuid}")
-   b. Read(".craftflow/state/workflows/{workflow_uuid}/activeContext.md")
-   c. Read(".craftflow/state/workflows/{workflow_uuid}/patterns.md")
-   d. Read(".craftflow/state/workflows/{workflow_uuid}/progress.md")
+   a. Bash("mkdir -p \"$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}\"")
+   b. Read("$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md")
+   c. Read("$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/patterns.md")
+   d. Read("$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md")
    Merge: workflow-scoped values override project-scoped for current-focus
    fields (## Current Focus, ## Next Steps, ## Tasks) only.
 7. Fallback: If project/ files are missing or empty, also read the root-flat
-   files (.craftflow/state/activeContext.md etc.) and merge content into project/
+   files ($PROJECT_ROOT/.craftflow/state/activeContext.md etc.) and merge content into project/
    before proceeding. Root-flat files are the backward-compat layer.
 ```
 
@@ -75,7 +172,7 @@ Auto-heal rule:
 - After every `Edit(...)`, immediately `Read(...)` and verify the new section exists.
 
 JUST_GO:
-- Read `activeContext.md ## Session Settings`.
+- Read `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Session Settings`.
 - If `AUTO_PROCEED: true`, set `JUST_GO=true`.
 - While `JUST_GO=true`, auto-default all non-REVERT AskUserQuestion gates to the recommended option and log the choice in `## Decisions`.
 - Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (§ 8) is carved out as a de
@@ -83,14 +180,14 @@ JUST_GO:
   default (`Defer`, never `Approve`).
 
 v10 trust rule:
-- `JUST_GO` never overrides explicit user/project standards, open plan decisions, or failure-stop gates.
+- `JUST_GO` never overrides explicit user/project standards, open plan decisions, or failure-stop gates — including any gate that explicitly documents its own exception, such as the multi-repo AMBIGUOUS resolution gate in Worktree Isolation.
 - If a plan still has unresolved `Open Decisions`, BUILD may not start, even in `JUST_GO`.
 
 ## 2a. Workflow Artifact And Hook Policy
 
 Core law:
-- Durable router state lives under `.craftflow/state/workflows/{workflow_uuid}.json`
-- Companion event log lives under `.craftflow/state/workflows/{workflow_uuid}.events.jsonl`
+- Durable router state lives under `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json`
+- Companion event log lives under `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.events.jsonl`
 - Router-owned gates still include `plan_trust_gate`, `phase_exit_gate`, `failure_stop_gate`, `memory_sync_gate`, and `skill_precedence_gate`
 
 Mandatory reference read:
@@ -144,7 +241,7 @@ Resume algorithm:
 5. Reconstruct the memory task as the unique pending/in_progress `kind:memory` task in the same `wf:`.
 
 Scope-decision resume:
-- Before normal routing, check `activeContext.md ## Decisions` for a live marker:
+- Before normal routing, check `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Decisions` for a live marker:
   - `[SCOPE-DECISION-PENDING: wf:{workflow_uuid} reason:{...}]`
 - If present, treat the current user reply as the answer to that pending BUILD scope gate:
   - `critical only` -> create the pending REM-FIX with `scope:CRITICAL_ONLY`
@@ -168,10 +265,10 @@ Safety rules:
 ### Shared preparation
 
 Before creating a new workflow:
-- Read `activeContext.md ## References` to discover `Plan`, `Design`, and prior `Research` files.
-- Read `activeContext.md ## Decisions` for prior planner/build clarifications.
-- Read `progress.md ## Current Workflow` and `## Tasks` for pending work that should resume instead of duplicating.
-- Read the latest `.craftflow/state/workflows/*.json` artifact if one exists for the current conversation.
+- Read `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References` to discover `Plan`, `Design`, and prior `Research` files.
+- Read `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Decisions` for prior planner/build clarifications.
+- Read `$PROJECT_ROOT/.craftflow/state/project/progress.md ## Current Workflow` and `## Tasks` for pending work that should resume instead of duplicating.
+- Read the latest `$PROJECT_ROOT/.craftflow/state/workflows/*.json` artifact if one exists for the current conversation.
 
 **Intent Readiness Gate (MANDATORY before PLAN or BUILD):**
 Before dispatching to planner or builder, verify the intent contract meets three conditions:
@@ -210,17 +307,35 @@ Perform `risk_keyword_scan`:
 
 Every new BUILD workflow attempts to isolate file writes in a dedicated git worktree:
 
-1. At BUILD start (before any child task creation), resolve the project root and run:
+1. At BUILD start, `PROJECT_ROOT` was already resolved once by `## 0. Resolve Project Root`
+   at session start — reuse it directly. Do not re-run `git rev-parse --show-toplevel` or
+   invoke the workspace-root resolver script a second time.
+
+   [EASY TO MISS: if `## 0.` fell back to `NO_REPO_FOUND`/`RESOLVE_SCRIPT_ERROR` (no git-repo
+   children under cwd, or the resolver script itself failed), `PROJECT_ROOT` is already set to
+   `$(pwd)` from that fallback — Worktree Isolation still proceeds with the `mkdir`/`git
+   worktree add` block below using that same fallback value, exactly like the single-repo
+   path. There is no separate NO_REPO_FOUND branch here anymore; `## 0.` already handled it.]
+
+   With `PROJECT_ROOT` reused from `## 0.` above, capture both commands' output and exit code,
+   mirroring the `MERGE_EXIT`/`COPY_FALLBACK_EXIT`/`WORKTREE_REMOVE_EXIT` pattern used later in
+   this section — never leave either command's exit code unchecked:
    ```bash
-   PROJECT_ROOT=$(git rev-parse --show-toplevel)
-   mkdir -p "$PROJECT_ROOT/.claude/worktrees"
-   git worktree add "$PROJECT_ROOT/.claude/worktrees/{worktree_dir}" -b {worktree_branch}
+   MKDIR_OUTPUT=$(mkdir -p "$PROJECT_ROOT/.claude/worktrees" 2>&1)
+   MKDIR_EXIT=$?
+   WORKTREE_ADD_OUTPUT=$(git worktree add "$PROJECT_ROOT/.claude/worktrees/{worktree_dir}" -b {worktree_branch} 2>&1)
+   WORKTREE_ADD_EXIT=$?
    ```
    where `worktree_dir` and `worktree_branch` come from the `craftflow_workflow_id.py` helper
    output (see step 1 of **Parent workflow creation** above).
    The trailing 8-hex suffix in both names ties the worktree back to the workflow id,
    guaranteeing concurrent same-feature workflows always get distinct dirs/branches.
-   [EASY TO MISS: Use `git rev-parse --show-toplevel` for the absolute path — never a bare `~/.claude/worktrees/` because `~` may not expand correctly in all shell contexts, and a relative path resolves against cwd, not the project root.]
+
+   - **If `MKDIR_EXIT != 0` OR `WORKTREE_ADD_EXIT != 0`**: proceed to step 3 ("On failure") below.
+     Use `$MKDIR_OUTPUT` as the `{error}` value if `MKDIR_EXIT != 0`; otherwise use
+     `$WORKTREE_ADD_OUTPUT`.
+   - **Otherwise** (`MKDIR_EXIT == 0` AND `WORKTREE_ADD_EXIT == 0`): proceed to step 2 ("On
+     success") below.
 
 2. On success:
    - Set `worktree_mode: "auto_created"` in the workflow artifact
@@ -247,17 +362,57 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
    to merge).
 
    a. **Resolve project root, the plugin install path, and this workflow's own identity:**
+      **Guard first, before anything else in this step:** read `worktree_path` from the current
+      workflow artifact. If `worktree_path` is null or empty despite `worktree_mode ==
+      "auto_created"` (a corrupted or partially-written artifact), treat it identically to
+      `worktree_mode != "auto_created"` at the top of step 4 — skip the rest of step 4 entirely.
+      Do NOT run the `dirname` derivation below or any of 4b-4e (no `git status`, no `git merge`,
+      no `git worktree remove`, no `git branch -d`). Append `{"event":"worktree_path_missing"}`
+      to the event log and proceed straight to doc-sync/memory-finalize, exactly like the
+      ordinary no-worktree case. [EASY TO MISS: `dirname` on an empty/unset string silently
+      returns `.` (the current working directory) at every nesting level — no error, no
+      sentinel. Without this guard, `PROJECT_ROOT` would silently become an arbitrary directory
+      and every downstream command in 4b-4e would run against the wrong root with no failure
+      signal.]
+
+      Once `worktree_path` is confirmed present, read `workflow_uuid` and `worktree_branch` from
+      the current workflow artifact (already set in step 2) — `PROJECT_ROOT` is derived from
+      `worktree_path`, never re-derived via `git rev-parse --show-toplevel`. A workflow whose
+      worktree was created via the step 1a multi-repo resolver still has a cwd that does not
+      resolve to a git repo at merge time either; re-running `git rev-parse --show-toplevel` here
+      would fail again for exactly the same reason it failed at worktree-creation time.
+
+      **Guard also required for `worktree_branch`** (identical corrupted/partial-artifact threat
+      model as the `worktree_path` guard above): if `worktree_branch` is null or empty despite
+      `worktree_mode == "auto_created"`, treat it identically to `worktree_mode != "auto_created"`
+      at the top of step 4 — skip the rest of step 4 entirely. Do NOT run the `dirname`
+      derivation below or any of 4b-4e (no `git status`, no `git merge`, no `git worktree
+      remove`, no `git branch -d`). Append `{"event":"worktree_branch_missing"}` to the event log
+      and proceed straight to doc-sync/memory-finalize, exactly like the ordinary no-worktree
+      case. [EASY TO MISS: an empty `{worktree_branch}` substituted directly into `git merge
+      {worktree_branch}` in step 4e would not fail with a clear, recognizable error — it risks
+      matching an unrelated ref or producing a confusing generic git error that obscures the real
+      missing-artifact problem. Without this guard, the failure would surface deep inside 4e
+      instead of being caught at the earliest possible point, the same way an unguarded
+      `worktree_path` would silently corrupt `PROJECT_ROOT` via `dirname`.]
       ```bash
-      PROJECT_ROOT=$(git rev-parse --show-toplevel)
+      # worktree_path = "{project_root}/.claude/worktrees/{worktree_dir}" (set in step 2) --
+      # three levels down from PROJECT_ROOT (.claude/worktrees/{worktree_dir}), so its
+      # great-grandparent directory is always PROJECT_ROOT, in both the single-repo and
+      # multi-repo-resolved cases.
+      PROJECT_ROOT=$(dirname "$(dirname "$(dirname "{worktree_path}")")")
       CRAFTFLOW_INSTALL=$(python3 -c "
       import json, pathlib
       reg = json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())
       print(reg['plugins']['craftflow@craftflow'][0]['installPath'])
       ")
+      CRAFTFLOW_INSTALL_EXIT=$?
       LOCK_DIR="$PROJECT_ROOT/.claude/worktrees/.merge.lock"
       ```
-      Read `workflow_uuid`, `worktree_path`, `worktree_branch` from the current workflow
-      artifact (already set in step 2).
+      (A non-zero `CRAFTFLOW_INSTALL_EXIT` here is not handled as a separate branch — it surfaces
+      downstream as an empty/unusable `$CRAFTFLOW_INSTALL` path in whichever script it is used to
+      invoke next, e.g. the lock-staleness `DECISION_EXIT` capture and default `case` arm in step
+      4b below, or `COPY_FALLBACK_EXIT` in step 4e.)
 
    b. **Acquire the merge lock.** The lock is a *directory*, not a plain file — `mkdir` is
       atomic on POSIX filesystems, which a bare existence check is not. The staleness/contention
@@ -282,6 +437,7 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
 
         DECISION=$(python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_worktree_lock_staleness.py" \
           "$LOCK_DIR/metadata.json" "$PROJECT_ROOT" "{workflow_uuid}")
+        DECISION_EXIT=$?
 
         case "$DECISION" in
           STALE_WORKTREE_GONE*|STALE_INACTIVE*|SELF_RECLAIM*)
@@ -304,6 +460,14 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
             fi
             # Metadata changed underneath us -- fall through to the normal
             # wait/retry path below, exactly like ordinary contention.
+            ;;
+          *)
+            # Unrecognized $DECISION -- covers ordinary CONTENDED*/LOCK_READ_ERROR*/
+            # GIT_WORKTREE_LIST_ERROR* outcomes (no reclaim action needed, just wait/retry)
+            # AND a genuinely unknown/garbled value (e.g. empty output from a non-zero
+            # DECISION_EXIT, or an unexpected outcome word this router doesn't recognize).
+            # Both are treated identically to CONTENDED_UNKNOWN_HOLDER: fail closed, never
+            # reclaim on an unrecognized state, fall through to the wait/retry path below.
             ;;
         esac
 
@@ -380,7 +544,9 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
       ```
       - If `DIRTY_EXIT != 0` (the `git status` command itself failed) OR `DIRTY_STATUS` is
         non-empty (uncommitted changes exist):
-        - Release the lock: `rm -rf "$LOCK_DIR"`
+        - Release the lock: `rm -rf "$LOCK_DIR"; RELEASE_LOCK_EXIT=$?` (a non-zero exit here is
+          self-detecting via the next workflow's contention path in step 4b — not treated as
+          fatal here)
         - Persist `pending_gate: "worktree_dirty_main_tree"` (include `$DIRTY_STATUS` in the
           event log for visibility).
         - Do NOT run `git merge`, do NOT copy any files from the worktree, do NOT remove the
@@ -394,16 +560,25 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
 
    e. **Finalize** (destination behavior unchanged from before this fix, now guarded — and now
       covers the copy-fallback path explicitly and executably for the first time):
-      - Attempt: `git merge {worktree_branch}` (from `$PROJECT_ROOT`; read `worktree_branch`
-        from the workflow artifact).
-      - **If the merge output contains `"Already up to date"`**: this means the worktree's
-        builder edited files but never committed them on `{worktree_branch}` — a real,
-        frequently-observed gotcha in this repo, not a sign there's nothing to merge. Recover
-        the actual changes directly from the worktree's own uncommitted state via the real
-        copy-fallback script, never via free-form manual copying:
+      - Attempt (capture both output and exit code, mirroring the `TOPLEVEL_EXIT`/`RESOLVE_EXIT`/
+        `DIRTY_EXIT` pattern used earlier in this section — never leave `git merge`'s own exit
+        code unchecked):
         ```bash
-        python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_worktree_copy_fallback.py" \
-          "{worktree_path}" "$PROJECT_ROOT"
+        MERGE_OUTPUT=$(git merge {worktree_branch} 2>&1)
+        MERGE_EXIT=$?
+        ```
+        (from `$PROJECT_ROOT`; read `worktree_branch` from the workflow artifact.)
+      - **If `MERGE_EXIT == 0` AND `$MERGE_OUTPUT` contains `"Already up to date"`**: this means
+        the worktree's builder edited files but never committed them on `{worktree_branch}` — a
+        real, frequently-observed gotcha in this repo, not a sign there's nothing to merge.
+        Recover the actual changes directly from the worktree's own uncommitted state via the
+        real copy-fallback script, never via free-form manual copying — capture both its output
+        and its own exit code, mirroring the `MERGE_EXIT` pattern immediately above (never leave
+        this script's exit code unchecked either):
+        ```bash
+        COPY_FALLBACK_OUTPUT=$(python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_worktree_copy_fallback.py" \
+          "{worktree_path}" "$PROJECT_ROOT" 2>&1)
+        COPY_FALLBACK_EXIT=$?
         ```
         This script parses `git status --porcelain=1 -z` in `{worktree_path}` (NUL-delimited,
         unquoted paths — chosen to correctly handle renamed/copied entries and paths containing
@@ -414,40 +589,111 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
         [EASY TO MISS: this fallback only ever runs after the clean-tree check in 4d has already
         passed for `$PROJECT_ROOT` — it never bypasses that check, because it is reached only
         from this already-guarded branch.]
-      - **If the copy-fallback script itself exits non-zero:** the script's own documented
-        guarantee is partial-apply-but-diagnosable, not atomic — earlier tokens in the same run
-        that already applied successfully remain applied in the main tree even if a later token
-        fails, so a non-zero exit does NOT mean nothing landed.
-        - Release the lock: `rm -rf "$LOCK_DIR"`
-        - Persist `pending_gate: "worktree_copy_fallback_failed"` (include the script's
-          stderr/error text in the event log for visibility).
+      - **If `COPY_FALLBACK_EXIT != 0`** (the copy-fallback script itself exits non-zero): the
+        script's own documented guarantee is partial-apply-but-diagnosable, not atomic — earlier
+        tokens in the same run that already applied successfully remain applied in the main tree
+        even if a later token fails, so a non-zero exit does NOT mean nothing landed.
+        - Release the lock: `rm -rf "$LOCK_DIR"; RELEASE_LOCK_EXIT=$?` (a non-zero exit here is
+          self-detecting via the next workflow's contention path in step 4b — not treated as
+          fatal here)
+        - Persist `pending_gate: "worktree_copy_fallback_failed"` (include `$COPY_FALLBACK_OUTPUT`
+          in the event log for visibility).
         - Do NOT remove the worktree, do NOT delete the branch — the worktree still holds the
           uncommitted source of truth for whatever did not land.
         - Stop before memory-finalize. Tell the user: "The copy-fallback script failed while
-          applying the worktree's uncommitted changes to the main tree: `{stderr_or_error_text}`.
+          applying the worktree's uncommitted changes to the main tree: `{copy_fallback_output}`.
           This may be a partial apply — earlier files in this run may have already landed. Run
           `git status --porcelain` in the main tree to see exactly what applied before resuming.
           Resolve the underlying issue (e.g. a filesystem/permission problem, or a genuine
           conflict/rename edge case the script refused to guess on), then resume this workflow to
           retry."
         - Resuming this workflow re-enters this step from 4a.
-      - **If the merge succeeds with real content merged** (not "Already up to date", no
-        conflicts): nothing further needed here.
-      - **If the merge reports conflicts** (existing, unchanged outcome):
-        - Release the lock: `rm -rf "$LOCK_DIR"`
+      - **If `COPY_FALLBACK_EXIT == 0`**: the fallback applied cleanly. Proceed to the final
+        cleanup below exactly as a successful `git merge` would.
+      - **If `MERGE_EXIT == 0` AND `$MERGE_OUTPUT` does not contain `"Already up to date"`** (a
+        real merge succeeded with actual content merged, no conflicts): nothing further needed
+        here.
+      - **If `MERGE_EXIT != 0` AND `$MERGE_OUTPUT` contains a conflict marker (`"CONFLICT"`)**
+        (existing, unchanged outcome, now gated on `MERGE_EXIT` + output text rather than assumed
+        by exclusion):
+        - Release the lock: `rm -rf "$LOCK_DIR"; RELEASE_LOCK_EXIT=$?` (a non-zero exit here is
+          self-detecting via the next workflow's contention path in step 4b — not treated as
+          fatal here)
         - Persist `pending_gate: "worktree_merge_conflict"`, ask user to resolve before
           memory-finalize.
         - Do NOT remove the worktree or delete the branch while conflicts are unresolved.
         - Resuming this workflow re-enters this step from 4a once the user has resolved the
           conflict.
-      - On successful merge or successful copy-fallback:
-        - Remove worktree: `git worktree remove {worktree_path} --force`
-        - Delete branch: `git branch -d {worktree_branch}`
-        - Update artifact: `worktree_mode → "merged_and_removed"`
-        - Release the lock: `rm -rf "$LOCK_DIR"`
-        - Continue to doc-sync/memory-finalize as today.
+      - **If `MERGE_EXIT != 0` AND `$MERGE_OUTPUT` matches neither `"Already up to date"` nor a
+        conflict marker** (an unrecognized merge failure — e.g. an invalid ref, an
+        unrelated-histories error, or an uncommitted-changes-would-be-overwritten error that
+        slipped past the 4d clean-tree check): this is the explicit 4th branch closing the
+        by-exclusion gap — nothing was actually merged, so nothing may be treated as if it had
+        merged.
+        - Release the lock: `rm -rf "$LOCK_DIR"; RELEASE_LOCK_EXIT=$?` (a non-zero exit here is
+          self-detecting via the next workflow's contention path in step 4b — not treated as
+          fatal here)
+        - Persist `pending_gate: "worktree_merge_unrecognized_failure"` (include `$MERGE_OUTPUT`
+          in the event log for visibility).
+        - Do NOT remove the worktree, do NOT delete the branch, do NOT run the copy-fallback
+          script — nothing has been confirmed merged, so the worktree's committed/uncommitted
+          content remains the only source of truth.
+        - Stop before memory-finalize. Tell the user: "`git merge {worktree_branch}` failed with
+          an error this router does not recognize as either 'already up to date' or a merge
+          conflict: `{merge_output}`. Nothing has been merged, and the worktree/branch have not
+          been touched. Inspect the error above, resolve the underlying issue in `$PROJECT_ROOT`,
+          then resume this workflow to retry."
+        - Resuming this workflow re-enters this step from 4a.
+      - On successful merge or successful copy-fallback, clean up — capture the exit code of
+        each command, mirroring the `MERGE_EXIT`/`COPY_FALLBACK_EXIT` pattern above (never leave
+        either cleanup command's exit code unchecked):
+        ```bash
+        WORKTREE_REMOVE_OUTPUT=$(git worktree remove {worktree_path} --force 2>&1)
+        WORKTREE_REMOVE_EXIT=$?
+        ```
+        - **If `WORKTREE_REMOVE_EXIT != 0`** (e.g. the worktree is busy/locked — a process still
+          has an open handle inside it): do NOT run `git branch -d`, do NOT set
+          `worktree_mode → "merged_and_removed"`.
+          - Release the lock: `rm -rf "$LOCK_DIR"; RELEASE_LOCK_EXIT=$?` (a non-zero exit here
+            is self-detecting via the next workflow's contention path in step 4b — not treated
+            as fatal here)
+          - Persist `pending_gate: "worktree_cleanup_failed"` (include `$WORKTREE_REMOVE_OUTPUT`
+            and the failing command, `git worktree remove`, in the event log for visibility).
+          - Stop before memory-finalize. Tell the user: "The merge/copy-fallback succeeded, but
+            `git worktree remove {worktree_path} --force` failed: `{worktree_remove_output}`. The
+            worktree and its branch are still present and untouched. Resolve the underlying issue
+            (e.g. a process still holding a handle inside the worktree), then resume this
+            workflow to retry cleanup."
+          - Resuming this workflow re-enters this step from 4a.
+        - **If `WORKTREE_REMOVE_EXIT == 0`**, proceed to delete the branch:
+          ```bash
+          BRANCH_DELETE_OUTPUT=$(git branch -d {worktree_branch} 2>&1)
+          BRANCH_DELETE_EXIT=$?
+          ```
+          - **If `BRANCH_DELETE_EXIT != 0`** (e.g. `git branch -d` refuses because the branch is
+            not fully merged into the current branch — a real correctness signal, not a cosmetic
+            failure): do NOT set `worktree_mode → "merged_and_removed"`.
+            - Release the lock: `rm -rf "$LOCK_DIR"; RELEASE_LOCK_EXIT=$?` (a non-zero exit here
+              is self-detecting via the next workflow's contention path in step 4b — not
+              treated as fatal here)
+            - Persist `pending_gate: "worktree_cleanup_failed"` (include `$BRANCH_DELETE_OUTPUT`
+              and the failing command, `git branch -d`, in the event log for visibility).
+            - Stop before memory-finalize. Tell the user: "The merge/copy-fallback succeeded and
+              the worktree was removed, but `git branch -d {worktree_branch}` failed:
+              `{branch_delete_output}`. This can mean the branch is not fully merged — a real
+              correctness signal, not a cosmetic failure. Inspect `git log {worktree_branch}` in
+              `$PROJECT_ROOT`, resolve the discrepancy (or delete the branch manually with
+              `git branch -D` once you've confirmed nothing is lost), then resume this workflow
+              to retry cleanup."
+            - Resuming this workflow re-enters this step from 4a.
+          - **If `BRANCH_DELETE_EXIT == 0`**: both cleanup commands succeeded.
+            - Update artifact: `worktree_mode → "merged_and_removed"`
+            - Release the lock: `rm -rf "$LOCK_DIR"; RELEASE_LOCK_EXIT=$?` (a non-zero exit here
+              is self-detecting via the next workflow's contention path in step 4b — not
+              treated as fatal here)
+            - Continue to doc-sync/memory-finalize as today.
 
-Safety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: "auto_created"` already set, re-use `worktree_path` from the artifact rather than creating a new worktree. If `worktree_path` is null despite `worktree_mode: "auto_created"`, treat as fallback and proceed with main tree. If a resume finds `pending_gate` set to `worktree_merge_locked`, `worktree_dirty_main_tree`, `worktree_merge_conflict`, or `worktree_copy_fallback_failed`, re-enter this step from 4a — none of these gates require any bespoke resume branch beyond the generic resume algorithm in `## 4. Resume And Hydration`.
+Safety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: "auto_created"` already set, re-use `worktree_path` from the artifact rather than creating a new worktree. If `worktree_path` is null despite `worktree_mode: "auto_created"`, treat as fallback and proceed with main tree. If a resume finds `pending_gate` set to `worktree_merge_locked`, `worktree_dirty_main_tree`, `worktree_merge_conflict`, `worktree_merge_unrecognized_failure`, `worktree_copy_fallback_failed`, or `worktree_cleanup_failed`, re-enter this step from 4a — none of these gates require any bespoke resume branch beyond the generic resume algorithm in `## 4. Resume And Hydration`.
 
 ### DEBUG preparation
 
@@ -516,19 +762,27 @@ TaskCreate({
 
 ```text
 Write(
-  file_path=".craftflow/state/workflows/{workflow_uuid}.json",
+  file_path="$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json",
   content="{\"workflow_uuid\":\"{workflow_uuid}\",\"workflow_id\":\"{workflow_uuid}\",\"workflow_type\":\"{WORKFLOW}\",\"state_root\":\".craftflow/state\",\"user_request\":\"{request}\",\"plan_file\":null,\"design_file\":null,\"research_files\":[],\"approved_decisions\":[],\"plan_mode\":null,\"verification_rigor\":\"standard\",\"proof_status\":\"gaps_found\",\"traceability\":{\"requirements\":[],\"phases\":[],\"verification\":[],\"remediation\":[]},\"intent\":{\"goal\":null,\"non_goals\":[],\"constraints\":[],\"acceptance_criteria\":[],\"open_decisions\":[]},\"normalized_phases\":[],\"phase_cursor\":null,\"capabilities\":{\"brightdata_available\":\"unknown\",\"octocode_available\":\"unknown\",\"websearch_available\":\"unknown\",\"webfetch_available\":\"unknown\"},\"research_rounds\":[],\"research_backend_history\":[],\"research_quality\":{\"web\":\"none\",\"github\":\"none\",\"overall\":\"none\"},\"task_ids\":{\"planner_create\":null,\"planning_review_pass1\":null,\"planner_replan\":null,\"planning_review_pass2\":null,\"memory_finalize\":null},\"phase_status\":{},\"results\":{\"builder\":null,\"investigator\":null,\"reviewer\":null,\"hunter\":null,\"verifier\":null,\"planner\":null,\"planning_reviewer\":null,\"research\":{\"web\":null,\"github\":null,\"synthesis\":null}},\"evidence\":{\"builder\":[],\"investigator\":[],\"reviewer\":[],\"hunter\":[],\"verifier\":[],\"planning_reviewer\":[]},\"telemetry\":{\"task_metrics_available\":\"unknown\",\"workflow_wall_clock_seconds\":0,\"agent_wall_clock_seconds\":{\"builder\":0,\"investigator\":0,\"reviewer\":0,\"hunter\":0,\"verifier\":0,\"planner\":0},\"loop_counts\":{\"re_review\":0,\"re_hunt\":0,\"re_verify\":0},\"verifier\":{\"phase_exit_proof_runs\":0,\"extended_audit_runs\":0,\"workload_seconds\":{\"tests\":0,\"build\":0,\"scan\":0,\"reconcile\":0,\"reasoning\":0}}},\"quality\":{\"confidence\":null,\"evidence_complete\":false,\"scenario_coverage\":0,\"research_quality\":\"none\",\"convergence_state\":\"pending\"},\"planning_review_runs\":0,\"planning_review_findings\":[],\"planning_review_status\":\"not_started\",\"build_mode\":null,\"fast_path_risk_signals\":[],\"fast_path_escalated\":false,\"worktree_mode\":null,\"worktree_path\":null,\"worktree_branch\":null,\"memory_notes\":[],\"pending_gate\":null,\"status_history\":[{\"event\":\"workflow_started\",\"ts\":\"{iso_timestamp}\",\"phase\":\"{build|debug|review|plan}\"}],\"remediation_history\":[],\"created_at\":\"{iso_timestamp}\",\"updated_at\":\"{iso_timestamp}\"}"
 )
 Write(
-  file_path=".craftflow/state/workflows/{workflow_uuid}.events.jsonl",
+  file_path="$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.events.jsonl",
   content="{\"ts\":\"{iso_timestamp}\",\"wf\":\"{workflow_uuid}\",\"event\":\"workflow_started\",\"phase\":\"{build|debug|review|plan}\",\"task_id\":\"{parent_task_id}\",\"agent\":\"router\",\"decision\":\"start\",\"reason\":\"User request\"}\n"
 )
 ```
 
+**Conditional — only if `## 0.` recorded a `project_root_resolution_fallback` reason for this
+session** (i.e. `TOPLEVEL_EXIT != 0` and the outcome was `NO_REPO_FOUND` or
+`RESOLVE_SCRIPT_ERROR`): append a second `status_history` entry and a second events.jsonl line
+alongside `workflow_started`, using the same `{workflow_uuid}`/`{iso_timestamp}` values as step
+3 above — `{"event":"project_root_resolution_fallback","ts":"{iso_timestamp}","reason":"NO_REPO_FOUND"|"RESOLVE_SCRIPT_ERROR"}`.
+If `## 0.` did not fall back (the common, single-repo case), skip this — there is nothing to
+append.
+
 4. Immediately after artifact creation, initialize the per-workflow state directory:
 
 ```text
-Bash("mkdir -p .craftflow/state/workflows/{workflow_uuid}")
+Bash("mkdir -p \"$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}\"")
 ```
 
 This directory is where the memory-finalize task will write workflow-scoped
@@ -601,7 +855,7 @@ waiting on this agent.
 - Task Phase: {phase}
 - Plan File: {plan_file or 'None'}
 - Workflow Scope: wf:{workflow_uuid}
-- Workflow Artifact: .craftflow/state/workflows/{workflow_uuid}.json
+- Workflow Artifact: $PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json
 - Effort Directive: {low|medium|high — from fast-path.md dispatch table; append one-line steering per §4 Effort Steering Directives}
 
 ## User Request
@@ -1007,7 +1261,7 @@ Memory Update.
 3. If the runnable task kind is memory:
    - execute inline in the main context
    - persist workflow artifact results + Memory Notes from the task description
-   - append `memory_finalized` to `.craftflow/state/workflows/{wf}.events.jsonl`
+   - append `memory_finalized` to `$PROJECT_ROOT/.craftflow/state/workflows/{wf}.events.jsonl`
    - clean up the matching [craftflow-internal] or legacy [cc10x-internal] memory_task_id entry
    - mark the memory task completed
    - mark the parent workflow task completed
@@ -1066,7 +1320,7 @@ If any answer is "no" or "unknown", treat as incomplete and apply the fallback v
 4. Memory payload was already captured in step 0:
    - READ-ONLY agents: append extracted notes to the memory task description.
    - WRITE agents: append deferred or supplemental payload needed by the memory task.
-5. Update `.craftflow/state/workflows/{workflow_uuid}.json` with:
+5. Update `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json` with:
    - intent contract fields from planner output when available
    - task ids
    - phase status
@@ -1101,15 +1355,17 @@ Memory is written to two tiers. Route each `MEMORY_NOTES` field as follows:
 
 | MEMORY_NOTES field | Write destination | Rationale |
 |--------------------|-------------------|-----------|
-| `learnings` | `workflows/{workflow_uuid}/activeContext.md ## Learnings` | Workflow-specific causal insights |
-| `patterns` | `project/patterns.md ## Common Gotchas` | Durable conventions that apply to all future workflows |
-| `verification` | `workflows/{workflow_uuid}/progress.md ## Verification` | Proof evidence scoped to this build/debug/review run |
-| `deferred` | `workflows/{workflow_uuid}/activeContext.md` as `[Deferred]: ...` | Non-blocking follow-ups scoped to this workflow |
+| `learnings` | `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## Learnings` | Workflow-specific causal insights |
+| `patterns` | `$PROJECT_ROOT/.craftflow/state/project/patterns.md ## Common Gotchas` | Durable conventions that apply to all future workflows |
+| `verification` | `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md ## Verification` | Proof evidence scoped to this build/debug/review run |
+| `deferred` | `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md` as `[Deferred]: ...` | Non-blocking follow-ups scoped to this workflow |
 
 Cross-workflow promotion rule: If a `learnings` item is a project-wide constraint
-(not specific to the current task), also copy it to `project/activeContext.md ## Learnings`.
-Use judgment: workflow-local observations stay in `workflows/{wf}/`; durable project
-truths belong in `project/`.
+(not specific to the current task), also copy it to
+`$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Learnings`.
+Use judgment: workflow-local observations stay in
+`$PROJECT_ROOT/.craftflow/state/workflows/{wf}/`; durable project truths belong in
+`$PROJECT_ROOT/.craftflow/state/project/`.
 
 Skill-candidate observe step (required before any markdown persistence below):
 - Before writing any `.md` memory file, run the deterministic ledger observe call for
@@ -1161,33 +1417,33 @@ Memory finalization permit (required before any `.md` memory write):
 - The `craftflow_pretooluse_guard.py` hook blocks direct writes to protected memory files.
 - Before writing the first memory file, create the permit token:
   ```
-  Bash("printf '%s' '{workflow_uuid}' > .craftflow/state/.memory-finalize")
+  Bash("printf '%s' '{workflow_uuid}' > \"$PROJECT_ROOT/.craftflow/state/.memory-finalize\"")
   ```
 - After all memory files are written, clear the permit:
   ```
-  Bash("rm -f .craftflow/state/.memory-finalize")
+  Bash("rm -f \"$PROJECT_ROOT/.craftflow/state/.memory-finalize\"")
   ```
 - If workflow_uuid is unavailable (fallback path), omit the permit steps — the guard will audit-log but not block in that case.
 
 The memory task also:
-- Replaces `workflows/{workflow_uuid}/progress.md ## Tasks` with the active workflow snapshot.
-- Keeps only the most recent 10 items in `workflows/{workflow_uuid}/progress.md ## Completed`.
-- Updates `project/progress.md ## Completed` with a one-line summary of the finished workflow.
-- Removes the matching `[craftflow-internal]` or legacy `[cc10x-internal]` `memory_task_id` line from `project/activeContext.md ## References`.
+- Replaces `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md ## Tasks` with the active workflow snapshot.
+- Keeps only the most recent 10 items in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md ## Completed`.
+- Updates `$PROJECT_ROOT/.craftflow/state/project/progress.md ## Completed` with a one-line summary of the finished workflow.
+- Removes the matching `[craftflow-internal]` or legacy `[cc10x-internal]` `memory_task_id` line from `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References`.
 - If any artifact or memory write fails, stop immediately (clear the permit first). Never advance the workflow after a failed persistence write.
 
 Fallback: If `workflow_uuid` is unavailable, write to root-flat files
-(`.craftflow/state/activeContext.md`, `.craftflow/state/patterns.md`, `.craftflow/state/progress.md`)
-as in prior versions.
+(`$PROJECT_ROOT/.craftflow/state/activeContext.md`, `$PROJECT_ROOT/.craftflow/state/patterns.md`,
+`$PROJECT_ROOT/.craftflow/state/progress.md`) as in prior versions.
 
 For PLAN:
-- Ensure `- Plan: {plan_file}` remains correct in `activeContext.md ## References`.
-- Ensure `- Design: {design_file}` remains correct in `activeContext.md ## References` when a design exists.
-- If a plan exists, record `Plan saved: {plan_file}` in `activeContext.md ## Recent Changes`.
-- If a plan exists, set `activeContext.md ## Next Steps` to `1. Execute plan: {plan_file}` unless the workflow ended in clarification-needed state.
+- Ensure `- Plan: {plan_file}` remains correct in `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References`.
+- Ensure `- Design: {design_file}` remains correct in `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References` when a design exists.
+- If a plan exists, record `Plan saved: {plan_file}` in `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Recent Changes`.
+- If a plan exists, set `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Next Steps` to `1. Execute plan: {plan_file}` unless the workflow ended in clarification-needed state.
 
 For DEBUG:
-- Preserve the latest `[DEBUG-RESET: wf:{workflow_task_id}]` section in `## Recent Changes` and summarize the final result beneath it.
+- Preserve the latest `[DEBUG-RESET: wf:{workflow_uuid}]` section in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## Recent Changes` and summarize the final result beneath it.
 
 ## 14. Hard Rules
 

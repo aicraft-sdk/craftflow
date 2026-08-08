@@ -460,6 +460,8 @@ def main() -> int:
         "worktree_dirty_main_tree",
         "worktree_merge_conflict",
         "worktree_copy_fallback_failed",
+        "worktree_merge_unrecognized_failure",
+        "worktree_cleanup_failed",
         "craftflow_worktree_lock_staleness.py",
         "craftflow_worktree_copy_fallback.py",
         "craftflow_worktree_merge_guard_check.py",
@@ -477,6 +479,8 @@ def main() -> int:
             "worktree_dirty_main_tree",
             "worktree_merge_conflict",
             "worktree_copy_fallback_failed",
+            "worktree_merge_unrecognized_failure",
+            "worktree_cleanup_failed",
         ),
         ROUTER_BUILD_REFERENCE: (
             "### BUILD preparation",

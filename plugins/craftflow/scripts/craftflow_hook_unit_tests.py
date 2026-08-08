@@ -416,6 +416,387 @@ def test_router_dispatches_intent_interview() -> None:
     ok(name)
 
 
+def test_section_0_precedes_memory_load() -> None:
+    name = "router/section-0-precedes-memory-load"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    idx_0 = content.find("## 0. Resolve Project Root")
+    idx_2 = content.find("## 2. Memory Load And Template Validation")
+    if idx_0 == -1:
+        fail(name, "## 0. Resolve Project Root heading not found")
+        return
+    if idx_2 == -1:
+        fail(name, "## 2. Memory Load And Template Validation heading not found")
+        return
+    if not (idx_0 < idx_2):
+        fail(name, f"expected ## 0. ({idx_0}) before ## 2. ({idx_2})")
+        return
+    ok(name)
+
+
+def test_memory_load_anchored_to_project_root() -> None:
+    name = "router/memory-load-anchored-to-project-root"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    start = content.find("## 2. Memory Load And Template Validation")
+    end = content.find("\n## 2a.", start)
+    if start == -1 or end == -1:
+        fail(name, "could not bound ## 2. section")
+        return
+    section = content[start:end]
+    if '$PROJECT_ROOT/.craftflow/state/project/activeContext.md' not in section:
+        fail(name, "anchored activeContext.md reference not found in ## 2.")
+        return
+    if '"activeContext.md"' in section or 'Read(".craftflow/state/project/activeContext.md")' in section:
+        fail(name, "bare unanchored activeContext.md reference still present in ## 2.")
+        return
+    ok(name)
+
+
+def test_parent_workflow_creation_anchored_to_project_root() -> None:
+    name = "router/parent-workflow-creation-anchored"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    start = content.find("### Parent workflow creation")
+    end = content.find("\n### BUILD task graph", start)
+    if start == -1 or end == -1:
+        fail(name, "could not bound ### Parent workflow creation section")
+        return
+    section = content[start:end]
+    if 'file_path="$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json"' not in section:
+        fail(name, "anchored workflow artifact Write() not found")
+        return
+    if 'file_path=".craftflow/state/workflows/{workflow_uuid}.json"' in section:
+        fail(name, "bare unanchored workflow artifact Write() still present")
+        return
+    ok(name)
+
+
+def test_parent_workflow_creation_fallback_reason_wired() -> None:
+    name = "router/parent-workflow-creation-fallback-reason-wired"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    start = content.find("### Parent workflow creation")
+    end = content.find("\n### BUILD task graph", start)
+    if start == -1 or end == -1:
+        fail(name, "could not bound ### Parent workflow creation section")
+        return
+    section = content[start:end]
+    fallback_idx = section.find("project_root_resolution_fallback")
+    if fallback_idx == -1:
+        fail(name, "project_root_resolution_fallback conditional block not found in ### Parent workflow creation")
+        return
+    fallback_block = section[fallback_idx: fallback_idx + 500]
+    if "NO_REPO_FOUND" not in fallback_block:
+        fail(name, "NO_REPO_FOUND reason literal not found in fallback conditional block")
+        return
+    if "RESOLVE_SCRIPT_ERROR" not in fallback_block:
+        fail(name, "RESOLVE_SCRIPT_ERROR reason literal not found in fallback conditional block")
+        return
+    if "{workflow_uuid}" not in fallback_block:
+        fail(name, "{workflow_uuid} templating not found in fallback conditional block")
+        return
+    if "{iso_timestamp}" not in fallback_block:
+        fail(name, "{iso_timestamp} templating not found in fallback conditional block")
+        return
+    ok(name)
+
+
+def test_shared_preparation_anchored_to_project_root() -> None:
+    name = "router/shared-preparation-anchored"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    start = content.find("### Shared preparation")
+    end = content.find("\n**Intent Readiness Gate", start)
+    if start == -1 or end == -1:
+        fail(name, "could not bound ### Shared preparation section")
+        return
+    section = content[start:end]
+    positive_checks = [
+        (
+            "$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References",
+            "anchored activeContext.md ## References read not found in Shared preparation",
+        ),
+        (
+            "$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Decisions",
+            "anchored activeContext.md ## Decisions read not found in Shared preparation",
+        ),
+        (
+            "$PROJECT_ROOT/.craftflow/state/project/progress.md ## Current Workflow",
+            "anchored progress.md ## Current Workflow read not found in Shared preparation",
+        ),
+        (
+            "$PROJECT_ROOT/.craftflow/state/workflows/*.json",
+            "anchored workflows/*.json artifact read not found in Shared preparation",
+        ),
+    ]
+    for needle, reason in positive_checks:
+        if needle not in section:
+            fail(name, reason)
+            return
+    negative_checks = [
+        (
+            "Read `activeContext.md ## References`",
+            "bare unanchored activeContext.md ## References read still present in Shared preparation",
+        ),
+        (
+            "Read `activeContext.md ## Decisions`",
+            "bare unanchored activeContext.md ## Decisions read still present in Shared preparation",
+        ),
+        (
+            "Read `progress.md ## Current Workflow`",
+            "bare unanchored progress.md ## Current Workflow read still present in Shared preparation",
+        ),
+        (
+            "latest `.craftflow/state/workflows/*.json` artifact",
+            "bare unanchored workflows/*.json artifact read still present in Shared preparation",
+        ),
+    ]
+    for needle, reason in negative_checks:
+        if needle in section:
+            fail(name, reason)
+            return
+    ok(name)
+
+
+def test_worktree_isolation_reuses_project_root_no_duplicate_resolution() -> None:
+    name = "router/worktree-isolation-reuses-project-root"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    if content.count("craftflow_resolve_workspace_root.py") != 1:
+        fail(name, f"expected exactly 1 reference to the resolver script, found {content.count('craftflow_resolve_workspace_root.py')}")
+        return
+    start = content.find("### Worktree Isolation (BUILD Default)")
+    next_heading = content.find("\n### DEBUG preparation", start)
+    section = content[start: next_heading if next_heading != -1 else None]
+    if "was already resolved once by" not in section:
+        fail(name, "expected reuse sentence not found in Worktree Isolation section")
+        return
+    if "TOPLEVEL_EXIT=$?" in section:
+        fail(name, "Worktree Isolation section still contains its own TOPLEVEL_EXIT assignment")
+        return
+    ok(name)
+
+
+def test_memory_finalization_for_plan_anchored_to_project_tier() -> None:
+    name = "router/memory-finalization-for-plan-anchored-to-project-tier"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    start = content.find("For PLAN:")
+    end = content.find("For DEBUG:", start)
+    if start == -1 or end == -1:
+        fail(name, "could not bound the For PLAN: block in ## 13. Memory Finalization")
+        return
+    section = content[start:end]
+    if "$PROJECT_ROOT/.craftflow/state/project/activeContext.md" not in section:
+        fail(name, "expected project-tier activeContext.md reference not found in For PLAN: block")
+        return
+    if "$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md" in section:
+        fail(name, "For PLAN: block writes to the wrong (workflow-tier) activeContext.md")
+        return
+    ok(name)
+
+
+def test_memory_finalization_for_debug_anchored_and_uses_workflow_uuid() -> None:
+    name = "router/memory-finalization-for-debug-anchored-uses-workflow-uuid"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    start = content.find("For DEBUG:")
+    end = content.find("## 14. Hard Rules", start)
+    if start == -1 or end == -1:
+        fail(name, "could not bound the For DEBUG: block in ## 13. Memory Finalization")
+        return
+    section = content[start:end]
+    if "$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md" not in section:
+        fail(name, "expected workflow-tier activeContext.md reference not found in For DEBUG: block")
+        return
+    if "[DEBUG-RESET: wf:{workflow_uuid}]" not in section:
+        fail(name, "expected {workflow_uuid} in the [DEBUG-RESET: wf:...] marker reference")
+        return
+    if "workflow_task_id" in section:
+        fail(name, "For DEBUG: block still references undefined workflow_task_id")
+        return
+    ok(name)
+
+
+def test_memory_finalization_prelude_anchored_to_project_root() -> None:
+    name = "router/memory-finalization-prelude-anchored"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    start = content.find("## 13. Memory Finalization")
+    end = content.find("For PLAN:", start)
+    if start == -1 or end == -1:
+        fail(name, "could not bound ## 13. Memory Finalization heading through For PLAN:")
+        return
+    section = content[start:end]
+    positive_checks = [
+        (
+            "| `learnings` | `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## Learnings` |",
+            "anchored learnings routing-table row not found",
+        ),
+        (
+            "| `patterns` | `$PROJECT_ROOT/.craftflow/state/project/patterns.md ## Common Gotchas` |",
+            "anchored patterns routing-table row not found",
+        ),
+        (
+            "| `verification` | `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md ## Verification` |",
+            "anchored verification routing-table row not found",
+        ),
+        (
+            "| `deferred` | `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md` as `[Deferred]: ...` |",
+            "anchored deferred routing-table row not found",
+        ),
+        (
+            "`$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Learnings`",
+            "anchored cross-workflow promotion rule reference not found",
+        ),
+        (
+            'Bash("printf \'%s\' \'{workflow_uuid}\' > \\"$PROJECT_ROOT/.craftflow/state/.memory-finalize\\"")',
+            "anchored memory-finalize permit printf Bash() call not found",
+        ),
+        (
+            'Bash("rm -f \\"$PROJECT_ROOT/.craftflow/state/.memory-finalize\\"")',
+            "anchored memory-finalize permit rm Bash() call not found",
+        ),
+        (
+            "Replaces `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md ## Tasks`",
+            "anchored 'memory task also' Replaces bullet not found",
+        ),
+        (
+            "Keeps only the most recent 10 items in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md ## Completed`",
+            "anchored 'memory task also' Keeps bullet not found",
+        ),
+        (
+            "Updates `$PROJECT_ROOT/.craftflow/state/project/progress.md ## Completed`",
+            "anchored 'memory task also' Updates bullet not found",
+        ),
+        (
+            "line from `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References`",
+            "anchored 'memory task also' Removes bullet not found",
+        ),
+        (
+            "`$PROJECT_ROOT/.craftflow/state/activeContext.md`",
+            "anchored root-flat fallback activeContext.md not found",
+        ),
+        (
+            "`$PROJECT_ROOT/.craftflow/state/patterns.md`",
+            "anchored root-flat fallback patterns.md not found",
+        ),
+        (
+            "`$PROJECT_ROOT/.craftflow/state/progress.md`",
+            "anchored root-flat fallback progress.md not found",
+        ),
+    ]
+    for needle, reason in positive_checks:
+        if needle not in section:
+            fail(name, reason)
+            return
+    negative_checks = [
+        (
+            "| `learnings` | `workflows/{workflow_uuid}/activeContext.md ## Learnings` |",
+            "bare unanchored learnings routing-table row still present",
+        ),
+        (
+            "| `patterns` | `project/patterns.md ## Common Gotchas` |",
+            "bare unanchored patterns routing-table row still present",
+        ),
+        (
+            "| `verification` | `workflows/{workflow_uuid}/progress.md ## Verification` |",
+            "bare unanchored verification routing-table row still present",
+        ),
+        (
+            "| `deferred` | `workflows/{workflow_uuid}/activeContext.md` as `[Deferred]: ...` |",
+            "bare unanchored deferred routing-table row still present",
+        ),
+        (
+            "`project/activeContext.md ## Learnings`",
+            "bare unanchored cross-workflow promotion rule reference still present",
+        ),
+        (
+            'Bash("printf \'%s\' \'{workflow_uuid}\' > .craftflow/state/.memory-finalize")',
+            "bare unanchored memory-finalize permit printf Bash() call still present",
+        ),
+        (
+            'Bash("rm -f .craftflow/state/.memory-finalize")',
+            "bare unanchored memory-finalize permit rm Bash() call still present",
+        ),
+        (
+            "Replaces `workflows/{workflow_uuid}/progress.md ## Tasks`",
+            "bare unanchored 'memory task also' Replaces bullet still present",
+        ),
+        (
+            "Updates `project/progress.md ## Completed`",
+            "bare unanchored 'memory task also' Updates bullet still present",
+        ),
+        (
+            "line from `project/activeContext.md ## References`",
+            "bare unanchored 'memory task also' Removes bullet still present",
+        ),
+        (
+            "(`.craftflow/state/activeContext.md`, `.craftflow/state/patterns.md`, `.craftflow/state/progress.md`)",
+            "bare unanchored root-flat fallback path group still present",
+        ),
+    ]
+    for needle, reason in negative_checks:
+        if needle in section:
+            fail(name, reason)
+            return
+    ok(name)
+
+
+def test_just_go_and_scope_decision_resume_anchored_to_project_root() -> None:
+    name = "router/just-go-and-scope-decision-resume-anchored"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+
+    jg_start = content.find("JUST_GO:")
+    jg_end = content.find("\n## 2a.", jg_start)
+    if jg_start == -1 or jg_end == -1:
+        fail(name, "could not bound JUST_GO: subsection through ## 2a.")
+        return
+    jg_section = content[jg_start:jg_end]
+    if "`$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Session Settings`" not in jg_section:
+        fail(name, "anchored JUST_GO Session Settings reference not found")
+        return
+    if "`activeContext.md ## Session Settings`" in jg_section:
+        fail(name, "bare unanchored JUST_GO Session Settings reference still present")
+        return
+
+    resume_start = content.find("## 4. Resume And Hydration")
+    resume_end = content.find("\n## 5. Workflow Preparation", resume_start)
+    if resume_start == -1 or resume_end == -1:
+        fail(name, "could not bound ## 4. Resume And Hydration through ## 5. Workflow Preparation")
+        return
+    resume_section = content[resume_start:resume_end]
+    if "`$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Decisions`" not in resume_section:
+        fail(name, "anchored scope-decision-resume Decisions reference not found")
+        return
+    if "`activeContext.md ## Decisions`" in resume_section:
+        fail(name, "bare unanchored scope-decision-resume Decisions reference still present")
+        return
+
+    ok(name)
+
+
+def test_dispatcher_scaffold_workflow_artifact_anchored_to_project_root() -> None:
+    name = "router/dispatcher-scaffold-workflow-artifact-anchored"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    start = content.find("### Prompt scaffold for every agent")
+    end = content.find("\n### Prompt assembly rule", start)
+    if start == -1 or end == -1:
+        fail(name, "could not bound ### Prompt scaffold for every agent through ### Prompt assembly rule")
+        return
+    section = content[start:end]
+    if "- Workflow Artifact: $PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json" not in section:
+        fail(name, "anchored Workflow Artifact line not found in dispatcher scaffold")
+        return
+    if "- Workflow Artifact: .craftflow/state/workflows/{workflow_uuid}.json" in section:
+        fail(name, "bare unanchored Workflow Artifact line still present in dispatcher scaffold")
+        return
+    ok(name)
+
+
 def test_workflow_id_script_present() -> None:
     name = "scripts/craftflow_workflow_id-present"
     path = SCRIPTS / "craftflow_workflow_id.py"
@@ -13089,6 +13470,17 @@ def main() -> int:
     test_root_hooks_json_registers_selfcheck_sessionstart()
     test_selfcheck_internal_budget_stays_under_registered_hook_timeout()
     test_workflow_id_script_present()
+    test_section_0_precedes_memory_load()
+    test_memory_load_anchored_to_project_root()
+    test_parent_workflow_creation_anchored_to_project_root()
+    test_parent_workflow_creation_fallback_reason_wired()
+    test_shared_preparation_anchored_to_project_root()
+    test_worktree_isolation_reuses_project_root_no_duplicate_resolution()
+    test_memory_finalization_for_plan_anchored_to_project_tier()
+    test_memory_finalization_for_debug_anchored_and_uses_workflow_uuid()
+    test_memory_finalization_prelude_anchored_to_project_root()
+    test_just_go_and_scope_decision_resume_anchored_to_project_root()
+    test_dispatcher_scaffold_workflow_artifact_anchored_to_project_root()
     test_statusline_script_present()
     test_router_uses_workflow_id_helper()
     test_learn_distiller_uses_tools_key_not_allowed_tools()
