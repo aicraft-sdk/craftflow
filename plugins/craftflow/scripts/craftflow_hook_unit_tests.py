@@ -811,6 +811,80 @@ def test_workflow_id_script_present() -> None:
     ok(name)
 
 
+def test_resolve_workspace_root_script_present() -> None:
+    name = "scripts/craftflow_resolve_workspace_root-present"
+    path = SCRIPTS / "craftflow_resolve_workspace_root.py"
+    if not path.exists():
+        fail(name, f"craftflow_resolve_workspace_root.py not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    for marker in ("find_repo_candidates", "match_request_text", "resolve", "DETERMINISTIC", "AMBIGUOUS", "NO_REPO_FOUND"):
+        if marker not in content:
+            fail(name, f"craftflow_resolve_workspace_root.py missing expected symbol: {marker!r}")
+            return
+    ok(name)
+
+
+def test_worktree_isolation_resolver_gated_on_toplevel_failure() -> None:
+    name = "router/worktree-isolation-resolver-gated"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not skill_path.exists():
+        fail(name, f"SKILL.md not found at {skill_path}")
+        return
+    content = skill_path.read_text(encoding="utf-8")
+    # NOTE: project-root resolution now lives in "## 0. Resolve Project Root" (a later
+    # refactor anchored router state to a single early PROJECT_ROOT resolution instead of
+    # inline inside "### Worktree Isolation (BUILD Default)"). Worktree Isolation itself now
+    # only *reuses* PROJECT_ROOT. Anchor on the section that actually contains the gate and
+    # the resolver reference, and search to EOF since the mkdir/worktree-add block it must
+    # precede lives in a later top-level section.
+    section_start = content.find("## 0. Resolve Project Root")
+    if section_start == -1:
+        fail(name, "Resolve Project Root section not found")
+        return
+    section = content[section_start:]
+
+    gate_idx = section.find("TOPLEVEL_EXIT != 0")
+    resolver_idx = section.find("craftflow_resolve_workspace_root.py")
+    mkdir_idx = section.find('mkdir -p "$PROJECT_ROOT/.claude/worktrees"')
+
+    if gate_idx == -1:
+        fail(name, "TOPLEVEL_EXIT != 0 gate text not found in/after Resolve Project Root section")
+        return
+    if resolver_idx == -1:
+        fail(name, "resolver script reference not found in/after Resolve Project Root section")
+        return
+    if mkdir_idx == -1:
+        fail(name, "mkdir -p .../.claude/worktrees block not found in/after Resolve Project Root section")
+        return
+    if not (gate_idx < resolver_idx < mkdir_idx):
+        fail(
+            name,
+            f"expected order TOPLEVEL_EXIT!=0 gate ({gate_idx}) < resolver reference "
+            f"({resolver_idx}) < mkdir/worktree-add block ({mkdir_idx}) -- resolver must be "
+            f"textually gated behind the failure branch, never unconditional",
+        )
+        return
+    ok(name)
+
+
+def test_worktree_isolation_step_4a_derives_from_worktree_path() -> None:
+    name = "router/worktree-isolation-step-4a-no-reredirive"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    # NOTE: current code nests `dirname` three levels deep (worktree_path ->
+    # {project_root}/.claude/worktrees/{worktree_dir}, so its great-grandparent is
+    # PROJECT_ROOT) -- deeper than this plan's original two-level literal, confirmed by
+    # reading the live file rather than trusting the stale plan text.
+    if 'PROJECT_ROOT=$(dirname "$(dirname "$(dirname "{worktree_path}")")")' not in content:
+        fail(name, "step 4a no longer derives PROJECT_ROOT from worktree_path via nested dirname")
+        return
+    if "PROJECT_ROOT=$(git rev-parse --show-toplevel)" in content:
+        fail(name, "a bare, unconditional `PROJECT_ROOT=$(git rev-parse --show-toplevel)` re-derivation still exists")
+        return
+    ok(name)
+
+
 def test_statusline_script_present() -> None:
     name = "scripts/craftflow_statusline-present"
     path = SCRIPTS / "craftflow_statusline.sh"
@@ -13470,6 +13544,9 @@ def main() -> int:
     test_root_hooks_json_registers_selfcheck_sessionstart()
     test_selfcheck_internal_budget_stays_under_registered_hook_timeout()
     test_workflow_id_script_present()
+    test_resolve_workspace_root_script_present()
+    test_worktree_isolation_resolver_gated_on_toplevel_failure()
+    test_worktree_isolation_step_4a_derives_from_worktree_path()
     test_section_0_precedes_memory_load()
     test_memory_load_anchored_to_project_root()
     test_parent_workflow_creation_anchored_to_project_root()
