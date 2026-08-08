@@ -240,10 +240,27 @@ Cursor's `Task`-dispatch model: instead of a `## Worktree` block appended to a
 `TaskCreate()` description, the block is added to the per-phase dispatch prompt built in
 § 5.
 
-1. **Creation.** At BUILD start, before any `Task` dispatch, resolve the project root and
-   create the worktree via the Shell tool:
+1. **Creation.** At BUILD start, before any `Task` dispatch, resolve the project root:
    ```bash
-   PROJECT_ROOT=$(git rev-parse --show-toplevel)
+   PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+   TOPLEVEL_EXIT=$?
+   ```
+   - If `TOPLEVEL_EXIT == 0`: unchanged single-repo path, `PROJECT_ROOT` is set.
+   - If `TOPLEVEL_EXIT != 0`: cwd is a multi-repo workspace root (not itself a git repo but
+     containing immediate-child nested git repos). Resolve exactly as Claude Code's
+     `craftflow-router/SKILL.md` does in its own "1a. Multi-repo workspace root resolution"
+     step: invoke the same `craftflow_resolve_workspace_root.py` helper (located via the same
+     `installed_plugins.json` lookup) with `--cwd "$(pwd)" --request "<user request>"`, and:
+     - `DETERMINISTIC` → set `PROJECT_ROOT` to the returned `project_root`.
+     - `AMBIGUOUS` → ask the user once which candidate repo this workflow targets (Cursor has
+       no `AskUserQuestion` tool; use a plain chat prompt listing the `candidates` and wait for
+       the user's reply before proceeding). This gate is never skipped/auto-answered.
+     - `NO_REPO_FOUND` (or the script exits non-zero): skip worktree creation entirely — go
+       directly to step 3 ("On failure") below, exactly like any other worktree-creation
+       failure.
+
+   Once `PROJECT_ROOT` is set, create the worktree via the Shell tool:
+   ```bash
    SHORT_ID="{last 8 hex chars of the workflow UUID}"
    git worktree add "$PROJECT_ROOT/.claude/worktrees/wf-${SHORT_ID}" -b "worktree-wf-${SHORT_ID}"
    ```
