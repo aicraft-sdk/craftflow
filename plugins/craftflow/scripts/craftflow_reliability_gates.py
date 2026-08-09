@@ -36,6 +36,22 @@ Subcommands:
 Ledger file default: .craftflow/state/project/reliability-gates.json
 Exit 0 on success. Exit 1 on usage error, unknown gate_id, or fail-closed
 corruption.
+
+IMPORTANT -- never write test/smoke-test evidence against the real project
+ledger (.craftflow/state/project/reliability-gates.json). Each gate's
+evidenceRuns is meant to be a durable, trustworthy record of what has
+actually been proven (a real doubt-verifier phase:fix-verify cycle, a real
+worktree-merge-guard run, etc.) -- not CLI-plumbing self-tests. Verifying
+that --seed/--record-evidence/--promote/--list/--query work end-to-end
+against the real repo layout must always target a scratch/tmp --state-dir
+(e.g. `--seed --state-dir /tmp/some-scratch-dir` then
+`--record-evidence ... --state-dir /tmp/some-scratch-dir`), never the
+default state dir. An entry written by CLI-plumbing verification is
+indistinguishable from genuine invariant proof to any future automated or
+human consumer of the ledger; see the 2026-08-09
+craftflow-reliability-gates-ledger REM-FIX that reverted exactly this
+mistake (a Phase 6 live-proof smoke test that had landed in the real
+ledger).
 """
 from __future__ import annotations
 
