@@ -972,6 +972,20 @@ TaskCreate({
 
 **Doubt cycle counter:** Track in workflow artifact under `telemetry.loop_counts.doubt_verify`. Max 3 cycles; router enforces the hard stop.
 
+**Reliability-gates evidence recording (best-effort, non-blocking):** After the `DOUBT_VERDICT`
+is captured, check whether this cycle's `plan:`/`reason:` text loosely matches any seeded gate in
+`.craftflow/state/project/reliability-gates.json` — a case-insensitive substring match against 3+
+significant words from the gate's `title`, or against any `assertionRefs` basename, is sufficient
+(this is bookkeeping, not a hard gate). For every matching gate, call:
+```bash
+python3 {plugin_root}/scripts/craftflow_reliability_gates.py --record-evidence {gate_id} \
+  --wf {workflow_uuid} --outcome {pass|fail} --note "{one-line cycle summary}" \
+  --state-dir .craftflow/state
+```
+Map `DOUBT_VERDICT: CONFIRMED` to `--outcome pass`; `REFUTED` or `DOUBT_THEATER` to `--outcome
+fail`. A non-zero exit from this call is non-blocking — log the error to the workflow event log
+and continue; same best-effort posture as the existing skill-ledger `--observe`/`--prune` calls.
+
 ### Fix-Verify Dispatch Rule
 
 After `integration-verifier` returns PASS, evaluate `fix_verify_gate` independently of
@@ -1029,6 +1043,20 @@ TaskCreate({
 **Fix-verify cycle counter:** Track in workflow artifact under
 `telemetry.loop_counts.fix_verify`. Max 3 cycles; router enforces the hard stop (same rule as
 `doubt_verify`'s own counter above).
+
+**Reliability-gates evidence recording (best-effort, non-blocking):** After `FIX_VERDICT` is
+captured (and any contract-override downgrade from `## 8. Post-Agent Validation → Contract
+overrides` has already been applied), always call:
+```bash
+python3 {plugin_root}/scripts/craftflow_reliability_gates.py --record-evidence \
+  fix-verify-evidence-completeness --wf {workflow_uuid} --outcome {pass|fail} \
+  --note "{one-line cycle summary}" --state-dir .craftflow/state
+```
+(`LOAD_BEARING` → `--outcome pass`; `NOT_LOAD_BEARING`/`SIBLING_FOUND` → `--outcome fail`) — every
+fix-verify cycle is definitionally evidence for this gate, recorded unconditionally. Additionally,
+apply the same loose-match check as the Doubt-Verify Dispatch Rule above against this cycle's
+`plan:`/`reason:`/diff-summary text for any OTHER seeded gate, and record evidence there too if it
+matches. A non-zero exit from either call is non-blocking — log and continue.
 
 ### Task metrics and timing telemetry
 
