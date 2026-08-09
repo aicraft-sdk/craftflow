@@ -205,6 +205,90 @@ def test_record_evidence_concurrent_appends_no_lost_writes() -> None:
             fail("concurrent-appends", f"results={results} wf_ids={wf_ids}")
 
 
+def test_promote_transitions_maturity_and_logs_history() -> None:
+    print("\n[--promote]")
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        run_cli(["--seed"], state_dir)
+        result = run_cli(["--promote", "worktree-merge-safety", "--to", "soak"], state_dir)
+        data = json.loads(ledger_path(state_dir).read_text())
+        gate = next(g for g in data["gates"] if g["id"] == "worktree-merge-safety")
+        history_entry = gate["maturity_history"][-1] if gate["maturity_history"] else {}
+        if (
+            result.returncode == 0
+            and gate["maturity"] == "soak"
+            and history_entry.get("from") == "experimental"
+            and history_entry.get("to") == "soak"
+        ):
+            ok("promote transitions maturity and appends maturity_history entry")
+        else:
+            fail("promote-transitions", f"exit={result.returncode} gate={gate}")
+
+
+def test_promote_never_touches_evidence_runs() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        run_cli(["--seed"], state_dir)
+        run_cli(
+            ["--record-evidence", "worktree-merge-safety", "--wf", "wf-1", "--outcome", "pass"],
+            state_dir,
+        )
+        run_cli(["--promote", "worktree-merge-safety", "--to", "blocking"], state_dir)
+        data = json.loads(ledger_path(state_dir).read_text())
+        gate = next(g for g in data["gates"] if g["id"] == "worktree-merge-safety")
+        if len(gate["evidenceRuns"]) == 1 and gate["evidenceRuns"][0]["wf"] == "wf-1":
+            ok("promote never mutates evidenceRuns")
+        else:
+            fail("promote-purity", f"evidenceRuns={gate['evidenceRuns']}")
+
+
+def test_promote_unknown_gate_id_fails_cleanly() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        run_cli(["--seed"], state_dir)
+        result = run_cli(["--promote", "nonexistent-gate", "--to", "soak"], state_dir)
+        if result.returncode != 0:
+            ok("promote against unknown gate_id fails cleanly")
+        else:
+            fail("promote-unknown-gate", f"exit={result.returncode}")
+
+
+def test_list_prints_gate_summary() -> None:
+    print("\n[--list]")
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        run_cli(["--seed"], state_dir)
+        result = run_cli(["--list"], state_dir)
+        try:
+            summary = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            summary = None
+        if (
+            result.returncode == 0
+            and isinstance(summary, list)
+            and len(summary) == 3
+            and all("id" in g and "maturity" in g and "evidence_count" in g for g in summary)
+        ):
+            ok("--list prints a 3-gate compact summary")
+        else:
+            fail("list-summary", f"exit={result.returncode} stdout={result.stdout!r}")
+
+
+def test_query_prints_full_ledger() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        run_cli(["--seed"], state_dir)
+        result = run_cli(["--query"], state_dir)
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            data = None
+        if result.returncode == 0 and isinstance(data, dict) and len(data.get("gates", [])) == 3:
+            ok("--query prints the full raw ledger")
+        else:
+            fail("query-full-ledger", f"exit={result.returncode} stdout={result.stdout!r}")
+
+
 def main() -> int:
     print("test_reliability_gates: running")
     test_seed_creates_file_with_three_gates()
@@ -215,6 +299,11 @@ def main() -> int:
     test_record_evidence_without_seed_fails_cleanly()
     test_record_evidence_invalid_outcome_rejected()
     test_record_evidence_concurrent_appends_no_lost_writes()
+    test_promote_transitions_maturity_and_logs_history()
+    test_promote_never_touches_evidence_runs()
+    test_promote_unknown_gate_id_fails_cleanly()
+    test_list_prints_gate_summary()
+    test_query_prints_full_ledger()
     print()
     print("=" * 40)
     if _errors:

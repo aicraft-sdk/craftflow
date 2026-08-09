@@ -274,15 +274,42 @@ def cmd_record_evidence(args) -> int:
 
 
 def cmd_promote(args) -> int:
-    raise NotImplementedError
+    ledger_path_ = Path(args.ledger)
+    with _ledger_file_lock(ledger_path_):
+        ledger = load_ledger(ledger_path_)
+        gate = find_gate(ledger, args.promote)
+        if gate is None:
+            print(json.dumps({"error": f"unknown gate_id: {args.promote!r}"}), file=sys.stderr)
+            return 1
+        old_maturity = gate.get("maturity", "experimental")
+        gate["maturity"] = args.to
+        gate.setdefault("maturity_history", [])
+        gate["maturity_history"].append({"ts": now_iso(), "from": old_maturity, "to": args.to})
+        save_ledger_atomic(ledger_path_, ledger)
+    print(json.dumps({"promoted": args.promote, "from": old_maturity, "to": args.to}, indent=2))
+    return 0
 
 
 def cmd_list(args) -> int:
-    raise NotImplementedError
+    ledger = load_ledger(Path(args.ledger))
+    summary = []
+    for g in ledger.get("gates", []):
+        runs = g.get("evidenceRuns", [])
+        summary.append({
+            "id": g.get("id"),
+            "title": g.get("title"),
+            "maturity": g.get("maturity"),
+            "evidence_count": len(runs),
+            "last_evidence": runs[-1] if runs else None,
+        })
+    print(json.dumps(summary, indent=2))
+    return 0
 
 
 def cmd_query(args) -> int:
-    raise NotImplementedError
+    ledger = load_ledger(Path(args.ledger))
+    print(json.dumps(ledger, indent=2))
+    return 0
 
 
 def _build_parser() -> argparse.ArgumentParser:
