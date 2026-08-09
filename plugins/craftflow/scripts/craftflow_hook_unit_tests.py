@@ -1311,6 +1311,69 @@ def test_pretooluse_guard_denies_tamper_then_write_via_ledger_write(tmp_dir: Pat
     ok(name)
 
 
+def test_pretooluse_guard_denies_edit_write_to_reliability_gates_ledger(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/denies-edit-write-to-reliability-gates-ledger"
+    ledger_path = tmp_dir / ".craftflow" / "state" / "project" / "reliability-gates.json"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text('{"schema_version": 1, "gates": []}')
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(ledger_path), "content": "{}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if (
+        '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out
+    ) and "reliability-gates-write" in out:
+        ok(name)
+    else:
+        fail(name, f"expected deny reliability-gates-write, got: {out!r}")
+
+
+def test_pretooluse_guard_denies_bash_redirect_to_reliability_gates_ledger(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/denies-bash-redirect-to-reliability-gates-ledger"
+    project_root = tmp_dir / "project"
+    ledger_path = project_root / ".craftflow" / "state" / "project" / "reliability-gates.json"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text('{"schema_version": 1, "gates": []}')
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo tampered > .craftflow/state/project/reliability-gates.json"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if (
+        '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out
+    ) and "reliability-gates-write" in out:
+        ok(name)
+    else:
+        fail(name, f"expected deny reliability-gates-write, got: {out!r}")
+
+
+def test_pretooluse_guard_allows_authorized_reliability_gates_script_bash_invocation(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/allows-reliability-gates-script-invocation"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True, exist_ok=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 tools/craftflow-plugin/plugins/craftflow/scripts/"
+                "craftflow_reliability_gates.py --record-evidence worktree-merge-safety "
+                "--wf wf-1 --outcome pass --state-dir .craftflow/state"
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        ok(name)
+    else:
+        fail(name, f"expected allow (script invocation is not a write-to-ledger command), got: {out!r}")
+
+
 def test_pretooluse_guard_denies_write_to_skill_proposal_file(tmp_dir: Path) -> None:
     # CRITICAL 1 (REM-FIX round 3): the staged-proposal file backing an
     # in-flight candidate's name<->path linkage must be protected the same
@@ -13470,6 +13533,12 @@ def main() -> int:
         test_pretooluse_guard_denies_bash_redirect_to_skill_ledger(tmp / "pg10")
         test_pretooluse_guard_denies_write_when_ledger_json_is_malformed(tmp / "pg11")
         test_pretooluse_guard_denies_any_skill_write_when_ledger_malformed_no_matching_candidate(tmp / "pg12")
+
+        print()
+        print("[ pretooluse-guard: Phase 4 (reliability-gates ledger protection) ]")
+        test_pretooluse_guard_denies_edit_write_to_reliability_gates_ledger(tmp / "pg-rg1")
+        test_pretooluse_guard_denies_bash_redirect_to_reliability_gates_ledger(tmp / "pg-rg2")
+        test_pretooluse_guard_allows_authorized_reliability_gates_script_bash_invocation(tmp / "pg-rg3")
 
         print()
         print(

@@ -38,6 +38,8 @@ from craftflow_hooklib import (
 
 PROTECTED_MEMORY_FILES = ("activeContext.md", "patterns.md", "progress.md")
 
+RELIABILITY_GATES_LEDGER_REL_PATH = ".craftflow/state/project/reliability-gates.json"
+
 # Narrow extension for the documented `python3 -c "...open(path, 'w')..."`
 # one-liner shape (Plan-vs-Code Gaps: "closes this exact gap") -- neither a
 # redirect nor a `tee`, so invisible to the generic `>`/`>>`/`tee` scan.
@@ -575,6 +577,22 @@ def _is_protected_skill_ledger_or_proposal_path(path: Path) -> bool:
     return True
 
 
+def _protected_reliability_gates_path(root: Path) -> Path:
+    """Resolved path for the reliability-gates ledger -- protected the same
+    unconditional way as the skill-candidate ledger (CRITICAL 1, REM-FIX
+    round 3 precedent), since it is a single script-owned JSON file, not a
+    markdown memory file eligible for the memory-finalize permit."""
+    return (root / RELIABILITY_GATES_LEDGER_REL_PATH).resolve()
+
+
+def _is_protected_reliability_gates_path(path: Path) -> bool:
+    try:
+        root = project_dir().resolve()
+        return path == _protected_reliability_gates_path(root)
+    except Exception:
+        return False
+
+
 def _protected_bash_write_paths() -> set:
     """Protected-path set for the NEW Bash-write-inspection layer only
     (Task 4.2 step 2): reuses `_protected_memory_paths()` (the 3 .md files
@@ -834,6 +852,13 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     if _is_protected_skill_ledger_or_proposal_path(path):
         violations.append("skill-ledger-write")
 
+    # Phase 4 (reliability-gates ledger protection): the reliability-gates
+    # ledger is a single script-owned JSON file, not a markdown memory file
+    # eligible for the memory-finalize permit -- protected unconditionally,
+    # mirroring the skill-candidate ledger's own treatment above.
+    if _is_protected_reliability_gates_path(path):
+        violations.append("reliability-gates-write")
+
     # Worktree confinement (Task 4.2 step 3): an independent violation type
     # that applies to every Edit/Write target, denied regardless of
     # protected-memory-path status. Any internal parsing exception here
@@ -887,7 +912,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     # permit or gated by memoryWrites mode.
     unconditional_violations = [
         v for v in violations
-        if v in ("worktree-confinement", "skill-promotion-path", "skill-ledger-write")
+        if v in ("worktree-confinement", "skill-promotion-path", "skill-ledger-write", "reliability-gates-write")
     ]
     if unconditional_violations:
         log_event(
@@ -1192,6 +1217,39 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         )
         skill_ledger_violations = []
 
+    # Phase 4 (reliability-gates ledger protection): mirrors the
+    # skill_ledger_violations lane immediately above -- redirect/tee,
+    # python-script-write-targets, and python-suspicious-mechanism, all
+    # scoped to the single reliability-gates ledger path literal.
+    reliability_gates_violations: list = []
+    try:
+        for target in extract_redirect_targets(command):
+            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            if _is_protected_reliability_gates_path(resolved):
+                reliability_gates_violations.append(str(resolved))
+
+        for target in _python_script_write_targets(command):
+            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            if _is_protected_reliability_gates_path(resolved):
+                reliability_gates_violations.append(str(resolved))
+
+        gates_root = project_dir().resolve()
+        gates_path = _protected_reliability_gates_path(gates_root)
+        reliability_gates_violations.extend(
+            _python_suspicious_mechanism_targets(command, {gates_path}, cwd)
+        )
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "bash_reliability_gates_write_check",
+                "error": repr(exc),
+                "reason": "skipped_bash_reliability_gates_write_check",
+            },
+        )
+        reliability_gates_violations = []
+
     # cp/mv/ln/install/rsync/dd destination-argument write detection
     # (REM-FIX round 5, systemic gap -- see `_cp_mv_like_write_targets()`
     # and `_dd_write_targets()` above for the live-reproduced bypass this
@@ -1214,6 +1272,8 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                     skill_promotion_violations.append(str(resolved))
                 if _is_protected_skill_ledger_or_proposal_path(resolved):
                     skill_ledger_violations.append(str(resolved))
+                if _is_protected_reliability_gates_path(resolved):
+                    reliability_gates_violations.append(str(resolved))
     except Exception as exc:
         log_event(
             "plugin_pretooluse_guard",
@@ -1230,14 +1290,20 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         and not confinement_violations
         and not skill_promotion_violations
         and not skill_ledger_violations
+        and not reliability_gates_violations
     ):
         return 0
 
-    # Worktree-confinement, skill-promotion-path, and skill-ledger-write are
-    # all denied unconditionally -- independent violation types (mirrors the
-    # Edit/Write handler's own treatment above), never gated by
-    # `protectedWrites`.
-    if confinement_violations or skill_promotion_violations or skill_ledger_violations:
+    # Worktree-confinement, skill-promotion-path, skill-ledger-write, and
+    # reliability-gates-write are all denied unconditionally -- independent
+    # violation types (mirrors the Edit/Write handler's own treatment
+    # above), never gated by `protectedWrites`.
+    if (
+        confinement_violations
+        or skill_promotion_violations
+        or skill_ledger_violations
+        or reliability_gates_violations
+    ):
         reason_parts = []
         if protected_write_violations:
             reason_parts.append(f"bash-write-protected-path:{','.join(protected_write_violations)}")
@@ -1247,6 +1313,8 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
             reason_parts.append(f"skill-promotion-path:{','.join(skill_promotion_violations)}")
         if skill_ledger_violations:
             reason_parts.append(f"skill-ledger-write:{','.join(skill_ledger_violations)}")
+        if reliability_gates_violations:
+            reason_parts.append(f"reliability-gates-write:{','.join(reliability_gates_violations)}")
         reason = "; ".join(reason_parts)
 
         log_event(
