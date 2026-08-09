@@ -403,6 +403,29 @@ def test_router_dispatches_doubt_verify() -> None:
     ok(name)
 
 
+def test_router_records_reliability_gates_evidence_in_fix_verify_and_doubt_verify() -> None:
+    name = "router/reliability-gates-record-evidence-wired"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    doubt_idx = content.find("### Doubt-Verify Dispatch Rule")
+    fix_idx = content.find("### Fix-Verify Dispatch Rule")
+    if doubt_idx == -1 or fix_idx == -1 or fix_idx <= doubt_idx:
+        fail(name, "expected Doubt-Verify section before Fix-Verify section")
+        return
+    doubt_section = content[doubt_idx:fix_idx]
+    fix_section = content[fix_idx:]
+    if "craftflow_reliability_gates.py" not in doubt_section or "--record-evidence" not in doubt_section:
+        fail(name, "Doubt-Verify Dispatch Rule missing --record-evidence wiring")
+        return
+    if "craftflow_reliability_gates.py" not in fix_section or "fix-verify-evidence-completeness" not in fix_section:
+        fail(name, "Fix-Verify Dispatch Rule missing --record-evidence wiring")
+        return
+    ok(name)
+
+
 def test_router_dispatches_intent_interview() -> None:
     name = "router/intent-interview-gate-registered"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
@@ -13550,6 +13573,7 @@ def main() -> int:
     test_doubt_verifier_agent_present()
     test_intent_interview_skill_present()
     test_router_dispatches_doubt_verify()
+    test_router_records_reliability_gates_evidence_in_fix_verify_and_doubt_verify()
     test_router_dispatches_intent_interview()
     test_hooks_json_registers_new_hooks()
     test_hooks_json_registers_bash_guard()
