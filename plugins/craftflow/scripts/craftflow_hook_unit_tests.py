@@ -466,6 +466,53 @@ def test_circuit_breaker_uses_persisted_non_telemetry_field_not_live_tasklist_co
     if "circuit_breaker" not in policy_content or "remfix_count" not in policy_content:
         fail(name, "workflow-artifact-and-hook-policy.md does not document the new circuit_breaker field")
         return
+    # Structural (not literal-blacklist) checks below. The literal-string checks above only catch
+    # the specific HISTORICAL mistake (old field names telemetry.loop_counts.remfix /
+    # telemetry.circuit_broken). They pass vacuously if a FUTURE regression re-nests circuit_breaker
+    # under telemetry using the NEW field names (e.g. telemetry.circuit_breaker.remfix_count, or by
+    # textually indenting the `circuit_breaker` bullet under the `telemetry` bullet's own block) --
+    # confirmed by mutation testing during this fix (2026-08-09 REM-FIX). These checks are genuinely
+    # structural: they inspect indentation/adjacency, not just substring presence/absence.
+    def _bullet_indents(content: str, field: str) -> list:
+        return [
+            len(m.group(1))
+            for m in re.finditer(r"^([ \t]*)-\s*`" + re.escape(field) + r"`", content, re.MULTILINE)
+        ]
+
+    # 1. workflow-artifact-and-hook-policy.md: `circuit_breaker` must appear as its own bullet at
+    #    the SAME top-level indentation as `telemetry`/`pending_gate` -- never indented/nested as a
+    #    sub-item under the `telemetry` bullet's own block (its own field list AND its own prose
+    #    description block both use this convention today).
+    telemetry_indents = _bullet_indents(policy_content, "telemetry")
+    circuit_breaker_indents = _bullet_indents(policy_content, "circuit_breaker")
+    if not telemetry_indents:
+        fail(name, "workflow-artifact-and-hook-policy.md: no `- `telemetry`` bullet found to establish top-level indentation baseline")
+        return
+    if not circuit_breaker_indents:
+        fail(name, "workflow-artifact-and-hook-policy.md: no `- `circuit_breaker`` bullet found at all")
+        return
+    top_level_indent = min(telemetry_indents)
+    if any(indent > top_level_indent for indent in circuit_breaker_indents):
+        fail(
+            name,
+            "workflow-artifact-and-hook-policy.md: `circuit_breaker` bullet is indented deeper than "
+            f"the top-level `telemetry` bullet (circuit_breaker indents={circuit_breaker_indents}, "
+            f"telemetry top-level indent={top_level_indent}) -- looks nested under telemetry",
+        )
+        return
+
+    # 2. remediation-and-research.md: no line may textually associate `telemetry` with
+    #    `circuit_breaker` via dotted/whitespace nesting (e.g. `telemetry.circuit_breaker.remfix_count`),
+    #    regardless of which new field name a future regression appends after `circuit_breaker`.
+    nesting_match = re.search(r"telemetry[.\s]*circuit_breaker", remediation_content)
+    if nesting_match is not None:
+        fail(
+            name,
+            "remediation-and-research.md: found text nesting circuit_breaker under telemetry "
+            f"({nesting_match.group(0)!r}) -- circuit_breaker must remain a sibling field, not "
+            "telemetry.circuit_breaker.*",
+        )
+        return
     ok(name)
 
 
