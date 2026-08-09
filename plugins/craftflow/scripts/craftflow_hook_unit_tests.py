@@ -825,6 +825,24 @@ def test_resolve_workspace_root_script_present() -> None:
     ok(name)
 
 
+def test_reliability_gates_script_present() -> None:
+    name = "scripts/craftflow_reliability_gates-present"
+    path = SCRIPTS / "craftflow_reliability_gates.py"
+    if not path.exists():
+        fail(name, f"craftflow_reliability_gates.py not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    for marker in (
+        "_seed_gates", "cmd_seed", "cmd_record_evidence", "cmd_promote",
+        "cmd_list", "cmd_query", "LedgerCorruptError", "worktree-merge-safety",
+        "memory-write-guard-symmetry", "fix-verify-evidence-completeness",
+    ):
+        if marker not in content:
+            fail(name, f"craftflow_reliability_gates.py missing expected symbol: {marker!r}")
+            return
+    ok(name)
+
+
 def test_worktree_isolation_resolver_gated_on_toplevel_failure() -> None:
     name = "router/worktree-isolation-resolver-gated"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
@@ -13545,6 +13563,7 @@ def main() -> int:
     test_selfcheck_internal_budget_stays_under_registered_hook_timeout()
     test_workflow_id_script_present()
     test_resolve_workspace_root_script_present()
+    test_reliability_gates_script_present()
     test_worktree_isolation_resolver_gated_on_toplevel_failure()
     test_worktree_isolation_step_4a_derives_from_worktree_path()
     test_section_0_precedes_memory_load()
