@@ -234,6 +234,7 @@ def cmd_seed(args) -> int:
     ledger_path_ = Path(args.ledger)
     with _ledger_file_lock(ledger_path_):
         if ledger_path_.exists():
+            load_ledger(ledger_path_)  # validates the file parses; raises LedgerCorruptError if not
             print(json.dumps({"seeded": False, "reason": "ledger already exists"}, indent=2))
             return 0
         ledger = {"schema_version": SCHEMA_VERSION, "gates": _seed_gates()}

@@ -101,6 +101,21 @@ def test_corrupted_json_fails_closed_no_overwrite() -> None:
             fail("corrupted-fail-closed", f"exit={result.returncode} after={after!r}")
 
 
+def test_seed_against_corrupted_ledger_fails_closed_no_overwrite() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        run_cli(["--seed"], state_dir)
+        path = ledger_path(state_dir)
+        original = path.read_text()
+        path.write_text("{not valid json")
+        result = run_cli(["--seed"], state_dir)
+        after = path.read_text()
+        if result.returncode != 0 and after == "{not valid json" and after != original:
+            ok("--seed against a corrupted existing ledger fails closed: non-zero exit, file left byte-for-byte unchanged")
+        else:
+            fail("seed-corrupted-fail-closed", f"exit={result.returncode} after={after!r}")
+
+
 def test_record_evidence_appends_entry_to_matching_gate() -> None:
     print("\n[--record-evidence]")
     with tempfile.TemporaryDirectory() as tmp:
@@ -294,6 +309,7 @@ def main() -> int:
     test_seed_creates_file_with_three_gates()
     test_seed_idempotent_does_not_overwrite_existing_evidence()
     test_corrupted_json_fails_closed_no_overwrite()
+    test_seed_against_corrupted_ledger_fails_closed_no_overwrite()
     test_record_evidence_appends_entry_to_matching_gate()
     test_record_evidence_unknown_gate_id_fails_cleanly()
     test_record_evidence_without_seed_fails_cleanly()
