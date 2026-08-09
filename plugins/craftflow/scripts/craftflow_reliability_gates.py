@@ -228,3 +228,115 @@ def find_gate(ledger: dict, gate_id: str):
         if isinstance(g, dict) and g.get("id") == gate_id:
             return g
     return None
+
+
+def cmd_seed(args) -> int:
+    ledger_path_ = Path(args.ledger)
+    with _ledger_file_lock(ledger_path_):
+        if ledger_path_.exists():
+            print(json.dumps({"seeded": False, "reason": "ledger already exists"}, indent=2))
+            return 0
+        ledger = {"schema_version": SCHEMA_VERSION, "gates": _seed_gates()}
+        save_ledger_atomic(ledger_path_, ledger)
+    print(json.dumps({"seeded": True, "gate_count": len(ledger["gates"])}, indent=2))
+    return 0
+
+
+def cmd_record_evidence(args) -> int:
+    ledger_path_ = Path(args.ledger)
+    with _ledger_file_lock(ledger_path_):
+        ledger = load_ledger(ledger_path_)
+        if not ledger.get("gates"):
+            print(json.dumps({"error": "ledger has no gates -- run --seed first"}), file=sys.stderr)
+            return 1
+        gate = find_gate(ledger, args.record_evidence)
+        if gate is None:
+            print(json.dumps({"error": f"unknown gate_id: {args.record_evidence!r}"}), file=sys.stderr)
+            return 1
+        gate.setdefault("evidenceRuns", [])
+        gate["evidenceRuns"].append({
+            "wf": args.wf,
+            "ts": now_iso(),
+            "outcome": args.outcome,
+            "note": args.note or "",
+        })
+        # evidenceRuns grows unboundedly -- no truncation. See the
+        # "no MAX_EVIDENCE_PER_GATE" comment near the module constants (Task 1)
+        # for why (fresh-review pass 1, 2026-08-09 blocking finding #2).
+        save_ledger_atomic(ledger_path_, ledger)
+    print(json.dumps({
+        "recorded": args.record_evidence,
+        "wf": args.wf,
+        "outcome": args.outcome,
+        "total_evidence_runs": len(gate["evidenceRuns"]),
+    }, indent=2))
+    return 0
+
+
+def cmd_promote(args) -> int:
+    raise NotImplementedError
+
+
+def cmd_list(args) -> int:
+    raise NotImplementedError
+
+
+def cmd_query(args) -> int:
+    raise NotImplementedError
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Craftflow reliability-gates ledger: durable, cross-workflow record of proven invariants."
+    )
+    parser.add_argument("--seed", action="store_true", help="Idempotently create the ledger with the 3 seeded gates.")
+    parser.add_argument("--record-evidence", metavar="GATE_ID", help="Append one evidenceRuns entry to GATE_ID.")
+    parser.add_argument("--promote", metavar="GATE_ID", help="Manually transition GATE_ID's maturity.")
+    parser.add_argument("--to", choices=_PROMOTABLE_TARGETS, help="Target maturity for --promote.")
+    parser.add_argument("--wf", help="Workflow id (required with --record-evidence).")
+    parser.add_argument("--outcome", choices=("pass", "fail"), help="Outcome (required with --record-evidence).")
+    parser.add_argument("--note", default=None, help="Optional one-line note.")
+    parser.add_argument("--list", action="store_true", help="Print a compact per-gate summary.")
+    parser.add_argument("--query", action="store_true", help="Print the full raw ledger as JSON.")
+    parser.add_argument("--state-dir", default=DEFAULT_STATE_DIR, help=f"Craftflow state dir (default: {DEFAULT_STATE_DIR})")
+    parser.add_argument("--ledger", default=None, help=f"Ledger file path (default: derived from --state-dir, {DEFAULT_LEDGER_PATH})")
+    return parser
+
+
+def _resolve_ledger_path(args) -> str:
+    if args.ledger:
+        return args.ledger
+    return str(Path(args.state_dir) / "project" / "reliability-gates.json")
+
+
+def main() -> int:
+    parser = _build_parser()
+    args = parser.parse_args()
+    args.ledger = _resolve_ledger_path(args)
+
+    if args.record_evidence and (not args.wf or not args.outcome):
+        parser.error("--record-evidence requires --wf and --outcome")
+    if args.promote and not args.to:
+        parser.error("--promote requires --to")
+
+    try:
+        if args.seed:
+            return cmd_seed(args)
+        if args.record_evidence:
+            return cmd_record_evidence(args)
+        if args.promote:
+            return cmd_promote(args)
+        if args.list:
+            return cmd_list(args)
+        if args.query:
+            return cmd_query(args)
+    except (OSError, UnicodeDecodeError, AttributeError, TypeError, LedgerCorruptError) as exc:
+        print(json.dumps({"error": f"unexpected error: {exc}"}), file=sys.stderr)
+        return 1
+
+    parser.print_help()
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

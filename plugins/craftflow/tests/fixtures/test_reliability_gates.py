@@ -101,11 +101,120 @@ def test_corrupted_json_fails_closed_no_overwrite() -> None:
             fail("corrupted-fail-closed", f"exit={result.returncode} after={after!r}")
 
 
+def test_record_evidence_appends_entry_to_matching_gate() -> None:
+    print("\n[--record-evidence]")
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        run_cli(["--seed"], state_dir)
+        result = run_cli(
+            [
+                "--record-evidence", "fix-verify-evidence-completeness",
+                "--wf", "wf-abc", "--outcome", "pass", "--note", "cycle 1",
+            ],
+            state_dir,
+        )
+        data = json.loads(ledger_path(state_dir).read_text())
+        gate = next(g for g in data["gates"] if g["id"] == "fix-verify-evidence-completeness")
+        entry = gate["evidenceRuns"][-1] if gate["evidenceRuns"] else {}
+        if (
+            result.returncode == 0
+            and entry.get("wf") == "wf-abc"
+            and entry.get("outcome") == "pass"
+            and entry.get("note") == "cycle 1"
+            and "ts" in entry
+        ):
+            ok("record-evidence appends a well-formed entry to the matching gate")
+        else:
+            fail("record-evidence-append", f"exit={result.returncode} entry={entry}")
+
+
+def test_record_evidence_unknown_gate_id_fails_cleanly() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        run_cli(["--seed"], state_dir)
+        before = ledger_path(state_dir).read_text()
+        result = run_cli(
+            ["--record-evidence", "nonexistent-gate", "--wf", "wf-x", "--outcome", "pass"],
+            state_dir,
+        )
+        after = ledger_path(state_dir).read_text()
+        if result.returncode != 0 and before == after:
+            ok("unknown gate_id fails closed, no write")
+        else:
+            fail("unknown-gate-id", f"exit={result.returncode} changed={before != after}")
+
+
+def test_record_evidence_without_seed_fails_cleanly() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        result = run_cli(
+            ["--record-evidence", "worktree-merge-safety", "--wf", "wf-x", "--outcome", "pass"],
+            state_dir,
+        )
+        if result.returncode != 0 and not ledger_path(state_dir).exists():
+            ok("record-evidence against an unseeded ledger fails closed, creates nothing")
+        else:
+            fail("no-seed-yet", f"exit={result.returncode} exists={ledger_path(state_dir).exists()}")
+
+
+def test_record_evidence_invalid_outcome_rejected() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        run_cli(["--seed"], state_dir)
+        result = run_cli(
+            ["--record-evidence", "worktree-merge-safety", "--wf", "wf-x", "--outcome", "maybe"],
+            state_dir,
+        )
+        if result.returncode != 0:
+            ok("--outcome maybe rejected by argparse choices")
+        else:
+            fail("invalid-outcome", f"expected nonzero exit, got {result.returncode}")
+
+
+def test_record_evidence_concurrent_appends_no_lost_writes() -> None:
+    print("\n[concurrency]")
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        run_cli(["--seed"], state_dir)
+
+        results = []
+
+        def worker(i: int) -> None:
+            r = run_cli(
+                [
+                    "--record-evidence", "worktree-merge-safety",
+                    "--wf", f"wf-concurrent-{i}", "--outcome", "pass",
+                ],
+                state_dir,
+            )
+            results.append(r.returncode)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        data = json.loads(ledger_path(state_dir).read_text())
+        gate = next(g for g in data["gates"] if g["id"] == "worktree-merge-safety")
+        wf_ids = {e["wf"] for e in gate["evidenceRuns"]}
+        expected_ids = {f"wf-concurrent-{i}" for i in range(5)}
+        if all(rc == 0 for rc in results) and wf_ids == expected_ids:
+            ok("5 concurrent --record-evidence calls: all 5 entries land, no lost update")
+        else:
+            fail("concurrent-appends", f"results={results} wf_ids={wf_ids}")
+
+
 def main() -> int:
     print("test_reliability_gates: running")
     test_seed_creates_file_with_three_gates()
     test_seed_idempotent_does_not_overwrite_existing_evidence()
     test_corrupted_json_fails_closed_no_overwrite()
+    test_record_evidence_appends_entry_to_matching_gate()
+    test_record_evidence_unknown_gate_id_fails_cleanly()
+    test_record_evidence_without_seed_fails_cleanly()
+    test_record_evidence_invalid_outcome_rejected()
+    test_record_evidence_concurrent_appends_no_lost_writes()
     print()
     print("=" * 40)
     if _errors:
