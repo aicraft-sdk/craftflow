@@ -439,6 +439,36 @@ def test_router_dispatches_intent_interview() -> None:
     ok(name)
 
 
+def test_circuit_breaker_uses_persisted_non_telemetry_field_not_live_tasklist_count() -> None:
+    name = "router/circuit-breaker-persisted-non-telemetry-field"
+    remediation_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "remediation-and-research.md"
+    policy_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "workflow-artifact-and-hook-policy.md"
+    if not remediation_path.exists():
+        fail(name, f"remediation-and-research.md not found at {remediation_path}")
+        return
+    if not policy_path.exists():
+        fail(name, f"workflow-artifact-and-hook-policy.md not found at {policy_path}")
+        return
+    remediation_content = remediation_path.read_text(encoding="utf-8")
+    policy_content = policy_path.read_text(encoding="utf-8")
+    if "circuit_breaker.remfix_count" not in remediation_content:
+        fail(name, "missing circuit_breaker.remfix_count field in remediation-and-research.md")
+        return
+    if "circuit_breaker.broken" not in remediation_content:
+        fail(name, "missing circuit_breaker.broken field in remediation-and-research.md")
+        return
+    if ">= 3" not in remediation_content:
+        fail(name, "missing the >=3 threshold (behavior must be unchanged, only persistence)")
+        return
+    if "telemetry.loop_counts.remfix" in remediation_content or "telemetry.circuit_broken" in remediation_content:
+        fail(name, "circuit-breaker state must not live under telemetry (policy: telemetry never drives routing decisions)")
+        return
+    if "circuit_breaker" not in policy_content or "remfix_count" not in policy_content:
+        fail(name, "workflow-artifact-and-hook-policy.md does not document the new circuit_breaker field")
+        return
+    ok(name)
+
+
 def test_section_0_precedes_memory_load() -> None:
     name = "router/section-0-precedes-memory-load"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
@@ -13644,6 +13674,7 @@ def main() -> int:
     test_router_dispatches_doubt_verify()
     test_router_records_reliability_gates_evidence_in_fix_verify_and_doubt_verify()
     test_router_dispatches_intent_interview()
+    test_circuit_breaker_uses_persisted_non_telemetry_field_not_live_tasklist_count()
     test_hooks_json_registers_new_hooks()
     test_hooks_json_registers_bash_guard()
     test_hooks_json_registers_pretooluse_guard_on_bash()

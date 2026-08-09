@@ -16,9 +16,21 @@ reason:{short remediation reason}
 
 ### Circuit breaker
 
+`circuit_breaker.remfix_count` (workflow artifact **top-level** field, sibling to `telemetry` —
+NOT a `telemetry` field, since `telemetry` is documented as informational-only and this field
+drives a routing decision) is a persisted counter, never reset for the life of the workflow
+(`wf:{workflow_uuid}`) — it survives redispatch of a REM-FIX chain to a new task, mirroring
+Orca's `MAX(failure_count) ... WHERE task_id = ?` carried-forward retry-budget pattern (the retry
+budget is not reset just because the fix moved to a fresh task). `circuit_breaker.broken`
+(boolean, default `false`) is the persisted, queryable trip state.
+
 Before creating a new remediation task:
-- Count tasks whose descriptions contain both `wf:{workflow_task_id}` and `kind:remfix`.
-- If count >= 3, ask the user how to proceed before creating another one.
+- If `circuit_breaker.broken` is already `true` for this workflow, ask the user how to proceed
+  before creating another REM-FIX task (same outcome as before — this is a persistence change,
+  not a threshold or behavior change).
+- Otherwise, increment `circuit_breaker.remfix_count` by 1 (create the field at 1 if absent) as
+  part of creating the new REM-FIX task, then set `circuit_breaker.broken = true` if
+  `circuit_breaker.remfix_count >= 3`.
 
 ### Rule matrix
 
