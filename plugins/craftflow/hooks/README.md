@@ -147,6 +147,14 @@ accepted and disclosed, not fixed, pending a future effect-based
 write-detection redesign — see
 `docs/2026-07-30-craftflow-guard-write-detection-limitations-decision.md`.
 
+`craftflow_pretooluse_guard.py` also unconditionally protects
+`.craftflow/state/project/reliability-gates.json` (the reliability-gates
+ledger — see `docs/ai/decisions/0018-craftflow-reliability-gates-ledger.md`)
+against raw Edit/Write/Bash writes, mirroring the skill-candidate ledger's
+own treatment above: it is a single script-owned JSON file, not a markdown
+memory file eligible for the `.memory-finalize` permit, so only
+`craftflow_reliability_gates.py` is an authorized writer.
+
 ## Optional Git Pre-Commit Hook
 
 This is separate from Claude Code plugin hooks. Install it only if you want
