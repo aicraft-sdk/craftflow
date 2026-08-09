@@ -331,7 +331,14 @@ def cmd_query(args) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Craftflow reliability-gates ledger: durable, cross-workflow record of proven invariants."
+        description="Craftflow reliability-gates ledger: durable, cross-workflow record of proven invariants.",
+        epilog=(
+            "IMPORTANT: never write test/smoke-test evidence against the real project "
+            "ledger (.craftflow/state/project/reliability-gates.json). CLI-plumbing "
+            "verification of --seed/--record-evidence/--promote/--list/--query must "
+            "always target a scratch/tmp --state-dir, never the default. See this "
+            "module's docstring for the full rationale."
+        ),
     )
     parser.add_argument("--seed", action="store_true", help="Idempotently create the ledger with the 3 seeded gates.")
     parser.add_argument("--record-evidence", metavar="GATE_ID", help="Append one evidenceRuns entry to GATE_ID.")
