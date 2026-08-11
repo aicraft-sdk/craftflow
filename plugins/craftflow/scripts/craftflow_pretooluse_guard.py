@@ -11,8 +11,30 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import craftflow_pretooluse_bash_guard as bash_guard  # noqa: E402
-import craftflow_skill_ledger as skill_ledger  # noqa: E402
-import craftflow_skill_promote as skill_promote  # noqa: E402
+
+# Defensive import (incident 2026-08-10/11): a partial/interrupted plugin-cache
+# sync can land this script's new top-level import ahead of the sibling module
+# file actually being copied -- a bare `import craftflow_skill_ledger` then
+# hard-crashes EVERY PreToolUse:Bash/Edit/Write hook invocation in every
+# project sharing the cache (a Python ModuleNotFoundError aborts the whole
+# process before main() runs), not just the skill-ledger/skill-promotion
+# checks below. Every call site that dereferences `skill_ledger`/
+# `skill_promote` already sits behind a broad `except Exception` that
+# degrades to "not protected" (see `_inflight_skill_promotion_paths`,
+# `_is_protected_skill_promotion_path`, `_is_protected_skill_ledger_or_
+# proposal_path`) -- an AttributeError from a None module is caught the same
+# way an unreadable ledger already is. Guarding just the import completes
+# that existing fail-open posture instead of letting the one ungated line
+# crash checks (memory-write, worktree-confinement, bash-traversal) that have
+# nothing to do with skill-ledger at all.
+try:
+    import craftflow_skill_ledger as skill_ledger  # noqa: E402
+except ImportError:
+    skill_ledger = None
+try:
+    import craftflow_skill_promote as skill_promote  # noqa: E402
+except ImportError:
+    skill_promote = None
 
 from craftflow_hooklib import (
     MEMORY_FINALIZE_PERMIT_LITERAL,
@@ -34,6 +56,24 @@ from craftflow_hooklib import (
     state_root,
     workflows_dir,
 )
+
+if skill_ledger is None or skill_promote is None:
+    log_event(
+        "plugin_pretooluse_guard",
+        {
+            "event": "plugin_module_missing",
+            "missing": [
+                name
+                for name, mod in (
+                    ("craftflow_skill_ledger", skill_ledger),
+                    ("craftflow_skill_promote", skill_promote),
+                )
+                if mod is None
+            ],
+            "decision": "degraded_skill_protections_disabled",
+            "reason": "sibling_module_not_present_in_deployed_cache",
+        },
+    )
 
 
 PROTECTED_MEMORY_FILES = ("activeContext.md", "patterns.md", "progress.md")
