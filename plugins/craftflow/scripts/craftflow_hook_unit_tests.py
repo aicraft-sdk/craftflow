@@ -1205,6 +1205,11 @@ def test_pretooluse_guard_denies_edit_write_to_claude_skills_skill_md(tmp_dir: P
     if "skill-promotion-path" not in out:
         fail(name, f"expected the deny reason to name 'skill-promotion-path'; got: {out!r}")
         return
+    # skill-promotion-path violations must keep their accurate skill-
+    # promotion explanatory text (misleading-deny-message fix).
+    if "craftflow_skill_promote.py" not in out or "craftflow_skill_propose.py" not in out:
+        fail(name, f"expected the deny message to still mention craftflow_skill_promote.py/craftflow_skill_propose.py; got: {out!r}")
+        return
     ok(name)
 
 
@@ -1247,6 +1252,15 @@ def test_pretooluse_guard_denies_bash_redirect_to_claude_skills_skill_md(tmp_dir
         return
     if "skill-promotion-path" not in out:
         fail(name, f"expected the deny reason to name 'skill-promotion-path'; got: {out!r}")
+        return
+    # skill-promotion-path Bash violations must keep their accurate skill-
+    # promotion explanatory text, phrased for the Bash-redirect path
+    # (misleading-deny-message fix, fix-verify cycle 1).
+    if "craftflow_skill_promote.py" not in out or "craftflow_skill_propose.py" not in out:
+        fail(name, f"expected the deny message to still mention craftflow_skill_promote.py/craftflow_skill_propose.py; got: {out!r}")
+        return
+    if "Bash redirect" not in out:
+        fail(name, f"expected the Bash-path deny message to say 'Bash redirect' (not 'raw Edit/Write'); got: {out!r}")
         return
     ok(name)
 
@@ -1402,6 +1416,17 @@ def test_pretooluse_guard_denies_edit_write_to_reliability_gates_ledger(tmp_dir:
     if (
         '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out
     ) and "reliability-gates-write" in out:
+        # reliability-gates-write violations are not skill-related -- the
+        # deny message must not carry the skill-promotion/ledger
+        # explanatory text (misleading-deny-message fix), and must
+        # accurately describe the reliability-gates ledger instead.
+        for forbidden in ("skill_promote", "skill_propose", "skill-candidate ledger"):
+            if forbidden in out:
+                fail(name, f"expected reliability-gates-write message to NOT mention {forbidden!r}; got: {out!r}")
+                return
+        if "reliability-gates" not in out.lower():
+            fail(name, f"expected reliability-gates-write message to describe the reliability-gates ledger; got: {out!r}")
+            return
         ok(name)
     else:
         fail(name, f"expected deny reliability-gates-write, got: {out!r}")
@@ -1423,6 +1448,18 @@ def test_pretooluse_guard_denies_bash_redirect_to_reliability_gates_ledger(tmp_d
     if (
         '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out
     ) and "reliability-gates-write" in out:
+        # reliability-gates-write Bash violations are not skill-related --
+        # the deny message must not carry the skill-promotion/ledger
+        # explanatory text (misleading-deny-message fix, fix-verify cycle
+        # 1), and must accurately describe the reliability-gates ledger
+        # instead.
+        for forbidden in ("skill_promote", "skill_propose", "skill-candidate ledger"):
+            if forbidden in out:
+                fail(name, f"expected reliability-gates-write Bash message to NOT mention {forbidden!r}; got: {out!r}")
+                return
+        if "reliability-gates" not in out.lower():
+            fail(name, f"expected reliability-gates-write Bash message to describe the reliability-gates ledger; got: {out!r}")
+            return
         ok(name)
     else:
         fail(name, f"expected deny reliability-gates-write, got: {out!r}")
@@ -1474,6 +1511,11 @@ def test_pretooluse_guard_denies_write_to_skill_proposal_file(tmp_dir: Path) -> 
         return
     if "skill-ledger-write" not in out:
         fail(name, f"expected the deny reason to name 'skill-ledger-write'; got: {out!r}")
+        return
+    # skill-ledger-write violations must keep their accurate ledger
+    # explanatory text (misleading-deny-message fix).
+    if "skill-candidate ledger" not in out:
+        fail(name, f"expected the deny message to still mention the skill-candidate ledger; got: {out!r}")
         return
     ok(name)
 
@@ -1583,6 +1625,11 @@ def test_pretooluse_guard_denies_bash_redirect_to_skill_ledger(tmp_dir: Path) ->
         return
     if "skill-ledger-write" not in out:
         fail(name, f"expected the deny reason to name 'skill-ledger-write'; got: {out!r}")
+        return
+    # skill-ledger-write Bash violations must keep their accurate ledger
+    # explanatory text (misleading-deny-message fix, fix-verify cycle 1).
+    if "skill-candidate ledger" not in out:
+        fail(name, f"expected the deny message to still mention the skill-candidate ledger; got: {out!r}")
         return
     ok(name)
 
@@ -2032,6 +2079,20 @@ def test_pretooluse_guard_edit_write_worktree_confinement_denies_outside(tmp_dir
     if "worktree-confinement" not in out:
         fail(name, f"expected a distinct 'worktree-confinement' deny reason; got: {out!r}")
         return
+    # A pure worktree-confinement violation has nothing to do with skill
+    # promotion -- the deny message must not carry the skill-promotion/
+    # ledger explanatory text that is only accurate for those OTHER
+    # violation types (misleading-deny-message fix).
+    for forbidden in ("skill_promote", "skill_propose", "skill-candidate ledger"):
+        if forbidden in out:
+            fail(name, f"expected worktree-confinement message to NOT mention {forbidden!r}; got: {out!r}")
+            return
+    if "worktree_path" not in out and "working directory" not in out:
+        fail(name, f"expected worktree-confinement message to explain the cwd/worktree_path escape; got: {out!r}")
+        return
+    if "run it manually outside the agent session" not in out:
+        fail(name, f"expected worktree-confinement message to keep the 'run it manually outside the agent session' guidance; got: {out!r}")
+        return
     ok(name)
 
 
@@ -2068,6 +2129,44 @@ def test_pretooluse_guard_worktree_confinement_degrades_when_no_workflow_json(tm
     _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
     if out:
         fail(name, f"expected allow (cwd-only degradation, no workflow JSON, no exception); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_worktree_confinement_only_message_omits_skill_text(tmp_dir: Path) -> None:
+    # misleading-deny-message fix (fix-verify cycle 1, live-reproduced): the
+    # catch-all deny block in `_handle_bash` fired the SAME hardcoded skill-
+    # promotion boilerplate regardless of which violation type(s) actually
+    # fired -- the exact defect class already fixed in `_handle_edit_write`
+    # (see test_pretooluse_guard_edit_write_worktree_confinement_denies_outside
+    # above). A Bash redirect into a protected memory file, from a cwd
+    # outside its confinement, with zero skill relevance, must get accurate,
+    # violation-specific text instead.
+    name = "pretooluse-guard/bash-worktree-confinement-only-message-omits-skill-text"
+    project_root = tmp_dir / "project"
+    elsewhere = tmp_dir / "elsewhere"
+    project_root.mkdir(parents=True)
+    elsewhere.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    target = project_root / ".craftflow" / "state" / "activeContext.md"
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(elsewhere.resolve()),
+        "tool_input": {"command": f"echo hi > {target.resolve()}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a Bash redirect into a protected memory file from a cwd outside its confinement; got: {out!r}")
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"expected a distinct 'worktree-confinement' deny reason; got: {out!r}")
+        return
+    for forbidden in ("skill_promote", "skill_propose", "skill-candidate ledger", "skill-candidate-ledger"):
+        if forbidden in out:
+            fail(name, f"expected worktree-confinement-only Bash message to NOT mention {forbidden!r}; got: {out!r}")
+            return
+    if "worktree_path" not in out and "working directory" not in out:
+        fail(name, f"expected worktree-confinement Bash message to explain the cwd/worktree_path escape; got: {out!r}")
         return
     ok(name)
 
@@ -13127,6 +13226,7 @@ def main() -> int:
         test_pretooluse_guard_bash_permit_write_allowed_when_worktree_path_stale(tmp / "g20")
         test_pretooluse_guard_allows_benign_redirect_to_dev_null(tmp / "g21")
         test_pretooluse_guard_allows_benign_stderr_redirect_to_dev_null(tmp / "g22")
+        test_pretooluse_guard_bash_worktree_confinement_only_message_omits_skill_text(tmp / "g22b")
 
         print()
         print("[ pretooluse-guard: REM-FIX (5 live-verified bugs) ]")

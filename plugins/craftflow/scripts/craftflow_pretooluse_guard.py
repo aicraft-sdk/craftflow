@@ -864,6 +864,41 @@ def _python_suspicious_mechanism_targets(command: str, protected_paths: set, cwd
     return list(hits)
 
 
+# Per-violation-type deny explanations for `_handle_edit_write`'s
+# unconditional-violation block (misleading-deny-message fix): the four
+# unconditional violation types are independent and semantically unrelated
+# -- a worktree-confinement escape has nothing to do with skill promotion,
+# and a reliability-gates ledger write has nothing to do with either. Each
+# type gets its own accurate explanatory text; when multiple violations fire
+# together for the same path (rare but structurally possible, e.g. a target
+# that is BOTH outside the worktree AND a skill-promotion path), the
+# matching texts are concatenated in `unconditional_violations` order so no
+# information is lost.
+_UNCONDITIONAL_VIOLATION_EXPLANATIONS = {
+    "worktree-confinement": (
+        "This Edit/Write target is outside both the current session's "
+        "working directory and the active workflow's worktree_path; if "
+        "this is otherwise intentional, run it manually outside the agent "
+        "session."
+    ),
+    "skill-promotion-path": (
+        "Skill promotion must go through craftflow_skill_promote.py "
+        "--approve and skill proposals must be staged through "
+        "craftflow_skill_propose.py, never a raw Edit/Write."
+    ),
+    "skill-ledger-write": (
+        "The skill-candidate ledger and its staged proposals must never be "
+        "modified directly either."
+    ),
+    "reliability-gates-write": (
+        "The reliability-gates ledger is a script-owned JSON file, not "
+        "skill-related -- direct edits aren't allowed; use the "
+        "reliability-gates script tooling, or do it manually outside the "
+        "agent session."
+    ),
+}
+
+
 def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     file_path = tool_input.get("file_path")
     if not file_path:
@@ -969,13 +1004,14 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
                 "reason": ",".join(violations),
             },
         )
+        explanation = " ".join(
+            _UNCONDITIONAL_VIOLATION_EXPLANATIONS[v]
+            for v in unconditional_violations
+            if v in _UNCONDITIONAL_VIOLATION_EXPLANATIONS
+        )
         pretool_deny(
             "CRAFTFLOW plugin hook blocked an Edit/Write target (reason: "
-            + ",".join(unconditional_violations) + "). Skill promotion must go through "
-            "craftflow_skill_promote.py --approve and skill proposals must be staged through "
-            "craftflow_skill_propose.py, never a raw Edit/Write; the skill-candidate ledger and "
-            "its staged proposals must never be modified directly either; if this is otherwise "
-            "intentional, run it manually outside the agent session."
+            + ",".join(unconditional_violations) + "). " + explanation
         )
         return 0
 
@@ -1045,6 +1081,37 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
             "CRAFTFLOW plugin hook blocked a direct state memory markdown write. Use the router-owned memory finalization path."
         )
     return 0
+
+
+# Bash-path overrides for `_UNCONDITIONAL_VIOLATION_EXPLANATIONS` (misleading-
+# deny-message fix, fix-verify cycle 1): `_handle_bash`'s catch-all deny
+# block has the exact same "one hardcoded skill-promotion paragraph for
+# every violation type" defect the Edit/Write handler had -- fixed the same
+# way, composing only the text for violation types that actually fired.
+# Reused verbatim from `_UNCONDITIONAL_VIOLATION_EXPLANATIONS` where the
+# wording is tool-agnostic (skill-ledger-write, reliability-gates-write);
+# overridden here only where the Bash-path wording genuinely differs (a
+# Bash redirect/tee/heredoc is not "a raw Edit/Write"), plus one Bash-only
+# entry for `bash-write-protected-path` (the gated-elsewhere protected-write
+# check, which can still co-fire in this block alongside an unconditional
+# violation on the same command).
+_BASH_ONLY_VIOLATION_EXPLANATIONS = {
+    "worktree-confinement": (
+        "This Bash write/redirect target is outside both the current "
+        "session's working directory and the active workflow's "
+        "worktree_path; if this is otherwise intentional, run it manually "
+        "outside the agent session."
+    ),
+    "skill-promotion-path": (
+        "Skill promotion must go through craftflow_skill_promote.py "
+        "--approve and skill proposals must be staged through "
+        "craftflow_skill_propose.py, never a Bash redirect."
+    ),
+    "bash-write-protected-path": (
+        "Other protected-path writes must be run manually outside the "
+        "agent session if intentional."
+    ),
+}
 
 
 def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
@@ -1368,12 +1435,34 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 "reason": reason,
             },
         )
+        # misleading-deny-message fix (fix-verify cycle 1): compose the
+        # explanation from only the violation types that actually fired,
+        # same per-type pattern as `_handle_edit_write` above -- a pure
+        # worktree-confinement violation must not carry the skill-promotion
+        # boilerplate, and vice versa. `protected_write_violations` is
+        # included too (it can co-fire here alongside an unconditional
+        # violation, even though on its own it is gated by `protectedWrites`
+        # below); order mirrors `reason_parts` above.
+        unconditional_violations = []
+        if protected_write_violations:
+            unconditional_violations.append("bash-write-protected-path")
+        if confinement_violations:
+            unconditional_violations.append("worktree-confinement")
+        if skill_promotion_violations:
+            unconditional_violations.append("skill-promotion-path")
+        if skill_ledger_violations:
+            unconditional_violations.append("skill-ledger-write")
+        if reliability_gates_violations:
+            unconditional_violations.append("reliability-gates-write")
+        explanation = " ".join(
+            _BASH_ONLY_VIOLATION_EXPLANATIONS.get(
+                v, _UNCONDITIONAL_VIOLATION_EXPLANATIONS.get(v, "")
+            )
+            for v in unconditional_violations
+        )
         pretool_deny(
             f"CRAFTFLOW plugin hook blocked a Bash write to a protected path (reason: {reason}). "
-            "Skill promotion must go through craftflow_skill_promote.py --approve and skill "
-            "proposals must be staged through craftflow_skill_propose.py, never a Bash redirect; "
-            "the skill-candidate ledger and its staged proposals must never be modified directly "
-            "either; other violations must be run manually outside the agent session if intentional."
+            + explanation
         )
         return 0
 
