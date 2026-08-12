@@ -7,9 +7,9 @@ Router-first AI development orchestration for Claude Code. Every build, debug, r
 ## What it does
 
 - **Routes all dev tasks** — one entry point (`craftflow-router`) dispatches to the right agent automatically
-- **Agent chain** — 11 specialized agents: planner, component-builder, bug-investigator, code-reviewer, integration-verifier, and more
+- **Agent chain** — 13 specialized agents: planner, component-builder, bug-investigator, code-reviewer, integration-verifier, and more
 - **27 skills** — planning, TDD, code-generation, debugging patterns, diff-driven docs, and others
-- **Hook system** — 24 Python lifecycle hooks for memory protection, write guards, URL caching, and session continuity
+- **Hook system** — 18 wired Python lifecycle hooks (44 total scripts in `scripts/`) for memory protection, write guards, URL caching, and session continuity
 - **Shared state** — `.craftflow/state/` is readable by both Claude Code and Cursor
 - **Quality layer** — gap classification (Missing/Partial/Contradicts/Unrequested × CRITICAL/HIGH/MEDIUM/LOW), constitution MUST/SHOULD checks, tech-agnostic AC lint, `[NEEDS CLARIFICATION]` blocking, `[P]` parallel plan markers, `FR-###`/`SC-###` traceability — all enforced by `craftflow_contract_validate.py`
 
@@ -163,9 +163,9 @@ claude plugin update craftflow
 
 ```
 plugins/craftflow/
-├── agents/          # 11 agent definitions (markdown)
+├── agents/          # 13 agent definitions (markdown)
 ├── skills/          # 27 skill definitions (each has SKILL.md)
-├── scripts/         # 24 Python hook scripts
+├── scripts/         # 44 Python hook scripts (18 wired in hooks.json)
 ├── hooks/           # Hook event bindings for Claude Code
 ├── hooks.json       # Hook bindings for Cursor
 ├── config/          # hook-mode.json (audit vs enforce)
