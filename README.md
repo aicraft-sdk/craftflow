@@ -12,6 +12,15 @@ Router-first AI development orchestration for Claude Code. Every build, debug, r
 - **Hook system** — 18 wired Python lifecycle hooks (44 total scripts in `scripts/`) for memory protection, write guards, URL caching, and session continuity
 - **Shared state** — `.craftflow/state/` is readable by both Claude Code and Cursor
 - **Quality layer** — gap classification (Missing/Partial/Contradicts/Unrequested × CRITICAL/HIGH/MEDIUM/LOW), constitution MUST/SHOULD checks, tech-agnostic AC lint, `[NEEDS CLARIFICATION]` blocking, `[P]` parallel plan markers, `FR-###`/`SC-###` traceability — all enforced by `craftflow_contract_validate.py`
+- **Reliability-gates ledger** — `craftflow_reliability_gates.py` tracks proven invariants
+  (append-only, fail-closed evidence log) across workflows
+- **Skill-distillation pipeline** — `craftflow_skill_ledger.py` mines recurring workflow patterns
+  into candidate skills, staged via `craftflow_skill_propose.py` and promoted via
+  `craftflow_skill_promote.py`
+- **Safe-shell / stop-verify / hook-trust guards** — `craftflow_safe_shell_guard.py` blocks
+  catastrophic shell command patterns pre-execution, `craftflow_stop_verify.py` is an opt-in
+  end-of-session verification gate (inert by default), and `craftflow_hook_trust.py` is a standalone
+  hash-manifest trust gate for repo-local hook scripts (not itself wired into `hooks.json`)
 
 ---
 

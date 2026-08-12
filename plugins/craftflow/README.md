@@ -16,6 +16,15 @@ Every build, debug, review, and plan task routes through a single entry point th
 - **Feature-named workflows** — workflow folders, files, and worktrees are named after the feature (`wf-auth-refactor-20260706-d4e5f6a7`) so you can identify them at a glance
 - **Live statusline progress** — a `⚡ feature-name 60% · 🟢 phase_2` segment appended to claude-hud, updates every ~300ms without interrupting the running agent
 - **Cursor support** — each workflow phase dispatched via a real, isolated Cursor `Task` call (`subagent_type: generalPurpose`), with code-reviewer and silent-failure-hunter dispatched in parallel; progress blocks appear in Cursor chat at each phase transition
+- **Reliability-gates ledger** — `craftflow_reliability_gates.py` tracks proven invariants
+  (append-only, fail-closed evidence log) across workflows
+- **Skill-distillation pipeline** — `craftflow_skill_ledger.py` mines recurring workflow patterns
+  into candidate skills, staged via `craftflow_skill_propose.py` and promoted via
+  `craftflow_skill_promote.py`
+- **Safe-shell / stop-verify / hook-trust guards** — `craftflow_safe_shell_guard.py` blocks
+  catastrophic shell command patterns pre-execution, `craftflow_stop_verify.py` is an opt-in
+  end-of-session verification gate (inert by default), and `craftflow_hook_trust.py` is a standalone
+  hash-manifest trust gate for repo-local hook scripts (not itself wired into `hooks.json`)
 
 ## Workflow types
 
