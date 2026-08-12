@@ -30,6 +30,7 @@ sys.path.insert(0, str(SCRIPTS))
 from craftflow_resolve_workspace_root import (  # noqa: E402
     find_repo_candidates,
     match_request_text,
+    read_workspace_writable_paths,
     resolve,
 )
 
@@ -319,6 +320,188 @@ def test_git_toplevel_case_mismatch_uses_filesystem_identity_not_string_equality
             fail("case-mismatch-identity", f"expected [{repo.resolve()}], got {result}")
 
 
+def _write_workspace_config(root: Path, writable_paths) -> None:
+    (root / ".craftflow-workspace.json").write_text(
+        json.dumps({"writable_paths": writable_paths}), encoding="utf-8"
+    )
+
+
+def test_read_workspace_writable_paths_returns_empty_when_no_config_file() -> None:
+    print("\n[read_workspace_writable_paths]")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        validated, dropped = read_workspace_writable_paths(root, [])
+        if validated == [] and dropped == []:
+            ok("no config file -> ([], [])")
+        else:
+            fail("no-config", f"expected ([], []), got ({validated}, {dropped})")
+
+
+def test_read_workspace_writable_paths_valid_direct_child_entry_accepted() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_workspace_config(root, ["CONTRACTS.md"])
+        validated, dropped = read_workspace_writable_paths(root, [])
+        expected = [(root / "CONTRACTS.md").resolve()]
+        if validated == expected and dropped == []:
+            ok("valid direct-child entry accepted")
+        else:
+            fail("valid-entry", f"expected ({expected}, []), got ({validated}, {dropped})")
+
+
+def test_read_workspace_writable_paths_rejects_entry_with_path_separator() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_workspace_config(root, ["sub/CONTRACTS.md"])
+        validated, dropped = read_workspace_writable_paths(root, [])
+        if validated == [] and len(dropped) == 1:
+            ok("entry with path separator rejected")
+        else:
+            fail("path-separator", f"got ({validated}, {dropped})")
+
+
+def test_read_workspace_writable_paths_rejects_dotdot_entry() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_workspace_config(root, [".."])
+        validated, dropped = read_workspace_writable_paths(root, [])
+        if validated == [] and len(dropped) == 1:
+            ok("'..' entry rejected")
+        else:
+            fail("dotdot", f"got ({validated}, {dropped})")
+
+
+def test_read_workspace_writable_paths_rejects_absolute_path_entry() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_workspace_config(root, ["/etc/passwd"])
+        validated, dropped = read_workspace_writable_paths(root, [])
+        if validated == [] and len(dropped) == 1:
+            ok("absolute-path entry rejected")
+        else:
+            fail("absolute", f"got ({validated}, {dropped})")
+
+
+def test_read_workspace_writable_paths_rejects_entry_resolving_inside_nested_repo() -> None:
+    # A symlink at the workspace root pointing INSIDE a nested repo: syntactically a bare
+    # filename (passes the direct-child check), but its resolved real path lands inside a
+    # candidate -- must still be dropped (the load-bearing check per the design).
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        nested_repo = root / "ai-platform-core"
+        nested_repo.mkdir()
+        target_inside = nested_repo / "secret.md"
+        target_inside.write_text("x", encoding="utf-8")
+        symlink_path = root / "sneaky-link"
+        symlink_path.symlink_to(target_inside)
+        _write_workspace_config(root, ["sneaky-link"])
+        validated, dropped = read_workspace_writable_paths(root, [nested_repo.resolve()])
+        if validated == [] and len(dropped) == 1:
+            ok("symlink resolving inside a nested repo rejected")
+        else:
+            fail("symlink-into-nested-repo", f"got ({validated}, {dropped})")
+
+
+def test_read_workspace_writable_paths_rejects_entry_naming_a_nested_repo_directory_itself() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        nested_repo = root / "ai-platform-core"
+        nested_repo.mkdir()
+        _write_workspace_config(root, ["ai-platform-core"])
+        validated, dropped = read_workspace_writable_paths(root, [nested_repo.resolve()])
+        if validated == [] and len(dropped) == 1:
+            ok("entry naming a nested repo directory itself rejected")
+        else:
+            fail("names-nested-repo", f"got ({validated}, {dropped})")
+
+
+def test_read_workspace_writable_paths_malformed_json_degrades_to_empty() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / ".craftflow-workspace.json").write_text("{not valid json", encoding="utf-8")
+        validated, dropped = read_workspace_writable_paths(root, [])
+        if validated == [] and len(dropped) == 1:
+            ok("malformed JSON degrades to empty, logged, no crash")
+        else:
+            fail("malformed-json", f"got ({validated}, {dropped})")
+
+
+def test_read_workspace_writable_paths_missing_writable_paths_key_degrades_to_empty() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / ".craftflow-workspace.json").write_text("{}", encoding="utf-8")
+        validated, dropped = read_workspace_writable_paths(root, [])
+        if validated == [] and len(dropped) == 1:
+            ok("missing writable_paths key degrades to empty")
+        else:
+            fail("missing-key", f"got ({validated}, {dropped})")
+
+
+def test_read_workspace_writable_paths_non_list_writable_paths_degrades_to_empty() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / ".craftflow-workspace.json").write_text(
+            json.dumps({"writable_paths": "CONTRACTS.md"}), encoding="utf-8"
+        )
+        validated, dropped = read_workspace_writable_paths(root, [])
+        if validated == [] and len(dropped) == 1:
+            ok("non-list writable_paths degrades to empty")
+        else:
+            fail("non-list", f"got ({validated}, {dropped})")
+
+
+def test_read_workspace_writable_paths_non_string_entry_dropped_individually() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_workspace_config(root, ["CONTRACTS.md", 42])
+        validated, dropped = read_workspace_writable_paths(root, [])
+        expected = [(root / "CONTRACTS.md").resolve()]
+        if validated == expected and len(dropped) == 1:
+            ok("non-string entry dropped individually, valid siblings still accepted")
+        else:
+            fail("non-string-entry", f"got ({validated}, {dropped})")
+
+
+def test_resolve_includes_workspace_writable_paths_when_config_present() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "only-repo"
+        _init_repo(repo)
+        _write_workspace_config(root, ["CONTRACTS.md"])
+        result = resolve(root, "anything")
+        if result.get("workspace_writable_paths") == [str((root / "CONTRACTS.md").resolve())]:
+            ok("resolve() includes workspace_writable_paths when config present")
+        else:
+            fail("resolve-includes", f"got {result}")
+
+
+def test_resolve_omits_workspace_writable_paths_key_when_no_config() -> None:
+    # Regression: zero behavior change / zero new keys when no .craftflow-workspace.json exists
+    # -- preserves this file's pre-existing exact-dict-equality tests untouched.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "only-repo"
+        _init_repo(repo)
+        result = resolve(root, "anything")
+        if "workspace_writable_paths" not in result and "workspace_writable_paths_dropped" not in result:
+            ok("resolve() omits workspace_writable_paths keys entirely when no config exists")
+        else:
+            fail("resolve-omits", f"got {result}")
+
+
+def test_resolve_no_repo_found_never_reads_config() -> None:
+    # Scope boundary per design: NO_REPO_FOUND never reads .craftflow-workspace.json at all,
+    # even if one exists in that directory.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_workspace_config(root, ["CONTRACTS.md"])
+        result = resolve(root, "anything")
+        if result == {"outcome": "NO_REPO_FOUND"}:
+            ok("NO_REPO_FOUND stays byte-identical even with a config file present")
+        else:
+            fail("no-repo-found-scope", f"expected exactly {{'outcome': 'NO_REPO_FOUND'}}, got {result}")
+
+
 def test_match_request_text_unique_token_match() -> None:
     print("\n[match_request_text]")
     with tempfile.TemporaryDirectory() as tmp:
@@ -501,6 +684,20 @@ def main() -> int:
     test_find_repo_candidates_path_resolve_runtimeerror_from_real_symlink_loop_excludes_child()
     test_find_repo_candidates_child_permission_error_excludes_child_not_whole_scan()
     test_git_toplevel_case_mismatch_uses_filesystem_identity_not_string_equality()
+    test_read_workspace_writable_paths_returns_empty_when_no_config_file()
+    test_read_workspace_writable_paths_valid_direct_child_entry_accepted()
+    test_read_workspace_writable_paths_rejects_entry_with_path_separator()
+    test_read_workspace_writable_paths_rejects_dotdot_entry()
+    test_read_workspace_writable_paths_rejects_absolute_path_entry()
+    test_read_workspace_writable_paths_rejects_entry_resolving_inside_nested_repo()
+    test_read_workspace_writable_paths_rejects_entry_naming_a_nested_repo_directory_itself()
+    test_read_workspace_writable_paths_malformed_json_degrades_to_empty()
+    test_read_workspace_writable_paths_missing_writable_paths_key_degrades_to_empty()
+    test_read_workspace_writable_paths_non_list_writable_paths_degrades_to_empty()
+    test_read_workspace_writable_paths_non_string_entry_dropped_individually()
+    test_resolve_includes_workspace_writable_paths_when_config_present()
+    test_resolve_omits_workspace_writable_paths_key_when_no_config()
+    test_resolve_no_repo_found_never_reads_config()
     test_match_request_text_unique_token_match()
     test_match_request_text_no_match_returns_none()
     test_match_request_text_multiple_names_returns_none()
