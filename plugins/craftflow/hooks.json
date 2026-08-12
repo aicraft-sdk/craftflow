@@ -21,6 +21,15 @@
       },
       {
         "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_sdd_cache_pre.py\" --tool WebFetch --event PreToolUse"
+      },
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_pretooluse_guard.py\" --tool Bash --event PreToolUse"
+      },
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_pretooluse_bash_guard.py\" --tool Bash --event PreToolUse"
+      },
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_safe_shell_guard.py\" --tool Bash --event PreToolUse"
       }
     ],
     "afterFileEdit": [
@@ -52,6 +61,9 @@
     "stop": [
       {
         "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_stop_persist.py\" --event Stop"
+      },
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_stop_verify.py\" --event Stop"
       }
     ]
   }
