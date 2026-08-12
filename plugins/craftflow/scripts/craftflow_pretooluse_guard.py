@@ -51,6 +51,7 @@ from craftflow_hooklib import (
     project_dir,
     project_state_dir,
     resolve_confinement,
+    resolve_workspace_writable_paths,
     resolve_toggle_decision,
     split_subcommands,
     state_root,
@@ -649,18 +650,22 @@ def _protected_bash_write_paths() -> set:
 
 
 def _edit_write_escapes_confinement(data: dict, path: Path) -> bool:
-    """True if the resolved Edit/Write target escapes {cwd} u {worktree_path}.
-    Absence of "cwd" in the payload, or no active workflow JSON / a null
-    worktree_path, degrades to allow (Behavior Contract rule 8) -- this only
-    returns True when cwd IS known and the target genuinely escapes both."""
+    """True if the resolved Edit/Write target escapes
+    {cwd} u {worktree_path} u {workspace_writable_paths}. Absence of "cwd"
+    in the payload, or no active workflow JSON / a null worktree_path / an
+    empty workspace_writable_paths, degrades to allow (Behavior Contract
+    rule 8) -- this only returns True when cwd IS known and the target
+    genuinely escapes all three."""
     cwd_raw = data.get("cwd")
     if not cwd_raw:
         return False
     cwd = Path(cwd_raw).resolve()
-    worktree_path = latest_workflow_payload().get("worktree_path")
+    workflow = latest_workflow_payload()
+    worktree_path = workflow.get("worktree_path")
     if worktree_path is not None and not isinstance(worktree_path, str):
         worktree_path = None
-    confined, _resolved = resolve_confinement(path, cwd, worktree_path)
+    workspace_writable_paths = resolve_workspace_writable_paths(workflow)
+    confined, _resolved = resolve_confinement(path, cwd, worktree_path, workspace_writable_paths)
     return not confined
 
 
@@ -1125,11 +1130,13 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     cwd = Path(cwd_raw).resolve()
 
     try:
-        worktree_path = latest_workflow_payload().get("worktree_path")
+        workflow = latest_workflow_payload()
     except Exception:
-        worktree_path = None
+        workflow = {}
+    worktree_path = workflow.get("worktree_path")
     if worktree_path is not None and not isinstance(worktree_path, str):
         worktree_path = None
+    workspace_writable_paths = resolve_workspace_writable_paths(workflow)
 
     protected_paths = _protected_bash_write_paths()
     try:
@@ -1200,10 +1207,20 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     # idioms and must never be denied just because they resolve outside
     # {cwd} u {worktree_path} -- a redirect target that is not a protected
     # path is left alone entirely, regardless of where it resolves.
+    # NOTE: this is the ONLY resolve_confinement() call site in _handle_bash that reads the
+    # returned `confined` value (via `_confined` below, despite the underscore) -- it is
+    # therefore the only one threaded with `workspace_writable_paths`. The other 9 calls in this
+    # function discard `confined` and only use `resolved` for unrelated protected-path/skill-
+    # promotion/skill-ledger/reliability-gates membership checks -- see
+    # docs/plans/2026-08-12-craftflow-workspace-root-allowlist-plan.md's Codebase Reality Check
+    # (Call-Site Classification table) for the full per-call-site reasoning. Do NOT "fix" the
+    # other 9 into 4-arg calls without re-reading that analysis first -- it would be a no-op
+    # (extra_exact_paths only ever changes the discarded `confined` value, never `resolved`) and
+    # only adds inconsistent-looking diff noise.
     confinement_violations: list = []
     try:
         for target in extract_redirect_targets(command):
-            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            _confined, resolved = resolve_confinement(target, cwd, worktree_path, workspace_writable_paths)
             if resolved not in protected_paths:
                 continue
             if not _confined:

@@ -2197,6 +2197,215 @@ def test_pretooluse_guard_edit_write_confinement_allows_workflow_json_when_workt
     ok(name)
 
 
+def test_pretooluse_guard_edit_write_allows_exact_allowlisted_workspace_root_file(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/edit-write-allows-exact-allowlisted-workspace-root-file"
+    project_root = tmp_dir / "project"
+    workspace_root = tmp_dir / "workspace"
+    project_root.mkdir(parents=True)
+    workspace_root.mkdir(parents=True)
+    allowlisted = (workspace_root / "CONTRACTS.md").resolve()
+    _write_workflow_json_fixture(project_root, None, workspace_writable_paths=[str(allowlisted)])
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str(allowlisted)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for the exact allowlisted workspace-root file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_denies_non_allowlisted_sibling_workspace_root_file(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/edit-write-denies-non-allowlisted-sibling-workspace-root-file"
+    project_root = tmp_dir / "project"
+    workspace_root = tmp_dir / "workspace"
+    project_root.mkdir(parents=True)
+    workspace_root.mkdir(parents=True)
+    allowlisted = (workspace_root / "CONTRACTS.md").resolve()
+    other_sibling = (workspace_root / "PLATFORM_CONTEXT.md").resolve()
+    _write_workflow_json_fixture(project_root, None, workspace_writable_paths=[str(allowlisted)])
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str(other_sibling)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a non-allowlisted sibling file (exact-match-only allowlist); got: {out!r}")
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"expected a 'worktree-confinement' deny reason; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_denies_descendant_of_allowlisted_entry_no_directory_grant(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/edit-write-denies-descendant-of-allowlisted-entry-no-directory-grant"
+    project_root = tmp_dir / "project"
+    workspace_root = tmp_dir / "workspace"
+    project_root.mkdir(parents=True)
+    allowlisted_dir = workspace_root / "CONTRACTS.md"
+    allowlisted_dir.mkdir(parents=True)
+    allowlisted_dir = allowlisted_dir.resolve()
+    descendant = allowlisted_dir / "nested.txt"
+    _write_workflow_json_fixture(project_root, None, workspace_writable_paths=[str(allowlisted_dir)])
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str(descendant)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a descendant of an allowlisted entry (no directory grant); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_confinement_regression_unaffected_by_unrelated_workspace_writable_paths(tmp_dir: Path) -> None:
+    # Re-verifies the pre-existing denies-outside-both scenario (g16) still denies when an
+    # UNRELATED, non-matching workspace_writable_paths list is present in the fixture -- proves
+    # the new field cannot accidentally widen confinement for anything not exactly listed.
+    name = "pretooluse-guard/edit-write-confinement-regression-unaffected-by-unrelated-workspace-writable-paths"
+    project_root = tmp_dir / "project"
+    worktree = tmp_dir / "worktree-sibling"
+    outside = tmp_dir / "outside"
+    unrelated_allowlisted = tmp_dir / "workspace" / "CONTRACTS.md"
+    project_root.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    (tmp_dir / "workspace").mkdir(parents=True)
+    _write_workflow_json_fixture(
+        project_root, str(worktree.resolve()), workspace_writable_paths=[str(unrelated_allowlisted.resolve())]
+    )
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((outside / "notes.md").resolve())},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny (regression g16 scenario) unaffected by an unrelated allowlist; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_protected_path_write_still_denied_when_unrelated_workspace_writable_paths_present(tmp_dir: Path) -> None:
+    # Regression for _handle_bash's confinement_violations lane (line 1206, the one call site
+    # this plan wires): an unrelated workspace_writable_paths entry must not weaken the
+    # pre-existing protected-memory-file denial.
+    name = "pretooluse-guard/bash-protected-path-write-still-denied-when-unrelated-workspace-writable-paths-present"
+    project_root = tmp_dir / "project"
+    elsewhere = tmp_dir / "elsewhere"
+    project_root.mkdir(parents=True)
+    elsewhere.mkdir(parents=True)
+    unrelated_allowlisted = tmp_dir / "workspace" / "CONTRACTS.md"
+    (tmp_dir / "workspace").mkdir(parents=True)
+    _write_workflow_json_fixture(
+        project_root, None, workspace_writable_paths=[str(unrelated_allowlisted.resolve())]
+    )
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    target = project_root / ".craftflow" / "state" / "activeContext.md"
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(elsewhere.resolve()),
+        "tool_input": {"command": f"echo hi > {target.resolve()}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny (protected memory file) unaffected by an unrelated allowlist; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_redirect_to_non_protected_workspace_root_file_unaffected_either_way(tmp_dir: Path) -> None:
+    # Documents a REAL, verified scope boundary (not a bug): _handle_bash's redirect/python-write
+    # confinement checks are gated to PROTECTED paths only (.craftflow/state/...) both before and
+    # after this plan -- a workspace-root file like CONTRACTS.md is never a protected path, so an
+    # ordinary Bash redirect to it was already unblocked before this fix, and stays unblocked
+    # after (this test proves the wiring is a no-op for this case either way, not a regression).
+    name = "pretooluse-guard/bash-redirect-to-non-protected-workspace-root-file-unaffected-either-way"
+    project_root = tmp_dir / "project"
+    workspace_root = tmp_dir / "workspace"
+    project_root.mkdir(parents=True)
+    workspace_root.mkdir(parents=True)
+    target = (workspace_root / "CONTRACTS.md").resolve()
+    _write_workflow_json_fixture(project_root, None, workspace_writable_paths=[])
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"echo hi > {target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"expected allow -- non-protected-path Bash redirects are out of this check's scope regardless of the allowlist; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_confinement_lane_no_longer_flags_target_once_it_is_workspace_allowlisted(tmp_dir: Path) -> None:
+    # Fresh-review-mandated proof (2026-08-13 revision) that _handle_bash's ONE genuinely
+    # load-bearing internal resolve_confinement() call site -- the confinement_violations lane,
+    # originally at line 1206, the only one of _handle_bash's 10 internal call sites that reads
+    # the returned `confined` value -- is REALLY threaded with workspace_writable_paths, not
+    # just present in the diff.
+    #
+    # This requires a target that is BOTH a member of _protected_bash_write_paths() (so the
+    # confinement_violations lane's own `if resolved not in protected_paths: continue` gate
+    # doesn't skip it) AND unconfined by plain {cwd, worktree_path} (so `_confined` would be
+    # False without the allowlist). The cleanest such target is the fixture's OWN workflow-
+    # artifact JSON file: it already matches `workflows_dir().glob("*.json")` (one of
+    # `_protected_bash_write_paths()`'s two globs) with zero extra setup, and reusing it avoids
+    # creating a second *.json file in workflows_dir() that could otherwise race
+    # latest_workflow_file()'s mtime-based "latest" selection against the real fixture.
+    #
+    # Listing this file's own path inside its own `workspace_writable_paths` field is unusual
+    # but legitimate for a GUARD-side wiring test: the guard layer already discloses (Assumption
+    # Ledger) that it trusts `workspace_writable_paths` structurally without re-validating it,
+    # exactly like `worktree_path` -- the real router-side resolver would never actually produce
+    # this value (Behavior Contract rule 5c forbids an entry resolving inside a nested repo, and
+    # this file always does), but that resolver-side validation is a SEPARATE concern from
+    # whether the guard, given a trusted value, wires it through correctly.
+    #
+    # Without the line-1206 fix: this target is unconfined (cwd=elsewhere, worktree_path=None)
+    # AND is a protected path -- confinement_violations fires unconditionally, so
+    # "worktree-confinement" appears in the deny reason. With the fix: `_confined` becomes True
+    # for this target via workspace_writable_paths, so confinement_violations does NOT fire --
+    # but "bash-write-protected-path" (line 1152's SEPARATE, deliberately untouched lane, which
+    # never consumed `confined` in the first place and is gated by the independent
+    # `protectedWrites` toggle) still correctly denies it. This asymmetry -- one violation type
+    # disappearing while an unrelated one persists -- is the actual proof the line-1206 wiring is
+    # real, not a no-op deny either way.
+    name = "pretooluse-guard/bash-confinement-lane-no-longer-flags-workspace-allowlisted-protected-path-target"
+    project_root = tmp_dir / "project"
+    elsewhere = tmp_dir / "elsewhere"
+    project_root.mkdir(parents=True)
+    elsewhere.mkdir(parents=True)
+    wf_uuid = "wf-fixture-self-target"
+    target = (project_root / ".craftflow" / "state" / "workflows" / f"{wf_uuid}.json").resolve()
+    _write_workflow_json_fixture(project_root, None, wf_uuid=wf_uuid, workspace_writable_paths=[str(target)])
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(elsewhere.resolve()),
+        "tool_input": {"command": f"echo hi > {target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if "worktree-confinement" in out:
+        fail(name, f"expected the confinement_violations lane (line 1206) to be suppressed once the target is workspace-allowlisted; got: {out!r}")
+        return
+    if "bash-write-protected-path" not in out:
+        fail(name, f"expected the SEPARATE, untouched protected-write lane (line 1152, never consumed `confined`) to still deny this protected-path target; got: {out!r}")
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_bash_permit_write_allowed_when_worktree_path_stale(tmp_dir: Path) -> None:
     # Regression flow 2, exact realistic condition (fresh review pass 1
     # BLOCKING) -- independent of, and in addition to, Phase 3's identical
@@ -4412,7 +4621,10 @@ def test_bash_guard_dd_falls_back_to_cwd_target_on_parse_exception(tmp_dir: Path
 # pass 1, BLOCKING correction; see the plan's Fresh Review Resolution).
 
 def _write_workflow_json_fixture(
-    project_root: Path, worktree_path: str | None, wf_uuid: str = "wf-phase3-test"
+    project_root: Path,
+    worktree_path: str | None,
+    wf_uuid: str = "wf-phase3-test",
+    workspace_writable_paths: list | None = None,
 ) -> None:
     """Write a minimal workflow JSON artifact under project_root's own
     .craftflow/state/workflows/ -- hooklib.latest_workflow_payload() reads
@@ -4420,10 +4632,10 @@ def _write_workflow_json_fixture(
     the fixture must live at the project_root the test's env points at."""
     wf_dir = project_root / ".craftflow" / "state" / "workflows"
     wf_dir.mkdir(parents=True, exist_ok=True)
-    (wf_dir / f"{wf_uuid}.json").write_text(
-        json.dumps({"workflow_uuid": wf_uuid, "worktree_path": worktree_path}),
-        encoding="utf-8",
-    )
+    payload = {"workflow_uuid": wf_uuid, "worktree_path": worktree_path}
+    if workspace_writable_paths is not None:
+        payload["workspace_writable_paths"] = workspace_writable_paths
+    (wf_dir / f"{wf_uuid}.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_bash_guard_blocks_dynamic_target_with_traversal_substitution(tmp_dir: Path) -> None:
@@ -5947,6 +6159,48 @@ def test_hooklib_resolve_confinement_byte_identical_when_extra_exact_paths_omitt
             )
             return
     ok(name)
+
+
+def test_hooklib_resolve_workspace_writable_paths_empty_when_key_missing() -> None:
+    name = "hooklib/resolve-workspace-writable-paths-empty-when-key-missing"
+    result = hooklib.resolve_workspace_writable_paths({})
+    if result == frozenset():
+        ok(name)
+    else:
+        fail(name, f"expected empty frozenset, got {result}")
+
+
+def test_hooklib_resolve_workspace_writable_paths_coerces_valid_string_list() -> None:
+    name = "hooklib/resolve-workspace-writable-paths-coerces-valid-string-list"
+    result = hooklib.resolve_workspace_writable_paths(
+        {"workspace_writable_paths": ["/tmp/CONTRACTS.md"]}
+    )
+    expected = frozenset({Path("/tmp/CONTRACTS.md").resolve()})
+    if result == expected:
+        ok(name)
+    else:
+        fail(name, f"expected {expected}, got {result}")
+
+
+def test_hooklib_resolve_workspace_writable_paths_skips_non_string_entries() -> None:
+    name = "hooklib/resolve-workspace-writable-paths-skips-non-string-entries"
+    result = hooklib.resolve_workspace_writable_paths(
+        {"workspace_writable_paths": ["/tmp/CONTRACTS.md", 42, None, ""]}
+    )
+    expected = frozenset({Path("/tmp/CONTRACTS.md").resolve()})
+    if result == expected:
+        ok(name)
+    else:
+        fail(name, f"expected {expected}, got {result}")
+
+
+def test_hooklib_resolve_workspace_writable_paths_empty_when_not_a_list() -> None:
+    name = "hooklib/resolve-workspace-writable-paths-empty-when-not-a-list"
+    result = hooklib.resolve_workspace_writable_paths({"workspace_writable_paths": "not-a-list"})
+    if result == frozenset():
+        ok(name)
+    else:
+        fail(name, f"expected empty frozenset, got {result}")
 
 
 def test_hooklib_command_has_traversal_true_for_dotdot_substitution() -> None:
@@ -13405,6 +13659,13 @@ def main() -> int:
         test_pretooluse_guard_edit_write_worktree_confinement_allows_inside_worktree(tmp / "g17")
         test_pretooluse_guard_worktree_confinement_degrades_when_no_workflow_json(tmp / "g18")
         test_pretooluse_guard_edit_write_confinement_allows_workflow_json_when_worktree_path_stale(tmp / "g19")
+        test_pretooluse_guard_edit_write_allows_exact_allowlisted_workspace_root_file(tmp / "g19b")
+        test_pretooluse_guard_edit_write_denies_non_allowlisted_sibling_workspace_root_file(tmp / "g19c")
+        test_pretooluse_guard_edit_write_denies_descendant_of_allowlisted_entry_no_directory_grant(tmp / "g19d")
+        test_pretooluse_guard_edit_write_confinement_regression_unaffected_by_unrelated_workspace_writable_paths(tmp / "g19e")
+        test_pretooluse_guard_bash_protected_path_write_still_denied_when_unrelated_workspace_writable_paths_present(tmp / "g19f")
+        test_pretooluse_guard_bash_redirect_to_non_protected_workspace_root_file_unaffected_either_way(tmp / "g19g")
+        test_pretooluse_guard_bash_confinement_lane_no_longer_flags_target_once_it_is_workspace_allowlisted(tmp / "g19h")
         test_pretooluse_guard_bash_permit_write_allowed_when_worktree_path_stale(tmp / "g20")
         test_pretooluse_guard_allows_benign_redirect_to_dev_null(tmp / "g21")
         test_pretooluse_guard_allows_benign_stderr_redirect_to_dev_null(tmp / "g22")
@@ -13701,6 +13962,10 @@ def main() -> int:
         test_hooklib_resolve_confinement_denies_non_matching_sibling_when_extra_exact_paths_set(tmp / "h7")
         test_hooklib_resolve_confinement_extra_exact_paths_does_not_rescue_unlisted_target_outside_cwd_and_worktree(tmp / "h8")
         test_hooklib_resolve_confinement_byte_identical_when_extra_exact_paths_omitted_or_empty(tmp / "h9")
+        test_hooklib_resolve_workspace_writable_paths_empty_when_key_missing()
+        test_hooklib_resolve_workspace_writable_paths_coerces_valid_string_list()
+        test_hooklib_resolve_workspace_writable_paths_skips_non_string_entries()
+        test_hooklib_resolve_workspace_writable_paths_empty_when_not_a_list()
         test_hooklib_command_has_traversal_true_for_dotdot_substitution()
         test_hooklib_command_has_traversal_false_for_lock_dir_var()
         test_hooklib_command_has_traversal_true_for_bare_wildcard()

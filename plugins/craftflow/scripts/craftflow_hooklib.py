@@ -417,6 +417,38 @@ def resolve_confinement(
     return False, resolved
 
 
+def resolve_workspace_writable_paths(workflow: Dict[str, Any]) -> "frozenset[Path]":
+    """Coerce workflow.get("workspace_writable_paths") into a frozenset of
+    resolved absolute Path objects, for resolve_confinement()'s
+    extra_exact_paths parameter. Never raises -- a missing key, a
+    non-list value, or a non-string/empty-string list member all degrade
+    to omission (never a crash, never a wildcard grant) -- Behavior
+    Contract: fail toward the stricter, pre-existing deny-by-default
+    posture, never fail open.
+
+    The router (craftflow-router/SKILL.md `## 0.` step 1a, via
+    craftflow_resolve_workspace_root.py's read_workspace_writable_paths())
+    is the SOLE writer of this field and already performs the full
+    semantic validation (direct-workspace-root-child, not inside a
+    nested repo) before ever writing it. This helper is a defensive
+    second layer doing only structural coercion -- it does not re-run
+    that semantic validation, exactly the same trust relationship this
+    guard already has with worktree_path (also unvalidated at this
+    layer)."""
+    raw = workflow.get("workspace_writable_paths")
+    if not isinstance(raw, list):
+        return frozenset()
+    resolved: set = set()
+    for entry in raw:
+        if not isinstance(entry, str) or not entry:
+            continue
+        try:
+            resolved.add(Path(entry).resolve())
+        except (OSError, RuntimeError):
+            continue
+    return frozenset(resolved)
+
+
 def split_subcommands(command: str) -> list:
     """Split a shell command string on control operators (;, &&, ||, |, &).
 
