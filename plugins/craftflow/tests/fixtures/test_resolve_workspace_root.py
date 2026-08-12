@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 from unittest import mock
 
@@ -415,6 +416,75 @@ def test_read_workspace_writable_paths_rejects_entry_naming_a_nested_repo_direct
             fail("names-nested-repo", f"got ({validated}, {dropped})")
 
 
+def test_read_workspace_writable_paths_rejects_entry_matching_nested_repo_by_case_only() -> None:
+    # macOS APFS default: case-insensitive but case-preserving. An entry that
+    # differs from a real nested-repo directory's name only in CASE resolves
+    # to the SAME on-disk inode as that nested repo (samefile() == True) even
+    # though `==`/`.parents` string comparison says False. Must be REJECTED,
+    # not validated -- string-equality-based "inside_nested_repo" checks were
+    # the load-bearing bug (see _git_toplevel()'s own docstring for the same
+    # invariant, already handled correctly there via samefile()).
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        nested_repo = root / "NestedRepo"
+        nested_repo.mkdir()
+        _write_workspace_config(root, ["nestedrepo"])
+        validated, dropped = read_workspace_writable_paths(root, [nested_repo.resolve()])
+        if validated == [] and len(dropped) == 1 and dropped[0].get("reason") == "resolves_inside_nested_repo":
+            ok("entry differing from nested repo dir only in case rejected (samefile identity)")
+        else:
+            fail("case-only-nested-repo-match", f"got ({validated}, {dropped})")
+
+
+def test_read_workspace_writable_paths_rejects_entry_matching_nested_repo_by_unicode_normalization_only() -> None:
+    # On default macOS APFS, a normalization-insensitive filesystem, an entry
+    # that is the NFD-decomposed Unicode form of a real nested-repo
+    # directory's NFC-composed name resolves to the SAME on-disk inode
+    # (samefile() == True), even though `==`/`.parents` string comparison
+    # (raw code-point sequences) says False. Must be REJECTED, not validated.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        nfc_name = unicodedata.normalize("NFC", "CaféRepo")  # precomposed e-acute
+        nfd_name = unicodedata.normalize("NFD", nfc_name)  # decomposed e + combining acute
+        if nfc_name == nfd_name:
+            # Nothing to prove on a platform where NFC/NFD collapse to the same code
+            # points for this string -- the case-only test above already covers the
+            # underlying samefile()-based mechanism.
+            ok("unicode-normalization-only-nested-repo-match (skipped: NFC == NFD here)")
+            return
+        nested_repo = root / nfc_name
+        nested_repo.mkdir()
+        _write_workspace_config(root, [nfd_name])
+        validated, dropped = read_workspace_writable_paths(root, [nested_repo.resolve()])
+        if validated == [] and len(dropped) == 1 and dropped[0].get("reason") == "resolves_inside_nested_repo":
+            ok("entry differing from nested repo dir only in Unicode normalization form rejected (samefile identity)")
+        else:
+            fail("unicode-normalization-nested-repo-match", f"got ({validated}, {dropped})")
+
+
+def test_read_workspace_writable_paths_embedded_null_byte_entry_dropped_individually_not_crash() -> None:
+    # A JSON string entry containing an embedded NUL byte makes
+    # (workspace_root / entry).resolve() raise ValueError: embedded null byte
+    # (NOT OSError/RuntimeError). Must be caught and the entry dropped
+    # individually with a resolve_failed:ValueError diagnostic -- never crash
+    # the whole function (violates the function's own documented contract:
+    # "Never raises... dropped on its own... never discarding the whole
+    # file"). A valid sibling entry must still be accepted.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_workspace_config(root, ["CONTRACTS.md", "evil\x00name"])
+        validated, dropped = read_workspace_writable_paths(root, [])
+        expected = [(root / "CONTRACTS.md").resolve()]
+        if (
+            validated == expected
+            and len(dropped) == 1
+            and dropped[0].get("reason") == "resolve_failed:ValueError"
+        ):
+            ok("embedded null byte entry dropped individually with resolve_failed:ValueError diagnostic")
+        else:
+            fail("embedded-null-byte", f"got ({validated}, {dropped})")
+
+
 def test_read_workspace_writable_paths_malformed_json_degrades_to_empty() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -691,6 +761,9 @@ def main() -> int:
     test_read_workspace_writable_paths_rejects_absolute_path_entry()
     test_read_workspace_writable_paths_rejects_entry_resolving_inside_nested_repo()
     test_read_workspace_writable_paths_rejects_entry_naming_a_nested_repo_directory_itself()
+    test_read_workspace_writable_paths_rejects_entry_matching_nested_repo_by_case_only()
+    test_read_workspace_writable_paths_rejects_entry_matching_nested_repo_by_unicode_normalization_only()
+    test_read_workspace_writable_paths_embedded_null_byte_entry_dropped_individually_not_crash()
     test_read_workspace_writable_paths_malformed_json_degrades_to_empty()
     test_read_workspace_writable_paths_missing_writable_paths_key_degrades_to_empty()
     test_read_workspace_writable_paths_non_list_writable_paths_degrades_to_empty()

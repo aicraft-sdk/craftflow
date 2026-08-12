@@ -219,15 +219,42 @@ def read_workspace_writable_paths(
             continue
         try:
             resolved_entry = (workspace_root / entry).resolve()
-        except (OSError, RuntimeError) as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
+            # ValueError ("embedded null byte") is raised by the OS-boundary
+            # calls resolve() makes when `entry` contains a literal NUL
+            # character -- not an OSError/RuntimeError -- and must be caught
+            # here like any other individually-invalid entry, never left to
+            # crash the whole function.
             dropped.append({"entry": entry, "reason": f"resolve_failed:{exc.__class__.__name__}"})
             continue
         if resolved_entry.parent != resolved_workspace_root:
             dropped.append({"entry": entry, "reason": "resolves_outside_workspace_root"})
             continue
-        inside_nested_repo = any(
-            resolved_entry == c or c in resolved_entry.parents for c in candidates
-        )
+        inside_nested_repo = False
+        for c in candidates:
+            if resolved_entry == c or c in resolved_entry.parents:
+                inside_nested_repo = True
+                break
+            try:
+                # Filesystem-identity check (samefile(), inode+device via
+                # os.stat), NOT string/component equality -- on a case-
+                # insensitive/normalization-insensitive filesystem (macOS/
+                # APFS default), an entry that differs from a nested repo's
+                # directory name only in case or Unicode normalization form
+                # can resolve to the SAME on-disk inode as that nested repo
+                # while still failing the `==`/`.parents` string comparison
+                # above. Mirrors _git_toplevel()'s established samefile()
+                # pattern for the identical class of bug. samefile()
+                # requires both paths to exist and raises OSError otherwise
+                # -- a nonexistent resolved_entry or candidate can't be
+                # identity-compared, so that failure is treated as "not the
+                # same" for this candidate and the loop continues to the
+                # next one (the string-based check above still applies).
+                if resolved_entry.samefile(c):
+                    inside_nested_repo = True
+                    break
+            except OSError:
+                continue
         if inside_nested_repo:
             dropped.append({"entry": entry, "reason": "resolves_inside_nested_repo"})
             continue
