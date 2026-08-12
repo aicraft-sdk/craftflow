@@ -561,6 +561,17 @@ In v1 Cursor Task-Dispatch Mode, the following Claude Code features are NOT supp
   Dispatch Rule wired yet, so the `## Task Context` block in § 5 intentionally omits
   this field rather than fabricate a value with no steering logic behind it. All
   dispatched phases run without effort steering until this is implemented.
+- Full memory-finalization safety hardening (deferred to v2) — § 8 below writes memory markdown
+  directly instead of invoking `craftflow_memory_merge.py` (the routing-table-driven,
+  confidence-filtered, dedup-capped, retraction-aware merge Claude Code's real memory-finalize task
+  runs, per `craftflow-router/SKILL.md` § 13 and every workflow reference file's
+  `phase:memory-finalize` task description). Cursor's § 8 also skips the skill-candidate ledger
+  `--observe`/`--prune` calls, the `.memory-finalize` permit-token guard, and the cross-workflow
+  promotion/DEBUG/PLAN-specific rules § 13 defines. This means Cursor-driven memory writes do not yet
+  benefit from the 2026-08-07 safety-hardening commits (organic-content silent loss, duplicate
+  accumulation, NaN/Infinity confidence bypass, section-discard bugs) that protect the Claude Code
+  path. Deferred to v2 for the same reason as the items above: no Cursor Task-Dispatch equivalent has
+  been built yet for this larger apparatus.
 
 Worktree isolation is now SUPPORTED (see § 4a) — it is no longer on this deferred list.
 Confirmed empirically this session: a real `cursor-agent -p --force --trust` Shell-tool
@@ -903,7 +914,9 @@ Emit after all phases complete successfully:
 Before starting the steps below: if `worktree_mode == "auto_created"`, complete § 4a Step 5
 (merge + cleanup) first. Do not begin memory finalization on an unmerged worktree.
 
-After all phases complete, write memory. This is identical to Claude Code memory finalization.
+After all phases complete, write memory. This is a simplified subset of Claude Code memory
+finalization — see § 5's "Simplified execution model (v1 differences from Claude Code)" list above
+("Full memory-finalization safety hardening (deferred to v2)") for the specific gap.
 
 ```
 1. Collect MEMORY_NOTES from each agent's Router Contract YAML
