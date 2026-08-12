@@ -378,11 +378,28 @@ CONTROL_OPERATORS = {";", "&&", "||", "|", "&", "\n"}
 
 
 def resolve_confinement(
-    path, cwd: Path, worktree_path: str | None
+    path,
+    cwd: Path,
+    worktree_path: str | None,
+    extra_exact_paths: "frozenset[Path] | None" = None,
 ) -> tuple[bool, Path]:
     """Return (is_confined, resolved_path). Confined if resolved_path == cwd,
-    is a descendant of cwd, or (when worktree_path is set) is cwd/worktree_path
-    itself or a descendant of worktree_path."""
+    is a descendant of cwd, (when worktree_path is set) is cwd/worktree_path
+    itself or a descendant of worktree_path, OR (when extra_exact_paths is
+    set) resolved_path is an EXACT member of extra_exact_paths.
+
+    `extra_exact_paths` (workspace-root file allowlist, see
+    docs/plans/2026-08-12-craftflow-workspace-root-allowlist-design.md) is
+    matched by EXACT EQUALITY ONLY -- deliberately never descendant/prefix
+    matching, unlike the cwd/worktree_path branches above. This is the
+    single invariant that keeps the mechanism from ever becoming a
+    directory/subtree grant into a sibling nested repo (the design's
+    rejected "Option B"). Members must already be resolved, absolute
+    Path objects -- this function does not re-resolve or validate them
+    (mirrors how worktree_path is already caller-resolved before being
+    passed in). Omitting this parameter, or passing None/an empty
+    collection, reproduces the pre-existing 3-parameter behavior exactly
+    (regression-tested)."""
     candidate = Path(os.path.expanduser(str(path)))
     if not candidate.is_absolute():
         candidate = cwd / candidate
@@ -395,6 +412,8 @@ def resolve_confinement(
         within_wt = resolved == wt or wt in resolved.parents
         if within_wt:
             return True, resolved
+    if extra_exact_paths and resolved in extra_exact_paths:
+        return True, resolved
     return False, resolved
 
 

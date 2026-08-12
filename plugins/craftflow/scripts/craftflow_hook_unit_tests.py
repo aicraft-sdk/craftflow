@@ -5837,6 +5837,118 @@ def test_hooklib_resolve_confinement_denies_outside_both(tmp_dir: Path) -> None:
     ok(name)
 
 
+def test_hooklib_resolve_confinement_allows_exact_match_in_extra_exact_paths(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-confinement-allows-exact-match-in-extra-exact-paths"
+    cwd = (tmp_dir / "project")
+    workspace_root = (tmp_dir / "workspace")
+    cwd.mkdir(parents=True)
+    workspace_root.mkdir(parents=True)
+    cwd = cwd.resolve()
+    allowlisted = (workspace_root / "CONTRACTS.md").resolve()
+    confined, _resolved = hooklib.resolve_confinement(
+        allowlisted, cwd, None, frozenset({allowlisted})
+    )
+    if not confined:
+        fail(name, f"expected confined=True for an exact extra_exact_paths match; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_denies_descendant_of_extra_exact_path_not_exact_file(tmp_dir: Path) -> None:
+    # Critical invariant: extra_exact_paths is EXACT-MATCH ONLY, never a directory grant. If the
+    # allowlisted entry happens to also be a real directory on disk, a file one level below it
+    # must still be denied -- this is what structurally keeps the mechanism from degrading into
+    # Option B (multi-root confinement spanning full edits across a nested repo).
+    name = "hooklib/resolve-confinement-denies-descendant-of-extra-exact-path-not-exact-file"
+    cwd = (tmp_dir / "project")
+    workspace_root = (tmp_dir / "workspace")
+    cwd.mkdir(parents=True)
+    workspace_root.mkdir(parents=True)
+    cwd = cwd.resolve()
+    allowlisted_dir = (workspace_root / "CONTRACTS.md")
+    allowlisted_dir.mkdir(parents=True)
+    allowlisted_dir = allowlisted_dir.resolve()
+    descendant = allowlisted_dir / "nested.txt"
+    confined, _resolved = hooklib.resolve_confinement(
+        descendant, cwd, None, frozenset({allowlisted_dir})
+    )
+    if confined:
+        fail(name, f"expected confined=False for a descendant of an extra_exact_paths entry (no directory grant); got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_denies_non_matching_sibling_when_extra_exact_paths_set(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-confinement-denies-non-matching-sibling-when-extra-exact-paths-set"
+    cwd = (tmp_dir / "project")
+    workspace_root = (tmp_dir / "workspace")
+    cwd.mkdir(parents=True)
+    workspace_root.mkdir(parents=True)
+    cwd = cwd.resolve()
+    allowlisted = (workspace_root / "CONTRACTS.md").resolve()
+    other_sibling = (workspace_root / "PLATFORM_CONTEXT.md").resolve()
+    confined, _resolved = hooklib.resolve_confinement(
+        other_sibling, cwd, None, frozenset({allowlisted})
+    )
+    if confined:
+        fail(name, f"expected confined=False for a non-allowlisted sibling file; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_extra_exact_paths_does_not_rescue_unlisted_target_outside_cwd_and_worktree(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-confinement-extra-exact-paths-does-not-rescue-unlisted-target"
+    cwd = (tmp_dir / "project")
+    worktree = (tmp_dir / "worktree-sibling")
+    outside = (tmp_dir / "outside")
+    cwd.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    cwd = cwd.resolve()
+    worktree = worktree.resolve()
+    target = (outside / "file.txt").resolve()
+    unrelated_allowlisted = (tmp_dir / "workspace" / "CONTRACTS.md")
+    confined, _resolved = hooklib.resolve_confinement(
+        target, cwd, str(worktree), frozenset({unrelated_allowlisted.resolve() if unrelated_allowlisted.parent.exists() else unrelated_allowlisted})
+    )
+    if confined:
+        fail(name, f"expected confined=False when target is outside cwd/worktree and not itself in extra_exact_paths; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_byte_identical_when_extra_exact_paths_omitted_or_empty(tmp_dir: Path) -> None:
+    # Regression proof (patterns.md mandate): the 4 pre-existing scenarios must produce
+    # byte-identical (confined, resolved) tuples whether extra_exact_paths is omitted entirely
+    # (3-arg call), explicitly None, or an empty frozenset.
+    name = "hooklib/resolve-confinement-byte-identical-when-extra-exact-paths-omitted-or-empty"
+    cwd = (tmp_dir / "project")
+    worktree = (tmp_dir / "worktree-sibling")
+    outside = (tmp_dir / "outside")
+    cwd.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    cwd = cwd.resolve()
+    worktree = worktree.resolve()
+    scenarios = [
+        (cwd / "file.txt", cwd, None),
+        ((outside / "file.txt"), cwd, None),
+        ((worktree / "file.txt"), cwd, str(worktree)),
+        ((outside / "file.txt"), cwd, str(worktree)),
+    ]
+    for target, scenario_cwd, scenario_worktree in scenarios:
+        baseline = hooklib.resolve_confinement(target, scenario_cwd, scenario_worktree)
+        with_none = hooklib.resolve_confinement(target, scenario_cwd, scenario_worktree, None)
+        with_empty = hooklib.resolve_confinement(target, scenario_cwd, scenario_worktree, frozenset())
+        if baseline != with_none or baseline != with_empty:
+            fail(
+                name,
+                f"mismatch for target={target}: 3-arg={baseline} None={with_none} empty={with_empty}",
+            )
+            return
+    ok(name)
+
+
 def test_hooklib_command_has_traversal_true_for_dotdot_substitution() -> None:
     name = "hooklib/command-has-traversal-true-for-dotdot-substitution"
     if not hooklib.command_has_traversal_or_wildcard('rm -rf "$(echo ../../..)"'):
@@ -13584,6 +13696,11 @@ def main() -> int:
         test_hooklib_resolve_confinement_denies_outside_cwd_no_worktree(tmp / "h2")
         test_hooklib_resolve_confinement_allows_within_worktree_outside_cwd(tmp / "h3")
         test_hooklib_resolve_confinement_denies_outside_both(tmp / "h4")
+        test_hooklib_resolve_confinement_allows_exact_match_in_extra_exact_paths(tmp / "h5")
+        test_hooklib_resolve_confinement_denies_descendant_of_extra_exact_path_not_exact_file(tmp / "h6")
+        test_hooklib_resolve_confinement_denies_non_matching_sibling_when_extra_exact_paths_set(tmp / "h7")
+        test_hooklib_resolve_confinement_extra_exact_paths_does_not_rescue_unlisted_target_outside_cwd_and_worktree(tmp / "h8")
+        test_hooklib_resolve_confinement_byte_identical_when_extra_exact_paths_omitted_or_empty(tmp / "h9")
         test_hooklib_command_has_traversal_true_for_dotdot_substitution()
         test_hooklib_command_has_traversal_false_for_lock_dir_var()
         test_hooklib_command_has_traversal_true_for_bare_wildcard()
