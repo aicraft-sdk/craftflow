@@ -6544,6 +6544,76 @@ def test_root_hooks_json_registers_selfcheck_sessionstart() -> None:
     ok(name)
 
 
+def test_cursor_adapter_logs_target_crash_but_stays_fail_open(tmp_dir: Path) -> None:
+    # REM-FIX (silent-failure-hunter, CRITICAL): translate_output() in
+    # craftflow_cursor_adapter.py fails open (exit 0) whenever the delegated
+    # target script exits non-zero -- including an uncaught Python exception
+    # in the target script -- with zero log_event call of its own. A crash in
+    # a wired guard/verify script (e.g. craftflow_pretooluse_bash_guard.py)
+    # would silently no-op with no audit trail. This proves: (a) fail-open is
+    # preserved (Cursor must still get exit 0), and (b) a log_event entry now
+    # records the crash (target script path + returncode) before the adapter
+    # returns its fail-open decision.
+    name = "cursor-adapter/logs-target-crash-stays-fail-open"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    broken_target = tmp_dir / "broken_target.py"
+    broken_target.write_text(
+        "raise RuntimeError('boom: simulated crash in target hook script')\n",
+        encoding="utf-8",
+    )
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "event": "PreToolUse",
+        "toolName": "Bash",
+        "toolInput": {"command": "rm -rf /"},
+        "cwd": str(project_root),
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "craftflow_cursor_adapter.py"),
+            str(broken_target),
+            "--tool",
+            "Bash",
+            "--event",
+            "PreToolUse",
+        ],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if result.returncode != 0:
+        fail(
+            name,
+            f"expected fail-open (exit 0) preserved on target-script crash; got exit {result.returncode}",
+        )
+        return
+    log_path = project_root / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, f"expected log file {log_path} to exist after target-script crash")
+        return
+    log_lines = [ln for ln in log_path.read_text(encoding="utf-8").strip().splitlines() if ln.strip()]
+    matching = [ln for ln in log_lines if "cursor_adapter_target_crash" in ln]
+    if not matching:
+        fail(
+            name,
+            "expected a log_event entry naming 'cursor_adapter_target_crash' for the "
+            f"uncaught target-script exception; got lines: {log_lines!r}",
+        )
+        return
+    entry = json.loads(matching[0])
+    if str(broken_target) not in json.dumps(entry):
+        fail(name, f"expected logged event to include target script path {broken_target}; got: {entry!r}")
+        return
+    if "returncode" not in entry or entry.get("returncode") == 0:
+        fail(name, f"expected logged event to include a non-zero returncode field; got: {entry!r}")
+        return
+    ok(name)
+
+
 def test_selfcheck_internal_budget_stays_under_registered_hook_timeout() -> None:
     # REM-FIX (doubt-verifier cycle-2 BLOCKING #2): no test or shared constant
     # tied the checker's own internal worst-case budget
@@ -13831,6 +13901,7 @@ def main() -> int:
     test_selfcheck_resolves_bare_python3_not_sys_executable()
     test_hooks_json_registers_selfcheck_sessionstart()
     test_root_hooks_json_registers_selfcheck_sessionstart()
+    test_cursor_adapter_logs_target_crash_but_stays_fail_open(tmp / "ca1")
     test_selfcheck_internal_budget_stays_under_registered_hook_timeout()
     test_workflow_id_script_present()
     test_resolve_workspace_root_script_present()

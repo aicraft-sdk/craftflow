@@ -16,6 +16,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from craftflow_hooklib import log_event
+
+# Cap logged stderr so a hostile/huge target-script traceback can't bloat the
+# shared event log.
+_MAX_LOGGED_STDERR_CHARS = 2000
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Craftflow Cursor adapter shim")
@@ -96,7 +102,7 @@ def delegate(target_script, normalized_input):
     )
 
 
-def translate_output(result):
+def translate_output(result, target_script):
     """
     Map Claude's stdout JSON → Cursor exit code + output.
 
@@ -110,8 +116,23 @@ def translate_output(result):
     if result.stderr:
         print(result.stderr, file=sys.stderr, end="")
 
-    # If target script failed, fail-open (never block on hook errors)
+    # If target script failed, fail-open (never block on hook errors). This
+    # includes an uncaught exception in the target script -- with none of the
+    # 4 wired guard/verify scripts wrapping their own main() in a top-level
+    # try/except, a crash here would otherwise be indistinguishable from
+    # "nothing happened" (zero trace in craftflow-hook-events.log). Log the
+    # crash BEFORE returning the fail-open decision; the fail-open behavior
+    # itself is unchanged -- Cursor still gets exit 0.
     if result.returncode != 0:
+        log_event(
+            "plugin_cursor_adapter",
+            {
+                "event": "cursor_adapter_target_crash",
+                "target_script": str(target_script),
+                "returncode": result.returncode,
+                "stderr_tail": (result.stderr or "")[-_MAX_LOGGED_STDERR_CHARS:],
+            },
+        )
         return 0
 
     # Parse Claude's stdout
@@ -161,7 +182,7 @@ def main():
     result = delegate(args.target_script, normalized)
 
     # 5. Translate output and exit with the appropriate Cursor exit code
-    exit_code = translate_output(result)
+    exit_code = translate_output(result, args.target_script)
     sys.exit(exit_code)
 
 
