@@ -10,7 +10,7 @@ Every build, debug, review, and plan task routes through a single entry point th
 
 - **Routes all dev tasks** — one router (`craftflow-router`) classifies intent and dispatches to the right agent chain automatically
 - **Agent chain** — 11 specialized agents: planner, component-builder, bug-investigator, code-reviewer, silent-failure-hunter, integration-verifier, and more
-- **26 skills** — planning patterns, TDD, code generation, debugging, diff-driven docs, workflow status, and others
+- **27 skills** — planning patterns, TDD, code generation, debugging, diff-driven docs, workflow status, and others
 - **Hook system** — Python lifecycle hooks for memory protection, write guards, URL caching, and session continuity
 - **Shared state** — `.craftflow/state/` is readable by both Claude Code and Cursor
 - **Feature-named workflows** — workflow folders, files, and worktrees are named after the feature (`wf-auth-refactor-20260706-d4e5f6a7`) so you can identify them at a glance
