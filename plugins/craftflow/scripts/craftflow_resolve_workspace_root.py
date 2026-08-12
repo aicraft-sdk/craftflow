@@ -19,6 +19,14 @@ normal decision outcome, not a script failure):
   {"outcome": "AMBIGUOUS", "candidates": ["<absolute path>", ...]}
   {"outcome": "NO_REPO_FOUND"}
 
+  DETERMINISTIC and AMBIGUOUS additionally gain two OPTIONAL keys, each
+  present only when non-empty (see read_workspace_writable_paths() and
+  resolve()): `workspace_writable_paths` (list of validated absolute
+  paths from {cwd}/.craftflow-workspace.json) and
+  `workspace_writable_paths_dropped` (list of {"entry", "reason"} dicts
+  for any rejected entries). NO_REPO_FOUND never gains these keys -- it
+  stays exactly {"outcome": "NO_REPO_FOUND"}.
+
 Exit codes:
   0  A decision was reached (including NO_REPO_FOUND) -- valid JSON on stdout.
   1  The script could not even complete the scan (e.g. --cwd itself is
