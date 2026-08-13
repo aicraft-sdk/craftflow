@@ -13998,6 +13998,21 @@ def test_workflow_artifact_template_includes_workspace_writable_paths_field() ->
     if '\\"workspace_writable_paths\\"' not in section and '"workspace_writable_paths"' not in section:
         fail(name, "workspace_writable_paths field not found in the artifact-write JSON literal")
         return
+    # The key existing is not enough -- the JSON template's default value must be exactly an
+    # empty array, not merely present. Guards against the key surviving with a corrupted or
+    # non-empty hardcoded default.
+    if '\\"workspace_writable_paths\\":[]' not in section:
+        fail(name, "workspace_writable_paths default value is not exactly the empty array '[]' in the artifact-write JSON literal")
+        return
+    # A future bad edit could silently strip the router's ONLY prose instructions for actually
+    # populating the allowlist (the "Conditional -- only if `## 0.` step 1a set
+    # `WORKSPACE_WRITABLE_PATHS_JSON`..." substitution paragraph) while leaving the
+    # workspace_writable_paths:[] key above untouched -- the two checks above alone would not
+    # catch that. Assert the substitution-instruction paragraph itself is present, anchored on a
+    # substring unique to it, combined with the variable name it substitutes.
+    if "Conditional — only if" not in section or "WORKSPACE_WRITABLE_PATHS_JSON" not in section:
+        fail(name, "workspace_writable_paths substitution-instruction paragraph (the 'Conditional -- only if ... WORKSPACE_WRITABLE_PATHS_JSON' prose telling the router how to populate the allowlist) not found in the '### Parent workflow creation' section")
+        return
     ok(name)
 
 

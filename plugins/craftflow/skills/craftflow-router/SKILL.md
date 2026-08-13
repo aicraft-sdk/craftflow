@@ -104,6 +104,16 @@ terminology and minimizing blast radius on an already 1000+-line file.]
      '[]'`), fold it into `## 6.`'s own initial event-log write alongside `workflow_started`, the
      same conditional pattern as `project_root_resolution_fallback` below —
      `{"event":"workspace_writable_paths_entries_dropped","dropped":<value>}`.
+     **Caveat — the two in-session values are NOT equivalent in what is lost if they never reach
+     `## 6.`:** `project_root_resolution_fallback` is a diagnostic string only — its own note above
+     already documents that nothing functional is lost if it never gets durably recorded.
+     `WORKSPACE_WRITABLE_PATHS_JSON` is a functional payload — nothing else re-echoes or reuses it
+     between this capture and `## 6.`'s write, so if it is lost in-session (e.g. the session ends
+     before `## 6.` runs), the workspace-root allowlist is silently disabled for that workflow
+     (the artifact's `workspace_writable_paths` stays at its `[]` default). The downstream guard
+     in `craftflow_hooklib.py`/`craftflow_pretooluse_guard.py` still fails closed regardless — an
+     empty allowlist only denies writes to the workspace-root files it would otherwise have
+     permitted, it never grants anything extra.
      - **`DETERMINISTIC`** (exactly one candidate nested repo exists, or the request text
        uniquely names one among several):
        ```bash
