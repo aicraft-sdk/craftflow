@@ -107,9 +107,13 @@ def review_after_iso(promoted_at_iso: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Frontmatter parsing -- ported (contract-identical subset) from
-# packages/harness-audit/src/util.ts's parseFrontmatter, so this script's
-# validation logic agrees with what harness-audit itself will later check
-# (SKL-02/SKL-04) rather than silently drifting from it.
+# harness-audit's parseFrontmatter (src/util.ts), so this script's validation
+# logic agrees with what harness-audit itself will later check (SKL-02/SKL-04).
+# NOTE: harness-audit was extracted to the external `aicraft-sdk/harnesslens`
+# repo (published as @ai-craft/harnesslens) and no longer lives in this repo,
+# so this port can silently drift without a same-repo grep catching it --
+# re-verify this parser against that repo's src/util.ts periodically rather
+# than assuming it stays in sync.
 # ---------------------------------------------------------------------------
 
 def _leading_whitespace(line: str) -> int:

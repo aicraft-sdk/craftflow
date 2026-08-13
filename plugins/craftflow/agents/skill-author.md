@@ -161,9 +161,11 @@ whether the target path already exists or not).
    other Step 4 failure (see Completion State Rules below).
 
 `SKILL.md` template for a new skill (flat `craftflow-*` frontmatter keys —
-**not** nested — because `harness-audit`'s `parseFrontmatter`
-(`packages/harness-audit/src/util.ts`) is a line-based `key: value` parser that
-would silently misread a nested YAML block):
+**not** nested — because `harness-audit`'s `parseFrontmatter` (now published as
+`@ai-craft/harnesslens`, source at `aicraft-sdk/harnesslens`'s `src/util.ts`, no
+longer same-repo) is a line-based `key: value` parser that would silently
+misread a nested YAML block. This local citation must be manually re-verified
+against that external repo's source periodically rather than assumed in sync.):
 
 ```yaml
 ---
@@ -178,9 +180,10 @@ craftflow-review-after: PENDING_APPROVAL
 ---
 ```
 
-`description` MUST be >= 40 characters (`SKL-04`,
-`packages/harness-audit/src/packs/core/skills.ts`) and must say when to use the
-skill, not just what it is. The body must include a `## Verified Commands`
+`description` MUST be >= 40 characters (`SKL-04`, defined in the external
+`aicraft-sdk/harnesslens` repo's `src/packs/core/skills.ts` — no longer
+same-repo; re-verify against that repo's source periodically) and must say
+when to use the skill, not just what it is. The body must include a `## Verified Commands`
 section populated from whichever evidence entries satisfied rule 4 — quote the
 actual command/pattern, do not paraphrase it away.
 
