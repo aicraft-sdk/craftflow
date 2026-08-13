@@ -86,6 +86,24 @@ terminology and minimizing blast radius on an already 1000+-line file.]
      ```bash
      RESOLVE_OUTCOME=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin)['outcome'])")
      ```
+     Also capture the workspace-root file allowlist `$RESOLVE_RESULT` may carry — safe and inert
+     for every outcome reachable in this branch (`DETERMINISTIC`, `AMBIGUOUS`, or `NO_REPO_FOUND`
+     reached via a successful `RESOLVE_EXIT == 0` scan), since the resolver script's
+     `resolve()` never includes these keys for `NO_REPO_FOUND` at all — `.get(..., [])` degrades to
+     an empty list in that case, exactly as intended. This capture is explicitly UNREACHABLE when
+     `RESOLVE_EXIT != 0` (the branch immediately above this one, which never parses
+     `$RESOLVE_RESULT` at all):
+     ```bash
+     WORKSPACE_WRITABLE_PATHS_JSON=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get('workspace_writable_paths', [])))")
+     WORKSPACE_WRITABLE_PATHS_DROPPED_JSON=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get('workspace_writable_paths_dropped', [])))")
+     ```
+     `WORKSPACE_WRITABLE_PATHS_JSON` is held in-session — it is written into the workflow artifact
+     at **Parent workflow creation** (`## 6.`) below, the same ordering constraint the
+     `project_root_resolution_fallback` reason already works around (the artifact doesn't exist
+     yet at this point in `## 0.`). If `WORKSPACE_WRITABLE_PATHS_DROPPED_JSON` is non-empty (`!=
+     '[]'`), fold it into `## 6.`'s own initial event-log write alongside `workflow_started`, the
+     same conditional pattern as `project_root_resolution_fallback` below —
+     `{"event":"workspace_writable_paths_entries_dropped","dropped":<value>}`.
      - **`DETERMINISTIC`** (exactly one candidate nested repo exists, or the request text
        uniquely names one among several):
        ```bash
@@ -763,7 +781,7 @@ TaskCreate({
 ```text
 Write(
   file_path="$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json",
-  content="{\"workflow_uuid\":\"{workflow_uuid}\",\"workflow_id\":\"{workflow_uuid}\",\"workflow_type\":\"{WORKFLOW}\",\"state_root\":\".craftflow/state\",\"user_request\":\"{request}\",\"plan_file\":null,\"design_file\":null,\"research_files\":[],\"approved_decisions\":[],\"plan_mode\":null,\"verification_rigor\":\"standard\",\"proof_status\":\"gaps_found\",\"traceability\":{\"requirements\":[],\"phases\":[],\"verification\":[],\"remediation\":[]},\"intent\":{\"goal\":null,\"non_goals\":[],\"constraints\":[],\"acceptance_criteria\":[],\"open_decisions\":[]},\"normalized_phases\":[],\"phase_cursor\":null,\"capabilities\":{\"brightdata_available\":\"unknown\",\"octocode_available\":\"unknown\",\"websearch_available\":\"unknown\",\"webfetch_available\":\"unknown\"},\"research_rounds\":[],\"research_backend_history\":[],\"research_quality\":{\"web\":\"none\",\"github\":\"none\",\"overall\":\"none\"},\"task_ids\":{\"planner_create\":null,\"planning_review_pass1\":null,\"planner_replan\":null,\"planning_review_pass2\":null,\"memory_finalize\":null},\"phase_status\":{},\"results\":{\"builder\":null,\"investigator\":null,\"reviewer\":null,\"hunter\":null,\"verifier\":null,\"planner\":null,\"planning_reviewer\":null,\"research\":{\"web\":null,\"github\":null,\"synthesis\":null}},\"evidence\":{\"builder\":[],\"investigator\":[],\"reviewer\":[],\"hunter\":[],\"verifier\":[],\"planning_reviewer\":[]},\"telemetry\":{\"task_metrics_available\":\"unknown\",\"workflow_wall_clock_seconds\":0,\"agent_wall_clock_seconds\":{\"builder\":0,\"investigator\":0,\"reviewer\":0,\"hunter\":0,\"verifier\":0,\"planner\":0},\"loop_counts\":{\"re_review\":0,\"re_hunt\":0,\"re_verify\":0},\"verifier\":{\"phase_exit_proof_runs\":0,\"extended_audit_runs\":0,\"workload_seconds\":{\"tests\":0,\"build\":0,\"scan\":0,\"reconcile\":0,\"reasoning\":0}}},\"quality\":{\"confidence\":null,\"evidence_complete\":false,\"scenario_coverage\":0,\"research_quality\":\"none\",\"convergence_state\":\"pending\"},\"planning_review_runs\":0,\"planning_review_findings\":[],\"planning_review_status\":\"not_started\",\"build_mode\":null,\"fast_path_risk_signals\":[],\"fast_path_escalated\":false,\"worktree_mode\":null,\"worktree_path\":null,\"worktree_branch\":null,\"memory_notes\":[],\"pending_gate\":null,\"status_history\":[{\"event\":\"workflow_started\",\"ts\":\"{iso_timestamp}\",\"phase\":\"{build|debug|review|plan}\"}],\"remediation_history\":[],\"created_at\":\"{iso_timestamp}\",\"updated_at\":\"{iso_timestamp}\"}"
+  content="{\"workflow_uuid\":\"{workflow_uuid}\",\"workflow_id\":\"{workflow_uuid}\",\"workflow_type\":\"{WORKFLOW}\",\"state_root\":\".craftflow/state\",\"user_request\":\"{request}\",\"plan_file\":null,\"design_file\":null,\"research_files\":[],\"approved_decisions\":[],\"plan_mode\":null,\"verification_rigor\":\"standard\",\"proof_status\":\"gaps_found\",\"traceability\":{\"requirements\":[],\"phases\":[],\"verification\":[],\"remediation\":[]},\"intent\":{\"goal\":null,\"non_goals\":[],\"constraints\":[],\"acceptance_criteria\":[],\"open_decisions\":[]},\"normalized_phases\":[],\"phase_cursor\":null,\"capabilities\":{\"brightdata_available\":\"unknown\",\"octocode_available\":\"unknown\",\"websearch_available\":\"unknown\",\"webfetch_available\":\"unknown\"},\"research_rounds\":[],\"research_backend_history\":[],\"research_quality\":{\"web\":\"none\",\"github\":\"none\",\"overall\":\"none\"},\"task_ids\":{\"planner_create\":null,\"planning_review_pass1\":null,\"planner_replan\":null,\"planning_review_pass2\":null,\"memory_finalize\":null},\"phase_status\":{},\"results\":{\"builder\":null,\"investigator\":null,\"reviewer\":null,\"hunter\":null,\"verifier\":null,\"planner\":null,\"planning_reviewer\":null,\"research\":{\"web\":null,\"github\":null,\"synthesis\":null}},\"evidence\":{\"builder\":[],\"investigator\":[],\"reviewer\":[],\"hunter\":[],\"verifier\":[],\"planning_reviewer\":[]},\"telemetry\":{\"task_metrics_available\":\"unknown\",\"workflow_wall_clock_seconds\":0,\"agent_wall_clock_seconds\":{\"builder\":0,\"investigator\":0,\"reviewer\":0,\"hunter\":0,\"verifier\":0,\"planner\":0},\"loop_counts\":{\"re_review\":0,\"re_hunt\":0,\"re_verify\":0},\"verifier\":{\"phase_exit_proof_runs\":0,\"extended_audit_runs\":0,\"workload_seconds\":{\"tests\":0,\"build\":0,\"scan\":0,\"reconcile\":0,\"reasoning\":0}}},\"quality\":{\"confidence\":null,\"evidence_complete\":false,\"scenario_coverage\":0,\"research_quality\":\"none\",\"convergence_state\":\"pending\"},\"planning_review_runs\":0,\"planning_review_findings\":[],\"planning_review_status\":\"not_started\",\"build_mode\":null,\"fast_path_risk_signals\":[],\"fast_path_escalated\":false,\"worktree_mode\":null,\"worktree_path\":null,\"worktree_branch\":null,\"workspace_writable_paths\":[],\"memory_notes\":[],\"pending_gate\":null,\"status_history\":[{\"event\":\"workflow_started\",\"ts\":\"{iso_timestamp}\",\"phase\":\"{build|debug|review|plan}\"}],\"remediation_history\":[],\"created_at\":\"{iso_timestamp}\",\"updated_at\":\"{iso_timestamp}\"}"
 )
 Write(
   file_path="$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.events.jsonl",
@@ -778,6 +796,18 @@ alongside `workflow_started`, using the same `{workflow_uuid}`/`{iso_timestamp}`
 3 above — `{"event":"project_root_resolution_fallback","ts":"{iso_timestamp}","reason":"NO_REPO_FOUND"|"RESOLVE_SCRIPT_ERROR"}`.
 If `## 0.` did not fall back (the common, single-repo case), skip this — there is nothing to
 append.
+
+**Conditional — only if `## 0.` step 1a set `WORKSPACE_WRITABLE_PATHS_JSON` to something other
+than the empty-array default** (i.e. `TOPLEVEL_EXIT != 0` in `## 0.` AND that variable is set and
+`!= '[]'`): substitute that JSON array value in place of the `workspace_writable_paths:[]`
+default in the artifact `Write` above, instead of leaving it as `[]`. If `## 0.` never ran step 1a
+(the common single-repo path), or step 1a ran but the array is empty, leave the default `[]` in
+place — no substitution needed.
+
+Additionally, if `WORKSPACE_WRITABLE_PATHS_DROPPED_JSON` from `## 0.` is non-empty, append a
+second `status_history` entry and a second `events.jsonl` line alongside `workflow_started` (same
+mechanics as the `project_root_resolution_fallback` conditional above) —
+`{"event":"workspace_writable_paths_entries_dropped","ts":"{iso_timestamp}","dropped":{WORKSPACE_WRITABLE_PATHS_DROPPED_JSON}}`.
 
 4. Immediately after artifact creation, initialize the per-workflow state directory:
 

@@ -13945,6 +13945,62 @@ def test_bash_guard_truthy_non_dict_tool_input_degrades_to_empty_dict_no_crash(t
     ok(name)
 
 
+def test_workspace_root_config_read_gated_inside_step_1a() -> None:
+    name = "router/workspace-root-config-read-gated-inside-step-1a"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not skill_path.exists():
+        fail(name, f"SKILL.md not found at {skill_path}")
+        return
+    content = skill_path.read_text(encoding="utf-8")
+    section_start = content.find("**1a. Multi-repo workspace root resolution**")
+    if section_start == -1:
+        fail(name, "step 1a section not found")
+        return
+    next_heading = content.find("\n## ", section_start + 1)
+    section = content[section_start: next_heading if next_heading != -1 else None]
+    if "workspace_writable_paths" not in section:
+        fail(name, "workspace_writable_paths read/parse not found inside step 1a's own section")
+        return
+    # Confirm it is NOT also present in the single-repo (TOPLEVEL_EXIT == 0) branch text, which
+    # sits just above step 1a in the same '## 0.' section.
+    zero_section_start = content.find("## 0. Resolve Project Root")
+    single_repo_branch = content[zero_section_start:section_start]
+    if "workspace_writable_paths" in single_repo_branch:
+        fail(name, "workspace_writable_paths read must not appear in the single-repo (TOPLEVEL_EXIT == 0) branch")
+        return
+    # Fresh-review advisory fix (2026-08-13): confirm the capture block is specifically absent
+    # from the "If RESOLVE_EXIT != 0" bullet's own text (the branch where $RESOLVE_RESULT is
+    # empty/unparseable) -- not just generically "present somewhere in step 1a," which the checks
+    # above already allowed even when the capture block was wrongly placed BEFORE this bullet in
+    # the original draft. Slices from that bullet's own start to the "Otherwise" bullet's start.
+    resolve_exit_bullet_start = section.find("**If `RESOLVE_EXIT != 0`**")
+    otherwise_bullet_start = section.find("**Otherwise**, parse the outcome")
+    if resolve_exit_bullet_start == -1 or otherwise_bullet_start == -1:
+        fail(name, "could not locate the 'If RESOLVE_EXIT != 0' / 'Otherwise' bullets inside step 1a")
+        return
+    resolve_exit_failure_branch = section[resolve_exit_bullet_start:otherwise_bullet_start]
+    if "workspace_writable_paths" in resolve_exit_failure_branch:
+        fail(name, "workspace_writable_paths capture must not be reachable on the RESOLVE_EXIT != 0 (unparseable $RESOLVE_RESULT) path")
+        return
+    ok(name)
+
+
+def test_workflow_artifact_template_includes_workspace_writable_paths_field() -> None:
+    name = "router/workflow-artifact-template-includes-workspace-writable-paths-field"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    parent_wf_start = content.find("### Parent workflow creation")
+    if parent_wf_start == -1:
+        fail(name, "'### Parent workflow creation' section not found")
+        return
+    next_heading = content.find("\n### ", parent_wf_start + 1)
+    section = content[parent_wf_start: next_heading if next_heading != -1 else None]
+    if '\\"workspace_writable_paths\\"' not in section and '"workspace_writable_paths"' not in section:
+        fail(name, "workspace_writable_paths field not found in the artifact-write JSON literal")
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -14721,6 +14777,11 @@ def main() -> int:
     test_bash_guard_non_dict_stdin_top_level_does_not_crash_degrades_to_allow(tmp / "j4")
     test_bash_guard_non_dict_hook_mode_json_does_not_crash_still_denies_destructive_command(tmp / "j5")
     test_bash_guard_truthy_non_dict_tool_input_degrades_to_empty_dict_no_crash(tmp / "j6")
+
+    print()
+    print("[ router: workspace-root allowlist wiring (Phase 4) ]")
+    test_workspace_root_config_read_gated_inside_step_1a()
+    test_workflow_artifact_template_includes_workspace_writable_paths_field()
 
     print()
     if _errors:
