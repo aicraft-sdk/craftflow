@@ -68,9 +68,17 @@ def load_input() -> Dict[str, Any]:
     if not raw.strip():
         return {}
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
         return {}
+    # REM-FIX cycle 4 (silent-failure-hunter, live-reproduced CRITICAL): json.loads()
+    # only guarantees valid JSON was parsed -- NOT that the top level is a dict (the same
+    # Bug A pattern already fixed for latest_workflow_payload() in earlier cycles). Every
+    # caller of load_input() immediately does `data.get(...)`, which crashes with an
+    # uncaught AttributeError on a non-dict top level (e.g. `[1, 2, 3]`), before either
+    # guard script's main() -- which has no top-level try/except -- can emit any deny
+    # decision. Coerce to {}, matching this function's own existing missing-stdin default.
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def load_mode() -> Dict[str, str]:
@@ -85,7 +93,7 @@ def load_mode() -> Dict[str, str]:
             "taskMetadata": "audit",
         }
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         print(f"CRAFTFLOW load_mode: failed to read {path}: {exc}; defaulting to fail-closed mode", file=sys.stderr)
         # REM-FIX (HIGH): same fail-closed rationale as the missing-file
@@ -96,6 +104,14 @@ def load_mode() -> Dict[str, str]:
             "memoryWrites": "audit",
             "taskMetadata": "audit",
         }
+    # REM-FIX cycle 4 (silent-failure-hunter, live-reproduced CRITICAL): identical
+    # dict-coercion gap as load_input() above -- a hook-mode.json that is valid JSON but
+    # not a dict (e.g. `[1, 2, 3]`) crashed the first `mode.get(...)` call downstream.
+    # Every caller already passes an explicit default to `.get(key, default)` that
+    # matches this function's own fallback dicts above, so coercing to {} here (rather
+    # than duplicating the fail-closed dict) reproduces identical caller-observed
+    # behavior without disturbing the missing-file/corrupt-file branches above.
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def resolve_toggle_decision(

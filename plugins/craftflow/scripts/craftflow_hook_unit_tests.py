@@ -13767,6 +13767,185 @@ def test_memory_merge_cli_nan_confidence_fails_cleanly() -> None:
 
 
 # ---------------------------------------------------------------------------
+# REM-FIX cycle 4 (silent-failure-hunter, live-reproduced 8x CRITICAL): the
+# same root-cause class already fixed twice for the `workflow` variable
+# (latest_workflow_payload() only guarantees valid JSON, not that the top
+# level is a dict) was ALSO present in three other places, all reachable
+# BEFORE either guard script's own deny logic ever runs, with no top-level
+# try/except in either main() to catch the fallout:
+#   1. load_input()'s success path returned whatever json.loads(raw)
+#      produced -- a non-dict stdin top level (e.g. `[1, 2, 3]`) crashed the
+#      very first `data.get(...)` call in main().
+#   2. load_mode()'s success path had the identical gap -- a non-dict
+#      hook-mode.json crashed the first `mode.get(...)` call downstream.
+#   3. Both scripts' `tool_input = data.get("tool_input") or {}` (or the
+#      inline equivalent) only substitutes on a FALSY value -- a truthy
+#      non-dict like `["a"]` survived untouched and crashed on the next
+#      `.get()` call.
+# All three degrade gracefully now (load_input()/load_mode() coerce a
+# non-dict parse result to {}; tool_input extraction uses an explicit
+# isinstance check instead of `or {}`), matching this codebase's existing
+# convention for missing/malformed top-level input.
+# ---------------------------------------------------------------------------
+
+def test_pretooluse_guard_non_dict_stdin_top_level_does_not_crash_degrades_to_allow(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/non-dict-stdin-top-level-does-not-crash-degrades-to-allow"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    code, out = run_hook("craftflow_pretooluse_guard.py", [1, 2, 3], env)
+    if code != 0:
+        fail(
+            name,
+            f"expected exit 0 (graceful degrade, not a crash) for a non-dict stdin top level; "
+            f"got exit={code} stdout={out!r}",
+        )
+        return
+    if out:
+        fail(
+            name,
+            f"expected allow (empty stdout) for a non-dict stdin top level, matching the "
+            f"missing-stdin default; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_non_dict_hook_mode_json_does_not_crash_degrades_to_fail_closed_deny(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/non-dict-hook-mode-json-does-not-crash-degrades-to-fail-closed-deny"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text("[1, 2, 3]", encoding="utf-8")
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo x | tee .craftflow/state/project/patterns.md"},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(
+            name,
+            f"expected exit 0 (graceful degrade, not a crash) for a non-dict hook-mode.json top "
+            f"level; got exit={code} stdout={out!r}",
+        )
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected fail-closed deny for a protected-memory-file write when hook-mode.json's "
+            f"top level is non-dict; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_truthy_non_dict_tool_input_degrades_to_empty_dict_no_crash(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/truthy-non-dict-tool-input-degrades-to-empty-dict-no-crash"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Write", "tool_input": ["a"]}
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(
+            name,
+            f"expected exit 0 (graceful degrade, not a crash) for a truthy non-dict tool_input; "
+            f"got exit={code} stdout={out!r}",
+        )
+        return
+    if out:
+        fail(
+            name,
+            f"expected allow (empty stdout) when tool_input is a truthy non-dict value with no "
+            f"file_path; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_non_dict_stdin_top_level_does_not_crash_degrades_to_allow(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/non-dict-stdin-top-level-does-not-crash-degrades-to-allow"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    code, out = run_hook("craftflow_pretooluse_bash_guard.py", [1, 2, 3], env)
+    if code != 0:
+        fail(
+            name,
+            f"expected exit 0 (graceful degrade, not a crash) for a non-dict stdin top level; "
+            f"got exit={code} stdout={out!r}",
+        )
+        return
+    if out:
+        fail(
+            name,
+            f"expected allow (empty stdout) for a non-dict stdin top level, matching the "
+            f"missing-stdin default; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_non_dict_hook_mode_json_does_not_crash_still_denies_destructive_command(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/non-dict-hook-mode-json-does-not-crash-still-denies-destructive-command"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text("[1, 2, 3]", encoding="utf-8")
+    project = tmp_dir / "project"
+    worktree = project / ".claude" / "worktrees" / "wf-test"
+    worktree.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(worktree.resolve()),
+        "tool_input": {"command": "rm -f ../../.."},
+    }
+    code, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if code != 0:
+        fail(
+            name,
+            f"expected exit 0 (graceful degrade, not a crash) for a non-dict hook-mode.json top "
+            f"level; got exit={code} stdout={out!r}",
+        )
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for a traversal escaping the worktree cwd even when hook-mode.json's "
+            f"top level is non-dict; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_truthy_non_dict_tool_input_degrades_to_empty_dict_no_crash(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/truthy-non-dict-tool-input-degrades-to-empty-dict-no-crash"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "tool_input": ["a"]}
+    code, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if code != 0:
+        fail(
+            name,
+            f"expected exit 0 (graceful degrade, not a crash) for a truthy non-dict tool_input; "
+            f"got exit={code} stdout={out!r}",
+        )
+        return
+    if out:
+        fail(
+            name,
+            f"expected allow (empty stdout) when tool_input is a truthy non-dict value with no "
+            f"command; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -14533,6 +14712,15 @@ def main() -> int:
     test_memory_merge_cli_non_integer_max_bullets_fails_cleanly()
     test_memory_merge_cli_empty_section_with_file_text_fails_cleanly()
     test_memory_merge_cli_nan_confidence_fails_cleanly()
+
+    print()
+    print("[ pretooluse-guard / pretooluse-bash-guard: REM-FIX cycle 4 (non-dict JSON top-level crash class) ]")
+    test_pretooluse_guard_non_dict_stdin_top_level_does_not_crash_degrades_to_allow(tmp / "j1")
+    test_pretooluse_guard_non_dict_hook_mode_json_does_not_crash_degrades_to_fail_closed_deny(tmp / "j2")
+    test_pretooluse_guard_truthy_non_dict_tool_input_degrades_to_empty_dict_no_crash(tmp / "j3")
+    test_bash_guard_non_dict_stdin_top_level_does_not_crash_degrades_to_allow(tmp / "j4")
+    test_bash_guard_non_dict_hook_mode_json_does_not_crash_still_denies_destructive_command(tmp / "j5")
+    test_bash_guard_truthy_non_dict_tool_input_degrades_to_empty_dict_no_crash(tmp / "j6")
 
     print()
     if _errors:

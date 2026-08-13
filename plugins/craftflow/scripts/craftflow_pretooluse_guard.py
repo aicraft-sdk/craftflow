@@ -1559,7 +1559,13 @@ def main() -> int:
     data = load_input()
     mode = load_mode()
     tool_name = data.get("tool_name")
-    tool_input = data.get("tool_input") or {}
+    # REM-FIX cycle 4 (silent-failure-hunter, live-reproduced CRITICAL): `or {}` only
+    # substitutes on a FALSY value (None, [], "", 0) -- a truthy non-dict like `["a"]`
+    # survives untouched and crashes the first `.get()` call inside
+    # _handle_edit_write/_handle_bash. Explicit isinstance check coerces any non-dict
+    # value to {}, not just falsy ones.
+    raw_tool_input = data.get("tool_input")
+    tool_input = raw_tool_input if isinstance(raw_tool_input, dict) else {}
 
     if tool_name == "Bash":
         return _handle_bash(data, mode, tool_input)
