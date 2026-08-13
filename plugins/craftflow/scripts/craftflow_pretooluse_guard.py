@@ -969,8 +969,17 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     # would crash main() before the deny below is ever emitted. Degrade
     # wf_uuid to None on failure -- the deny must still fire; only the
     # logged wf_uuid metadata degrades (Behavior Contract rule 9).
+    #
+    # REM-FIX cycle 3 (live-reproduced CRITICAL): latest_workflow_payload() only guarantees
+    # valid JSON was parsed -- NOT that the top level is a dict (same Bug A pattern already
+    # fixed in _handle_bash). wf_uuid/pending_gate MUST be derived inside this SAME try/except,
+    # not after it, so a non-dict top level (e.g. `[1,2,3]`) degrades gracefully instead of
+    # raising an uncaught AttributeError out of _handle_edit_write (and the whole guard process,
+    # since main() has no top-level try/except) before the deny below is ever emitted.
     try:
         workflow = latest_workflow_payload()
+        wf_uuid = workflow.get("workflow_uuid") or workflow.get("workflow_id")
+        pending_gate = workflow.get("pending_gate")
     except Exception as exc:
         log_event(
             "plugin_pretooluse_guard",
@@ -982,7 +991,8 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
             },
         )
         workflow = {}
-    wf_uuid = workflow.get("workflow_uuid") or workflow.get("workflow_id")
+        wf_uuid = None
+        pending_gate = None
 
     # Worktree-confinement, skill-promotion-path, and skill-ledger-write are
     # all denied unconditionally -- independent violation types (Behavior
@@ -999,7 +1009,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
             "plugin_pretooluse_guard",
             {
                 "wf": wf_uuid,
-                "phase": workflow.get("pending_gate") or "unknown",
+                "phase": pending_gate or "unknown",
                 "task_id": None,
                 "agent": "router",
                 "tool_name": data.get("tool_name"),
@@ -1027,7 +1037,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
             "plugin_pretooluse_guard",
             {
                 "wf": wf_uuid,
-                "phase": workflow.get("pending_gate") or "memory-finalize",
+                "phase": pending_gate or "memory-finalize",
                 "task_id": None,
                 "agent": "router",
                 "tool_name": data.get("tool_name"),
@@ -1070,7 +1080,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
         "plugin_pretooluse_guard",
         {
             "wf": wf_uuid,
-            "phase": workflow.get("pending_gate") or "unknown",
+            "phase": pending_gate or "unknown",
             "task_id": None,
             "agent": "router",
             "tool_name": data.get("tool_name"),
@@ -1141,7 +1151,16 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         if worktree_path is not None and not isinstance(worktree_path, str):
             worktree_path = None
         workspace_writable_paths = resolve_workspace_writable_paths(workflow)
-    except Exception:
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "latest_workflow_payload",
+                "error": repr(exc),
+                "reason": "skipped_worktree_path_and_workspace_writable_paths_lookup",
+            },
+        )
         worktree_path = None
         workspace_writable_paths = frozenset()
 

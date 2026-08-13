@@ -2537,6 +2537,46 @@ def test_pretooluse_guard_bash_non_dict_workflow_json_top_level_degrades_gracefu
     ok(name)
 
 
+def test_pretooluse_guard_edit_write_non_dict_workflow_json_top_level_degrades_gracefully_still_denies(tmp_dir: Path) -> None:
+    # REM-FIX cycle 3 (live-reproduced CRITICAL): the identical Bug A pattern above
+    # (latest_workflow_payload() only guarantees valid JSON was parsed -- NOT that the top level
+    # is a dict) was ALSO present in the sibling function _handle_edit_write: workflow.get(...)
+    # calls at "wf_uuid = workflow.get(...)" and "workflow.get('pending_gate')" sat OUTSIDE the
+    # try/except around the latest_workflow_payload() fetch, so a non-dict top level (e.g.
+    # [1,2,3]) raised an uncaught AttributeError, crashing _handle_edit_write -- and the whole
+    # guard process, since main() has no top-level try/except -- BEFORE the deny for the
+    # memory-write violation below it was ever emitted. Must degrade gracefully and still
+    # correctly deny a protected-memory-file write.
+    name = "pretooluse-guard/edit-write-non-dict-workflow-json-top-level-degrades-gracefully-still-denies"
+    project_root = tmp_dir / "project"
+    wf_dir = project_root / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "wf-non-dict-test.json").write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    target = project_root / ".craftflow" / "state" / "activeContext.md"
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str(target.resolve())},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(
+            name,
+            f"expected the guard process to exit 0 (graceful degrade, not a crash) when the "
+            f"workflow JSON top-level is a non-dict value; got exit={code} stdout={out!r}",
+        )
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            f"expected deny for a protected-memory-file write even when the active workflow "
+            f"JSON top-level is a non-dict value; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_allows_benign_redirect_to_dev_null(tmp_dir: Path) -> None:
     # Fresh review pass 2, BLOCKING: proves the Bash-write redirect check is
     # scoped to protected paths only -- /dev/null is not a protected path.
@@ -13797,6 +13837,7 @@ def main() -> int:
         test_pretooluse_guard_bash_null_byte_workspace_writable_paths_entry_denies_without_crash(tmp / "g62")
         test_pretooluse_guard_edit_write_null_byte_workspace_writable_paths_entry_denies_target_outside_confinement(tmp / "g63")
         test_pretooluse_guard_bash_non_dict_workflow_json_top_level_degrades_gracefully_still_denies(tmp / "g64")
+        test_pretooluse_guard_edit_write_non_dict_workflow_json_top_level_degrades_gracefully_still_denies(tmp / "g65")
 
         test_pretooluse_guard_allows_benign_redirect_to_dev_null(tmp / "g21")
         test_pretooluse_guard_allows_benign_stderr_redirect_to_dev_null(tmp / "g22")
