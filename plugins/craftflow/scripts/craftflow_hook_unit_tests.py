@@ -14013,6 +14013,15 @@ def test_workflow_artifact_template_includes_workspace_writable_paths_field() ->
     if "Conditional — only if" not in section or "WORKSPACE_WRITABLE_PATHS_JSON" not in section:
         fail(name, "workspace_writable_paths substitution-instruction paragraph (the 'Conditional -- only if ... WORKSPACE_WRITABLE_PATHS_JSON' prose telling the router how to populate the allowlist) not found in the '### Parent workflow creation' section")
         return
+    # The two anchors above both live in the paragraph's opening/premise clause ("Conditional --
+    # only if ... WORKSPACE_WRITABLE_PATHS_JSON to something other than the empty-array
+    # default"). An edit that keeps that premise sentence verbatim but guts everything AFTER it
+    # (the actual "how to substitute the value" instruction) would still satisfy both checks
+    # above. Require a substring that only exists in the instructional body that follows the
+    # premise, so a stubbed-out body cannot pass.
+    if "substitute that JSON array value in place of the" not in section:
+        fail(name, "workspace_writable_paths substitution-instruction paragraph's INSTRUCTIONAL BODY (the 'substitute that JSON array value in place of the ... default' sentence, not just its premise clause) not found in the '### Parent workflow creation' section")
+        return
     ok(name)
 
 
