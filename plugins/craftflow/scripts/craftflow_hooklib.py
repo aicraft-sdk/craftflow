@@ -68,9 +68,17 @@ def load_input() -> Dict[str, Any]:
     if not raw.strip():
         return {}
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
         return {}
+    # REM-FIX cycle 4 (silent-failure-hunter, live-reproduced CRITICAL): json.loads()
+    # only guarantees valid JSON was parsed -- NOT that the top level is a dict (the same
+    # Bug A pattern already fixed for latest_workflow_payload() in earlier cycles). Every
+    # caller of load_input() immediately does `data.get(...)`, which crashes with an
+    # uncaught AttributeError on a non-dict top level (e.g. `[1, 2, 3]`), before either
+    # guard script's main() -- which has no top-level try/except -- can emit any deny
+    # decision. Coerce to {}, matching this function's own existing missing-stdin default.
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def load_mode() -> Dict[str, str]:
@@ -85,7 +93,7 @@ def load_mode() -> Dict[str, str]:
             "taskMetadata": "audit",
         }
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         print(f"CRAFTFLOW load_mode: failed to read {path}: {exc}; defaulting to fail-closed mode", file=sys.stderr)
         # REM-FIX (HIGH): same fail-closed rationale as the missing-file
@@ -96,6 +104,14 @@ def load_mode() -> Dict[str, str]:
             "memoryWrites": "audit",
             "taskMetadata": "audit",
         }
+    # REM-FIX cycle 4 (silent-failure-hunter, live-reproduced CRITICAL): identical
+    # dict-coercion gap as load_input() above -- a hook-mode.json that is valid JSON but
+    # not a dict (e.g. `[1, 2, 3]`) crashed the first `mode.get(...)` call downstream.
+    # Every caller already passes an explicit default to `.get(key, default)` that
+    # matches this function's own fallback dicts above, so coercing to {} here (rather
+    # than duplicating the fail-closed dict) reproduces identical caller-observed
+    # behavior without disturbing the missing-file/corrupt-file branches above.
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def resolve_toggle_decision(
@@ -378,11 +394,28 @@ CONTROL_OPERATORS = {";", "&&", "||", "|", "&", "\n"}
 
 
 def resolve_confinement(
-    path, cwd: Path, worktree_path: str | None
+    path,
+    cwd: Path,
+    worktree_path: str | None,
+    extra_exact_paths: "frozenset[Path] | None" = None,
 ) -> tuple[bool, Path]:
     """Return (is_confined, resolved_path). Confined if resolved_path == cwd,
-    is a descendant of cwd, or (when worktree_path is set) is cwd/worktree_path
-    itself or a descendant of worktree_path."""
+    is a descendant of cwd, (when worktree_path is set) is cwd/worktree_path
+    itself or a descendant of worktree_path, OR (when extra_exact_paths is
+    set) resolved_path is an EXACT member of extra_exact_paths.
+
+    `extra_exact_paths` (workspace-root file allowlist, see
+    docs/plans/2026-08-12-craftflow-workspace-root-allowlist-design.md) is
+    matched by EXACT EQUALITY ONLY -- deliberately never descendant/prefix
+    matching, unlike the cwd/worktree_path branches above. This is the
+    single invariant that keeps the mechanism from ever becoming a
+    directory/subtree grant into a sibling nested repo (the design's
+    rejected "Option B"). Members must already be resolved, absolute
+    Path objects -- this function does not re-resolve or validate them
+    (mirrors how worktree_path is already caller-resolved before being
+    passed in). Omitting this parameter, or passing None/an empty
+    collection, reproduces the pre-existing 3-parameter behavior exactly
+    (regression-tested)."""
     candidate = Path(os.path.expanduser(str(path)))
     if not candidate.is_absolute():
         candidate = cwd / candidate
@@ -395,7 +428,41 @@ def resolve_confinement(
         within_wt = resolved == wt or wt in resolved.parents
         if within_wt:
             return True, resolved
+    if extra_exact_paths and resolved in extra_exact_paths:
+        return True, resolved
     return False, resolved
+
+
+def resolve_workspace_writable_paths(workflow: Dict[str, Any]) -> "frozenset[Path]":
+    """Coerce workflow.get("workspace_writable_paths") into a frozenset of
+    resolved absolute Path objects, for resolve_confinement()'s
+    extra_exact_paths parameter. Never raises -- a missing key, a
+    non-list value, or a non-string/empty-string list member all degrade
+    to omission (never a crash, never a wildcard grant) -- Behavior
+    Contract: fail toward the stricter, pre-existing deny-by-default
+    posture, never fail open.
+
+    The router (craftflow-router/SKILL.md `## 0.` step 1a, via
+    craftflow_resolve_workspace_root.py's read_workspace_writable_paths())
+    is the SOLE writer of this field and already performs the full
+    semantic validation (direct-workspace-root-child, not inside a
+    nested repo) before ever writing it. This helper is a defensive
+    second layer doing only structural coercion -- it does not re-run
+    that semantic validation, exactly the same trust relationship this
+    guard already has with worktree_path (also unvalidated at this
+    layer)."""
+    raw = workflow.get("workspace_writable_paths")
+    if not isinstance(raw, list):
+        return frozenset()
+    resolved: set = set()
+    for entry in raw:
+        if not isinstance(entry, str) or not entry:
+            continue
+        try:
+            resolved.add(Path(entry).resolve())
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return frozenset(resolved)
 
 
 def split_subcommands(command: str) -> list:

@@ -51,6 +51,7 @@ from craftflow_hooklib import (
     project_dir,
     project_state_dir,
     resolve_confinement,
+    resolve_workspace_writable_paths,
     resolve_toggle_decision,
     split_subcommands,
     state_root,
@@ -649,18 +650,22 @@ def _protected_bash_write_paths() -> set:
 
 
 def _edit_write_escapes_confinement(data: dict, path: Path) -> bool:
-    """True if the resolved Edit/Write target escapes {cwd} u {worktree_path}.
-    Absence of "cwd" in the payload, or no active workflow JSON / a null
-    worktree_path, degrades to allow (Behavior Contract rule 8) -- this only
-    returns True when cwd IS known and the target genuinely escapes both."""
+    """True if the resolved Edit/Write target escapes
+    {cwd} u {worktree_path} u {workspace_writable_paths}. Absence of "cwd"
+    in the payload, or no active workflow JSON / a null worktree_path / an
+    empty workspace_writable_paths, degrades to allow (Behavior Contract
+    rule 8) -- this only returns True when cwd IS known and the target
+    genuinely escapes all three."""
     cwd_raw = data.get("cwd")
     if not cwd_raw:
         return False
     cwd = Path(cwd_raw).resolve()
-    worktree_path = latest_workflow_payload().get("worktree_path")
+    workflow = latest_workflow_payload()
+    worktree_path = workflow.get("worktree_path")
     if worktree_path is not None and not isinstance(worktree_path, str):
         worktree_path = None
-    confined, _resolved = resolve_confinement(path, cwd, worktree_path)
+    workspace_writable_paths = resolve_workspace_writable_paths(workflow)
+    confined, _resolved = resolve_confinement(path, cwd, worktree_path, workspace_writable_paths)
     return not confined
 
 
@@ -964,8 +969,17 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     # would crash main() before the deny below is ever emitted. Degrade
     # wf_uuid to None on failure -- the deny must still fire; only the
     # logged wf_uuid metadata degrades (Behavior Contract rule 9).
+    #
+    # REM-FIX cycle 3 (live-reproduced CRITICAL): latest_workflow_payload() only guarantees
+    # valid JSON was parsed -- NOT that the top level is a dict (same Bug A pattern already
+    # fixed in _handle_bash). wf_uuid/pending_gate MUST be derived inside this SAME try/except,
+    # not after it, so a non-dict top level (e.g. `[1,2,3]`) degrades gracefully instead of
+    # raising an uncaught AttributeError out of _handle_edit_write (and the whole guard process,
+    # since main() has no top-level try/except) before the deny below is ever emitted.
     try:
         workflow = latest_workflow_payload()
+        wf_uuid = workflow.get("workflow_uuid") or workflow.get("workflow_id")
+        pending_gate = workflow.get("pending_gate")
     except Exception as exc:
         log_event(
             "plugin_pretooluse_guard",
@@ -977,7 +991,8 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
             },
         )
         workflow = {}
-    wf_uuid = workflow.get("workflow_uuid") or workflow.get("workflow_id")
+        wf_uuid = None
+        pending_gate = None
 
     # Worktree-confinement, skill-promotion-path, and skill-ledger-write are
     # all denied unconditionally -- independent violation types (Behavior
@@ -994,7 +1009,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
             "plugin_pretooluse_guard",
             {
                 "wf": wf_uuid,
-                "phase": workflow.get("pending_gate") or "unknown",
+                "phase": pending_gate or "unknown",
                 "task_id": None,
                 "agent": "router",
                 "tool_name": data.get("tool_name"),
@@ -1022,7 +1037,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
             "plugin_pretooluse_guard",
             {
                 "wf": wf_uuid,
-                "phase": workflow.get("pending_gate") or "memory-finalize",
+                "phase": pending_gate or "memory-finalize",
                 "task_id": None,
                 "agent": "router",
                 "tool_name": data.get("tool_name"),
@@ -1065,7 +1080,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
         "plugin_pretooluse_guard",
         {
             "wf": wf_uuid,
-            "phase": workflow.get("pending_gate") or "unknown",
+            "phase": pending_gate or "unknown",
             "task_id": None,
             "agent": "router",
             "tool_name": data.get("tool_name"),
@@ -1124,12 +1139,30 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         return 0
     cwd = Path(cwd_raw).resolve()
 
+    # REM-FIX (live-reproduced CRITICAL): latest_workflow_payload() only guarantees valid JSON
+    # was parsed -- NOT that the top level is a dict. Wrap the derived reads in the SAME
+    # try/except as the payload fetch itself so a non-dict top level (e.g. `[1,2,3]`) degrades
+    # gracefully to worktree_path=None / workspace_writable_paths=frozenset() instead of raising
+    # an uncaught AttributeError out of _handle_bash (and the whole guard process, since main()
+    # has no top-level try/except) before any protection check below ever runs.
     try:
-        worktree_path = latest_workflow_payload().get("worktree_path")
-    except Exception:
+        workflow = latest_workflow_payload()
+        worktree_path = workflow.get("worktree_path")
+        if worktree_path is not None and not isinstance(worktree_path, str):
+            worktree_path = None
+        workspace_writable_paths = resolve_workspace_writable_paths(workflow)
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "latest_workflow_payload",
+                "error": repr(exc),
+                "reason": "skipped_worktree_path_and_workspace_writable_paths_lookup",
+            },
+        )
         worktree_path = None
-    if worktree_path is not None and not isinstance(worktree_path, str):
-        worktree_path = None
+        workspace_writable_paths = frozenset()
 
     protected_paths = _protected_bash_write_paths()
     try:
@@ -1200,10 +1233,20 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     # idioms and must never be denied just because they resolve outside
     # {cwd} u {worktree_path} -- a redirect target that is not a protected
     # path is left alone entirely, regardless of where it resolves.
+    # NOTE: this is the ONLY resolve_confinement() call site in _handle_bash that reads the
+    # returned `confined` value (via `_confined` below, despite the underscore) -- it is
+    # therefore the only one threaded with `workspace_writable_paths`. The other 9 calls in this
+    # function discard `confined` and only use `resolved` for unrelated protected-path/skill-
+    # promotion/skill-ledger/reliability-gates membership checks -- see
+    # docs/plans/2026-08-12-craftflow-workspace-root-allowlist-plan.md's Codebase Reality Check
+    # (Call-Site Classification table) for the full per-call-site reasoning. Do NOT "fix" the
+    # other 9 into 4-arg calls without re-reading that analysis first -- it would be a no-op
+    # (extra_exact_paths only ever changes the discarded `confined` value, never `resolved`) and
+    # only adds inconsistent-looking diff noise.
     confinement_violations: list = []
     try:
         for target in extract_redirect_targets(command):
-            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            _confined, resolved = resolve_confinement(target, cwd, worktree_path, workspace_writable_paths)
             if resolved not in protected_paths:
                 continue
             if not _confined:
@@ -1516,7 +1559,13 @@ def main() -> int:
     data = load_input()
     mode = load_mode()
     tool_name = data.get("tool_name")
-    tool_input = data.get("tool_input") or {}
+    # REM-FIX cycle 4 (silent-failure-hunter, live-reproduced CRITICAL): `or {}` only
+    # substitutes on a FALSY value (None, [], "", 0) -- a truthy non-dict like `["a"]`
+    # survives untouched and crashes the first `.get()` call inside
+    # _handle_edit_write/_handle_bash. Explicit isinstance check coerces any non-dict
+    # value to {}, not just falsy ones.
+    raw_tool_input = data.get("tool_input")
+    tool_input = raw_tool_input if isinstance(raw_tool_input, dict) else {}
 
     if tool_name == "Bash":
         return _handle_bash(data, mode, tool_input)

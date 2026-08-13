@@ -1479,7 +1479,13 @@ def main() -> int:
     if data.get("tool_name") != "Bash":
         return 0
 
-    command = (data.get("tool_input") or {}).get("command")
+    # REM-FIX cycle 4 (silent-failure-hunter, live-reproduced CRITICAL): `or {}` only
+    # substitutes on a FALSY value (None, [], "", 0) -- a truthy non-dict like `["a"]`
+    # survives untouched and crashes on the `.get("command")` call below. Explicit
+    # isinstance check coerces any non-dict value to {}, not just falsy ones.
+    raw_tool_input = data.get("tool_input")
+    tool_input = raw_tool_input if isinstance(raw_tool_input, dict) else {}
+    command = tool_input.get("command")
     if not command or not isinstance(command, str):
         return 0
 
@@ -1527,7 +1533,21 @@ def main() -> int:
     # confinement check below to cwd-only (Behavior Contract rule 8).
     try:
         worktree_path = latest_workflow_payload().get("worktree_path")
-    except Exception:
+    except Exception as exc:
+        # REM-FIX cycle 4 (consistency, MEDIUM): mirrors the equivalent
+        # latest_workflow_payload() except blocks in the sibling
+        # craftflow_pretooluse_guard.py -- this block was silently swallowing the
+        # exception with no log_event() call, unlike every other parse-error
+        # fallback in this file.
+        log_event(
+            "plugin_pretooluse_bash_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "latest_workflow_payload",
+                "error": repr(exc),
+                "reason": "skipped_worktree_lookup",
+            },
+        )
         worktree_path = None
 
     # CRITICAL 3 (REM-FIX Phase 3 review+hunt): worktree_path is an untyped

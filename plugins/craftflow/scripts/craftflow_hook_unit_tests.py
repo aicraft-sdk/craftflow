@@ -2197,6 +2197,215 @@ def test_pretooluse_guard_edit_write_confinement_allows_workflow_json_when_workt
     ok(name)
 
 
+def test_pretooluse_guard_edit_write_allows_exact_allowlisted_workspace_root_file(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/edit-write-allows-exact-allowlisted-workspace-root-file"
+    project_root = tmp_dir / "project"
+    workspace_root = tmp_dir / "workspace"
+    project_root.mkdir(parents=True)
+    workspace_root.mkdir(parents=True)
+    allowlisted = (workspace_root / "CONTRACTS.md").resolve()
+    _write_workflow_json_fixture(project_root, None, workspace_writable_paths=[str(allowlisted)])
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str(allowlisted)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for the exact allowlisted workspace-root file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_denies_non_allowlisted_sibling_workspace_root_file(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/edit-write-denies-non-allowlisted-sibling-workspace-root-file"
+    project_root = tmp_dir / "project"
+    workspace_root = tmp_dir / "workspace"
+    project_root.mkdir(parents=True)
+    workspace_root.mkdir(parents=True)
+    allowlisted = (workspace_root / "CONTRACTS.md").resolve()
+    other_sibling = (workspace_root / "PLATFORM_CONTEXT.md").resolve()
+    _write_workflow_json_fixture(project_root, None, workspace_writable_paths=[str(allowlisted)])
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str(other_sibling)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a non-allowlisted sibling file (exact-match-only allowlist); got: {out!r}")
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"expected a 'worktree-confinement' deny reason; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_denies_descendant_of_allowlisted_entry_no_directory_grant(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/edit-write-denies-descendant-of-allowlisted-entry-no-directory-grant"
+    project_root = tmp_dir / "project"
+    workspace_root = tmp_dir / "workspace"
+    project_root.mkdir(parents=True)
+    allowlisted_dir = workspace_root / "CONTRACTS.md"
+    allowlisted_dir.mkdir(parents=True)
+    allowlisted_dir = allowlisted_dir.resolve()
+    descendant = allowlisted_dir / "nested.txt"
+    _write_workflow_json_fixture(project_root, None, workspace_writable_paths=[str(allowlisted_dir)])
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str(descendant)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a descendant of an allowlisted entry (no directory grant); got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_confinement_regression_unaffected_by_unrelated_workspace_writable_paths(tmp_dir: Path) -> None:
+    # Re-verifies the pre-existing denies-outside-both scenario (g16) still denies when an
+    # UNRELATED, non-matching workspace_writable_paths list is present in the fixture -- proves
+    # the new field cannot accidentally widen confinement for anything not exactly listed.
+    name = "pretooluse-guard/edit-write-confinement-regression-unaffected-by-unrelated-workspace-writable-paths"
+    project_root = tmp_dir / "project"
+    worktree = tmp_dir / "worktree-sibling"
+    outside = tmp_dir / "outside"
+    unrelated_allowlisted = tmp_dir / "workspace" / "CONTRACTS.md"
+    project_root.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    (tmp_dir / "workspace").mkdir(parents=True)
+    _write_workflow_json_fixture(
+        project_root, str(worktree.resolve()), workspace_writable_paths=[str(unrelated_allowlisted.resolve())]
+    )
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((outside / "notes.md").resolve())},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny (regression g16 scenario) unaffected by an unrelated allowlist; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_protected_path_write_still_denied_when_unrelated_workspace_writable_paths_present(tmp_dir: Path) -> None:
+    # Regression for _handle_bash's confinement_violations lane (line 1206, the one call site
+    # this plan wires): an unrelated workspace_writable_paths entry must not weaken the
+    # pre-existing protected-memory-file denial.
+    name = "pretooluse-guard/bash-protected-path-write-still-denied-when-unrelated-workspace-writable-paths-present"
+    project_root = tmp_dir / "project"
+    elsewhere = tmp_dir / "elsewhere"
+    project_root.mkdir(parents=True)
+    elsewhere.mkdir(parents=True)
+    unrelated_allowlisted = tmp_dir / "workspace" / "CONTRACTS.md"
+    (tmp_dir / "workspace").mkdir(parents=True)
+    _write_workflow_json_fixture(
+        project_root, None, workspace_writable_paths=[str(unrelated_allowlisted.resolve())]
+    )
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    target = project_root / ".craftflow" / "state" / "activeContext.md"
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(elsewhere.resolve()),
+        "tool_input": {"command": f"echo hi > {target.resolve()}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny (protected memory file) unaffected by an unrelated allowlist; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_redirect_to_non_protected_workspace_root_file_unaffected_either_way(tmp_dir: Path) -> None:
+    # Documents a REAL, verified scope boundary (not a bug): _handle_bash's redirect/python-write
+    # confinement checks are gated to PROTECTED paths only (.craftflow/state/...) both before and
+    # after this plan -- a workspace-root file like CONTRACTS.md is never a protected path, so an
+    # ordinary Bash redirect to it was already unblocked before this fix, and stays unblocked
+    # after (this test proves the wiring is a no-op for this case either way, not a regression).
+    name = "pretooluse-guard/bash-redirect-to-non-protected-workspace-root-file-unaffected-either-way"
+    project_root = tmp_dir / "project"
+    workspace_root = tmp_dir / "workspace"
+    project_root.mkdir(parents=True)
+    workspace_root.mkdir(parents=True)
+    target = (workspace_root / "CONTRACTS.md").resolve()
+    _write_workflow_json_fixture(project_root, None, workspace_writable_paths=[])
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"echo hi > {target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(name, f"expected allow -- non-protected-path Bash redirects are out of this check's scope regardless of the allowlist; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_confinement_lane_no_longer_flags_target_once_it_is_workspace_allowlisted(tmp_dir: Path) -> None:
+    # Fresh-review-mandated proof (2026-08-13 revision) that _handle_bash's ONE genuinely
+    # load-bearing internal resolve_confinement() call site -- the confinement_violations lane,
+    # originally at line 1206, the only one of _handle_bash's 10 internal call sites that reads
+    # the returned `confined` value -- is REALLY threaded with workspace_writable_paths, not
+    # just present in the diff.
+    #
+    # This requires a target that is BOTH a member of _protected_bash_write_paths() (so the
+    # confinement_violations lane's own `if resolved not in protected_paths: continue` gate
+    # doesn't skip it) AND unconfined by plain {cwd, worktree_path} (so `_confined` would be
+    # False without the allowlist). The cleanest such target is the fixture's OWN workflow-
+    # artifact JSON file: it already matches `workflows_dir().glob("*.json")` (one of
+    # `_protected_bash_write_paths()`'s two globs) with zero extra setup, and reusing it avoids
+    # creating a second *.json file in workflows_dir() that could otherwise race
+    # latest_workflow_file()'s mtime-based "latest" selection against the real fixture.
+    #
+    # Listing this file's own path inside its own `workspace_writable_paths` field is unusual
+    # but legitimate for a GUARD-side wiring test: the guard layer already discloses (Assumption
+    # Ledger) that it trusts `workspace_writable_paths` structurally without re-validating it,
+    # exactly like `worktree_path` -- the real router-side resolver would never actually produce
+    # this value (Behavior Contract rule 5c forbids an entry resolving inside a nested repo, and
+    # this file always does), but that resolver-side validation is a SEPARATE concern from
+    # whether the guard, given a trusted value, wires it through correctly.
+    #
+    # Without the line-1206 fix: this target is unconfined (cwd=elsewhere, worktree_path=None)
+    # AND is a protected path -- confinement_violations fires unconditionally, so
+    # "worktree-confinement" appears in the deny reason. With the fix: `_confined` becomes True
+    # for this target via workspace_writable_paths, so confinement_violations does NOT fire --
+    # but "bash-write-protected-path" (line 1152's SEPARATE, deliberately untouched lane, which
+    # never consumed `confined` in the first place and is gated by the independent
+    # `protectedWrites` toggle) still correctly denies it. This asymmetry -- one violation type
+    # disappearing while an unrelated one persists -- is the actual proof the line-1206 wiring is
+    # real, not a no-op deny either way.
+    name = "pretooluse-guard/bash-confinement-lane-no-longer-flags-workspace-allowlisted-protected-path-target"
+    project_root = tmp_dir / "project"
+    elsewhere = tmp_dir / "elsewhere"
+    project_root.mkdir(parents=True)
+    elsewhere.mkdir(parents=True)
+    wf_uuid = "wf-fixture-self-target"
+    target = (project_root / ".craftflow" / "state" / "workflows" / f"{wf_uuid}.json").resolve()
+    _write_workflow_json_fixture(project_root, None, wf_uuid=wf_uuid, workspace_writable_paths=[str(target)])
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(elsewhere.resolve()),
+        "tool_input": {"command": f"echo hi > {target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if "worktree-confinement" in out:
+        fail(name, f"expected the confinement_violations lane (line 1206) to be suppressed once the target is workspace-allowlisted; got: {out!r}")
+        return
+    if "bash-write-protected-path" not in out:
+        fail(name, f"expected the SEPARATE, untouched protected-write lane (line 1152, never consumed `confined`) to still deny this protected-path target; got: {out!r}")
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_bash_permit_write_allowed_when_worktree_path_stale(tmp_dir: Path) -> None:
     # Regression flow 2, exact realistic condition (fresh review pass 1
     # BLOCKING) -- independent of, and in addition to, Phase 3's identical
@@ -2216,6 +2425,154 @@ def test_pretooluse_guard_bash_permit_write_allowed_when_worktree_path_stale(tmp
     _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
     if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
         fail(name, f"regression flow 2 must stay allowed from pretooluse_guard.py's own permit-shape check even with a stale/different worktree_path set; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_null_byte_workspace_writable_paths_entry_denies_without_crash(tmp_dir: Path) -> None:
+    # Bug B (REM-FIX, live-reproduced): a workspace_writable_paths entry containing a null byte
+    # ("\x00") makes Path(entry).resolve() raise ValueError ("embedded null byte") -- not
+    # OSError/RuntimeError, so hooklib.resolve_workspace_writable_paths()'s pre-fix except tuple
+    # let it propagate uncaught out of _handle_bash (that call site sits near the top of the
+    # function, outside any try/except). The malformed entry must be dropped, not crash the whole
+    # guard process, and a write to a genuinely protected memory file must still be DENIED.
+    name = "pretooluse-guard/bash-null-byte-workspace-writable-paths-entry-denies-without-crash"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, None, workspace_writable_paths=["bad\x00entry"])
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    target = project_root / ".craftflow" / "state" / "activeContext.md"
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"echo hi > {target.resolve()}"},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(
+            name,
+            f"expected the guard process to exit 0 (graceful degrade, not a crash) even with a "
+            f"null-byte workspace_writable_paths entry; got exit={code} stdout={out!r}",
+        )
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            f"expected deny for a protected-memory-file write even when workspace_writable_paths "
+            f"contains a malformed null-byte entry; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_null_byte_workspace_writable_paths_entry_denies_target_outside_confinement(tmp_dir: Path) -> None:
+    # Bug B (REM-FIX, live-reproduced): on the Edit/Write path, _handle_edit_write's existing
+    # broad `except Exception` around _edit_write_escapes_confinement() previously swallowed the
+    # uncaught ValueError from a null-byte workspace_writable_paths entry, treating it as "check
+    # skipped" -- which meant the worktree-confinement check was SILENTLY SKIPPED and a target
+    # outside cwd/worktree/allowlist was ALLOWED regardless of whether it should have been denied.
+    # This is a full confinement bypass on a single malformed input, not just a crash.
+    name = "pretooluse-guard/edit-write-null-byte-workspace-writable-paths-entry-denies-target-outside-confinement"
+    project_root = tmp_dir / "project"
+    outside = tmp_dir / "outside"
+    project_root.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, None, workspace_writable_paths=["bad\x00entry"])
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((outside / "notes.md").resolve())},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            f"expected deny for a target outside cwd/worktree/allowlist even when "
+            f"workspace_writable_paths contains a malformed null-byte entry (not silently "
+            f"allowed via exception-swallowing); got: {out!r}",
+        )
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"expected a 'worktree-confinement' deny reason; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_non_dict_workflow_json_top_level_degrades_gracefully_still_denies(tmp_dir: Path) -> None:
+    # Bug A (REM-FIX, live-reproduced): latest_workflow_payload() only guarantees valid JSON was
+    # parsed -- NOT that the top level is a dict. If the workflow JSON file's content is e.g.
+    # [1,2,3], workflow.get(...) raises AttributeError, uncaught (outside the try/except around
+    # latest_workflow_payload() itself), crashing the whole _handle_bash function -- and the whole
+    # guard process, since main() has no top-level try/except -- BEFORE any protection check runs.
+    # Must degrade gracefully (worktree_path=None, workspace_writable_paths=frozenset()) and still
+    # correctly deny a protected-memory-file write.
+    name = "pretooluse-guard/bash-non-dict-workflow-json-top-level-degrades-gracefully-still-denies"
+    project_root = tmp_dir / "project"
+    wf_dir = project_root / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "wf-non-dict-test.json").write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    target = project_root / ".craftflow" / "state" / "activeContext.md"
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"echo hi > {target.resolve()}"},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(
+            name,
+            f"expected the guard process to exit 0 (graceful degrade, not a crash) when the "
+            f"workflow JSON top-level is a non-dict value; got exit={code} stdout={out!r}",
+        )
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            f"expected deny for a protected-memory-file write even when the active workflow "
+            f"JSON top-level is a non-dict value; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_non_dict_workflow_json_top_level_degrades_gracefully_still_denies(tmp_dir: Path) -> None:
+    # REM-FIX cycle 3 (live-reproduced CRITICAL): the identical Bug A pattern above
+    # (latest_workflow_payload() only guarantees valid JSON was parsed -- NOT that the top level
+    # is a dict) was ALSO present in the sibling function _handle_edit_write: workflow.get(...)
+    # calls at "wf_uuid = workflow.get(...)" and "workflow.get('pending_gate')" sat OUTSIDE the
+    # try/except around the latest_workflow_payload() fetch, so a non-dict top level (e.g.
+    # [1,2,3]) raised an uncaught AttributeError, crashing _handle_edit_write -- and the whole
+    # guard process, since main() has no top-level try/except -- BEFORE the deny for the
+    # memory-write violation below it was ever emitted. Must degrade gracefully and still
+    # correctly deny a protected-memory-file write.
+    name = "pretooluse-guard/edit-write-non-dict-workflow-json-top-level-degrades-gracefully-still-denies"
+    project_root = tmp_dir / "project"
+    wf_dir = project_root / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "wf-non-dict-test.json").write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    target = project_root / ".craftflow" / "state" / "activeContext.md"
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str(target.resolve())},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(
+            name,
+            f"expected the guard process to exit 0 (graceful degrade, not a crash) when the "
+            f"workflow JSON top-level is a non-dict value; got exit={code} stdout={out!r}",
+        )
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            f"expected deny for a protected-memory-file write even when the active workflow "
+            f"JSON top-level is a non-dict value; got: {out!r}",
+        )
         return
     ok(name)
 
@@ -4412,7 +4769,10 @@ def test_bash_guard_dd_falls_back_to_cwd_target_on_parse_exception(tmp_dir: Path
 # pass 1, BLOCKING correction; see the plan's Fresh Review Resolution).
 
 def _write_workflow_json_fixture(
-    project_root: Path, worktree_path: str | None, wf_uuid: str = "wf-phase3-test"
+    project_root: Path,
+    worktree_path: str | None,
+    wf_uuid: str = "wf-phase3-test",
+    workspace_writable_paths: list | None = None,
 ) -> None:
     """Write a minimal workflow JSON artifact under project_root's own
     .craftflow/state/workflows/ -- hooklib.latest_workflow_payload() reads
@@ -4420,10 +4780,10 @@ def _write_workflow_json_fixture(
     the fixture must live at the project_root the test's env points at."""
     wf_dir = project_root / ".craftflow" / "state" / "workflows"
     wf_dir.mkdir(parents=True, exist_ok=True)
-    (wf_dir / f"{wf_uuid}.json").write_text(
-        json.dumps({"workflow_uuid": wf_uuid, "worktree_path": worktree_path}),
-        encoding="utf-8",
-    )
+    payload = {"workflow_uuid": wf_uuid, "worktree_path": worktree_path}
+    if workspace_writable_paths is not None:
+        payload["workspace_writable_paths"] = workspace_writable_paths
+    (wf_dir / f"{wf_uuid}.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_bash_guard_blocks_dynamic_target_with_traversal_substitution(tmp_dir: Path) -> None:
@@ -5835,6 +6195,176 @@ def test_hooklib_resolve_confinement_denies_outside_both(tmp_dir: Path) -> None:
         fail(name, f"expected confined=False for a path outside both cwd and worktree_path; got confined={confined}")
         return
     ok(name)
+
+
+def test_hooklib_resolve_confinement_allows_exact_match_in_extra_exact_paths(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-confinement-allows-exact-match-in-extra-exact-paths"
+    cwd = (tmp_dir / "project")
+    workspace_root = (tmp_dir / "workspace")
+    cwd.mkdir(parents=True)
+    workspace_root.mkdir(parents=True)
+    cwd = cwd.resolve()
+    allowlisted = (workspace_root / "CONTRACTS.md").resolve()
+    confined, _resolved = hooklib.resolve_confinement(
+        allowlisted, cwd, None, frozenset({allowlisted})
+    )
+    if not confined:
+        fail(name, f"expected confined=True for an exact extra_exact_paths match; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_denies_descendant_of_extra_exact_path_not_exact_file(tmp_dir: Path) -> None:
+    # Critical invariant: extra_exact_paths is EXACT-MATCH ONLY, never a directory grant. If the
+    # allowlisted entry happens to also be a real directory on disk, a file one level below it
+    # must still be denied -- this is what structurally keeps the mechanism from degrading into
+    # Option B (multi-root confinement spanning full edits across a nested repo).
+    name = "hooklib/resolve-confinement-denies-descendant-of-extra-exact-path-not-exact-file"
+    cwd = (tmp_dir / "project")
+    workspace_root = (tmp_dir / "workspace")
+    cwd.mkdir(parents=True)
+    workspace_root.mkdir(parents=True)
+    cwd = cwd.resolve()
+    allowlisted_dir = (workspace_root / "CONTRACTS.md")
+    allowlisted_dir.mkdir(parents=True)
+    allowlisted_dir = allowlisted_dir.resolve()
+    descendant = allowlisted_dir / "nested.txt"
+    confined, _resolved = hooklib.resolve_confinement(
+        descendant, cwd, None, frozenset({allowlisted_dir})
+    )
+    if confined:
+        fail(name, f"expected confined=False for a descendant of an extra_exact_paths entry (no directory grant); got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_denies_non_matching_sibling_when_extra_exact_paths_set(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-confinement-denies-non-matching-sibling-when-extra-exact-paths-set"
+    cwd = (tmp_dir / "project")
+    workspace_root = (tmp_dir / "workspace")
+    cwd.mkdir(parents=True)
+    workspace_root.mkdir(parents=True)
+    cwd = cwd.resolve()
+    allowlisted = (workspace_root / "CONTRACTS.md").resolve()
+    other_sibling = (workspace_root / "PLATFORM_CONTEXT.md").resolve()
+    confined, _resolved = hooklib.resolve_confinement(
+        other_sibling, cwd, None, frozenset({allowlisted})
+    )
+    if confined:
+        fail(name, f"expected confined=False for a non-allowlisted sibling file; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_extra_exact_paths_does_not_rescue_unlisted_target_outside_cwd_and_worktree(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-confinement-extra-exact-paths-does-not-rescue-unlisted-target"
+    cwd = (tmp_dir / "project")
+    worktree = (tmp_dir / "worktree-sibling")
+    outside = (tmp_dir / "outside")
+    cwd.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    cwd = cwd.resolve()
+    worktree = worktree.resolve()
+    target = (outside / "file.txt").resolve()
+    unrelated_allowlisted = (tmp_dir / "workspace" / "CONTRACTS.md")
+    confined, _resolved = hooklib.resolve_confinement(
+        target, cwd, str(worktree), frozenset({unrelated_allowlisted.resolve() if unrelated_allowlisted.parent.exists() else unrelated_allowlisted})
+    )
+    if confined:
+        fail(name, f"expected confined=False when target is outside cwd/worktree and not itself in extra_exact_paths; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_byte_identical_when_extra_exact_paths_omitted_or_empty(tmp_dir: Path) -> None:
+    # Regression proof (patterns.md mandate): the 4 pre-existing scenarios must produce
+    # byte-identical (confined, resolved) tuples whether extra_exact_paths is omitted entirely
+    # (3-arg call), explicitly None, or an empty frozenset.
+    name = "hooklib/resolve-confinement-byte-identical-when-extra-exact-paths-omitted-or-empty"
+    cwd = (tmp_dir / "project")
+    worktree = (tmp_dir / "worktree-sibling")
+    outside = (tmp_dir / "outside")
+    cwd.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    cwd = cwd.resolve()
+    worktree = worktree.resolve()
+    scenarios = [
+        (cwd / "file.txt", cwd, None),
+        ((outside / "file.txt"), cwd, None),
+        ((worktree / "file.txt"), cwd, str(worktree)),
+        ((outside / "file.txt"), cwd, str(worktree)),
+    ]
+    for target, scenario_cwd, scenario_worktree in scenarios:
+        baseline = hooklib.resolve_confinement(target, scenario_cwd, scenario_worktree)
+        with_none = hooklib.resolve_confinement(target, scenario_cwd, scenario_worktree, None)
+        with_empty = hooklib.resolve_confinement(target, scenario_cwd, scenario_worktree, frozenset())
+        if baseline != with_none or baseline != with_empty:
+            fail(
+                name,
+                f"mismatch for target={target}: 3-arg={baseline} None={with_none} empty={with_empty}",
+            )
+            return
+    ok(name)
+
+
+def test_hooklib_resolve_workspace_writable_paths_empty_when_key_missing() -> None:
+    name = "hooklib/resolve-workspace-writable-paths-empty-when-key-missing"
+    result = hooklib.resolve_workspace_writable_paths({})
+    if result == frozenset():
+        ok(name)
+    else:
+        fail(name, f"expected empty frozenset, got {result}")
+
+
+def test_hooklib_resolve_workspace_writable_paths_coerces_valid_string_list() -> None:
+    name = "hooklib/resolve-workspace-writable-paths-coerces-valid-string-list"
+    result = hooklib.resolve_workspace_writable_paths(
+        {"workspace_writable_paths": ["/tmp/CONTRACTS.md"]}
+    )
+    expected = frozenset({Path("/tmp/CONTRACTS.md").resolve()})
+    if result == expected:
+        ok(name)
+    else:
+        fail(name, f"expected {expected}, got {result}")
+
+
+def test_hooklib_resolve_workspace_writable_paths_skips_non_string_entries() -> None:
+    name = "hooklib/resolve-workspace-writable-paths-skips-non-string-entries"
+    result = hooklib.resolve_workspace_writable_paths(
+        {"workspace_writable_paths": ["/tmp/CONTRACTS.md", 42, None, ""]}
+    )
+    expected = frozenset({Path("/tmp/CONTRACTS.md").resolve()})
+    if result == expected:
+        ok(name)
+    else:
+        fail(name, f"expected {expected}, got {result}")
+
+
+def test_hooklib_resolve_workspace_writable_paths_empty_when_not_a_list() -> None:
+    name = "hooklib/resolve-workspace-writable-paths-empty-when-not-a-list"
+    result = hooklib.resolve_workspace_writable_paths({"workspace_writable_paths": "not-a-list"})
+    if result == frozenset():
+        ok(name)
+    else:
+        fail(name, f"expected empty frozenset, got {result}")
+
+
+def test_hooklib_resolve_workspace_writable_paths_skips_null_byte_entry_without_raising() -> None:
+    # Bug B (REM-FIX, live-reproduced): Path(entry).resolve() raises ValueError ("embedded null
+    # byte") for a string containing "\x00" -- not OSError/RuntimeError, so the pre-fix except
+    # tuple let it propagate uncaught. Must degrade to dropping the malformed entry (never raise),
+    # while still keeping a valid sibling entry.
+    name = "hooklib/resolve-workspace-writable-paths-skips-null-byte-entry-without-raising"
+    result = hooklib.resolve_workspace_writable_paths(
+        {"workspace_writable_paths": ["/tmp/CONTRACTS.md", "bad\x00entry"]}
+    )
+    expected = frozenset({Path("/tmp/CONTRACTS.md").resolve()})
+    if result == expected:
+        ok(name)
+    else:
+        fail(name, f"expected {expected} (null-byte entry dropped, valid sibling kept), got {result}")
 
 
 def test_hooklib_command_has_traversal_true_for_dotdot_substitution() -> None:
@@ -13237,6 +13767,310 @@ def test_memory_merge_cli_nan_confidence_fails_cleanly() -> None:
 
 
 # ---------------------------------------------------------------------------
+# REM-FIX cycle 4 (silent-failure-hunter, live-reproduced 8x CRITICAL): the
+# same root-cause class already fixed twice for the `workflow` variable
+# (latest_workflow_payload() only guarantees valid JSON, not that the top
+# level is a dict) was ALSO present in three other places, all reachable
+# BEFORE either guard script's own deny logic ever runs, with no top-level
+# try/except in either main() to catch the fallout:
+#   1. load_input()'s success path returned whatever json.loads(raw)
+#      produced -- a non-dict stdin top level (e.g. `[1, 2, 3]`) crashed the
+#      very first `data.get(...)` call in main().
+#   2. load_mode()'s success path had the identical gap -- a non-dict
+#      hook-mode.json crashed the first `mode.get(...)` call downstream.
+#   3. Both scripts' `tool_input = data.get("tool_input") or {}` (or the
+#      inline equivalent) only substitutes on a FALSY value -- a truthy
+#      non-dict like `["a"]` survived untouched and crashed on the next
+#      `.get()` call.
+# All three degrade gracefully now (load_input()/load_mode() coerce a
+# non-dict parse result to {}; tool_input extraction uses an explicit
+# isinstance check instead of `or {}`), matching this codebase's existing
+# convention for missing/malformed top-level input.
+# ---------------------------------------------------------------------------
+
+def test_pretooluse_guard_non_dict_stdin_top_level_does_not_crash_degrades_to_allow(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/non-dict-stdin-top-level-does-not-crash-degrades-to-allow"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    code, out = run_hook("craftflow_pretooluse_guard.py", [1, 2, 3], env)
+    if code != 0:
+        fail(
+            name,
+            f"expected exit 0 (graceful degrade, not a crash) for a non-dict stdin top level; "
+            f"got exit={code} stdout={out!r}",
+        )
+        return
+    if out:
+        fail(
+            name,
+            f"expected allow (empty stdout) for a non-dict stdin top level, matching the "
+            f"missing-stdin default; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_non_dict_hook_mode_json_does_not_crash_degrades_to_fail_closed_deny(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/non-dict-hook-mode-json-does-not-crash-degrades-to-fail-closed-deny"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text("[1, 2, 3]", encoding="utf-8")
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo x | tee .craftflow/state/project/patterns.md"},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(
+            name,
+            f"expected exit 0 (graceful degrade, not a crash) for a non-dict hook-mode.json top "
+            f"level; got exit={code} stdout={out!r}",
+        )
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected fail-closed deny for a protected-memory-file write when hook-mode.json's "
+            f"top level is non-dict; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_truthy_non_dict_tool_input_degrades_to_empty_dict_no_crash(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/truthy-non-dict-tool-input-degrades-to-empty-dict-no-crash"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Write", "tool_input": ["a"]}
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(
+            name,
+            f"expected exit 0 (graceful degrade, not a crash) for a truthy non-dict tool_input; "
+            f"got exit={code} stdout={out!r}",
+        )
+        return
+    if out:
+        fail(
+            name,
+            f"expected allow (empty stdout) when tool_input is a truthy non-dict value with no "
+            f"file_path; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_non_dict_stdin_top_level_does_not_crash_degrades_to_allow(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/non-dict-stdin-top-level-does-not-crash-degrades-to-allow"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    code, out = run_hook("craftflow_pretooluse_bash_guard.py", [1, 2, 3], env)
+    if code != 0:
+        fail(
+            name,
+            f"expected exit 0 (graceful degrade, not a crash) for a non-dict stdin top level; "
+            f"got exit={code} stdout={out!r}",
+        )
+        return
+    if out:
+        fail(
+            name,
+            f"expected allow (empty stdout) for a non-dict stdin top level, matching the "
+            f"missing-stdin default; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_non_dict_hook_mode_json_does_not_crash_still_denies_destructive_command(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/non-dict-hook-mode-json-does-not-crash-still-denies-destructive-command"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text("[1, 2, 3]", encoding="utf-8")
+    project = tmp_dir / "project"
+    worktree = project / ".claude" / "worktrees" / "wf-test"
+    worktree.mkdir(parents=True)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(worktree.resolve()),
+        "tool_input": {"command": "rm -f ../../.."},
+    }
+    code, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if code != 0:
+        fail(
+            name,
+            f"expected exit 0 (graceful degrade, not a crash) for a non-dict hook-mode.json top "
+            f"level; got exit={code} stdout={out!r}",
+        )
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            "expected deny for a traversal escaping the worktree cwd even when hook-mode.json's "
+            f"top level is non-dict; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_bash_guard_truthy_non_dict_tool_input_degrades_to_empty_dict_no_crash(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/truthy-non-dict-tool-input-degrades-to-empty-dict-no-crash"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "tool_input": ["a"]}
+    code, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if code != 0:
+        fail(
+            name,
+            f"expected exit 0 (graceful degrade, not a crash) for a truthy non-dict tool_input; "
+            f"got exit={code} stdout={out!r}",
+        )
+        return
+    if out:
+        fail(
+            name,
+            f"expected allow (empty stdout) when tool_input is a truthy non-dict value with no "
+            f"command; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_workspace_root_config_read_gated_inside_step_1a() -> None:
+    name = "router/workspace-root-config-read-gated-inside-step-1a"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not skill_path.exists():
+        fail(name, f"SKILL.md not found at {skill_path}")
+        return
+    content = skill_path.read_text(encoding="utf-8")
+    section_start = content.find("**1a. Multi-repo workspace root resolution**")
+    if section_start == -1:
+        fail(name, "step 1a section not found")
+        return
+    next_heading = content.find("\n## ", section_start + 1)
+    section = content[section_start: next_heading if next_heading != -1 else None]
+    if "workspace_writable_paths" not in section:
+        fail(name, "workspace_writable_paths read/parse not found inside step 1a's own section")
+        return
+    # Confirm it is NOT also present in the single-repo (TOPLEVEL_EXIT == 0) branch text, which
+    # sits just above step 1a in the same '## 0.' section.
+    zero_section_start = content.find("## 0. Resolve Project Root")
+    single_repo_branch = content[zero_section_start:section_start]
+    if "workspace_writable_paths" in single_repo_branch:
+        fail(name, "workspace_writable_paths read must not appear in the single-repo (TOPLEVEL_EXIT == 0) branch")
+        return
+    # Fresh-review advisory fix (2026-08-13): confirm the capture block is specifically absent
+    # from the "If RESOLVE_EXIT != 0" bullet's own text (the branch where $RESOLVE_RESULT is
+    # empty/unparseable) -- not just generically "present somewhere in step 1a," which the checks
+    # above already allowed even when the capture block was wrongly placed BEFORE this bullet in
+    # the original draft. Slices from that bullet's own start to the "Otherwise" bullet's start.
+    resolve_exit_bullet_start = section.find("**If `RESOLVE_EXIT != 0`**")
+    otherwise_bullet_start = section.find("**Otherwise**, parse the outcome")
+    if resolve_exit_bullet_start == -1 or otherwise_bullet_start == -1:
+        fail(name, "could not locate the 'If RESOLVE_EXIT != 0' / 'Otherwise' bullets inside step 1a")
+        return
+    resolve_exit_failure_branch = section[resolve_exit_bullet_start:otherwise_bullet_start]
+    if "workspace_writable_paths" in resolve_exit_failure_branch:
+        fail(name, "workspace_writable_paths capture must not be reachable on the RESOLVE_EXIT != 0 (unparseable $RESOLVE_RESULT) path")
+        return
+    ok(name)
+
+
+_EXPECTED_WORKSPACE_WRITABLE_PATHS_SUBSTITUTION_PARAGRAPH = (
+    # Derived programmatically (not hand-typed) from the real, live SKILL.md content at the
+    # time this exact-match check was written: isolate the paragraph with the same start-marker
+    # regex + next-boundary logic below, collapse all whitespace runs to single spaces, then
+    # hardcode the verified result. Regenerate the same way if the real paragraph is
+    # intentionally edited.
+    "**Conditional — only if `## 0.` step 1a set `WORKSPACE_WRITABLE_PATHS_JSON` to something other than the empty-array default** (i.e. `TOPLEVEL_EXIT != 0` in `## 0.` AND that variable is set and `!= '[]'`): substitute that JSON array value in place of the `workspace_writable_paths:[]` default in the artifact `Write` above, instead of leaving it as `[]`. If `## 0.` never ran step 1a (the common single-repo path), or step 1a ran but the array is empty, leave the default `[]` in place — no substitution needed."
+)
+
+
+def test_workflow_artifact_template_includes_workspace_writable_paths_field() -> None:
+    name = "router/workflow-artifact-template-includes-workspace-writable-paths-field"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    parent_wf_start = content.find("### Parent workflow creation")
+    if parent_wf_start == -1:
+        fail(name, "'### Parent workflow creation' section not found")
+        return
+    next_heading = content.find("\n### ", parent_wf_start + 1)
+    section = content[parent_wf_start: next_heading if next_heading != -1 else None]
+    if '\\"workspace_writable_paths\\"' not in section and '"workspace_writable_paths"' not in section:
+        fail(name, "workspace_writable_paths field not found in the artifact-write JSON literal")
+        return
+    # The key existing is not enough -- the JSON template's default value must be exactly an
+    # empty array, not merely present. Guards against the key surviving with a corrupted or
+    # non-empty hardcoded default.
+    if '\\"workspace_writable_paths\\":[]' not in section:
+        fail(name, "workspace_writable_paths default value is not exactly the empty array '[]' in the artifact-write JSON literal")
+        return
+    # --- Exact-match check on the substitution-instruction paragraph -----------------------
+    # A future bad edit could silently strip the router's ONLY prose instructions for actually
+    # populating the allowlist (the "Conditional -- only if `## 0.` step 1a set
+    # `WORKSPACE_WRITABLE_PATHS_JSON`..." substitution paragraph) while leaving the
+    # workspace_writable_paths:[] key above untouched -- the two checks above alone would not
+    # catch that.
+    #
+    # History: two remediation rounds each added ONE MORE independent substring anchor, and each
+    # was defeated by an adversarial edit preserving the newest anchor while corrupting whatever
+    # came after it. A third round replaced the anchors with a length-floor + multi-anchor
+    # structural check; that round was defeated by a "pad-and-anchor" attack -- fabricated filler
+    # text containing all the required anchor substrings, padded past the length floor, but
+    # semantically wrong. Chained substring/length heuristics cannot close that hole: any set of
+    # independently-checked fragments can be satisfied by content that says something different
+    # from what those fragments imply.
+    #
+    # Closing fix: exact string equality against a verified golden value. This is not a
+    # heuristic -- no amount of padding, anchor-preserving filler, or clause reordering can
+    # satisfy exact equality; only the literal correct paragraph can. Whitespace (line-wrap /
+    # reflow) is normalized away first since it carries no semantic content, so a harmless
+    # reflow of the same words still passes.
+    paragraph_marker_words = "**Conditional — only if `## 0.` step 1a set `WORKSPACE_WRITABLE_PATHS_JSON`".split(" ")
+    paragraph_marker_re = re.compile(r"\s+".join(re.escape(w) for w in paragraph_marker_words))
+    marker_match = paragraph_marker_re.search(section)
+    if marker_match is None:
+        fail(
+            name,
+            "workspace_writable_paths substitution-instruction paragraph not found (start marker "
+            "missing) in the '### Parent workflow creation' section",
+        )
+        return
+    paragraph_start = marker_match.start()
+    # End at the next paragraph boundary (blank line) or heading, whichever comes first.
+    boundary_candidates = [
+        idx
+        for idx in (
+            section.find("\n\n", paragraph_start),
+            section.find("\n## ", paragraph_start),
+            section.find("\n### ", paragraph_start),
+        )
+        if idx != -1
+    ]
+    paragraph_end = min(boundary_candidates) if boundary_candidates else len(section)
+    paragraph = section[paragraph_start:paragraph_end]
+
+    normalized = re.sub(r"\s+", " ", paragraph)
+    if normalized != _EXPECTED_WORKSPACE_WRITABLE_PATHS_SUBSTITUTION_PARAGRAPH:
+        fail(
+            name,
+            "workspace_writable_paths substitution-instruction paragraph does not exactly match "
+            f"the expected golden text -- got: {normalized!r}",
+        )
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -13293,7 +14127,22 @@ def main() -> int:
         test_pretooluse_guard_edit_write_worktree_confinement_allows_inside_worktree(tmp / "g17")
         test_pretooluse_guard_worktree_confinement_degrades_when_no_workflow_json(tmp / "g18")
         test_pretooluse_guard_edit_write_confinement_allows_workflow_json_when_worktree_path_stale(tmp / "g19")
+        test_pretooluse_guard_edit_write_allows_exact_allowlisted_workspace_root_file(tmp / "g19b")
+        test_pretooluse_guard_edit_write_denies_non_allowlisted_sibling_workspace_root_file(tmp / "g19c")
+        test_pretooluse_guard_edit_write_denies_descendant_of_allowlisted_entry_no_directory_grant(tmp / "g19d")
+        test_pretooluse_guard_edit_write_confinement_regression_unaffected_by_unrelated_workspace_writable_paths(tmp / "g19e")
+        test_pretooluse_guard_bash_protected_path_write_still_denied_when_unrelated_workspace_writable_paths_present(tmp / "g19f")
+        test_pretooluse_guard_bash_redirect_to_non_protected_workspace_root_file_unaffected_either_way(tmp / "g19g")
+        test_pretooluse_guard_bash_confinement_lane_no_longer_flags_target_once_it_is_workspace_allowlisted(tmp / "g19h")
         test_pretooluse_guard_bash_permit_write_allowed_when_worktree_path_stale(tmp / "g20")
+
+        print()
+        print("[ pretooluse-guard: REM-FIX (null-byte workspace_writable_paths entry + non-dict workflow JSON top-level) ]")
+        test_pretooluse_guard_bash_null_byte_workspace_writable_paths_entry_denies_without_crash(tmp / "g62")
+        test_pretooluse_guard_edit_write_null_byte_workspace_writable_paths_entry_denies_target_outside_confinement(tmp / "g63")
+        test_pretooluse_guard_bash_non_dict_workflow_json_top_level_degrades_gracefully_still_denies(tmp / "g64")
+        test_pretooluse_guard_edit_write_non_dict_workflow_json_top_level_degrades_gracefully_still_denies(tmp / "g65")
+
         test_pretooluse_guard_allows_benign_redirect_to_dev_null(tmp / "g21")
         test_pretooluse_guard_allows_benign_stderr_redirect_to_dev_null(tmp / "g22")
         test_pretooluse_guard_bash_worktree_confinement_only_message_omits_skill_text(tmp / "g22b")
@@ -13584,6 +14433,16 @@ def main() -> int:
         test_hooklib_resolve_confinement_denies_outside_cwd_no_worktree(tmp / "h2")
         test_hooklib_resolve_confinement_allows_within_worktree_outside_cwd(tmp / "h3")
         test_hooklib_resolve_confinement_denies_outside_both(tmp / "h4")
+        test_hooklib_resolve_confinement_allows_exact_match_in_extra_exact_paths(tmp / "h5")
+        test_hooklib_resolve_confinement_denies_descendant_of_extra_exact_path_not_exact_file(tmp / "h6")
+        test_hooklib_resolve_confinement_denies_non_matching_sibling_when_extra_exact_paths_set(tmp / "h7")
+        test_hooklib_resolve_confinement_extra_exact_paths_does_not_rescue_unlisted_target_outside_cwd_and_worktree(tmp / "h8")
+        test_hooklib_resolve_confinement_byte_identical_when_extra_exact_paths_omitted_or_empty(tmp / "h9")
+        test_hooklib_resolve_workspace_writable_paths_empty_when_key_missing()
+        test_hooklib_resolve_workspace_writable_paths_coerces_valid_string_list()
+        test_hooklib_resolve_workspace_writable_paths_skips_non_string_entries()
+        test_hooklib_resolve_workspace_writable_paths_empty_when_not_a_list()
+        test_hooklib_resolve_workspace_writable_paths_skips_null_byte_entry_without_raising()
         test_hooklib_command_has_traversal_true_for_dotdot_substitution()
         test_hooklib_command_has_traversal_false_for_lock_dir_var()
         test_hooklib_command_has_traversal_true_for_bare_wildcard()
@@ -13978,6 +14837,20 @@ def main() -> int:
     test_memory_merge_cli_non_integer_max_bullets_fails_cleanly()
     test_memory_merge_cli_empty_section_with_file_text_fails_cleanly()
     test_memory_merge_cli_nan_confidence_fails_cleanly()
+
+    print()
+    print("[ pretooluse-guard / pretooluse-bash-guard: REM-FIX cycle 4 (non-dict JSON top-level crash class) ]")
+    test_pretooluse_guard_non_dict_stdin_top_level_does_not_crash_degrades_to_allow(tmp / "j1")
+    test_pretooluse_guard_non_dict_hook_mode_json_does_not_crash_degrades_to_fail_closed_deny(tmp / "j2")
+    test_pretooluse_guard_truthy_non_dict_tool_input_degrades_to_empty_dict_no_crash(tmp / "j3")
+    test_bash_guard_non_dict_stdin_top_level_does_not_crash_degrades_to_allow(tmp / "j4")
+    test_bash_guard_non_dict_hook_mode_json_does_not_crash_still_denies_destructive_command(tmp / "j5")
+    test_bash_guard_truthy_non_dict_tool_input_degrades_to_empty_dict_no_crash(tmp / "j6")
+
+    print()
+    print("[ router: workspace-root allowlist wiring (Phase 4) ]")
+    test_workspace_root_config_read_gated_inside_step_1a()
+    test_workflow_artifact_template_includes_workspace_writable_paths_field()
 
     print()
     if _errors:
