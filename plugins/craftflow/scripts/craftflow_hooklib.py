@@ -444,7 +444,7 @@ def resolve_workspace_writable_paths(workflow: Dict[str, Any]) -> "frozenset[Pat
             continue
         try:
             resolved.add(Path(entry).resolve())
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError, ValueError):
             continue
     return frozenset(resolved)
 

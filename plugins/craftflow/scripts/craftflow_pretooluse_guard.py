@@ -1129,14 +1129,21 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         return 0
     cwd = Path(cwd_raw).resolve()
 
+    # REM-FIX (live-reproduced CRITICAL): latest_workflow_payload() only guarantees valid JSON
+    # was parsed -- NOT that the top level is a dict. Wrap the derived reads in the SAME
+    # try/except as the payload fetch itself so a non-dict top level (e.g. `[1,2,3]`) degrades
+    # gracefully to worktree_path=None / workspace_writable_paths=frozenset() instead of raising
+    # an uncaught AttributeError out of _handle_bash (and the whole guard process, since main()
+    # has no top-level try/except) before any protection check below ever runs.
     try:
         workflow = latest_workflow_payload()
+        worktree_path = workflow.get("worktree_path")
+        if worktree_path is not None and not isinstance(worktree_path, str):
+            worktree_path = None
+        workspace_writable_paths = resolve_workspace_writable_paths(workflow)
     except Exception:
-        workflow = {}
-    worktree_path = workflow.get("worktree_path")
-    if worktree_path is not None and not isinstance(worktree_path, str):
         worktree_path = None
-    workspace_writable_paths = resolve_workspace_writable_paths(workflow)
+        workspace_writable_paths = frozenset()
 
     protected_paths = _protected_bash_write_paths()
     try:

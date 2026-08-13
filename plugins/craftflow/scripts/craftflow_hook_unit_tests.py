@@ -2429,6 +2429,114 @@ def test_pretooluse_guard_bash_permit_write_allowed_when_worktree_path_stale(tmp
     ok(name)
 
 
+def test_pretooluse_guard_bash_null_byte_workspace_writable_paths_entry_denies_without_crash(tmp_dir: Path) -> None:
+    # Bug B (REM-FIX, live-reproduced): a workspace_writable_paths entry containing a null byte
+    # ("\x00") makes Path(entry).resolve() raise ValueError ("embedded null byte") -- not
+    # OSError/RuntimeError, so hooklib.resolve_workspace_writable_paths()'s pre-fix except tuple
+    # let it propagate uncaught out of _handle_bash (that call site sits near the top of the
+    # function, outside any try/except). The malformed entry must be dropped, not crash the whole
+    # guard process, and a write to a genuinely protected memory file must still be DENIED.
+    name = "pretooluse-guard/bash-null-byte-workspace-writable-paths-entry-denies-without-crash"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, None, workspace_writable_paths=["bad\x00entry"])
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    target = project_root / ".craftflow" / "state" / "activeContext.md"
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"echo hi > {target.resolve()}"},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(
+            name,
+            f"expected the guard process to exit 0 (graceful degrade, not a crash) even with a "
+            f"null-byte workspace_writable_paths entry; got exit={code} stdout={out!r}",
+        )
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            f"expected deny for a protected-memory-file write even when workspace_writable_paths "
+            f"contains a malformed null-byte entry; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_null_byte_workspace_writable_paths_entry_denies_target_outside_confinement(tmp_dir: Path) -> None:
+    # Bug B (REM-FIX, live-reproduced): on the Edit/Write path, _handle_edit_write's existing
+    # broad `except Exception` around _edit_write_escapes_confinement() previously swallowed the
+    # uncaught ValueError from a null-byte workspace_writable_paths entry, treating it as "check
+    # skipped" -- which meant the worktree-confinement check was SILENTLY SKIPPED and a target
+    # outside cwd/worktree/allowlist was ALLOWED regardless of whether it should have been denied.
+    # This is a full confinement bypass on a single malformed input, not just a crash.
+    name = "pretooluse-guard/edit-write-null-byte-workspace-writable-paths-entry-denies-target-outside-confinement"
+    project_root = tmp_dir / "project"
+    outside = tmp_dir / "outside"
+    project_root.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, None, workspace_writable_paths=["bad\x00entry"])
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((outside / "notes.md").resolve())},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            f"expected deny for a target outside cwd/worktree/allowlist even when "
+            f"workspace_writable_paths contains a malformed null-byte entry (not silently "
+            f"allowed via exception-swallowing); got: {out!r}",
+        )
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"expected a 'worktree-confinement' deny reason; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_non_dict_workflow_json_top_level_degrades_gracefully_still_denies(tmp_dir: Path) -> None:
+    # Bug A (REM-FIX, live-reproduced): latest_workflow_payload() only guarantees valid JSON was
+    # parsed -- NOT that the top level is a dict. If the workflow JSON file's content is e.g.
+    # [1,2,3], workflow.get(...) raises AttributeError, uncaught (outside the try/except around
+    # latest_workflow_payload() itself), crashing the whole _handle_bash function -- and the whole
+    # guard process, since main() has no top-level try/except -- BEFORE any protection check runs.
+    # Must degrade gracefully (worktree_path=None, workspace_writable_paths=frozenset()) and still
+    # correctly deny a protected-memory-file write.
+    name = "pretooluse-guard/bash-non-dict-workflow-json-top-level-degrades-gracefully-still-denies"
+    project_root = tmp_dir / "project"
+    wf_dir = project_root / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "wf-non-dict-test.json").write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    target = project_root / ".craftflow" / "state" / "activeContext.md"
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"echo hi > {target.resolve()}"},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(
+            name,
+            f"expected the guard process to exit 0 (graceful degrade, not a crash) when the "
+            f"workflow JSON top-level is a non-dict value; got exit={code} stdout={out!r}",
+        )
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            f"expected deny for a protected-memory-file write even when the active workflow "
+            f"JSON top-level is a non-dict value; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_allows_benign_redirect_to_dev_null(tmp_dir: Path) -> None:
     # Fresh review pass 2, BLOCKING: proves the Bash-write redirect check is
     # scoped to protected paths only -- /dev/null is not a protected path.
@@ -6201,6 +6309,22 @@ def test_hooklib_resolve_workspace_writable_paths_empty_when_not_a_list() -> Non
         ok(name)
     else:
         fail(name, f"expected empty frozenset, got {result}")
+
+
+def test_hooklib_resolve_workspace_writable_paths_skips_null_byte_entry_without_raising() -> None:
+    # Bug B (REM-FIX, live-reproduced): Path(entry).resolve() raises ValueError ("embedded null
+    # byte") for a string containing "\x00" -- not OSError/RuntimeError, so the pre-fix except
+    # tuple let it propagate uncaught. Must degrade to dropping the malformed entry (never raise),
+    # while still keeping a valid sibling entry.
+    name = "hooklib/resolve-workspace-writable-paths-skips-null-byte-entry-without-raising"
+    result = hooklib.resolve_workspace_writable_paths(
+        {"workspace_writable_paths": ["/tmp/CONTRACTS.md", "bad\x00entry"]}
+    )
+    expected = frozenset({Path("/tmp/CONTRACTS.md").resolve()})
+    if result == expected:
+        ok(name)
+    else:
+        fail(name, f"expected {expected} (null-byte entry dropped, valid sibling kept), got {result}")
 
 
 def test_hooklib_command_has_traversal_true_for_dotdot_substitution() -> None:
@@ -13667,6 +13791,13 @@ def main() -> int:
         test_pretooluse_guard_bash_redirect_to_non_protected_workspace_root_file_unaffected_either_way(tmp / "g19g")
         test_pretooluse_guard_bash_confinement_lane_no_longer_flags_target_once_it_is_workspace_allowlisted(tmp / "g19h")
         test_pretooluse_guard_bash_permit_write_allowed_when_worktree_path_stale(tmp / "g20")
+
+        print()
+        print("[ pretooluse-guard: REM-FIX (null-byte workspace_writable_paths entry + non-dict workflow JSON top-level) ]")
+        test_pretooluse_guard_bash_null_byte_workspace_writable_paths_entry_denies_without_crash(tmp / "g62")
+        test_pretooluse_guard_edit_write_null_byte_workspace_writable_paths_entry_denies_target_outside_confinement(tmp / "g63")
+        test_pretooluse_guard_bash_non_dict_workflow_json_top_level_degrades_gracefully_still_denies(tmp / "g64")
+
         test_pretooluse_guard_allows_benign_redirect_to_dev_null(tmp / "g21")
         test_pretooluse_guard_allows_benign_stderr_redirect_to_dev_null(tmp / "g22")
         test_pretooluse_guard_bash_worktree_confinement_only_message_omits_skill_text(tmp / "g22b")
@@ -13966,6 +14097,7 @@ def main() -> int:
         test_hooklib_resolve_workspace_writable_paths_coerces_valid_string_list()
         test_hooklib_resolve_workspace_writable_paths_skips_non_string_entries()
         test_hooklib_resolve_workspace_writable_paths_empty_when_not_a_list()
+        test_hooklib_resolve_workspace_writable_paths_skips_null_byte_entry_without_raising()
         test_hooklib_command_has_traversal_true_for_dotdot_substitution()
         test_hooklib_command_has_traversal_false_for_lock_dir_var()
         test_hooklib_command_has_traversal_true_for_bare_wildcard()
