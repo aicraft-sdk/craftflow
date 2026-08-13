@@ -155,6 +155,37 @@ own treatment above: it is a single script-owned JSON file, not a markdown
 memory file eligible for the `.memory-finalize` permit, so only
 `craftflow_reliability_gates.py` is an authorized writer.
 
+## Workspace-Root File Allowlist (`.craftflow-workspace.json`)
+
+When a session is launched at a multi-repo workspace root (a directory that is not itself a
+git repo but contains several independently git-initialized nested repos), `## 0.` step 1a of
+`craftflow-router/SKILL.md` narrows `PROJECT_ROOT` down to exactly one owning nested repo. From
+that point on, the confinement union the guards enforce — `{cwd} ∪ {worktree_path}` — only ever
+covers that one nested repo, so workspace-root-level sibling files that live outside any nested
+repo (e.g. `CONTRACTS.md` sitting alongside the project folders) become permanently unwritable
+via Edit/Write/Bash-redirect for the rest of the session.
+
+`.craftflow-workspace.json`, placed at the workspace root itself (a sibling of the nested repos,
+not inside any of them), is a human-authored escape hatch for that gap: a `writable_paths` array
+naming exact, direct workspace-root-child filenames to treat as writable in addition to
+`{cwd} ∪ {worktree_path}`. It is read once per workflow, in `## 0.` step 1a
+(`craftflow_resolve_workspace_root.py`'s `read_workspace_writable_paths()`), and the validated,
+resolved list is persisted into the workflow artifact as `workspace_writable_paths` so the guard
+hooks can read it the same way they already read `worktree_path`.
+
+```json
+{ "writable_paths": ["CONTRACTS.md", "PLATFORM_CONTEXT.md"] }
+```
+
+Matching is **exact-equality only** — never prefix, descendant, or directory matching — enforced
+via `resolve_confinement()`'s new `extra_exact_paths` parameter in `craftflow_hooklib.py`. An
+entry is dropped (never silently honored) if it isn't a direct child of the workspace root (no
+path separators, no `..`, no absolute paths) or if it resolves inside a nested repo. This keeps
+the mechanism structurally incapable of becoming a directory/subtree grant into a sibling repo's
+contents — only the pre-existing single confined repo/worktree ever gains full-tree write access.
+Missing or malformed config, or an unvalidated entry, degrades to `[]` (no grant), never a crash
+and never a wildcard. See `docs/2026-08-13-craftflow-workspace-root-allowlist-decision.md`.
+
 ## Optional Git Pre-Commit Hook
 
 This is separate from Claude Code plugin hooks. Install it only if you want
