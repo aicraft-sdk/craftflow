@@ -14004,23 +14004,92 @@ def test_workflow_artifact_template_includes_workspace_writable_paths_field() ->
     if '\\"workspace_writable_paths\\":[]' not in section:
         fail(name, "workspace_writable_paths default value is not exactly the empty array '[]' in the artifact-write JSON literal")
         return
+    # --- Structural check on the substitution-instruction paragraph -----------------------
     # A future bad edit could silently strip the router's ONLY prose instructions for actually
     # populating the allowlist (the "Conditional -- only if `## 0.` step 1a set
     # `WORKSPACE_WRITABLE_PATHS_JSON`..." substitution paragraph) while leaving the
     # workspace_writable_paths:[] key above untouched -- the two checks above alone would not
-    # catch that. Assert the substitution-instruction paragraph itself is present, anchored on a
-    # substring unique to it, combined with the variable name it substitutes.
-    if "Conditional — only if" not in section or "WORKSPACE_WRITABLE_PATHS_JSON" not in section:
-        fail(name, "workspace_writable_paths substitution-instruction paragraph (the 'Conditional -- only if ... WORKSPACE_WRITABLE_PATHS_JSON' prose telling the router how to populate the allowlist) not found in the '### Parent workflow creation' section")
+    # catch that.
+    #
+    # Two prior remediation rounds each added ONE MORE independent substring anchor to try to
+    # catch this, and each was defeated by an adversarial edit that preserved the newest anchor
+    # while corrupting whatever text came after it -- the vulnerable seam simply moved one
+    # clause later each round. Chained independent substring checks cannot close that hole:
+    # any prefix of the paragraph can be kept verbatim while the remainder is replaced.
+    #
+    # Structural replacement: isolate the ENTIRE paragraph as one contiguous slice (mirroring
+    # the section-isolation pattern in test_workspace_root_config_read_gated_inside_step_1a --
+    # content.find(start marker) / content.find(next boundary)), require the slice to retain
+    # most of its real length (a stub cannot gut the middle without shrinking the whole slice),
+    # AND require multiple anchors drawn from genuinely distinct clauses within that slice. A
+    # stub cannot satisfy the length floor, the distinct-clause anchors, AND stay short enough
+    # to read as "mostly placeholder" all at once.
+    # Whitespace-tolerant: built as a regex with `\s+` between words (rather than a plain
+    # substring) so a harmless reflow that happens to insert/move a line break INSIDE this
+    # marker phrase still locates the paragraph correctly.
+    paragraph_marker_words = "**Conditional — only if `## 0.` step 1a set `WORKSPACE_WRITABLE_PATHS_JSON`".split(" ")
+    paragraph_marker_re = re.compile(r"\s+".join(re.escape(w) for w in paragraph_marker_words))
+    marker_match = paragraph_marker_re.search(section)
+    if marker_match is None:
+        fail(
+            name,
+            "workspace_writable_paths substitution-instruction paragraph not found (start marker "
+            "missing) in the '### Parent workflow creation' section",
+        )
         return
-    # The two anchors above both live in the paragraph's opening/premise clause ("Conditional --
-    # only if ... WORKSPACE_WRITABLE_PATHS_JSON to something other than the empty-array
-    # default"). An edit that keeps that premise sentence verbatim but guts everything AFTER it
-    # (the actual "how to substitute the value" instruction) would still satisfy both checks
-    # above. Require a substring that only exists in the instructional body that follows the
-    # premise, so a stubbed-out body cannot pass.
-    if "substitute that JSON array value in place of the" not in section:
-        fail(name, "workspace_writable_paths substitution-instruction paragraph's INSTRUCTIONAL BODY (the 'substitute that JSON array value in place of the ... default' sentence, not just its premise clause) not found in the '### Parent workflow creation' section")
+    paragraph_start = marker_match.start()
+    # End at the next paragraph boundary (blank line) or heading, whichever comes first.
+    boundary_candidates = [
+        idx
+        for idx in (
+            section.find("\n\n", paragraph_start),
+            section.find("\n## ", paragraph_start),
+            section.find("\n### ", paragraph_start),
+        )
+        if idx != -1
+    ]
+    paragraph_end = min(boundary_candidates) if boundary_candidates else len(section)
+    paragraph = section[paragraph_start:paragraph_end]
+
+    # The real, unmodified paragraph measures ~510 chars. The floor below is ~63% of that --
+    # enough headroom that harmless reflow/rewrapping (which only redistributes whitespace, not
+    # content -- see the normalized-anchor matching below) cannot trip it, but low enough that a
+    # stub replacing the bulk of the paragraph with a short placeholder fails it (measured: a
+    # premise-only stub is ~140 chars; a stub truncated right after the connector phrase
+    # "substitute that JSON array value in place of the" is ~253 chars).
+    MIN_PARAGRAPH_LEN = 320
+    if len(paragraph) < MIN_PARAGRAPH_LEN:
+        fail(
+            name,
+            f"workspace_writable_paths substitution-instruction paragraph is only {len(paragraph)} "
+            f"chars long (expected at least {MIN_PARAGRAPH_LEN}; the real paragraph is ~510) -- "
+            "looks stubbed, truncated, or gutted",
+        )
+        return
+
+    # Anchors are checked on whitespace-normalized text (all runs of whitespace collapsed to a
+    # single space) so line-wrap/reflow differences never affect matching -- only genuine content
+    # changes do. Each anchor is drawn from a clearly distinct clause of the paragraph so an edit
+    # cannot satisfy all of them by preserving only one contiguous prefix.
+    normalized = re.sub(r"\s+", " ", paragraph)
+    clause_anchors = {
+        "premise clause ('Conditional -- only if ... WORKSPACE_WRITABLE_PATHS_JSON')": (
+            "Conditional — only if" in normalized and "WORKSPACE_WRITABLE_PATHS_JSON" in normalized
+        ),
+        "substitution-target clause (workspace_writable_paths:[] substituted into the artifact Write)": (
+            "workspace_writable_paths:[]` default in the artifact `Write`" in normalized
+        ),
+        "fallback/no-op clause (leave the default [] in place when there is nothing to substitute)": (
+            "no substitution needed" in normalized
+        ),
+    }
+    missing_clauses = [clause for clause, present in clause_anchors.items() if not present]
+    if missing_clauses:
+        fail(
+            name,
+            "workspace_writable_paths substitution-instruction paragraph is missing distinct-clause "
+            f"anchor(s): {missing_clauses} -- paragraph text: {normalized!r}",
+        )
         return
     ok(name)
 
