@@ -21,7 +21,6 @@ import re
 from pathlib import Path
 
 from craftflow_hooklib import (
-    MEMORY_FINALIZE_PERMIT_LITERAL,
     command_has_traversal_or_wildcard,
     extract_redirect_targets,
     is_env_assignment,
@@ -1657,7 +1656,7 @@ def main() -> int:
                     continue
                 if (
                     resolved == memory_finalize_permit_path().resolve()
-                    and matches_memory_finalize_permit_shape(tokens, MEMORY_FINALIZE_PERMIT_LITERAL)
+                    and matches_memory_finalize_permit_shape(tokens)
                 ):
                     continue
                 protected_redirect_escapes.append(str(resolved))

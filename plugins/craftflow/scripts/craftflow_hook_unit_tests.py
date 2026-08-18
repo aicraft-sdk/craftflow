@@ -2214,6 +2214,37 @@ def test_pretooluse_guard_edit_write_denies_other_project_claude_code_memory_dir
     ok(name)
 
 
+def test_pretooluse_guard_edit_write_allows_claude_code_own_session_scoped_memory_dir(tmp_dir: Path) -> None:
+    # Regression (session-scoped shape): after a context-compaction resume,
+    # Claude Code's own auto-memory root for a session can be computed as
+    # SESSION-scoped instead of project-scoped --
+    # ~/.claude/projects/<slug-of-cwd>/<session-uuid>/memory/<file>.md --
+    # this is still Claude Code's own infrastructure for this exact trusted
+    # cwd, just with one extra session-uuid segment before memory/. It must
+    # be permitted the same way the pre-existing project-scoped
+    # <slug>/memory/** grant already is.
+    name = "pretooluse-guard/edit-write-allows-claude-code-own-session-scoped-memory-dir"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    cwd = project_root.resolve()
+    slug = _claude_code_memory_slug(cwd)
+    session_uuid = "17021386-8f91-4f13-8fa2-3fa3355ef61c"
+    target = (
+        Path.home() / ".claude" / "projects" / slug / session_uuid / "memory" / "project_portal_ci_slow_build_and_test.md"
+    )
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(cwd),
+        "tool_input": {"file_path": str(target)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for a Write to Claude Code's own session-scoped auto-memory dir for this cwd; got: {out!r}")
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_bash_worktree_confinement_only_message_omits_skill_text(tmp_dir: Path) -> None:
     # misleading-deny-message fix (fix-verify cycle 1, live-reproduced): the
     # catch-all deny block in `_handle_bash` fired the SAME hardcoded skill-
@@ -3453,15 +3484,17 @@ def test_pretooluse_guard_allows_benign_stderr_redirect_to_dev_null(tmp_dir: Pat
 # bugs across craftflow_pretooluse_guard.py and craftflow_pretooluse_bash_guard.py.
 # ---------------------------------------------------------------------------
 
-def test_pretooluse_guard_denies_bash_permit_write_noncanonical_absolute_spelling(tmp_dir: Path) -> None:
-    # CRITICAL 1: matches_memory_finalize_permit_shape() was called with the
-    # EXTRACTED redirect target as `permit_path_str`, instead of the literal
-    # documented constant -- making the 4th AND-condition (target ==
-    # permit_path_str) tautologically true for ANY spelling that resolves to
-    # the file. An absolute-path spelling (not the documented literal
-    # ".craftflow/state/.memory-finalize") must be DENIED, not permit-shape-
-    # matched.
-    name = "pretooluse-guard/denies-bash-permit-write-noncanonical-absolute-spelling"
+def test_pretooluse_guard_allows_bash_permit_write_absolute_spelling(tmp_dir: Path) -> None:
+    # Root-cause regression (chicken-and-egg deadlock fix, 2026-08-18 DEBUG
+    # workflow): matches_memory_finalize_permit_shape() previously required
+    # the raw target token to literally string-equal a single hardcoded
+    # bare-relative constant (".craftflow/state/.memory-finalize"), denying
+    # every OTHER spelling that resolves to the exact same file -- including
+    # an absolute-path spelling. The caller's OWN independent
+    # `resolved == memory_finalize_permit_path().resolve()` check (immune to
+    # spelling variance) is the real, non-spoofable security anchor; an
+    # absolute-path spelling that resolves correctly must now be ALLOWED.
+    name = "pretooluse-guard/allows-bash-permit-write-absolute-spelling"
     project_root = tmp_dir / "project"
     (project_root / ".craftflow" / "state").mkdir(parents=True)
     env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
@@ -3472,8 +3505,70 @@ def test_pretooluse_guard_denies_bash_permit_write_noncanonical_absolute_spellin
         "tool_input": {"command": f"printf '%s' 'wf-test-1234' > {abs_target}"},
     }
     _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for a correctly-resolving absolute-path spelling of the permit target; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_bash_permit_write_dot_slash_spelling(tmp_dir: Path) -> None:
+    # Variant coverage: a "./"-prefixed relative spelling is a DIFFERENT
+    # string from both the bare-relative literal and the absolute spelling
+    # above, but resolves to the exact same file -- must also be permitted.
+    name = "pretooluse-guard/allows-bash-permit-write-dot-slash-spelling"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "printf '%s' 'wf-test-1234' > ./.craftflow/state/.memory-finalize"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for a correctly-resolving './'-prefixed spelling of the permit target; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_permit_shape_targeting_different_file(tmp_dir: Path) -> None:
+    # Negative control: the exact 5-token printf/%s/value/>/target shape,
+    # but targeting a DIFFERENT file (not the real permit path). Must still
+    # be denied by the caller's `resolved == permit_path` check -- proves
+    # dropping the target-spelling literal from matches_memory_finalize_
+    # permit_shape() did not turn it into a blanket allow for ANY target.
+    name = "pretooluse-guard/denies-bash-permit-shape-targeting-different-file"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "printf '%s' 'wf-test-1234' > .craftflow/state/activeContext.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
     if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
-        fail(name, f"expected deny for a non-canonical absolute-path spelling of .memory-finalize (permit-shape must not tautologically match any spelling); got: {out!r}")
+        fail(name, f"expected deny for the permit-write SHAPE targeting a different protected file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_permit_write_tee_shape(tmp_dir: Path) -> None:
+    # Negative control: a different-shaped command (tee instead of a
+    # printf/redirect) targeting the real permit path must still be denied
+    # -- this stays a narrow allowlist, not a broadened one.
+    name = "pretooluse-guard/denies-bash-permit-write-tee-shape"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "printf '%s' 'wf-test-1234' | tee .craftflow/state/.memory-finalize"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a tee-shaped write to the permit path; got: {out!r}")
         return
     ok(name)
 
@@ -5826,14 +5921,17 @@ def test_bash_guard_worktree_confinement_allows_memory_finalize_permit_write_whe
     ok(name)
 
 
-def test_bash_guard_denies_permit_write_noncanonical_absolute_spelling(tmp_dir: Path) -> None:
-    # CRITICAL 1 (fix in BOTH files): matches_memory_finalize_permit_shape()
-    # was called with the EXTRACTED redirect target as `permit_path_str`,
-    # instead of the literal documented constant -- making the 4th
-    # AND-condition (target == permit_path_str) tautologically true for ANY
-    # spelling that resolves to the file. An absolute-path spelling must be
-    # DENIED here too, not permit-shape-matched.
-    name = "pretooluse-bash-guard/denies-permit-write-noncanonical-absolute-spelling"
+def test_bash_guard_allows_permit_write_absolute_spelling(tmp_dir: Path) -> None:
+    # Root-cause regression (fix in BOTH files, 2026-08-18 DEBUG workflow):
+    # matches_memory_finalize_permit_shape() previously required the raw
+    # target token to literally string-equal a single hardcoded
+    # bare-relative constant, denying every OTHER spelling that resolves to
+    # the exact same file. The caller's OWN independent
+    # `resolved == memory_finalize_permit_path().resolve()` check (immune
+    # to spelling variance) is the real, non-spoofable security anchor; an
+    # absolute-path spelling that resolves correctly must now be ALLOWED
+    # here too.
+    name = "pretooluse-bash-guard/allows-permit-write-absolute-spelling"
     project_root = tmp_dir / "project"
     project_root.mkdir(parents=True)
     (project_root / ".craftflow" / "state").mkdir(parents=True)
@@ -5845,8 +5943,119 @@ def test_bash_guard_denies_permit_write_noncanonical_absolute_spelling(tmp_dir: 
         "tool_input": {"command": f"printf '%s' 'wf-test-1234' > {abs_target}"},
     }
     _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for a correctly-resolving absolute-path spelling of the permit target; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_allows_permit_write_dot_slash_spelling(tmp_dir: Path) -> None:
+    # Variant coverage: a "./"-prefixed relative spelling is a DIFFERENT
+    # string from both the bare-relative literal and the absolute spelling
+    # above, but resolves to the exact same file -- must also be permitted.
+    name = "pretooluse-bash-guard/allows-permit-write-dot-slash-spelling"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "printf '%s' 'wf-test-1234' > ./.craftflow/state/.memory-finalize"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for a correctly-resolving './'-prefixed spelling of the permit target; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_denies_permit_shape_targeting_different_file(tmp_dir: Path) -> None:
+    # Negative control: the exact 5-token printf/%s/value/>/target shape,
+    # but targeting a DIFFERENT file (not the real permit path). Must still
+    # be denied by the caller's `resolved == permit_path` check -- proves
+    # dropping the target-spelling literal from matches_memory_finalize_
+    # permit_shape() did not turn it into a blanket allow for ANY target.
+    name = "pretooluse-bash-guard/denies-permit-shape-targeting-different-file"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "printf '%s' 'wf-test-1234' > .craftflow/state/activeContext.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
     if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
-        fail(name, f"expected deny for a non-canonical absolute-path spelling of .memory-finalize (permit-shape must not tautologically match any spelling); got: {out!r}")
+        fail(name, f"expected deny for the permit-write SHAPE targeting a different protected file; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_permit_write_python_open_shape(tmp_dir: Path) -> None:
+    # Negative control: a differently-shaped command (a python `open(...).
+    # write(...)` one-liner, no printf/redirect at all) targeting the real
+    # permit path must still be denied -- this stays a narrow allowlist,
+    # not a broadened one. Python-script write detection is
+    # craftflow_pretooluse_guard.py's own separate mechanism (Bash-write-
+    # inspection layer), independent of matches_memory_finalize_permit_
+    # shape() and unaffected by this fix.
+    name = "pretooluse-guard/denies-permit-write-python-open-shape"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": "python3 -c \"open('.craftflow/state/.memory-finalize', 'w').write('wf-test-1234')\""
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a python open().write() write to the permit path; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_permit_write_end_to_end_skill_md_literal_project_root_prefixed_spelling(
+    tmp_dir: Path,
+) -> None:
+    # Confirmatory, NOT a claim that this fix changed this specific
+    # behavior: the router's SKILL.md literally documents
+    # `Bash("printf '%s' '{workflow_uuid}' > \"$PROJECT_ROOT/.craftflow/
+    # state/.memory-finalize\"")`. PreToolUse hooks receive this command as
+    # a RAW, unexecuted string -- "$PROJECT_ROOT" is never shell-expanded
+    # before this guard parses it, because no real shell ever runs it here
+    # (that only happens later, in the actual persistent Bash-tool shell).
+    # resolve_confinement() has no `$VAR`-expansion step, so this exact
+    # literal token does NOT resolve to the real permit path at this
+    # guard's parsing layer, at all -- it is therefore never even
+    # recognized as a protected-path write here, and is allowed through by
+    # a DIFFERENT, unrelated code path (never reaching, and unaffected by,
+    # matches_memory_finalize_permit_shape() or this fix). This is a
+    # SEPARATE, independent gap in resolve_confinement()'s lack of
+    # `$PROJECT_ROOT` expansion -- out of scope for this fix (see
+    # MEMORY_NOTES.deferred / final report) -- captured here only to prove
+    # the router's exact documented invocation text is not rejected
+    # end-to-end, without overclaiming this fix is what makes it so.
+    name = "pretooluse-bash-guard/permit-write-end-to-end-skill-md-literal-project-root-prefixed-spelling"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": 'printf \'%s\' \'wf-test-1234\' > "$PROJECT_ROOT/.craftflow/state/.memory-finalize"'
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow (via the separate confinement-detection gap, not this fix) for the SKILL.md-literal $PROJECT_ROOT-prefixed command; got: {out!r}")
         return
     ok(name)
 
@@ -7218,6 +7427,133 @@ def test_hooklib_resolve_confinement_denies_different_cwd_slug_memory_dir(tmp_di
     ok(name)
 
 
+def test_hooklib_resolve_confinement_allows_claude_code_own_session_scoped_memory_dir(tmp_dir: Path) -> None:
+    # Root-cause regression (white-box, session-scoped shape): exactly one
+    # extra directory segment (a session uuid) between the trusted cwd's
+    # slug root and memory/ must still be confined=True -- the shape
+    # observed live for a resumed-after-compaction session
+    # (~/.claude/projects/<slug>/<session-uuid>/memory/<file>.md).
+    name = "hooklib/resolve-confinement-allows-claude-code-own-session-scoped-memory-dir"
+    cwd = (tmp_dir / "cwd")
+    cwd.mkdir(parents=True)
+    cwd = cwd.resolve()
+    slug = "".join("-" if c in "/." else c for c in str(cwd))
+    session_uuid = "17021386-8f91-4f13-8fa2-3fa3355ef61c"
+    target = Path.home() / ".claude" / "projects" / slug / session_uuid / "memory" / "note.md"
+    confined, _resolved = hooklib.resolve_confinement(target, cwd, None)
+    if not confined:
+        fail(name, f"expected confined=True for Claude Code's own session-scoped auto-memory dir under this cwd's slug; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_allows_claude_code_own_session_scoped_memory_md_exact(tmp_dir: Path) -> None:
+    # Variant: the session-scoped top-level MEMORY.md file (not under
+    # memory/) must also be allowed, mirroring the project-scoped exact-file
+    # form.
+    name = "hooklib/resolve-confinement-allows-claude-code-own-session-scoped-memory-md-exact"
+    cwd = (tmp_dir / "cwd")
+    cwd.mkdir(parents=True)
+    cwd = cwd.resolve()
+    slug = "".join("-" if c in "/." else c for c in str(cwd))
+    session_uuid = "17021386-8f91-4f13-8fa2-3fa3355ef61c"
+    target = Path.home() / ".claude" / "projects" / slug / session_uuid / "MEMORY.md"
+    confined, _resolved = hooklib.resolve_confinement(target, cwd, None)
+    if not confined:
+        fail(name, f"expected confined=True for Claude Code's own session-scoped MEMORY.md under this cwd's slug; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_still_allows_claude_code_own_project_scoped_memory_dir(tmp_dir: Path) -> None:
+    # Non-regression: widening the allowance to accept the session-scoped
+    # shape must NOT weaken the pre-existing project-scoped
+    # <slug>/memory/** grant added by commit 2c5cbd9.
+    name = "hooklib/resolve-confinement-still-allows-claude-code-own-project-scoped-memory-dir"
+    cwd = (tmp_dir / "cwd")
+    cwd.mkdir(parents=True)
+    cwd = cwd.resolve()
+    slug = "".join("-" if c in "/." else c for c in str(cwd))
+    target = Path.home() / ".claude" / "projects" / slug / "memory" / "note.md"
+    confined, _resolved = hooklib.resolve_confinement(target, cwd, None)
+    if not confined:
+        fail(name, f"expected confined=True (no regression) for the project-scoped auto-memory dir; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_denies_different_cwd_slug_session_scoped_memory_dir(tmp_dir: Path) -> None:
+    # Anti-blanket-grant (session-scoped shape): a session-scoped Claude
+    # Code auto-memory dir keyed to a DIFFERENT cwd's slug must stay
+    # confined=False -- widening the pattern must stay fully contained
+    # within the already-non-spoofable <slug> root, never become a blanket
+    # ~/.claude/projects/** grant.
+    name = "hooklib/resolve-confinement-denies-different-cwd-slug-session-scoped-memory-dir"
+    cwd = (tmp_dir / "cwd")
+    other_cwd = (tmp_dir / "other-cwd")
+    cwd.mkdir(parents=True)
+    other_cwd.mkdir(parents=True)
+    cwd = cwd.resolve()
+    other_slug = "".join("-" if c in "/." else c for c in str(other_cwd.resolve()))
+    session_uuid = "17021386-8f91-4f13-8fa2-3fa3355ef61c"
+    target = Path.home() / ".claude" / "projects" / other_slug / session_uuid / "memory" / "note.md"
+    confined, _resolved = hooklib.resolve_confinement(target, cwd, None)
+    if confined:
+        fail(name, f"expected confined=False for a DIFFERENT cwd's session-scoped Claude Code memory dir; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_denies_session_scoped_dir_not_named_memory(tmp_dir: Path) -> None:
+    # Negative control: an arbitrary two-segment-deep path under the
+    # trusted slug root whose LAST directory is not named "memory" (e.g. a
+    # sibling dir under the session-uuid segment) must still be denied --
+    # the session-scoped allowance is not a blanket grant for the whole
+    # <slug>/<session-uuid>/** subtree, only its memory/ and MEMORY.md leaf.
+    name = "hooklib/resolve-confinement-denies-session-scoped-dir-not-named-memory"
+    cwd = (tmp_dir / "cwd")
+    cwd.mkdir(parents=True)
+    cwd = cwd.resolve()
+    slug = "".join("-" if c in "/." else c for c in str(cwd))
+    session_uuid = "17021386-8f91-4f13-8fa2-3fa3355ef61c"
+    target = Path.home() / ".claude" / "projects" / slug / session_uuid / "not-memory" / "x.md"
+    confined, _resolved = hooklib.resolve_confinement(target, cwd, None)
+    if confined:
+        fail(name, f"expected confined=False for a session-scoped subdir NOT named 'memory'; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_denies_session_scoped_traversal_escape(tmp_dir: Path) -> None:
+    # Traversal/bypass attempt: using ".." segments inside the session-uuid
+    # position to try to escape the trusted slug root entirely must still be
+    # denied -- resolve_confinement() uses .resolve() + real Path ancestry,
+    # never str.startswith(), so a normalized escape must not be confused
+    # for a legitimate session-uuid segment.
+    name = "hooklib/resolve-confinement-denies-session-scoped-traversal-escape"
+    cwd = (tmp_dir / "cwd")
+    cwd.mkdir(parents=True)
+    cwd = cwd.resolve()
+    slug = "".join("-" if c in "/." else c for c in str(cwd))
+    target = (
+        Path.home()
+        / ".claude"
+        / "projects"
+        / slug
+        / ".."
+        / ".."
+        / ".."
+        / "etc"
+        / "memory"
+        / "escaped.md"
+    )
+    confined, _resolved = hooklib.resolve_confinement(target, cwd, None)
+    if confined:
+        fail(name, f"expected confined=False for a '..'-traversal escape attempt via the session-uuid position; got confined={confined}")
+        return
+    ok(name)
+
+
 def test_hooklib_resolve_workspace_writable_paths_empty_when_key_missing() -> None:
     name = "hooklib/resolve-workspace-writable-paths-empty-when-key-missing"
     result = hooklib.resolve_workspace_writable_paths({})
@@ -7336,11 +7672,29 @@ def test_hooklib_matches_permit_shape_true_for_exact_documented_command() -> Non
     tokens = hooklib.split_subcommands(
         "printf '%s' 'wf-1234' > .craftflow/state/.memory-finalize"
     )[0]
-    if not hooklib.matches_memory_finalize_permit_shape(
-        tokens, ".craftflow/state/.memory-finalize"
-    ):
+    if not hooklib.matches_memory_finalize_permit_shape(tokens):
         fail(name, "expected True for the exact documented permit-write shape")
         return
+    ok(name)
+
+
+def test_hooklib_matches_permit_shape_true_regardless_of_target_spelling() -> None:
+    # Root-cause regression: matches_memory_finalize_permit_shape() no
+    # longer takes or checks a path-spelling literal -- path spelling is
+    # entirely the CALLER's concern (via resolve_confinement() equality).
+    # An absolute-path spelling and a "$PROJECT_ROOT/"-prefixed spelling
+    # (the router's own SKILL.md-documented form) must both match the
+    # SHAPE exactly the same as the bare-relative spelling above.
+    name = "hooklib/matches-permit-shape-true-regardless-of-target-spelling"
+    for target in (
+        "/abs/path/.craftflow/state/.memory-finalize",
+        "$PROJECT_ROOT/.craftflow/state/.memory-finalize",
+        "./.craftflow/state/.memory-finalize",
+    ):
+        tokens = hooklib.split_subcommands(f"printf '%s' 'wf-1234' > {target}")[0]
+        if not hooklib.matches_memory_finalize_permit_shape(tokens):
+            fail(name, f"expected True for target spelling {target!r} (shape-only match)")
+            return
     ok(name)
 
 
@@ -7349,9 +7703,7 @@ def test_hooklib_matches_permit_shape_false_for_different_printf_args() -> None:
     tokens = hooklib.split_subcommands(
         "printf '%s\\ninjected' 'wf-1234' > .craftflow/state/.memory-finalize"
     )[0]
-    if hooklib.matches_memory_finalize_permit_shape(
-        tokens, ".craftflow/state/.memory-finalize"
-    ):
+    if hooklib.matches_memory_finalize_permit_shape(tokens):
         fail(name, "expected False for a printf with a different format string")
         return
     ok(name)
@@ -7362,9 +7714,7 @@ def test_hooklib_matches_permit_shape_false_for_heredoc() -> None:
     tokens = hooklib.split_subcommands(
         "cat << EOF > .craftflow/state/.memory-finalize"
     )[0]
-    if hooklib.matches_memory_finalize_permit_shape(
-        tokens, ".craftflow/state/.memory-finalize"
-    ):
+    if hooklib.matches_memory_finalize_permit_shape(tokens):
         fail(name, "expected False for a heredoc-shaped subcommand")
         return
     ok(name)
@@ -7379,10 +7729,36 @@ def test_hooklib_matches_permit_shape_false_for_substitution_in_value() -> None:
     tokens = hooklib.split_subcommands(
         "printf '%s' \"$(touch /tmp/x)\" > .craftflow/state/.memory-finalize"
     )[0]
-    if hooklib.matches_memory_finalize_permit_shape(
-        tokens, ".craftflow/state/.memory-finalize"
-    ):
+    if hooklib.matches_memory_finalize_permit_shape(tokens):
         fail(name, "expected False for a value token containing command substitution")
+        return
+    ok(name)
+
+
+def test_hooklib_matches_permit_shape_false_for_substitution_in_value_project_root_prefixed(
+) -> None:
+    # Same as above, but with a "$PROJECT_ROOT/"-prefixed target -- proves
+    # looks_dynamic(_value) rejection is independent of, and unaffected by,
+    # dropping the target-spelling literal check.
+    name = "hooklib/matches-permit-shape-false-for-substitution-in-value-project-root-prefixed"
+    tokens = hooklib.split_subcommands(
+        "printf '%s' \"$(touch /tmp/x)\" > \"$PROJECT_ROOT/.craftflow/state/.memory-finalize\""
+    )[0]
+    if hooklib.matches_memory_finalize_permit_shape(tokens):
+        fail(name, "expected False for a value token containing command substitution")
+        return
+    ok(name)
+
+
+def test_hooklib_matches_permit_shape_false_for_six_token_shape() -> None:
+    # A DIFFERENT (6-token) shape targeting the same file must still be
+    # denied -- this stays a narrow allowlist, not a broadened one.
+    name = "hooklib/matches-permit-shape-false-for-six-token-shape"
+    tokens = hooklib.split_subcommands(
+        "printf '%s' 'wf-1234' extra > .craftflow/state/.memory-finalize"
+    )[0]
+    if hooklib.matches_memory_finalize_permit_shape(tokens):
+        fail(name, "expected False for a 6-token shape")
         return
     ok(name)
 
@@ -15764,6 +16140,7 @@ def main() -> int:
         test_pretooluse_guard_edit_write_allows_claude_code_own_memory_dir(tmp / "g18b")
         test_pretooluse_guard_edit_write_allows_claude_code_own_memory_md_exact_file(tmp / "g18c")
         test_pretooluse_guard_edit_write_denies_other_project_claude_code_memory_dir(tmp / "g18d")
+        test_pretooluse_guard_edit_write_allows_claude_code_own_session_scoped_memory_dir(tmp / "g18e")
         test_pretooluse_guard_edit_write_confinement_allows_workflow_json_when_worktree_path_stale(tmp / "g19")
         test_pretooluse_guard_latest_workflow_ignores_terminal_worktree_mode_even_with_newest_mtime(tmp / "g19-itemA-1")
         test_pretooluse_guard_latest_workflow_ignores_missing_worktree_directory_even_with_newest_mtime(tmp / "g19-itemA-2")
@@ -15800,7 +16177,11 @@ def main() -> int:
 
         print()
         print("[ pretooluse-guard: REM-FIX (5 live-verified bugs) ]")
-        test_pretooluse_guard_denies_bash_permit_write_noncanonical_absolute_spelling(tmp / "g23")
+        test_pretooluse_guard_allows_bash_permit_write_absolute_spelling(tmp / "g23")
+        test_pretooluse_guard_allows_bash_permit_write_dot_slash_spelling(tmp / "g23b")
+        test_pretooluse_guard_denies_bash_permit_shape_targeting_different_file(tmp / "g23c")
+        test_pretooluse_guard_denies_bash_permit_write_tee_shape(tmp / "g23d")
+        test_pretooluse_guard_denies_permit_write_python_open_shape(tmp / "g23e")
         test_pretooluse_guard_denies_bash_python_heredoc_write_to_memory_md(tmp / "g24")
         test_pretooluse_guard_denies_bash_python_path_write_text_to_memory_md(tmp / "g25")
         test_pretooluse_guard_denies_bash_python_oneliner_via_env_prefix_write_to_memory_md(tmp / "g26")
@@ -15927,7 +16308,10 @@ def main() -> int:
         test_bash_guard_worktree_confinement_allows_within_cwd_despite_different_set_worktree(tmp / "b47")
         test_bash_guard_worktree_confinement_allows_memory_finalize_clear_when_worktree_path_stale(tmp / "b48")
         test_bash_guard_worktree_confinement_allows_memory_finalize_permit_write_when_worktree_path_stale(tmp / "b49")
-        test_bash_guard_denies_permit_write_noncanonical_absolute_spelling(tmp / "b49b")
+        test_bash_guard_allows_permit_write_absolute_spelling(tmp / "b49b")
+        test_bash_guard_allows_permit_write_dot_slash_spelling(tmp / "b49c")
+        test_bash_guard_denies_permit_shape_targeting_different_file(tmp / "b49d")
+        test_bash_guard_permit_write_end_to_end_skill_md_literal_project_root_prefixed_spelling(tmp / "b49f")
         test_bash_guard_allows_benign_redirect_to_dev_null(tmp / "b50")
         test_bash_guard_allows_benign_stderr_redirect_to_dev_null(tmp / "b51")
 
@@ -16093,6 +16477,12 @@ def main() -> int:
         test_hooklib_resolve_confinement_allows_claude_code_own_memory_dir(tmp / "h10")
         test_hooklib_resolve_confinement_allows_claude_code_own_memory_md_exact(tmp / "h11")
         test_hooklib_resolve_confinement_denies_different_cwd_slug_memory_dir(tmp / "h12")
+        test_hooklib_resolve_confinement_allows_claude_code_own_session_scoped_memory_dir(tmp / "h12b")
+        test_hooklib_resolve_confinement_allows_claude_code_own_session_scoped_memory_md_exact(tmp / "h12c")
+        test_hooklib_resolve_confinement_still_allows_claude_code_own_project_scoped_memory_dir(tmp / "h12d")
+        test_hooklib_resolve_confinement_denies_different_cwd_slug_session_scoped_memory_dir(tmp / "h12e")
+        test_hooklib_resolve_confinement_denies_session_scoped_dir_not_named_memory(tmp / "h12f")
+        test_hooklib_resolve_confinement_denies_session_scoped_traversal_escape(tmp / "h12g")
         test_hooklib_resolve_workspace_writable_paths_empty_when_key_missing()
         test_hooklib_resolve_workspace_writable_paths_coerces_valid_string_list()
         test_hooklib_resolve_workspace_writable_paths_skips_non_string_entries()
@@ -16105,9 +16495,12 @@ def main() -> int:
         test_hooklib_extract_redirect_targets_finds_tee_target()
         test_hooklib_extract_redirect_targets_empty_for_no_redirect()
         test_hooklib_matches_permit_shape_true_for_exact_documented_command()
+        test_hooklib_matches_permit_shape_true_regardless_of_target_spelling()
         test_hooklib_matches_permit_shape_false_for_different_printf_args()
         test_hooklib_matches_permit_shape_false_for_heredoc()
         test_hooklib_matches_permit_shape_false_for_substitution_in_value()
+        test_hooklib_matches_permit_shape_false_for_substitution_in_value_project_root_prefixed()
+        test_hooklib_matches_permit_shape_false_for_six_token_shape()
 
         print()
         print("[ hook-selfcheck ]")

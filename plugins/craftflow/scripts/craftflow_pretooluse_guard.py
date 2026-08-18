@@ -38,7 +38,6 @@ except ImportError:
 
 from craftflow_hooklib import (
     DENIAL_ESCALATION_THRESHOLD,
-    MEMORY_FINALIZE_PERMIT_LITERAL,
     clear_denial,
     extract_redirect_targets,
     has_memory_finalize_permit,
@@ -1377,12 +1376,15 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 if resolved not in protected_paths:
                     continue
                 if permit_path is not None and resolved == permit_path:
-                    # CRITICAL 1 (REM-FIX): pass the literal documented
-                    # constant, never the extracted `target` -- passing
-                    # `target` back here made the shape-match's `target ==
-                    # permit_path_str` condition tautologically true for
-                    # ANY spelling that resolves to the permit file.
-                    if matches_memory_finalize_permit_shape(tokens, MEMORY_FINALIZE_PERMIT_LITERAL):
+                    # This `resolved == permit_path` equality (computed via
+                    # resolve_confinement()/.resolve(), immune to spelling
+                    # variance) is the real security anchor -- it already
+                    # proves `tokens`' target points at the permit file
+                    # regardless of how it was spelled. matches_memory_
+                    # finalize_permit_shape() only needs to validate the
+                    # command SHAPE from here; it no longer takes or checks
+                    # a path-spelling literal (see its docstring).
+                    if matches_memory_finalize_permit_shape(tokens):
                         continue
                 protected_write_violations.append(str(resolved))
 

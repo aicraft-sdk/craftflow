@@ -884,11 +884,35 @@ def _within_claude_code_own_memory_dir(resolved: Path, cwd: Path) -> bool:
     or lives at/under its memory/ subtree, scoped EXACTLY to the trusted
     `cwd`'s own slug -- never a blanket ~/.claude/projects/** grant (that
     would leak into other projects' auto-memory), and never based on a
-    caller-supplied/spoofable slug."""
+    caller-supplied/spoofable slug.
+
+    Also permits the SESSION-scoped shape observed live after a
+    context-compaction resume, where Claude Code computes its own
+    auto-memory root one directory level deeper, keyed by session uuid:
+    <root>/<session-uuid>/memory/** and <root>/<session-uuid>/MEMORY.md.
+    The session-uuid segment itself is never validated against any known
+    id -- it is an arbitrary single path component -- because the grant
+    stays fully contained within the already-non-spoofable `root` (derived
+    only from the trusted `cwd`, never the candidate path), so widening the
+    pattern within that root introduces no additional spoofability, exactly
+    like the project-scoped `<root>/memory/**` grant above."""
     root = claude_code_own_memory_root(cwd)
     memory_md = root / "MEMORY.md"
     memory_dir = root / "memory"
-    return resolved == memory_md or resolved == memory_dir or memory_dir in resolved.parents
+    if resolved == memory_md or resolved == memory_dir or memory_dir in resolved.parents:
+        return True
+    try:
+        rel_parts = resolved.relative_to(root).parts
+    except ValueError:
+        return False
+    if len(rel_parts) < 2:
+        return False
+    leaf = rel_parts[1]
+    if leaf == "memory":
+        return True
+    if leaf == "MEMORY.md" and len(rel_parts) == 2:
+        return True
+    return False
 
 
 def resolve_confinement(
@@ -1120,22 +1144,9 @@ def extract_redirect_targets(command: str) -> list:
     return targets
 
 
-# The one documented literal spelling of the permit sentinel path. Callers
-# of matches_memory_finalize_permit_shape() below MUST pass this constant
-# (never a target string extracted from the command being checked) as the
-# `permit_path_str` argument -- passing the extracted target back at the
-# call site makes the function's 4th AND-condition (`target ==
-# permit_path_str`) tautologically true for ANY spelling that resolves to
-# the same file (e.g. an absolute-path spelling), silently defeating the
-# intended literal-spelling narrowing (CRITICAL 1, guardrail-hardening
-# REM-FIX -- live-verified in both craftflow_pretooluse_guard.py and
-# craftflow_pretooluse_bash_guard.py).
-MEMORY_FINALIZE_PERMIT_LITERAL = ".craftflow/state/.memory-finalize"
-
-
-def matches_memory_finalize_permit_shape(subcommand_tokens: list, permit_path_str: str) -> bool:
+def matches_memory_finalize_permit_shape(subcommand_tokens: list) -> bool:
     """Narrow, exact TOKEN-SHAPE match for the ONE documented permit-write
-    shape: printf '%s' '<value>' > .craftflow/state/.memory-finalize
+    shape: printf '%s' '<value>' > <permit-path, any spelling>
 
     Deliberately token-based, not a raw-text regex: split_subcommands()
     (posix shlex) already strips quotes, so the original quoted substring
@@ -1145,19 +1156,31 @@ def matches_memory_finalize_permit_shape(subcommand_tokens: list, permit_path_st
     caller. Exact expected shape once tokenized:
     ["printf", "%s", "<any-single-value-token>", ">", "<permit-path>"]
 
-    `permit_path_str` MUST be the literal documented constant
-    (MEMORY_FINALIZE_PERMIT_LITERAL above), not a target string derived
-    from the command under test -- see the constant's own docstring for
-    why (CRITICAL 1).
+    Deliberately does NOT compare the target token's SPELLING against any
+    literal constant. Both call sites (craftflow_pretooluse_guard.py,
+    craftflow_pretooluse_bash_guard.py) already independently verify
+    `resolved == memory_finalize_permit_path().resolve()` -- a real
+    `Path.resolve()`-based equality, immune to spelling variance (relative,
+    absolute, `./`-prefixed, etc.) -- BEFORE ever calling this function.
+    That resolved-path check is the real, spelling-independent,
+    non-spoofable security anchor; this function's only remaining job is to
+    validate the command SHAPE (exactly 5 tokens; printf/%s/`>` with a
+    non-dynamic value). A prior version of this function additionally
+    required the raw target token to literally string-equal a single
+    hardcoded bare-relative spelling (`.craftflow/state/.memory-finalize`)
+    -- that requirement was both redundant with the caller's resolved-path
+    check (which already proves the token points at the right file
+    regardless of spelling) AND actively broken: it silently denied every
+    OTHER correctly-resolving spelling of the same file, including the
+    router's own documented `$PROJECT_ROOT/`-prefixed and absolute-path
+    forms, making the permit file impossible to create via the one
+    sanctioned Bash path whenever the caller didn't spell the target as
+    that exact bare-relative literal (CRITICAL, live-reproduced
+    chicken-and-egg deadlock -- see 2026-08-18 DEBUG workflow).
     """
     if len(subcommand_tokens) != 5:
         return False
-    cmd, fmt, _value, redirect, target = subcommand_tokens
+    cmd, fmt, _value, redirect, _target = subcommand_tokens
     if looks_dynamic(_value):
         return False
-    return (
-        cmd == "printf"
-        and fmt == "%s"
-        and redirect == ">"
-        and target == permit_path_str
-    )
+    return cmd == "printf" and fmt == "%s" and redirect == ">"
