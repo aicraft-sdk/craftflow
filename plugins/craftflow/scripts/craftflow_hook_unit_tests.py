@@ -15482,6 +15482,108 @@ def test_state_query_summarize_markdown_no_headings_falls_back_to_generic(tmp_di
     ok(name)
 
 
+def _large_narrative_section_fixture(narrative_lines: int) -> str:
+    """Reproduce the real activeContext.md shape: a '## Current Focus'
+    section with large, zero-bullet narrative prose, alongside a normal
+    bulleted section."""
+    focus_body = "\n".join(
+        f"narrative line {i} describing ongoing work, decisions, and "
+        "background context for this session in verbose free-text prose."
+        for i in range(narrative_lines)
+    )
+    recent_changes = "\n".join(f"- change entry number {i} with some detail text" for i in range(10))
+    return (
+        "# Active Context\n\n"
+        "## Current Focus\n" + focus_body + "\n\n"
+        "## Recent Changes\n" + recent_changes + "\n\n"
+    )
+
+
+def test_state_query_summarize_markdown_truncates_large_non_bulleted_section(tmp_dir: Path) -> None:
+    name = "state-query/summarize-markdown/truncates-large-non-bulleted-section"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    content = _large_narrative_section_fixture(400)
+    target = tmp_dir / "activeContext.md"
+    target.write_text(content, encoding="utf-8")
+    script = SCRIPTS / "craftflow_state_query.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(target), "--mode", "summary"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}: {result.stderr}")
+        return
+    out = result.stdout
+    for heading in ("Current Focus", "Recent Changes"):
+        if f"## {heading}" not in out:
+            fail(name, f"missing heading in summary: {heading!r}")
+            return
+    if len(out) >= len(content) / 3:
+        fail(name, f"summary must be meaningfully smaller than source: {len(out)} vs {len(content)}")
+        return
+    if "narrative line 0 " not in out:
+        fail(name, "expected the first narrative line to still be shown")
+        return
+    if "narrative line 399 " not in out:
+        fail(name, "expected the last narrative line to still be shown")
+        return
+    if "lines omitted" not in out:
+        fail(name, "expected truncated non-bulleted section to disclose omitted line count")
+        return
+    ok(name)
+
+
+def test_state_query_summarize_markdown_real_shape_meaningful_reduction(tmp_dir: Path) -> None:
+    # Reproduces this repo's real trigger: activeContext.md's ## Current
+    # Focus section reached 300KB+ of zero-bullet narrative prose and was
+    # previously copied through 100% verbatim, defeating compaction.
+    name = "state-query/summarize-markdown/real-shape-meaningful-reduction"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    content = _large_narrative_section_fixture(4000)
+    if len(content) < 300_000:
+        fail(name, f"fixture must reproduce a realistic 300KB+ trigger, got {len(content)}")
+        return
+    target = tmp_dir / "activeContext.md"
+    target.write_text(content, encoding="utf-8")
+    script = SCRIPTS / "craftflow_state_query.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(target), "--mode", "summary"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}: {result.stderr}")
+        return
+    out = result.stdout
+    if "## Current Focus" not in out:
+        fail(name, "expected the section heading to be preserved")
+        return
+    ratio = len(content) / len(out) if out else float("inf")
+    if ratio < 10:
+        fail(name, f"expected order-of-magnitude-ish compaction, got ratio {ratio:.1f}x ({len(content)} -> {len(out)})")
+        return
+    ok(name)
+
+
+def test_state_query_summarize_markdown_short_non_bulleted_section_stays_verbatim(tmp_dir: Path) -> None:
+    name = "state-query/summarize-markdown/short-non-bulleted-section-stays-verbatim"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    content = _markdown_memory_fixture()
+    target = tmp_dir / "activeContext.md"
+    target.write_text(content, encoding="utf-8")
+    script = SCRIPTS / "craftflow_state_query.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(target), "--mode", "summary"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}: {result.stderr}")
+        return
+    if "Some short focus text." not in result.stdout:
+        fail(name, "expected a genuinely short non-bulleted section body to remain verbatim")
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # pretooluse-guard: state-read compaction (Read PreToolUse)
 # ---------------------------------------------------------------------------
@@ -16434,6 +16536,9 @@ def main() -> int:
     print("[ craftflow_state_query.py: markdown + generic summary modes ]")
     test_state_query_summarize_markdown_caps_bullets_per_section(tmp / "q8")
     test_state_query_summarize_markdown_no_headings_falls_back_to_generic(tmp / "q9")
+    test_state_query_summarize_markdown_truncates_large_non_bulleted_section(tmp / "q10")
+    test_state_query_summarize_markdown_real_shape_meaningful_reduction(tmp / "q11")
+    test_state_query_summarize_markdown_short_non_bulleted_section_stays_verbatim(tmp / "q12")
 
     print()
     print("[ pretooluse-guard: state-read compaction (Read PreToolUse) ]")

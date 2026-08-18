@@ -139,9 +139,17 @@ def _summarize_markdown(content: str) -> str:
         out.append(f"## {heading}")
         bullets = extract_bullets(body)
         if not bullets:
-            # Non-bullet section body (e.g. free text like "## Current Focus")
-            # -- keep it verbatim, it is usually already short.
-            out.append(body.strip())
+            # Non-bullet section body (e.g. free text like "## Current
+            # Focus"). Short bodies are kept verbatim -- most sections
+            # genuinely are short. Large narrative bodies (this repo's real
+            # activeContext.md ## Current Focus section reached 300KB+ of
+            # zero-bullet prose and was previously copied through 100%
+            # verbatim, defeating compaction) are truncated with the same
+            # first/last-N-lines pattern _summarize_generic already uses for
+            # heading-less files, so the section still shows something
+            # useful (start + end) instead of reproducing hundreds of KB of
+            # prose.
+            out.append(_summarize_generic(body.strip()))
             continue
         shown = bullets[-DEFAULT_BULLETS_PER_SECTION:]
         out.extend(shown)
