@@ -347,6 +347,11 @@ def _handle_read(data: dict, mode: dict, tool_input: dict) -> int:
     try:
         should_redirect = check_state_read_compaction(path)
     except Exception as exc:
+        # Fail-open by design (non-security posture): any unexpected error
+        # here must never block a normal Read. Discoverability is via
+        # log-grep, not a counter/escalation mechanism -- the distinct
+        # `reason: "skipped_state_read_compaction_check"` key below is
+        # intended to be the grep/alert target for this path.
         log_event(
             "plugin_pretooluse_guard",
             {
