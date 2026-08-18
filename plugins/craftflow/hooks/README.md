@@ -15,6 +15,25 @@ This directory now serves two different purposes:
    - `InstructionsLoaded` — instruction file load audit (async)
 2. **Optional git pre-commit helper** via `pre-commit`
 
+**Not the same file as Cursor's hooks.json.** A separate `hooks.json` lives at the plugin root
+(`../hooks.json`, sibling of this `hooks/` directory) — that one is for Cursor, uses Cursor's own
+native hook step names (`preToolUse`, `postToolUse`, `sessionStart`, `afterFileEdit`,
+`subagentStop`, `preCompact`, `stop`), and is a *template*: its commands reference a
+`${CURSOR_PLUGIN_ROOT}` placeholder. Cursor DOES resolve this placeholder itself, but only for
+hooks it loads via its own native "claude-plugin" hook source — i.e. Claude Code plugin manifests
+it auto-imports directly, gated behind its `thirdPartyExtensibilityEnabled` setting — NOT for a
+project-local `.cursor/hooks.json` like the one `../install-cursor.sh` writes, which gets no
+placeholder substitution at all. `../install-cursor.sh` resolves the placeholder to a real
+absolute path itself and writes/merges the result into the current project's own
+`.cursor/hooks.json` (confirmed live: Cursor reads a project-local `.cursor/hooks.json` per open
+workspace folder and additively merges it with the machine's global `~/.cursor/hooks.json` — never
+an override). This step is per-project; re-run `install-cursor.sh` inside every project you want
+craftflow's write-guard enforced in, not just once globally. Whether the native
+`thirdPartyExtensibilityEnabled` auto-import path already covers this without any per-project step
+is an open question, not yet confirmed either way. See `../skills/cursor-router/SKILL.md`'s
+"Hook-based write-guard enforcement" note for the full story, including why this silently didn't
+work before 2026-08-18.
+
 ## Composable Trust Gate (not wired to a hook event)
 
 `craftflow_hook_trust.py` is a standalone CLI (`check` / `update` subcommands),

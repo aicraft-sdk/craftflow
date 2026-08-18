@@ -43,6 +43,31 @@ interactive `/name` chat shortcut). A future reader should not assume this secti
 speculative and revert the file to inline role-play — it is based on live, corroborated
 verification, not documentation alone.
 
+**Hook-based write-guard enforcement is separate from this router file, and is per-project.**
+This file drives Cursor's *agent-behavior/routing* side (the always-on MDC rule dispatching
+here) — it does not by itself make Cursor *enforce* `craftflow_pretooluse_guard.py` /
+`craftflow_pretooluse_bash_guard.py` / `craftflow_safe_shell_guard.py` the way Claude Code's own
+`hooks/hooks.json` does. That enforcement requires `../../install-cursor.sh` to have generated a
+resolved `.cursor/hooks.json` **inside the specific project** you're working in (confirmed live:
+Cursor merges `~/.cursor/hooks.json` with each open workspace folder's own `.cursor/hooks.json`
+additively — it never lets one source override another — so this coexists safely with any other
+tool already using the global file). Before `install-cursor.sh` gained this step
+(2026-08-18), the shipped `../hooks.json` template was never actually installed anywhere Cursor
+reads, AND its commands referenced a `${CURSOR_PLUGIN_ROOT}` shell variable that Cursor only
+resolves for hooks loaded via its own native "claude-plugin" source (auto-imported Claude Code
+plugin manifests, gated behind `thirdPartyExtensibilityEnabled`) — NOT for a project-local
+`.cursor/hooks.json` like the one `install-cursor.sh` writes, which gets no placeholder
+substitution at all. Both bugs together meant Cursor sessions got craftflow's routing but never
+its write-guard enforcement via this path, silently. (Open question, not yet confirmed either
+way: whether `thirdPartyExtensibilityEnabled`'s native import already covers craftflow without
+any per-project step — if you have that setting on and want to check, look for craftflow's
+scripts appearing as `"claude-plugin"`-sourced hooks in Cursor's own hooks debug view before
+assuming this project-local step is redundant.) If a Cursor session in a given project reports
+allowing a write this router's own BUILD worktree/confinement rules should have denied, check
+whether `.cursor/hooks.json` exists in that project's root and contains
+`craftflow_cursor_adapter.py` entries — if not, re-run `install-cursor.sh` from a local checkout
+with that project as the current directory.
+
 ## Agent File Paths
 
 All agent .md files live under:
