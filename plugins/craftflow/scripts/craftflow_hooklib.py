@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
 import shlex
 import sys
+import contextlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -186,12 +188,139 @@ def log_event(name: str, payload: Dict[str, Any]) -> None:
         pass  # never fail the hook
 
 
+# ---------------------------------------------------------------------------
+# "Latest workflow" selection
+# ---------------------------------------------------------------------------
+# latest_workflow_file()/latest_workflow_payload()/read_latest_workflow_state()
+# below are the ORIGINAL, UNFILTERED "true newest by mtime" selectors --
+# every non-security consumer (craftflow_stop_persist.py,
+# craftflow_precompact_state.py, craftflow_sessionstart_context.py,
+# craftflow_posttooluse_artifact_guard.py, craftflow_status_report.py,
+# craftflow_postcompact_context.py, craftflow_stop_failure_log.py) depends on
+# this exact "newest by mtime, including terminal workflows" semantic and
+# must NOT be affected by liveness filtering (code-reviewer CHANGES_REQUESTED,
+# Finding 1, REM-FIX cycle 1: liveness filtering had been applied
+# UNCONDITIONALLY here, silently changing behavior for every one of these
+# callers even though only the write-confinement-sensitive callers needed
+# it).
+#
+# `latest_live_workflow_file()`/`latest_live_workflow_payload()`/
+# `read_latest_live_workflow_state()` further down are the fail-closed,
+# liveness-filtered variants (Item A fix: cross-session workflow-identity
+# leak) -- used ONLY by the 4 write-confinement-sensitive call sites in
+# craftflow_pretooluse_guard.py (3) and craftflow_pretooluse_bash_guard.py
+# (1). See docs/2026-07-30-craftflow-guard-write-detection-limitations-
+# decision.md for the SEPARATE, out-of-scope command-enumeration bypass
+# class this does NOT touch.
+#
+# Before the Item A fix, `latest_workflow_file()` picked whichever *.json
+# under .craftflow/state/workflows/ had the single most recent mtime,
+# globally -- with NO filtering by liveness or session identity. A workflow
+# that had already finished (worktree merged and removed) could still "win"
+# if its JSON file's mtime was bumped later for an unrelated reason (e.g. a
+# memory-notes append), leaking its stale/removed `worktree_path` into an
+# unrelated invocation's write-confinement check and fail-OPENing writes to
+# the wrong worktree instead of fail-CLOSING to cwd/scratchpad. That
+# staleness risk is real ONLY for write-confinement decisions -- the
+# non-security consumers above only ever read/report workflow state, so the
+# pre-existing "true newest by mtime" semantic remains correct for them.
+
+# Terminal worktree_mode values the router itself writes once a workflow's
+# worktree has been merged/removed and is no longer a legitimate write
+# target for ANY invocation (verified live against this repo's own
+# .craftflow/state/workflows/*.json corpus, 2026-08-18: 78/221 files carry
+# "merged_and_removed", 1 carries "removed_no_merge_needed"; "auto_created"/
+# "existing_worktree" mean the worktree is still in active use;
+# "skipped_main_tree"/None mean no worktree was ever created for that
+# workflow, which is not itself a staleness signal).
+TERMINAL_WORKTREE_MODES = {"merged_and_removed", "removed_no_merge_needed"}
+
+# Bounds the cost of the liveness scan below to a small, constant-ish
+# number of file reads on the common (non-pathological) path, regardless of
+# how many historical workflow artifacts have accumulated under
+# .craftflow/state/workflows/ (this repo alone has 221+ as of 2026-08-18) --
+# a PreToolUse hook runs on every Edit/Write/Bash call and must stay fast.
+_LATEST_WORKFLOW_SCAN_WINDOW = 50
+
+
+def _workflow_payload_is_live(payload: Dict[str, Any]) -> bool:
+    """True if a workflow artifact payload is still a legitimate candidate
+    for "the active workflow for this invocation" selection. Excludes:
+    (1) a terminal `worktree_mode` (the router's own signal that the
+    worktree is gone); (2) a `worktree_path` that is a non-empty string
+    but whose directory no longer exists on disk -- a stronger,
+    filesystem-truth-based signal that catches the terminal case even when
+    `worktree_mode` was never updated (e.g. an interrupted/crashed merge).
+    A workflow with `worktree_path` None/"" (main-tree-only -- e.g. a
+    DEBUG/PLAN fast path that never spawned a worktree) is always live:
+    there is no worktree to go stale."""
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("worktree_mode") in TERMINAL_WORKTREE_MODES:
+        return False
+    worktree_path = payload.get("worktree_path")
+    if isinstance(worktree_path, str) and worktree_path:
+        try:
+            if not Path(worktree_path).is_dir():
+                return False
+        except Exception:
+            return False
+    return True
+
+
+def _live_workflow_candidates(paths) -> List[Tuple[Path, Dict[str, Any]]]:
+    """Parse each candidate path and keep only the live ones (see
+    `_workflow_payload_is_live()`), preserving the caller's ordering.
+    Corrupt/unreadable/non-dict JSON is skipped, never raised -- matches
+    this module's established fail-toward-stricter-not-crash posture."""
+    live: List[Tuple[Path, Dict[str, Any]]] = []
+    for candidate in paths:
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if not _workflow_payload_is_live(payload):
+            continue
+        live.append((candidate, payload))
+    return live
+
+
+def _any_session_id_key_present(paths) -> bool:
+    """True if at least one candidate JSON payload in `paths` -- LIVE OR
+    NOT -- carries a `session_id` key at all (regardless of its value).
+    Deliberately not restricted to live candidates: this answers "does the
+    producer side populate session_id for anything in this window", not
+    "does a live, session-scoping-eligible candidate exist" -- a window
+    where every candidate happens to be terminal/dead must not be
+    conflated with a window that genuinely never carries the key (the
+    former should still widen past the window to find a live candidate
+    further back; the latter should not, per REM-FIX cycle 3)."""
+    for candidate in paths:
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict) and "session_id" in payload:
+            return True
+    return False
+
+
 def latest_workflow_payload() -> Dict[str, Any]:
+    """ORIGINAL, unfiltered "true newest by mtime" selector -- see this
+    section's module-level docstring. Non-security consumers only; write-
+    confinement-sensitive callers use `latest_live_workflow_payload()`
+    instead."""
     payload, _, _ = read_latest_workflow_state()
     return payload
 
 
 def latest_workflow_file() -> Path | None:
+    """ORIGINAL, unfiltered "true newest by mtime" selector -- see this
+    section's module-level docstring. Non-security consumers only; write-
+    confinement-sensitive callers use `latest_live_workflow_file()`
+    instead."""
     files = sorted(
         workflows_dir().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
     )
@@ -201,7 +330,146 @@ def latest_workflow_file() -> Path | None:
 
 
 def read_latest_workflow_state() -> Tuple[Dict[str, Any], Path | None, str | None]:
+    """ORIGINAL, unfiltered "true newest by mtime" selector -- see this
+    section's module-level docstring. Non-security consumers only; write-
+    confinement-sensitive callers use `read_latest_live_workflow_state()`
+    instead."""
     latest = latest_workflow_file()
+    if latest is None:
+        return {}, None, None
+    try:
+        return json.loads(latest.read_text(encoding="utf-8")), latest, None
+    except Exception as exc:
+        return {}, latest, exc.__class__.__name__
+
+
+def latest_live_workflow_payload(session_id: str | None = None) -> Dict[str, Any]:
+    payload, _, _ = read_latest_live_workflow_state(session_id)
+    return payload
+
+
+def latest_live_workflow_file(session_id: str | None = None) -> Path | None:
+    """Select the workflow artifact JSON this hook invocation should treat
+    as "the active workflow" for confinement purposes.
+
+    Two-tier selection, both restricted to LIVE candidates only (see
+    `_workflow_payload_is_live()`):
+
+      1. If `session_id` is given, prefer the mtime-latest live candidate
+         whose own `session_id` field matches exactly. The PreToolUse hook
+         payload's own `session_id` field (a documented common field on
+         every Claude Code hook invocation) is the caller-supplied value
+         here -- but as of 2026-08-18 the router does not yet stamp
+         `session_id` into a workflow artifact at creation time, so no
+         candidate will ever match and this tier is currently a no-op.
+         Threading it through now means true session-scoping activates
+         automatically, with zero further guard changes, the moment that
+         router-side follow-up ships (tracked as a deferred item -- see
+         the bug investigation this fixes).
+      2. Otherwise (or if no session match), fall back to the mtime-latest
+         LIVE candidate -- the fail-safe minimum bar: a workflow whose
+         worktree is already gone is NEVER selected as "latest", even if
+         its JSON file happens to be the most-recently-touched one on
+         disk.
+
+    Returns None if there are zero live candidates (even when non-live
+    files exist) -- callers already degrade a None workflow to cwd-only
+    confinement (fail CLOSED to cwd/scratchpad, see
+    `resolve_confinement()`), which is exactly the desired posture when no
+    confidently-resolvable active workflow exists for this invocation,
+    rather than fail-OPEN to a stale `worktree_path`.
+
+    Scan-window fallback (doubt-verify cycle 1, item 2, REM-FIX cycle 2):
+    the bounded `_LATEST_WORKFLOW_SCAN_WINDOW` must never let an
+    unrelated-but-live in-window candidate silently mask the true answer.
+    Two cases, handled separately below:
+
+      - `session_id` given: the window is a fast-path optimization for the
+        common case (a matching, still-live workflow found within it). If
+        NO in-window live candidate matches `session_id` AND at least one
+        in-window candidate (live or not) carries a `session_id` key at
+        all, the scan widens to the rest of the directory before falling
+        back to an unrelated live candidate -- a session match older than
+        the window must not be missed just because some other, unrelated,
+        live workflow happened to occupy every window slot. Gating on
+        "does the key exist in the window" rather than "did it match" is
+        deliberate (REM-FIX cycle 3, CRITICAL): as of 2026-08-18, 0/222
+        real workflow artifacts under .craftflow/state/workflows/ carry a
+        `session_id` key at all, yet every Claude Code hook payload
+        supplies a real session_id -- so gating on "matched" alone made
+        the widen (and its full-directory-scan cost) fire unconditionally
+        on every PreToolUse invocation. "Does any in-window candidate
+        carry the key at all" is the true distinguishing signal: it still
+        widens correctly once the producer side starts populating
+        `session_id` (even with non-matching values from other sessions),
+        while collapsing back to the cheap bounded-window path against
+        today's real corpus, where the key is never present. The key-
+        presence check deliberately looks at ALL in-window candidates, not
+        just live ones (`_any_session_id_key_present()`), so a window
+        whose live candidates happen to be too few (or zero, e.g. every
+        in-window mtime slot is a terminal workflow) never silently
+        suppresses the widen-to-find-a-live-candidate-below-window
+        fallback that REM-FIX cycle 2 relies on.
+      - `session_id` absent (today's actual production reality -- the
+        router does not yet stamp `session_id` into workflow artifacts):
+        this heuristic cannot distinguish "the workflow driving this
+        invocation" from "an unrelated-but-more-recently-touched live
+        workflow" no matter how far it scans -- that ambiguity is a
+        separate, disclosed, out-of-scope limitation (liveness-heuristic
+        forgeability/session-scoping, see this section's module
+        docstring). What IS in scope: not letting the bounded window
+        silently narrow the candidate pool below the full population.
+        Widens to a full-directory live scan unconditionally in this
+        branch -- restores the pre-Item-A-fix full-scan cost profile
+        (measured ~100ms against this repo's own 221-file
+        .craftflow/state/workflows/ corpus, 2026-08-18; comparable to the
+        ~306ms this repo's own investigation already treated as an
+        acceptable per-invocation cost for a security-relevant lookup),
+        for this path only."""
+    candidates = sorted(
+        workflows_dir().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    if not candidates:
+        return None
+
+    if not session_id:
+        full_live = _live_workflow_candidates(candidates)
+        return full_live[0][0] if full_live else None
+
+    window_candidates = candidates[:_LATEST_WORKFLOW_SCAN_WINDOW]
+    live_window = _live_workflow_candidates(window_candidates)
+    for candidate, payload in live_window:
+        if payload.get("session_id") == session_id:
+            return candidate
+
+    # Only widen past the window when there is a realistic chance a wider
+    # scan could actually find a session match -- i.e. at least one
+    # in-window candidate (live or not -- see `_any_session_id_key_present()`)
+    # carries a `session_id` key AT ALL (REM-FIX cycle 3, CRITICAL: gating
+    # on "did any candidate MATCH" instead of "does the key exist at all"
+    # made the widen fire unconditionally in production, since 0/222 real
+    # workflow artifacts carry `session_id` yet every hook payload supplies
+    # one -- see this function's docstring). When the window itself never
+    # populates the key, no amount of scanning further back changes that;
+    # widening would only add full-directory-scan cost for zero
+    # correctness gain.
+    remainder = candidates[_LATEST_WORKFLOW_SCAN_WINDOW:]
+    live_remainder: List[Tuple[Path, Dict[str, Any]]] = []
+    if remainder and _any_session_id_key_present(window_candidates):
+        live_remainder = _live_workflow_candidates(remainder)
+        for candidate, payload in live_remainder:
+            if payload.get("session_id") == session_id:
+                return candidate
+
+    if live_window:
+        return live_window[0][0]
+    return live_remainder[0][0] if live_remainder else None
+
+
+def read_latest_live_workflow_state(
+    session_id: str | None = None,
+) -> Tuple[Dict[str, Any], Path | None, str | None]:
+    latest = latest_live_workflow_file(session_id)
     if latest is None:
         return {}, None, None
     try:
@@ -264,6 +532,207 @@ def workflow_artifact_is_fresh(path: Path, max_age_seconds: int = 60) -> bool:
     except FileNotFoundError:
         return False
     return age <= max_age_seconds
+
+
+# ---------------------------------------------------------------------------
+# Consecutive-denial hard stop (Item B fix)
+# ---------------------------------------------------------------------------
+# Before this fix there was no tracking of repeated denials anywhere in this
+# guard: an agent whose Edit/Write (or guard-detected Bash write) was denied
+# could immediately retry the identical target via a different tool/surface,
+# with nothing pausing for human input in between. This does NOT attempt to
+# detect a bypass via an un-enumerated Bash command (e.g. `git apply`) --
+# that whole command-enumeration approach is a SEPARATE, explicitly paused
+# class (see docs/2026-07-30-craftflow-guard-write-detection-limitations-
+# decision.md). This mechanism only escalates denials THIS guard itself
+# already detects and emits.
+#
+# Granularity choice (documented per the investigation's own instruction):
+# a "logical write action" is keyed by (session_id, resolved absolute
+# target path). Session-scoped so two independent/parallel sessions denied
+# on the same path never cross-contaminate each other's counters;
+# path-scoped (not e.g. workflow_uuid-scoped) because the motivating
+# incident was "the SAME file kept getting denied" -- a different target
+# path is a genuinely different logical action and starts its own count.
+#
+# What "hard stop" means from a stateless PreToolUse hook: a hook can only
+# allow/deny the ONE tool call it was invoked for -- it cannot halt the
+# agent's turn outright. The achievable mechanism (one of the two options
+# the investigation's own instructions floated) is: the 2nd+ consecutive
+# denial for the same logical action is escalated -- a qualitatively
+# different, more forceful deny message plus a distinct `log_event`
+# decision ("deny-escalated") -- rather than an identical-looking ordinary
+# deny. This is NOT a claim that the agent is structurally prevented from
+# trying a third time; it is the escalated signal the instructions
+# describe as an acceptable structural discouragement.
+DENIAL_ESCALATION_THRESHOLD = 2
+
+# A denial older than this starts a FRESH count instead of continuing to
+# accumulate indefinitely -- satisfies the "or after enough time" reset
+# condition without needing a session-end hook to clear state explicitly.
+DENIAL_TRACKER_TTL_SECONDS = 30 * 60
+
+
+def denial_tracker_path() -> Path:
+    """Guard-owned internal bookkeeping file for the consecutive-denial
+    hard stop. Written directly by this Python process's own file I/O --
+    never routed back through the Edit/Write/Bash tool-call surface this
+    guard itself intercepts, so there is no self-blocking circularity.
+    Deliberately NOT a markdown memory file and NOT a workflow JSON
+    artifact -- excluded from both `_protected_memory_paths()` and
+    `_protected_bash_write_paths()` in craftflow_pretooluse_guard.py."""
+    return state_root() / ".denial-tracker.json"
+
+
+def _denial_tracker_lock_path() -> Path:
+    """Dedicated lock file, separate from the tracker JSON itself -- so a
+    process that crashes mid-write never leaves the ACTUAL tracker data
+    file (as opposed to an empty/inert lock file) in a locked-and-partial
+    state that could confuse a future read. Locking the JSON data file
+    directly would also mean any reader/writer that opens it via
+    `.read_text()`/`.write_text()` (bypassing the lock) could still race;
+    the dedicated lock file makes the discipline explicit: EVERY read-
+    modify-write of the tracker must go through this lock."""
+    return denial_tracker_path().with_name(".denial-tracker.lock")
+
+
+@contextlib.contextmanager
+def _denial_tracker_locked():
+    """Exclusive lock around a denial-tracker read-modify-write.
+
+    Finding 3 (code-reviewer MEDIUM, REM-FIX cycle 1): `_load_denial_tracker()`
+    / `_save_denial_tracker()` previously had no coordination between the
+    read and the write -- two concurrent PreToolUse invocations in the same
+    session could both read the same stale count, both increment locally,
+    and both write back the same incremented value, silently losing one of
+    the two denials and potentially missing the escalation ("ESCALATED /
+    HARD STOP") signal when it should have fired. This does NOT affect the
+    actual allow/deny decision for either invocation -- only the escalation
+    *messaging* reliability (already confirmed independent by the
+    investigation this fixes).
+
+    `fcntl.flock` on a dedicated lock file is deliberately the simplest
+    correct primitive for this: single-machine, single-user local file
+    coordination, not a distributed system. The lock is released
+    automatically when the `with` block exits, even on exception, so a
+    caller's own failure never leaves the tracker permanently locked."""
+    lock_path = _denial_tracker_lock_path()
+    try:
+        lock_path.touch(exist_ok=True)
+        fh = open(lock_path, "r+", encoding="utf-8")
+    except Exception:
+        # Lock file itself unwritable/unreadable (e.g. permissions) --
+        # degrade to unlocked (matches this module's established
+        # fail-toward-stricter-not-crash posture: the denial recording
+        # itself must never crash the hook; losing exclusivity here only
+        # risks the SAME under-counting this fix narrows, not a hard
+        # failure).
+        yield
+        return
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        fh.close()
+
+
+def _load_denial_tracker() -> Dict[str, Any]:
+    path = denial_tracker_path()
+    if not path.exists():
+        return {}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _save_denial_tracker(tracker: Dict[str, Any]) -> None:
+    try:
+        denial_tracker_path().write_text(
+            json.dumps(tracker, ensure_ascii=True), encoding="utf-8"
+        )
+    except Exception:
+        pass  # never fail the hook on a bookkeeping write error
+
+
+def denial_action_key(session_id: str | None, target: str) -> str:
+    """'Logical write action' identity for the consecutive-denial hard
+    stop -- see this section's module-level docstring for the granularity
+    rationale.
+
+    Case-normalizes `target` (doubt-verify cycle 1, item 3, REM-FIX cycle
+    2): on the case-insensitive default macOS/APFS volume,
+    `str(Path(...).resolve())` preserves the caller-supplied case rather
+    than normalizing it, even though two differently-cased spellings of
+    the same path share the same underlying inode (confirmed empirically
+    against this repo's own filesystem: `Path("foo.md").resolve()` and
+    `Path("FOO.md").resolve()` are different Python strings but the same
+    inode). A trivial case variation in a retried path was silently
+    resetting the consecutive-denial counter, defeating the escalation
+    this mechanism exists to provide. Lowercasing here is scoped to THIS
+    tracker's key only -- it does NOT touch the guard's broader
+    `_protected_memory_paths()`/protected-path set-membership matching (a
+    separate, pre-existing, disclosed, out-of-scope item). Normalizes
+    unconditionally rather than runtime-detecting filesystem
+    case-sensitivity: a false-positive "same key" for two genuinely
+    different, differently-cased files on a case-SENSITIVE filesystem is a
+    much smaller cost than the current false-negative on a
+    case-INSENSITIVE one."""
+    return f"{session_id or 'nosession'}::{target.lower()}"
+
+
+def record_denial(session_id: str | None, target: str) -> Tuple[int, bool]:
+    """Record one denial for `target` under `session_id`. Returns
+    `(count, escalated)` -- `escalated` is True once `count` reaches
+    `DENIAL_ESCALATION_THRESHOLD`. A denial older than
+    `DENIAL_TRACKER_TTL_SECONDS` starts a NEW sequence (count resets to 1)
+    rather than accumulating indefinitely. Never raises -- a corrupt
+    tracker file degrades to an empty one (fresh count), matching this
+    module's established fail-toward-stricter-not-crash posture (the
+    denial itself, from the caller's own violation check, is unaffected
+    either way). The whole read-modify-write is wrapped in
+    `_denial_tracker_locked()` (Finding 3, REM-FIX cycle 1) so concurrent
+    PreToolUse invocations in the same session never race each other's
+    read against a not-yet-written increment."""
+    key = denial_action_key(session_id, target)
+    with _denial_tracker_locked():
+        tracker = _load_denial_tracker()
+        entry = tracker.get(key)
+        now = datetime.now(timezone.utc).timestamp()
+        count = 1
+        if isinstance(entry, dict):
+            last_ts = entry.get("last_ts")
+            prior_count = entry.get("count")
+            if (
+                isinstance(prior_count, int)
+                and isinstance(last_ts, (int, float))
+                and (now - last_ts) <= DENIAL_TRACKER_TTL_SECONDS
+            ):
+                count = prior_count + 1
+        tracker[key] = {"count": count, "last_ts": now}
+        _save_denial_tracker(tracker)
+    return count, count >= DENIAL_ESCALATION_THRESHOLD
+
+
+def clear_denial(session_id: str | None, target: str) -> None:
+    """Reset the consecutive-denial count for `target` -- called whenever
+    the guard ALLOWS a write to that same target. From a stateless
+    PreToolUse hook's vantage point, this guard's own ALLOW decision is the
+    closest available signal to "the equivalent write succeeded" (the
+    hook cannot observe the tool's actual post-execution result), which is
+    the documented reset condition. Locked for the same TOCTOU reason as
+    `record_denial()` above."""
+    key = denial_action_key(session_id, target)
+    with _denial_tracker_locked():
+        tracker = _load_denial_tracker()
+        if key in tracker:
+            del tracker[key]
+            _save_denial_tracker(tracker)
 
 
 def parse_metadata(description: str) -> Dict[str, str]:

@@ -25,7 +25,7 @@ from craftflow_hooklib import (
     command_has_traversal_or_wildcard,
     extract_redirect_targets,
     is_env_assignment,
-    latest_workflow_payload,
+    latest_live_workflow_payload,
     load_input,
     load_mode,
     log_event,
@@ -1532,10 +1532,18 @@ def main() -> int:
     # absence of a workflow JSON, or worktree_path: null, degrades every
     # confinement check below to cwd-only (Behavior Contract rule 8).
     try:
-        worktree_path = latest_workflow_payload().get("worktree_path")
+        # Item A fix (cross-session workflow-identity leak): thread the
+        # PreToolUse payload's own "session_id" through so this call site
+        # gets the same session-scoped / non-terminal-only selection as
+        # the sibling craftflow_pretooluse_guard.py (see
+        # latest_live_workflow_file()'s docstring in craftflow_hooklib.py).
+        # Write-confinement-sensitive call site (Finding 1, REM-FIX cycle
+        # 1) -- uses the *_live_* variant, not the plain newest-by-mtime
+        # latest_workflow_payload().
+        worktree_path = latest_live_workflow_payload(data.get("session_id")).get("worktree_path")
     except Exception as exc:
         # REM-FIX cycle 4 (consistency, MEDIUM): mirrors the equivalent
-        # latest_workflow_payload() except blocks in the sibling
+        # latest_live_workflow_payload() except blocks in the sibling
         # craftflow_pretooluse_guard.py -- this block was silently swallowing the
         # exception with no log_event() call, unlike every other parse-error
         # fallback in this file.
@@ -1543,7 +1551,7 @@ def main() -> int:
             "plugin_pretooluse_bash_guard",
             {
                 "event": "pretool_guard_parse_error",
-                "command_name": "latest_workflow_payload",
+                "command_name": "latest_live_workflow_payload",
                 "error": repr(exc),
                 "reason": "skipped_worktree_lookup",
             },
