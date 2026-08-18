@@ -10,5 +10,6 @@
   "stopFailureLog": "audit",
   "instructionsLoadedAudit": "audit",
   "contractValidation": "audit",
+  "stateReadCompaction": "block",
   "bashDestructiveTraversal": "block"
 }

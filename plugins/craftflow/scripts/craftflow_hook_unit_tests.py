@@ -2257,10 +2257,26 @@ def test_pretooluse_guard_edit_write_confinement_allows_workflow_json_when_workt
     # BLOCKING): worktree_path SET to a different, stale-looking sibling
     # path -- proves TRUE union semantics for the Edit/Write confinement
     # path specifically, not just inherited from Phase 3's bash-guard proof.
+    #
+    # Finding 2 (code-reviewer CHANGES_REQUESTED, REM-FIX cycle 1, MEDIUM,
+    # test-rot symptom of Finding 1): the Edit/Write confinement call site
+    # is write-confinement-sensitive, so it uses latest_live_workflow_payload()
+    # (liveness-filtered) -- a worktree_path whose directory was never
+    # created on disk gets excluded as "not live," collapsing `workflow` to
+    # {} and `worktree_path` to None. The write below was then only
+    # allowed because the target sits inside cwd -- NOT because of the
+    # union-with-a-stale-worktree_path semantics this test's name/docstring
+    # claims to prove. The stale_worktree directory is created here (a
+    # genuinely different/unrelated path, but one that exists on disk) so
+    # the workflow fixture stays "live" and its (irrelevant, different)
+    # worktree_path value actually reaches resolve_confinement() -- proving
+    # the write is allowed via the cwd branch of the cwd u worktree_path
+    # union, independent of whatever worktree_path happens to be set to.
     name = "pretooluse-guard/edit-write-confinement-allows-workflow-json-when-worktree-path-stale"
     project_root = tmp_dir / "project"
     project_root.mkdir(parents=True)
     stale_worktree = tmp_dir / ".claude" / "worktrees" / "wf-stale-test"
+    stale_worktree.mkdir(parents=True)
     wf_dir = project_root / ".craftflow" / "state" / "workflows"
     wf_dir.mkdir(parents=True)
     _write_workflow_json_fixture(project_root, str(stale_worktree))
@@ -2274,6 +2290,663 @@ def test_pretooluse_guard_edit_write_confinement_allows_workflow_json_when_workt
     _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
     if out:
         fail(name, f"regression flow 4 must stay allowed even with a stale/different worktree_path set; got: {out!r}")
+        return
+    ok(name)
+
+
+def _write_workflow_json_fixture_full(
+    project_root: Path,
+    wf_uuid: str,
+    worktree_path: str | None,
+    worktree_mode: str | None = None,
+    session_id: str | None = None,
+) -> Path:
+    """Like `_write_workflow_json_fixture()` but exposes `worktree_mode`/
+    `session_id` too -- needed for the Item A (cross-session
+    workflow-identity leak) regression tests below, which specifically
+    depend on `worktree_mode` and multi-file mtime ordering."""
+    wf_dir = project_root / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True, exist_ok=True)
+    payload: dict = {"workflow_uuid": wf_uuid, "worktree_path": worktree_path}
+    if worktree_mode is not None:
+        payload["worktree_mode"] = worktree_mode
+    if session_id is not None:
+        payload["session_id"] = session_id
+    path = wf_dir / f"{wf_uuid}.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_pretooluse_guard_latest_workflow_ignores_terminal_worktree_mode_even_with_newest_mtime(tmp_dir: Path) -> None:
+    # Regression (Item A root cause, 2026-08-18 bug investigation):
+    # latest_workflow_file() used to pick whichever workflow JSON had the
+    # single most recent mtime, globally -- with no filtering by liveness.
+    # A finished workflow (worktree already merged and removed) whose JSON
+    # file happens to be touched LAST still "wins" under the old logic,
+    # leaking its stale/removed worktree_path into an unrelated
+    # invocation's confinement check. Reproduces the exact live incident:
+    # two workflow artifacts on disk, the STALE one is newer by mtime.
+    name = "pretooluse-guard/latest-workflow-ignores-terminal-worktree-mode-even-with-newest-mtime"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    live_worktree = tmp_dir / "live-worktree"
+    live_worktree.mkdir(parents=True)
+    # The "stale" workflow's own worktree directory is genuinely gone --
+    # matches the router's real merge-and-remove behavior.
+    stale_worktree = tmp_dir / "removed-worktree"
+
+    old_path = _write_workflow_json_fixture_full(
+        project_root, "wf-old-live", str(live_worktree.resolve()), worktree_mode="auto_created"
+    )
+    new_path = _write_workflow_json_fixture_full(
+        project_root, "wf-new-stale", str(stale_worktree), worktree_mode="merged_and_removed"
+    )
+    now = time.time()
+    os.utime(old_path, (now - 3600, now - 3600))  # older
+    os.utime(new_path, (now, now))  # newest mtime -- but terminal
+
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    # 1. A write inside the LIVE (older-mtime) workflow's worktree must be
+    #    ALLOWED -- proves the still-active workflow's worktree_path won,
+    #    not the newest-mtime terminal one.
+    payload_live = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((live_worktree / "scratch.md").resolve())},
+    }
+    _, out_live = run_hook("craftflow_pretooluse_guard.py", payload_live, env)
+    if out_live:
+        fail(name, f"expected allow for a write inside the LIVE workflow's worktree; got: {out_live!r}")
+        return
+
+    # 2. A write inside the STALE (newest-mtime, terminal) workflow's
+    #    (removed) worktree path must be DENIED -- under the pre-fix bug,
+    #    this was exactly the target that got incorrectly ALLOWED, because
+    #    the terminal workflow's worktree_path won the mtime race.
+    payload_stale = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((stale_worktree / "notes.md").resolve())},
+    }
+    _, out_stale = run_hook("craftflow_pretooluse_guard.py", payload_stale, env)
+    if '"permissionDecision": "deny"' not in out_stale and '"permissionDecision":"deny"' not in out_stale:
+        fail(
+            name,
+            "expected DENY for a write inside the stale/terminal workflow's "
+            f"(newest-mtime) worktree_path -- this is the exact fail-open "
+            f"regression signature; got: {out_stale!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_latest_workflow_ignores_missing_worktree_directory_even_with_newest_mtime(tmp_dir: Path) -> None:
+    # Variant (data-shape: staleness signaled by a REMOVED worktree
+    # directory, independent of worktree_mode ever being updated -- e.g. a
+    # crashed/interrupted merge that removed the directory but never got to
+    # write worktree_mode: "merged_and_removed"). Must be caught by the
+    # SAME fail-safe filter via the filesystem-truth check, not just the
+    # worktree_mode string.
+    name = "pretooluse-guard/latest-workflow-ignores-missing-worktree-directory-even-with-newest-mtime"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    live_worktree = tmp_dir / "live-worktree-2"
+    live_worktree.mkdir(parents=True)
+    # Directory genuinely does not exist -- no worktree_mode set at all
+    # (simulates an interrupted merge, not a clean router-flagged one).
+    vanished_worktree = tmp_dir / "vanished-worktree"
+
+    old_path = _write_workflow_json_fixture_full(
+        project_root, "wf-old-live-2", str(live_worktree.resolve())
+    )
+    new_path = _write_workflow_json_fixture_full(
+        project_root, "wf-new-vanished", str(vanished_worktree)
+    )
+    now = time.time()
+    os.utime(old_path, (now - 3600, now - 3600))
+    os.utime(new_path, (now, now))
+
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    payload_live = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((live_worktree / "scratch.md").resolve())},
+    }
+    _, out_live = run_hook("craftflow_pretooluse_guard.py", payload_live, env)
+    if out_live:
+        fail(name, f"expected allow for a write inside the still-live workflow's worktree; got: {out_live!r}")
+        return
+
+    payload_vanished = {
+        "tool_name": "Write",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((vanished_worktree / "notes.md").resolve())},
+    }
+    _, out_vanished = run_hook("craftflow_pretooluse_guard.py", payload_vanished, env)
+    if '"permissionDecision": "deny"' not in out_vanished and '"permissionDecision":"deny"' not in out_vanished:
+        fail(
+            name,
+            "expected DENY for a write inside a workflow whose worktree_path "
+            f"directory no longer exists on disk, even with the newest mtime; got: {out_vanished!r}",
+        )
+        return
+    ok(name)
+
+
+def test_hooklib_latest_workflow_file_prefers_session_id_match_when_present(tmp_dir: Path) -> None:
+    # Forward-compat proof: once a workflow artifact DOES carry a
+    # session_id (a future router-side follow-up, out of scope for this
+    # fix), latest_live_workflow_file() must prefer the matching-session
+    # live candidate over a different, more-recently-touched live one --
+    # proves tier 1 of the two-tier selection actually works, even though
+    # no in-repo writer populates session_id yet.
+    #
+    # Finding 1 (REM-FIX cycle 1): session_id-scoped selection is a
+    # write-confinement-sensitive concern (Item A), so it lives on
+    # latest_live_workflow_file() now -- the plain latest_workflow_file()
+    # reverted to its original zero-arg, unfiltered-newest-by-mtime
+    # signature (see craftflow_hooklib.py's "Latest workflow selection"
+    # module docstring).
+    name = "hooklib/latest-workflow-file-prefers-session-id-match-when-present"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    other_path = _write_workflow_json_fixture_full(
+        project_root, "wf-other-session", None, session_id="session-B"
+    )
+    mine_path = _write_workflow_json_fixture_full(
+        project_root, "wf-my-session", None, session_id="session-A"
+    )
+    now = time.time()
+    os.utime(mine_path, (now - 3600, now - 3600))  # older, but session-matched
+    os.utime(other_path, (now, now))  # newest mtime, different session
+
+    old_env = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(project_root)
+    try:
+        selected = hooklib.latest_live_workflow_file(session_id="session-A")
+    finally:
+        if old_env is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = old_env
+
+    if selected is None or selected.name != "wf-my-session.json":
+        fail(name, f"expected the session-A-matched (older) workflow to be selected; got: {selected!r}")
+        return
+    ok(name)
+
+
+def test_hooklib_latest_live_workflow_file_finds_session_match_outside_scan_window(tmp_dir: Path) -> None:
+    # Doubt-verify cycle 1, item 2 ("scan-window fallback gap", REM-FIX
+    # cycle 2, genuine new-code bug): the old `latest_live_workflow_file()`
+    # stopped scanning the instant the bounded window
+    # (`_LATEST_WORKFLOW_SCAN_WINDOW` = 50) produced ANY live candidate --
+    # even when `session_id` was given and none of those in-window live
+    # candidates matched it. A true session-matching live workflow sitting
+    # just outside the window (this repo's own high-churn scenario: many
+    # newer, unrelated, live workflows from concurrent work push a
+    # long-idle session's own workflow file below the window) was silently
+    # never found; the function fell through to an unrelated in-window
+    # live candidate instead of widening the scan. Reproduces the exact
+    # counter-example: an unrelated live workflow occupies every window
+    # slot (position 1..50), while the true session-matching live workflow
+    # sits older, at position 51+.
+    name = "hooklib/latest-live-workflow-file-finds-session-match-outside-scan-window"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+
+    now = time.time()
+    target_session = "sess-fix1-outside-window"
+    target_path = _write_workflow_json_fixture_full(
+        project_root, "wf-true-target", None, session_id=target_session
+    )
+    os.utime(target_path, (now - 7200, now - 7200))  # oldest -- pushed outside window
+
+    for i in range(hooklib._LATEST_WORKFLOW_SCAN_WINDOW):
+        filler_path = _write_workflow_json_fixture_full(
+            project_root, f"wf-filler-{i}", None, session_id="sess-unrelated"
+        )
+        # All newer than target_path, so all _LATEST_WORKFLOW_SCAN_WINDOW
+        # of them sort ahead of it -- target_path is guaranteed outside
+        # the bounded window.
+        os.utime(filler_path, (now - 3600 + i, now - 3600 + i))
+
+    old_env = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(project_root)
+    try:
+        selected = hooklib.latest_live_workflow_file(session_id=target_session)
+    finally:
+        if old_env is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = old_env
+
+    if selected is None or selected.name != "wf-true-target.json":
+        fail(
+            name,
+            "expected the session-matching workflow outside the scan window to "
+            f"be found (widened scan), not an unrelated in-window live "
+            f"candidate; got: {selected!r}",
+        )
+        return
+    ok(name)
+
+
+def test_precompact_state_snapshot_uses_newest_by_mtime_even_when_terminal_workflow(tmp_dir: Path) -> None:
+    # Finding 1 (code-reviewer CHANGES_REQUESTED, REM-FIX cycle 1, CRITICAL):
+    # the Item A liveness filter (_workflow_payload_is_live()) had been
+    # applied UNCONDITIONALLY inside latest_workflow_file()/
+    # latest_workflow_payload()/read_latest_workflow_state() -- silently
+    # changing behavior for every consumer of those shared functions, not
+    # just the 4 write-confinement-sensitive call sites in
+    # craftflow_pretooluse_guard.py/craftflow_pretooluse_bash_guard.py that
+    # actually need fail-closed liveness semantics.
+    #
+    # craftflow_precompact_state.py is a non-security consumer: it calls
+    # `read_latest_workflow_state()` (no session_id, no liveness filtering)
+    # to snapshot "whatever workflow is currently active" before a context
+    # compaction. It must keep the ORIGINAL "true newest by mtime,
+    # including terminal workflows" semantic that craftflow_status_report.py's
+    # own comment documents ("# Default: precompact snapshot -> newest by
+    # mtime") -- a terminal (merged_and_removed) workflow whose JSON file
+    # happens to be the most-recently-touched one on disk must still win
+    # here, exactly as it did before the Item A liveness filter existed.
+    name = "precompact-state/snapshot-uses-newest-by-mtime-even-when-terminal-workflow"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+
+    old_path = _write_workflow_json_fixture_full(
+        project_root, "wf-old-live", None, worktree_mode="auto_created"
+    )
+    new_path = _write_workflow_json_fixture_full(
+        project_root, "wf-new-terminal", None, worktree_mode="merged_and_removed"
+    )
+    now = time.time()
+    os.utime(old_path, (now - 3600, now - 3600))  # older, live
+    os.utime(new_path, (now, now))  # newest mtime, but terminal
+
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"trigger": "auto"}
+    exit_code, out = run_hook("craftflow_precompact_state.py", payload, env)
+    if exit_code != 0:
+        fail(name, f"expected craftflow_precompact_state.py to exit 0; got {exit_code}, out={out!r}")
+        return
+
+    snapshot_path = project_root / ".craftflow" / "state" / "precompact-state.json"
+    if not snapshot_path.exists():
+        fail(name, "expected precompact-state.json snapshot to be written")
+        return
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    if snapshot.get("workflow_uuid") != "wf-new-terminal":
+        fail(
+            name,
+            "expected the snapshot to reflect the TRUE newest-by-mtime workflow "
+            "even though it is terminal (merged_and_removed) -- a non-security "
+            f"consumer must NOT be liveness-filtered; got: {snapshot.get('workflow_uuid')!r}",
+        )
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# Item B fix: consecutive-denial hard stop
+# ---------------------------------------------------------------------------
+
+def _denial_log_lines(project_root: Path) -> list:
+    log_path = project_root / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        return []
+    return log_path.read_text(encoding="utf-8").strip().splitlines()
+
+
+def test_pretooluse_guard_edit_write_single_denial_is_not_escalated(tmp_dir: Path) -> None:
+    # Regression proof part 1 (Item B requirement 1): a SINGLE denial must
+    # NOT hard-stop -- ordinary deny wording/decision only.
+    name = "pretooluse-guard/edit-write-single-denial-is-not-escalated"
+    project_root = tmp_dir / "project"
+    worktree = tmp_dir / "worktree"
+    outside = tmp_dir / "outside"
+    project_root.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, str(worktree.resolve()))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "sess-itemb-1",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((outside / "notes.md").resolve())},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny on the first attempt; got: {out!r}")
+        return
+    if "ESCALATED" in out:
+        fail(name, f"a single denial must not be escalated; got: {out!r}")
+        return
+    log_lines = _denial_log_lines(project_root)
+    if any('"decision": "deny-escalated"' in line for line in log_lines):
+        fail(name, f"expected no deny-escalated log entry after only 1 denial; got: {log_lines!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_second_consecutive_denial_is_escalated(tmp_dir: Path) -> None:
+    # Regression proof part 2 (Item B requirement 2): a SECOND consecutive
+    # denial on the SAME (session, resolved target) logical write action
+    # escalates -- distinct wording ("ESCALATED"/"STOP and ask the user")
+    # and a distinct log decision ("deny-escalated"), reproducing the
+    # structural backstop for the motivating incident (2 Edit denials on
+    # the same target, then a Bash-surface bypass attempt with nothing
+    # pausing for human input in between).
+    name = "pretooluse-guard/edit-write-second-consecutive-denial-is-escalated"
+    project_root = tmp_dir / "project"
+    worktree = tmp_dir / "worktree"
+    outside = tmp_dir / "outside"
+    project_root.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, str(worktree.resolve()))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "sess-itemb-2",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((outside / "notes.md").resolve())},
+    }
+    run_hook("craftflow_pretooluse_guard.py", payload, env)  # 1st denial
+    _, out2 = run_hook("craftflow_pretooluse_guard.py", payload, env)  # 2nd denial, same target
+    if '"permissionDecision": "deny"' not in out2 and '"permissionDecision":"deny"' not in out2:
+        fail(name, f"expected deny on the 2nd attempt too; got: {out2!r}")
+        return
+    if "ESCALATED" not in out2 or "STOP" not in out2:
+        fail(name, f"expected the 2nd consecutive denial to be escalated; got: {out2!r}")
+        return
+    log_lines = _denial_log_lines(project_root)
+    if not any('"decision": "deny-escalated"' in line for line in log_lines):
+        fail(name, f"expected a deny-escalated log entry after the 2nd denial; got: {log_lines!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_second_consecutive_denial_is_escalated(tmp_dir: Path) -> None:
+    # Variant (trigger-surface dimension): the SAME escalation mechanism
+    # via the Bash-write-detection lane in _handle_bash, not just
+    # Edit/Write -- proves the hard stop is not hardcoded to one tool
+    # surface. Two consecutive Bash redirects into the SAME protected
+    # memory file (memoryWrites/protectedWrites unconditional lane is not
+    # used here -- worktree-confinement is unconditional and simplest to
+    # trigger deterministically).
+    name = "pretooluse-guard/bash-second-consecutive-denial-is-escalated"
+    project_root = tmp_dir / "project"
+    elsewhere = tmp_dir / "elsewhere"
+    project_root.mkdir(parents=True)
+    elsewhere.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    target = project_root / ".craftflow" / "state" / "activeContext.md"
+    payload = {
+        "tool_name": "Bash",
+        "session_id": "sess-itemb-3",
+        "cwd": str(elsewhere.resolve()),
+        "tool_input": {"command": f"echo hi > {target.resolve()}"},
+    }
+    _, out1 = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if "ESCALATED" in out1:
+        fail(name, f"expected the 1st Bash denial to NOT be escalated; got: {out1!r}")
+        return
+    _, out2 = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out2 and '"permissionDecision":"deny"' not in out2:
+        fail(name, f"expected deny on the 2nd Bash attempt too; got: {out2!r}")
+        return
+    if "ESCALATED" not in out2 or "STOP" not in out2:
+        fail(name, f"expected the 2nd consecutive Bash denial to be escalated; got: {out2!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_denial_counter_resets_on_different_target(tmp_dir: Path) -> None:
+    # Reset condition (Item B requirement 3, "a new logical action"): an
+    # escalated target must NOT contaminate a DIFFERENT target's count --
+    # each resolved path is its own independent logical action.
+    name = "pretooluse-guard/edit-write-denial-counter-resets-on-different-target"
+    project_root = tmp_dir / "project"
+    worktree = tmp_dir / "worktree"
+    outside = tmp_dir / "outside"
+    project_root.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, str(worktree.resolve()))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    session_id = "sess-itemb-4"
+
+    target_a = {
+        "tool_name": "Write",
+        "session_id": session_id,
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((outside / "a.md").resolve())},
+    }
+    run_hook("craftflow_pretooluse_guard.py", target_a, env)
+    _, out_a2 = run_hook("craftflow_pretooluse_guard.py", target_a, env)
+    if "ESCALATED" not in out_a2:
+        fail(name, f"expected target A's 2nd denial to be escalated (sanity check); got: {out_a2!r}")
+        return
+
+    target_b = {
+        "tool_name": "Write",
+        "session_id": session_id,
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((outside / "b.md").resolve())},
+    }
+    _, out_b1 = run_hook("craftflow_pretooluse_guard.py", target_b, env)
+    if "ESCALATED" in out_b1:
+        fail(name, f"expected target B's FIRST denial to NOT be escalated by target A's count; got: {out_b1!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_denial_counter_resets_after_allowed_write(tmp_dir: Path) -> None:
+    # Reset condition (Item B requirement 3, "a successful equivalent
+    # write"): once the guard ALLOWS a write to the same target (e.g. the
+    # worktree_path is fixed / becomes correct), the next denial on that
+    # target must start a FRESH count, not continue the old escalation.
+    name = "pretooluse-guard/edit-write-denial-counter-resets-after-allowed-write"
+    project_root = tmp_dir / "project"
+    worktree = tmp_dir / "worktree"
+    outside = tmp_dir / "outside"
+    project_root.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    _write_workflow_json_fixture(project_root, str(worktree.resolve()))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    session_id = "sess-itemb-5"
+    outside_target = outside / "notes.md"
+
+    # Deny twice on an outside-of-confinement path (worktree-confinement
+    # violation, escalates on the 2nd), then issue an ALLOWED write to
+    # that EXACT SAME resolved path (by pointing cwd at `outside` itself,
+    # so it now resolves inside cwd -- a clean "no violations" pass), then
+    # deny it again from the original cwd and confirm it is back to an
+    # ordinary (non-escalated) 1st-of-a-new-sequence denial.
+    deny_payload = {
+        "tool_name": "Write",
+        "session_id": session_id,
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str(outside_target.resolve())},
+    }
+    run_hook("craftflow_pretooluse_guard.py", deny_payload, env)  # 1st deny
+    _, out2 = run_hook("craftflow_pretooluse_guard.py", deny_payload, env)  # 2nd deny -- escalated
+    if "ESCALATED" not in out2:
+        fail(name, f"expected the 2nd denial to be escalated (sanity check); got: {out2!r}")
+        return
+
+    # An ALLOWED write to the exact same resolved path (now targeted
+    # inside cwd, so it clears the "no violations" path) resets the count.
+    allow_payload = {
+        "tool_name": "Write",
+        "session_id": session_id,
+        "cwd": str(outside.resolve()),
+        "tool_input": {"file_path": str(outside_target.resolve())},
+    }
+    _, out_allow = run_hook("craftflow_pretooluse_guard.py", allow_payload, env)
+    if out_allow:
+        fail(name, f"expected the corrected write (now inside its own cwd) to be allowed; got: {out_allow!r}")
+        return
+
+    _, out_after_reset = run_hook("craftflow_pretooluse_guard.py", deny_payload, env)
+    if "ESCALATED" in out_after_reset:
+        fail(
+            name,
+            "expected the FIRST denial after an intervening allow to NOT be "
+            f"escalated (counter must reset); got: {out_after_reset!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_denial_escalates_across_case_variant_paths(tmp_dir: Path) -> None:
+    # Doubt-verify cycle 1, item 3 (case-insensitive `denial_action_key()`,
+    # REM-FIX cycle 2): on the case-insensitive default macOS/APFS volume,
+    # `str(Path(...).resolve())` preserves the literal case the caller
+    # supplied rather than normalizing it -- confirmed empirically:
+    # `Path("foo.md").resolve()` and `Path("FOO.md").resolve()` are
+    # different Python strings that share the same underlying inode. A
+    # retry that spells the SAME logical file with a different case (a
+    # trivial, easy-to-hit variation -- not necessarily adversarial)
+    # produced a DIFFERENT `denial_action_key()`, silently resetting the
+    # consecutive-denial counter and defeating the Item B escalation this
+    # fix exists to provide. Deny the same logical file twice via two
+    # different-case spellings and confirm the 2nd is now escalated.
+    name = "pretooluse-guard/edit-write-denial-escalates-across-case-variant-paths"
+    project_root = tmp_dir / "project"
+    worktree = tmp_dir / "worktree"
+    outside = tmp_dir / "outside"
+    project_root.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    # File must actually exist on disk for the case-insensitive lookup to
+    # share an inode across spellings (a non-existent path has no inode to
+    # share, but `denial_action_key()` must normalize the STRING either
+    # way, independent of on-disk existence).
+    (outside / "notes.md").write_text("x", encoding="utf-8")
+    _write_workflow_json_fixture(project_root, str(worktree.resolve()))
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    session_id = "sess-itemb-case"
+
+    payload_lower = {
+        "tool_name": "Write",
+        "session_id": session_id,
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((outside / "notes.md").resolve())},
+    }
+    payload_upper = {
+        "tool_name": "Write",
+        "session_id": session_id,
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"file_path": str((outside / "NOTES.MD").resolve())},
+    }
+
+    _, out1 = run_hook("craftflow_pretooluse_guard.py", payload_lower, env)  # 1st deny
+    if "ESCALATED" in out1:
+        fail(name, f"expected the 1st denial (lowercase spelling) to NOT be escalated; got: {out1!r}")
+        return
+
+    _, out2 = run_hook("craftflow_pretooluse_guard.py", payload_upper, env)  # 2nd deny, different case
+    if '"permissionDecision": "deny"' not in out2 and '"permissionDecision":"deny"' not in out2:
+        fail(name, f"expected deny on the 2nd (case-variant) attempt too; got: {out2!r}")
+        return
+    if "ESCALATED" not in out2:
+        fail(
+            name,
+            "expected the 2nd denial (different case spelling of the SAME "
+            f"logical file) to be escalated; got: {out2!r}",
+        )
+        return
+    ok(name)
+
+
+def test_hooklib_record_denial_concurrent_calls_do_not_lose_updates(tmp_dir: Path) -> None:
+    # Finding 3 (code-reviewer CHANGES_REQUESTED, REM-FIX cycle 1, MEDIUM):
+    # `_load_denial_tracker()`/`_save_denial_tracker()` did a read-modify-
+    # write on `.denial-tracker.json` with no coordination between the read
+    # and the write. Two concurrent PreToolUse invocations denied on the
+    # SAME (session_id, target) can both read the same stale count, both
+    # increment locally, and both write back the same value -- silently
+    # losing one denial and potentially missing the escalation signal.
+    #
+    # `_load_denial_tracker` is monkeypatched to sleep briefly AFTER its
+    # real read completes -- this deterministically widens the read/write
+    # window so every concurrent thread's read happens before any of them
+    # writes, WITHOUT relying on GIL/scheduler luck. With `record_denial()`
+    # properly locking the whole read-modify-write (the fix), that sleep
+    # just makes the holder of the lock slower -- every other thread blocks
+    # on lock acquisition and still observes the prior thread's write, so
+    # the final count is exactly N. Without the lock, the sleep guarantees
+    # every thread reads the same stale state and the final count collapses
+    # to 1 (N-1 denials silently lost).
+    import threading
+
+    name = "hooklib/record-denial-concurrent-calls-do-not-lose-updates"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+
+    old_project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(project_root)
+
+    original_load = hooklib._load_denial_tracker
+
+    def _slow_load():
+        result = original_load()
+        time.sleep(0.05)
+        return result
+
+    hooklib._load_denial_tracker = _slow_load
+
+    concurrent_calls = 8
+    errors: list = []
+
+    def _worker() -> None:
+        try:
+            hooklib.record_denial("session-race", "/some/racy/target.md")
+        except Exception as exc:  # pragma: no cover - defensive
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_worker) for _ in range(concurrent_calls)]
+    tracker = {}
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+        # Read the tracker BEFORE CLAUDE_PROJECT_DIR is restored below --
+        # denial_tracker_path() (via state_root()/project_dir()) resolves
+        # relative to the CURRENT env var, so reading after restore would
+        # silently read the wrong (real) project's tracker file instead of
+        # the tmp fixture's.
+        hooklib._load_denial_tracker = original_load
+        tracker = hooklib._load_denial_tracker()
+    finally:
+        hooklib._load_denial_tracker = original_load
+        if old_project_dir is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = old_project_dir
+
+    if errors:
+        fail(name, f"unexpected exception(s) during concurrent record_denial() calls: {errors!r}")
+        return
+
+    key = hooklib.denial_action_key("session-race", "/some/racy/target.md")
+    entry = tracker.get(key)
+    count = entry.get("count") if isinstance(entry, dict) else None
+    if count != concurrent_calls:
+        fail(
+            name,
+            f"expected all {concurrent_calls} concurrent record_denial() calls to be "
+            "counted without loss (TOCTOU race in the read-modify-write of "
+            f".denial-tracker.json); got count={count!r}",
+        )
         return
     ok(name)
 
@@ -2812,14 +3485,17 @@ def test_pretooluse_guard_denies_bash_python_oneliner_via_env_prefix_write_to_me
 
 
 def test_pretooluse_guard_handles_workflow_payload_race_in_wf_uuid_lookup(tmp_dir: Path) -> None:
-    # HIGH 3: of the two structurally identical latest_workflow_payload()
+    # HIGH 3: of the two structurally identical latest_live_workflow_payload()
     # calls in _handle_edit_write, the confinement-check call (inside
     # _edit_write_escapes_confinement) is wrapped in try/except by its
     # caller, but the SECOND call (populating wf_uuid for the deny/log
     # payload on the worktree-confinement deny path) had none.
-    # latest_workflow_payload() can raise FileNotFoundError on a stat-race
-    # (workflow JSON file deleted between glob() and .stat()), crashing
-    # main() before the deny is ever emitted -- an uncaught crash fails OPEN.
+    # latest_live_workflow_payload() can raise FileNotFoundError on a
+    # stat-race (workflow JSON file deleted between glob() and .stat()),
+    # crashing main() before the deny is ever emitted -- an uncaught crash
+    # fails OPEN. (Finding 1, REM-FIX cycle 1: this is the write-
+    # confinement-sensitive *_live_* variant now, not the plain
+    # newest-by-mtime latest_workflow_payload().)
     name = "pretooluse-guard/handles-workflow-payload-race-in-wf-uuid-lookup"
     project_root = tmp_dir / "project"
     outside = tmp_dir / "outside"
@@ -2828,17 +3504,17 @@ def test_pretooluse_guard_handles_workflow_payload_race_in_wf_uuid_lookup(tmp_di
 
     call_count = {"n": 0}
 
-    def _fake_latest_workflow_payload():
+    def _fake_latest_live_workflow_payload(session_id=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             return {}
         raise FileNotFoundError("workflow json vanished mid-stat")
 
-    original = pretooluse_guard.latest_workflow_payload
+    original = pretooluse_guard.latest_live_workflow_payload
     old_env = {k: os.environ.get(k) for k in ("CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT")}
     os.environ["CLAUDE_PROJECT_DIR"] = str(project_root)
     os.environ["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
-    pretooluse_guard.latest_workflow_payload = _fake_latest_workflow_payload
+    pretooluse_guard.latest_live_workflow_payload = _fake_latest_live_workflow_payload
     buf = io.StringIO()
     old_stdout = sys.stdout
     crashed_exc = None
@@ -2854,7 +3530,7 @@ def test_pretooluse_guard_handles_workflow_payload_race_in_wf_uuid_lookup(tmp_di
             crashed_exc = exc
     finally:
         sys.stdout = old_stdout
-        pretooluse_guard.latest_workflow_payload = original
+        pretooluse_guard.latest_live_workflow_payload = original
         for key, value in old_env.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -14230,6 +14906,82 @@ def test_workflow_artifact_template_includes_workspace_writable_paths_field() ->
 
 
 # ---------------------------------------------------------------------------
+# pretooluse-guard: state-read compaction (Read PreToolUse)
+# ---------------------------------------------------------------------------
+
+def test_pretooluse_guard_denies_oversized_state_read(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/read/denies-oversized-state-file"
+    state_dir = tmp_dir / ".craftflow" / "state" / "project"
+    state_dir.mkdir(parents=True)
+    target = state_dir / "activeContext.md"
+    target.write_text("x" * 60000, encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir.resolve())}
+    payload = {"tool_name": "Read", "tool_input": {"file_path": str(target.resolve())}}
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(name, f"exit code {code}; expected 0")
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny decision, got: {out[:300]}")
+        return
+    if "craftflow_state_query.py" not in out:
+        fail(name, f"deny message must name the redirect script: {out[:300]}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_under_threshold_state_read(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/read/allows-under-threshold"
+    state_dir = tmp_dir / ".craftflow" / "state" / "project"
+    state_dir.mkdir(parents=True)
+    target = state_dir / "patterns.md"
+    target.write_text("small content", encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir.resolve())}
+    payload = {"tool_name": "Read", "tool_input": {"file_path": str(target.resolve())}}
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0 or "permissionDecision" in out:
+        fail(name, f"expected allow (no deny), got exit={code} out={out[:200]}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_oversized_read_outside_state_dir(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/read/allows-oversized-outside-state"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    target = tmp_dir / "README.md"
+    target.write_text("x" * 60000, encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir.resolve())}
+    payload = {"tool_name": "Read", "tool_input": {"file_path": str(target.resolve())}}
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0 or "permissionDecision" in out:
+        fail(name, f"expected allow outside .craftflow/state, got exit={code} out={out[:200]}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_read_branch_does_not_affect_edit_write_dispatch(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/read/edit-write-dispatch-unaffected"
+    state_dir = tmp_dir / ".craftflow" / "state" / "project"
+    state_dir.mkdir(parents=True)
+    target = state_dir / "patterns.md"
+    target.write_text("existing content", encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir.resolve())}
+    payload = {
+        "tool_name": "Edit",
+        "cwd": str(tmp_dir.resolve()),
+        "tool_input": {"file_path": str(target.resolve()), "old_string": "a", "new_string": "b"},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(name, f"exit code {code}; expected 0")
+        return
+    if "state-read-compaction" in out:
+        fail(name, f"Edit must never trigger the read-compaction reason: {out[:200]}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -14289,6 +15041,18 @@ def main() -> int:
         test_pretooluse_guard_edit_write_allows_claude_code_own_memory_md_exact_file(tmp / "g18c")
         test_pretooluse_guard_edit_write_denies_other_project_claude_code_memory_dir(tmp / "g18d")
         test_pretooluse_guard_edit_write_confinement_allows_workflow_json_when_worktree_path_stale(tmp / "g19")
+        test_pretooluse_guard_latest_workflow_ignores_terminal_worktree_mode_even_with_newest_mtime(tmp / "g19-itemA-1")
+        test_pretooluse_guard_latest_workflow_ignores_missing_worktree_directory_even_with_newest_mtime(tmp / "g19-itemA-2")
+        test_hooklib_latest_workflow_file_prefers_session_id_match_when_present(tmp / "g19-itemA-3")
+        test_precompact_state_snapshot_uses_newest_by_mtime_even_when_terminal_workflow(tmp / "g19-itemA-4")
+        test_hooklib_latest_live_workflow_file_finds_session_match_outside_scan_window(tmp / "g19-itemA-5")
+        test_pretooluse_guard_edit_write_single_denial_is_not_escalated(tmp / "g19-itemB-1")
+        test_pretooluse_guard_edit_write_second_consecutive_denial_is_escalated(tmp / "g19-itemB-2")
+        test_pretooluse_guard_bash_second_consecutive_denial_is_escalated(tmp / "g19-itemB-3")
+        test_pretooluse_guard_edit_write_denial_counter_resets_on_different_target(tmp / "g19-itemB-4")
+        test_pretooluse_guard_edit_write_denial_counter_resets_after_allowed_write(tmp / "g19-itemB-5")
+        test_hooklib_record_denial_concurrent_calls_do_not_lose_updates(tmp / "g19-itemB-6")
+        test_pretooluse_guard_edit_write_denial_escalates_across_case_variant_paths(tmp / "g19-itemB-7")
         test_pretooluse_guard_edit_write_allows_exact_allowlisted_workspace_root_file(tmp / "g19b")
         test_pretooluse_guard_edit_write_denies_non_allowlisted_sibling_workspace_root_file(tmp / "g19c")
         test_pretooluse_guard_edit_write_denies_descendant_of_allowlisted_entry_no_directory_grant(tmp / "g19d")
@@ -15017,6 +15781,13 @@ def main() -> int:
     print("[ router: workspace-root allowlist wiring (Phase 4) ]")
     test_workspace_root_config_read_gated_inside_step_1a()
     test_workflow_artifact_template_includes_workspace_writable_paths_field()
+
+    print()
+    print("[ pretooluse-guard: state-read compaction (Read PreToolUse) ]")
+    test_pretooluse_guard_denies_oversized_state_read(tmp / "r1")
+    test_pretooluse_guard_allows_under_threshold_state_read(tmp / "r2")
+    test_pretooluse_guard_allows_oversized_read_outside_state_dir(tmp / "r3")
+    test_pretooluse_guard_read_branch_does_not_affect_edit_write_dispatch(tmp / "r4")
 
     print()
     if _errors:

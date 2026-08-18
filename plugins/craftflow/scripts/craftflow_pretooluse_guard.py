@@ -37,19 +37,23 @@ except ImportError:
     skill_promote = None
 
 from craftflow_hooklib import (
+    DENIAL_ESCALATION_THRESHOLD,
     MEMORY_FINALIZE_PERMIT_LITERAL,
+    clear_denial,
     extract_redirect_targets,
     has_memory_finalize_permit,
-    latest_workflow_payload,
+    latest_live_workflow_payload,
     load_input,
     load_mode,
     log_event,
     looks_dynamic,
     matches_memory_finalize_permit_shape,
     memory_finalize_permit_path,
+    plugin_root,
     pretool_deny,
     project_dir,
     project_state_dir,
+    record_denial,
     resolve_confinement,
     resolve_workspace_writable_paths,
     resolve_toggle_decision,
@@ -80,6 +84,15 @@ if skill_ledger is None or skill_promote is None:
 PROTECTED_MEMORY_FILES = ("activeContext.md", "patterns.md", "progress.md")
 
 RELIABILITY_GATES_LEDGER_REL_PATH = ".craftflow/state/project/reliability-gates.json"
+
+# rtk-inspired state-read compaction (PreToolUse deny+redirect on Read, not a
+# rewrite -- Claude Code's own PostToolUse contract cannot retroactively
+# shrink content already in context, and this repo's prior on-disk-masking
+# approach (craftflow_memory_protect_pre.py, reverted for "defeats Memory
+# First") is deliberately NOT reused here: this check never mutates the
+# target file's bytes, it only denies the Read and names the redirect
+# command.
+READ_COMPACTION_THRESHOLD_BYTES = 50_000
 
 # Narrow extension for the documented `python3 -c "...open(path, 'w')..."`
 # one-liner shape (Plan-vs-Code Gaps: "closes this exact gap") -- neither a
@@ -289,6 +302,89 @@ def _protected_memory_paths() -> set:
     except Exception:
         pass
     return paths
+
+
+def _is_state_read_compaction_candidate(path: Path) -> bool:
+    """True if `path` is under `.craftflow/state/**` and is not the
+    memory-finalize permit sentinel (too small to matter, excluded for
+    clarity, matching how the permit path is always excluded explicitly
+    elsewhere in this module)."""
+    try:
+        path.relative_to(state_root())
+    except (OSError, ValueError):
+        return False
+    try:
+        if path == memory_finalize_permit_path().resolve():
+            return False
+    except Exception:
+        pass
+    return True
+
+
+def check_state_read_compaction(path: Path) -> bool:
+    """True if this Read target should be denied and redirected to
+    craftflow_state_query.py: under .craftflow/state/**, not the permit
+    sentinel, and strictly over READ_COMPACTION_THRESHOLD_BYTES. Any error
+    reading the target's size (missing file, permission error) degrades to
+    False -- fail-open, non-security posture, matching this check's own
+    Error Handling design (never block a normal, small, or non-existent
+    Read)."""
+    if not _is_state_read_compaction_candidate(path):
+        return False
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    return size > READ_COMPACTION_THRESHOLD_BYTES
+
+
+def _handle_read(data: dict, mode: dict, tool_input: dict) -> int:
+    file_path = tool_input.get("file_path")
+    if not file_path:
+        return 0
+
+    path = Path(file_path).resolve()
+    try:
+        should_redirect = check_state_read_compaction(path)
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "check_state_read_compaction",
+                "error": repr(exc),
+                "reason": "skipped_state_read_compaction_check",
+            },
+        )
+        return 0
+
+    if not should_redirect:
+        return 0
+
+    should_block, decision = resolve_toggle_decision(mode.get("stateReadCompaction", "block"))
+
+    log_event(
+        "plugin_pretooluse_guard",
+        {
+            "event": "pretool_guard",
+            "tool_name": "Read",
+            "path": str(path),
+            "decision": decision if should_block else "audit",
+            "reason": "state-read-compaction",
+        },
+    )
+
+    if not should_block:
+        return 0
+
+    script = plugin_root() / "scripts" / "craftflow_state_query.py"
+    pretool_deny(
+        "CRAFTFLOW plugin hook redirected an oversized Read of a "
+        f".craftflow/state file (over {READ_COMPACTION_THRESHOLD_BYTES} bytes). "
+        f'Run: python3 "{script}" "{path}" --mode summary '
+        "(or --mode full for the complete, byte-identical content) instead of Read."
+    )
+    return 0
 
 
 # HIGH 5 (REM-FIX, skill-distillation Phase 2 remediation): a skill can only
@@ -634,6 +730,53 @@ def _is_protected_reliability_gates_path(path: Path) -> bool:
         return False
 
 
+def _denial_escalation_suffix(count: int) -> str:
+    """Item B fix (consecutive-denial hard stop). Appended to a deny
+    message once `count` reaches `DENIAL_ESCALATION_THRESHOLD` for the same
+    (session_id, resolved target) logical write action -- see
+    craftflow_hooklib.py's own module docstring for the granularity
+    choice.
+
+    Wording (doubt-verify cycle 1, defends-with-advisory finding, REM-FIX
+    cycle 2): the previous wording ("HARD STOP ... do not retry via a
+    different tool") implied a mechanical enforcement this guard cannot
+    actually provide -- a stateless PreToolUse hook can only allow/deny
+    the ONE tool call it was invoked for; it has no ability to block a
+    calling agent from attempting yet another tool or surface. This
+    wording is honest about that: it is a strong, unambiguous signal
+    (escalated message + distinct `deny-escalated` log decision) asking
+    the agent to stop and involve the user, not a claim of literal
+    process-level or structural prevention."""
+    return (
+        f" ESCALATED: this is the {count}th consecutive denial on this exact "
+        "target within this session. This strongly suggests you are "
+        "attempting to work around a legitimate restriction via a "
+        "different tool or surface. STOP and ask the user before "
+        "proceeding by any other means -- do not attempt an equivalent "
+        "write through Bash, a different tool, or a workaround."
+    )
+
+
+def _record_multi_target_denial(session_id: str | None, targets: list) -> Tuple[int, bool]:
+    """Bash-path variant of `record_denial()` (Item B fix): a single Bash
+    command's deny decision can involve MULTIPLE distinct violating target
+    paths across several violation categories at once. Records one denial
+    against every unique target and escalates if ANY of them has now
+    reached the threshold -- returns (max_count_seen, escalated)."""
+    max_count = 0
+    escalated = False
+    for target in sorted(set(t for t in targets if t)):
+        count, esc = record_denial(session_id, target)
+        max_count = max(max_count, count)
+        escalated = escalated or esc
+    return max_count, escalated
+
+
+def _clear_multi_target_denial(session_id: str | None, targets: list) -> None:
+    for target in sorted(set(t for t in targets if t)):
+        clear_denial(session_id, target)
+
+
 def _protected_bash_write_paths() -> set:
     """Protected-path set for the NEW Bash-write-inspection layer only
     (Task 4.2 step 2): reuses `_protected_memory_paths()` (the 3 .md files
@@ -660,7 +803,14 @@ def _edit_write_escapes_confinement(data: dict, path: Path) -> bool:
     if not cwd_raw:
         return False
     cwd = Path(cwd_raw).resolve()
-    workflow = latest_workflow_payload()
+    # Item A fix: session_id-scoped, liveness-filtered selection (see
+    # latest_live_workflow_file()'s own docstring) -- the PreToolUse hook
+    # payload's own "session_id" field is threaded through so a matching,
+    # still-live workflow is preferred over an unrelated session's stale
+    # artifact. This is a write-confinement-sensitive call site (Finding 1,
+    # REM-FIX cycle 1) so it uses the *_live_* variant, not the plain
+    # newest-by-mtime latest_workflow_payload().
+    workflow = latest_live_workflow_payload(data.get("session_id"))
     worktree_path = workflow.get("worktree_path")
     if worktree_path is not None and not isinstance(worktree_path, str):
         worktree_path = None
@@ -959,25 +1109,31 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
         )
 
     if not violations:
+        # Item B fix: an allowed write to this exact target resets any
+        # consecutive-denial escalation on it (the "successful equivalent
+        # write" reset condition).
+        clear_denial(data.get("session_id"), str(path))
         return 0
 
     # HIGH 3 (REM-FIX): this call is structurally identical to the one
     # inside _edit_write_escapes_confinement above, but that one is wrapped
     # in try/except by ITS caller -- this one previously was not.
-    # latest_workflow_payload() can raise (e.g. FileNotFoundError on a
+    # latest_live_workflow_payload() can raise (e.g. FileNotFoundError on a
     # stat-race, workflow JSON deleted between glob() and .stat()), which
     # would crash main() before the deny below is ever emitted. Degrade
     # wf_uuid to None on failure -- the deny must still fire; only the
     # logged wf_uuid metadata degrades (Behavior Contract rule 9).
     #
-    # REM-FIX cycle 3 (live-reproduced CRITICAL): latest_workflow_payload() only guarantees
-    # valid JSON was parsed -- NOT that the top level is a dict (same Bug A pattern already
-    # fixed in _handle_bash). wf_uuid/pending_gate MUST be derived inside this SAME try/except,
-    # not after it, so a non-dict top level (e.g. `[1,2,3]`) degrades gracefully instead of
-    # raising an uncaught AttributeError out of _handle_edit_write (and the whole guard process,
-    # since main() has no top-level try/except) before the deny below is ever emitted.
+    # REM-FIX cycle 3 (live-reproduced CRITICAL): latest_live_workflow_payload() only
+    # guarantees valid JSON was parsed -- NOT that the top level is a dict (same Bug A
+    # pattern already fixed in _handle_bash). wf_uuid/pending_gate MUST be derived inside
+    # this SAME try/except, not after it, so a non-dict top level (e.g. `[1,2,3]`) degrades
+    # gracefully instead of raising an uncaught AttributeError out of _handle_edit_write
+    # (and the whole guard process, since main() has no top-level try/except) before the
+    # deny below is ever emitted. Write-confinement-sensitive call site (Finding 1,
+    # REM-FIX cycle 1) -- uses the *_live_* variant.
     try:
-        workflow = latest_workflow_payload()
+        workflow = latest_live_workflow_payload(data.get("session_id"))
         wf_uuid = workflow.get("workflow_uuid") or workflow.get("workflow_id")
         pending_gate = workflow.get("pending_gate")
     except Exception as exc:
@@ -985,7 +1141,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
             "plugin_pretooluse_guard",
             {
                 "event": "pretool_guard_parse_error",
-                "command_name": "latest_workflow_payload",
+                "command_name": "latest_live_workflow_payload",
                 "error": repr(exc),
                 "reason": "skipped_wf_uuid_lookup",
             },
@@ -1005,6 +1161,12 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
         if v in ("worktree-confinement", "skill-promotion-path", "skill-ledger-write", "reliability-gates-write")
     ]
     if unconditional_violations:
+        # Item B fix: record this denial against the (session, target)
+        # logical action BEFORE logging, so an escalated 2nd+ consecutive
+        # denial is reflected in both the log decision and the deny
+        # message itself.
+        session_id = data.get("session_id")
+        denial_count, denial_escalated = record_denial(session_id, str(path))
         log_event(
             "plugin_pretooluse_guard",
             {
@@ -1015,7 +1177,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
                 "tool_name": data.get("tool_name"),
                 "path": str(path),
                 "event": "pretool_guard",
-                "decision": "deny",
+                "decision": "deny-escalated" if denial_escalated else "deny",
                 "reason": ",".join(violations),
             },
         )
@@ -1024,15 +1186,21 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
             for v in unconditional_violations
             if v in _UNCONDITIONAL_VIOLATION_EXPLANATIONS
         )
-        pretool_deny(
+        message = (
             "CRAFTFLOW plugin hook blocked an Edit/Write target (reason: "
             + ",".join(unconditional_violations) + "). " + explanation
         )
+        if denial_escalated:
+            message += _denial_escalation_suffix(denial_count)
+        pretool_deny(message)
         return 0
 
     # Router-owned memory finalization: permit token lifts the block for the
     # active workflow so the router can write memory files inline.
     if "memory-write" in violations and has_memory_finalize_permit(wf_uuid):
+        # Item B fix: the finalize permit means this write IS proceeding --
+        # treat it as an allow for escalation-reset purposes too.
+        clear_denial(data.get("session_id"), str(path))
         log_event(
             "plugin_pretooluse_guard",
             {
@@ -1076,6 +1244,18 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     should_block_raw, memory_writes_decision = resolve_toggle_decision(mode.get("memoryWrites", "audit"))
     should_block = "memory-write" in violations and should_block_raw
 
+    # Item B fix: only a genuine deny records a denial; anything else at
+    # this point in the function is effectively an allow (the write
+    # proceeds, e.g. an "audit" mode toggle) and resets any prior
+    # escalation on this exact target.
+    session_id = data.get("session_id")
+    denial_count = 0
+    denial_escalated = False
+    if should_block:
+        denial_count, denial_escalated = record_denial(session_id, str(path))
+    else:
+        clear_denial(session_id, str(path))
+
     log_event(
         "plugin_pretooluse_guard",
         {
@@ -1086,15 +1266,19 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
             "tool_name": data.get("tool_name"),
             "path": str(path),
             "event": "pretool_guard",
-            "decision": memory_writes_decision if "memory-write" in violations else "audit",
+            "decision": (
+                "deny-escalated" if denial_escalated
+                else (memory_writes_decision if "memory-write" in violations else "audit")
+            ),
             "reason": ",".join(violations),
         },
     )
 
     if should_block:
-        pretool_deny(
-            "CRAFTFLOW plugin hook blocked a direct state memory markdown write. Use the router-owned memory finalization path."
-        )
+        message = "CRAFTFLOW plugin hook blocked a direct state memory markdown write. Use the router-owned memory finalization path."
+        if denial_escalated:
+            message += _denial_escalation_suffix(denial_count)
+        pretool_deny(message)
     return 0
 
 
@@ -1139,14 +1323,16 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         return 0
     cwd = Path(cwd_raw).resolve()
 
-    # REM-FIX (live-reproduced CRITICAL): latest_workflow_payload() only guarantees valid JSON
-    # was parsed -- NOT that the top level is a dict. Wrap the derived reads in the SAME
-    # try/except as the payload fetch itself so a non-dict top level (e.g. `[1,2,3]`) degrades
-    # gracefully to worktree_path=None / workspace_writable_paths=frozenset() instead of raising
-    # an uncaught AttributeError out of _handle_bash (and the whole guard process, since main()
-    # has no top-level try/except) before any protection check below ever runs.
+    # REM-FIX (live-reproduced CRITICAL): latest_live_workflow_payload() only guarantees
+    # valid JSON was parsed -- NOT that the top level is a dict. Wrap the derived reads in
+    # the SAME try/except as the payload fetch itself so a non-dict top level (e.g.
+    # `[1,2,3]`) degrades gracefully to worktree_path=None / workspace_writable_paths=
+    # frozenset() instead of raising an uncaught AttributeError out of _handle_bash (and
+    # the whole guard process, since main() has no top-level try/except) before any
+    # protection check below ever runs. Write-confinement-sensitive call site (Finding 1,
+    # REM-FIX cycle 1) -- uses the *_live_* variant.
     try:
-        workflow = latest_workflow_payload()
+        workflow = latest_live_workflow_payload(data.get("session_id"))
         worktree_path = workflow.get("worktree_path")
         if worktree_path is not None and not isinstance(worktree_path, str):
             worktree_path = None
@@ -1156,7 +1342,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
             "plugin_pretooluse_guard",
             {
                 "event": "pretool_guard_parse_error",
-                "command_name": "latest_workflow_payload",
+                "command_name": "latest_live_workflow_payload",
                 "error": repr(exc),
                 "reason": "skipped_worktree_path_and_workspace_writable_paths_lookup",
             },
@@ -1442,6 +1628,10 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         and not skill_ledger_violations
         and not reliability_gates_violations
     ):
+        # Item B fix: nothing to clear here -- no violating target was
+        # even detected for this command, so there is no (session, target)
+        # key to reset (see clear_denial()'s docstring for the reset
+        # contract; a clean command has no prior denial to have created one).
         return 0
 
     # Worktree-confinement, skill-promotion-path, skill-ledger-write, and
@@ -1467,6 +1657,19 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
             reason_parts.append(f"reliability-gates-write:{','.join(reliability_gates_violations)}")
         reason = "; ".join(reason_parts)
 
+        # Item B fix: record this denial against every distinct violating
+        # target BEFORE logging, so an escalated 2nd+ consecutive denial on
+        # any of them is reflected in both the log decision and the deny
+        # message below (see `_record_multi_target_denial()`'s docstring).
+        denial_count, denial_escalated = _record_multi_target_denial(
+            data.get("session_id"),
+            protected_write_violations
+            + confinement_violations
+            + skill_promotion_violations
+            + skill_ledger_violations
+            + reliability_gates_violations,
+        )
+
         log_event(
             "plugin_pretooluse_guard",
             {
@@ -1474,7 +1677,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 "tool_name": "Bash",
                 "cwd": str(cwd),
                 "command": command,
-                "decision": "deny",
+                "decision": "deny-escalated" if denial_escalated else "deny",
                 "reason": reason,
             },
         )
@@ -1503,10 +1706,13 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
             )
             for v in unconditional_violations
         )
-        pretool_deny(
+        message = (
             f"CRAFTFLOW plugin hook blocked a Bash write to a protected path (reason: {reason}). "
             + explanation
         )
+        if denial_escalated:
+            message += _denial_escalation_suffix(denial_count)
+        pretool_deny(message)
         return 0
 
     # Only protected_write_violations remain at this point (Task 5.2): the
@@ -1536,6 +1742,17 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     # craftflow_pretooluse_bash_guard.py.
     should_block, decision = resolve_toggle_decision(mode.get("protectedWrites", "block"))
 
+    # Item B fix: only a genuine deny records a denial; an "audit"-mode
+    # allow resets any prior escalation on these exact targets (the
+    # "successful equivalent write" reset condition).
+    session_id = data.get("session_id")
+    denial_count = 0
+    denial_escalated = False
+    if should_block:
+        denial_count, denial_escalated = _record_multi_target_denial(session_id, protected_write_violations)
+    else:
+        _clear_multi_target_denial(session_id, protected_write_violations)
+
     log_event(
         "plugin_pretooluse_guard",
         {
@@ -1543,15 +1760,18 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
             "tool_name": "Bash",
             "cwd": str(cwd),
             "command": command,
-            "decision": decision,
+            "decision": "deny-escalated" if denial_escalated else decision,
             "reason": reason,
         },
     )
     if should_block:
-        pretool_deny(
+        message = (
             f"CRAFTFLOW plugin hook blocked a Bash write to a protected path (reason: {reason}). "
             "If this is intentional, run it manually outside the agent session."
         )
+        if denial_escalated:
+            message += _denial_escalation_suffix(denial_count)
+        pretool_deny(message)
     return 0
 
 
@@ -1569,6 +1789,8 @@ def main() -> int:
 
     if tool_name == "Bash":
         return _handle_bash(data, mode, tool_input)
+    if tool_name == "Read":
+        return _handle_read(data, mode, tool_input)
     return _handle_edit_write(data, mode, tool_input)
 
 
