@@ -15216,6 +15216,9 @@ def test_state_query_full_mode_missing_file_errors_cleanly(tmp_dir: Path) -> Non
     if result.returncode == 0:
         fail(name, "expected non-zero exit for missing file")
         return
+    if "cannot read" not in result.stderr:
+        fail(name, f"expected 'cannot read' error message on stderr, got: {result.stderr!r}")
+        return
     ok(name)
 
 
