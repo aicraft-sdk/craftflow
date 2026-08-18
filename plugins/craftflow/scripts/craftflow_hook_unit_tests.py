@@ -15102,6 +15102,98 @@ def test_state_query_summarize_workflow_json_malformed_falls_open(tmp_dir: Path)
 
 
 # ---------------------------------------------------------------------------
+# craftflow_state_query.py: events.jsonl summary mode
+# ---------------------------------------------------------------------------
+
+def _events_jsonl_fixture(n_valid: int = 198, n_malformed: int = 2, event_types: tuple = ("pretool_guard",)) -> str:
+    lines = []
+    for i in range(n_valid):
+        event_type = event_types[i % len(event_types)]
+        lines.append(json.dumps({"event": event_type, "seq": i}))
+    for i in range(n_malformed):
+        lines.append("{not valid json,,,")
+    return "\n".join(lines) + "\n"
+
+
+def test_state_query_summarize_events_jsonl_default_tail_and_footer(tmp_dir: Path) -> None:
+    name = "state-query/summarize-events-jsonl/default-tail-and-footer"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    content = _events_jsonl_fixture(n_valid=198, n_malformed=2)
+    target = tmp_dir / "test.events.jsonl"
+    target.write_text(content, encoding="utf-8")
+    script = SCRIPTS / "craftflow_state_query.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(target), "--mode", "summary"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}: {result.stderr}")
+        return
+    lines_out = result.stdout.rstrip("\n").split("\n")
+    footer = lines_out[-1]
+    entry_lines = lines_out[:-1]
+    if len(entry_lines) != 50:
+        fail(name, f"expected 50 tailed entries by default, got {len(entry_lines)}")
+        return
+    parsed_entries = [json.loads(line) for line in entry_lines]
+    if parsed_entries[-1]["seq"] != 197:
+        fail(name, f"tail must be the MOST RECENT entries; last seq={parsed_entries[-1]['seq']}")
+        return
+    if "200 total lines" not in footer or "2 malformed" not in footer:
+        fail(name, f"footer must report total lines and malformed count: {footer!r}")
+        return
+    ok(name)
+
+
+def test_state_query_summarize_events_jsonl_event_type_filter(tmp_dir: Path) -> None:
+    name = "state-query/summarize-events-jsonl/event-type-filter"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    content = _events_jsonl_fixture(
+        n_valid=30, n_malformed=0, event_types=("pretool_guard", "audit", "session_start")
+    )
+    target = tmp_dir / "filter.events.jsonl"
+    target.write_text(content, encoding="utf-8")
+    script = SCRIPTS / "craftflow_state_query.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(target), "--mode", "summary", "--event-type", "audit"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}: {result.stderr}")
+        return
+    lines_out = result.stdout.rstrip("\n").split("\n")
+    entry_lines = lines_out[:-1]
+    parsed_entries = [json.loads(line) for line in entry_lines]
+    if not parsed_entries:
+        fail(name, "expected at least one matching entry")
+        return
+    if any(entry["event"] != "audit" for entry in parsed_entries):
+        fail(name, f"filter must return only matching event types: {parsed_entries!r}")
+        return
+    ok(name)
+
+
+def test_state_query_summarize_events_jsonl_all_malformed_never_crashes(tmp_dir: Path) -> None:
+    name = "state-query/summarize-events-jsonl/all-malformed-never-crashes"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    content = _events_jsonl_fixture(n_valid=0, n_malformed=5)
+    target = tmp_dir / "all-malformed.events.jsonl"
+    target.write_text(content, encoding="utf-8")
+    script = SCRIPTS / "craftflow_state_query.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(target), "--mode", "summary"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}: {result.stderr}")
+        return
+    if "0 valid" not in result.stdout or "5 malformed" not in result.stdout:
+        fail(name, f"expected 0 valid / 5 malformed reported: {result.stdout!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # pretooluse-guard: state-read compaction (Read PreToolUse)
 # ---------------------------------------------------------------------------
 
@@ -15988,6 +16080,12 @@ def main() -> int:
     print("[ craftflow_state_query.py: workflow-JSON summary mode ]")
     test_state_query_summarize_workflow_json_shrinks_and_keeps_key_fields(tmp / "q3")
     test_state_query_summarize_workflow_json_malformed_falls_open(tmp / "q4")
+
+    print()
+    print("[ craftflow_state_query.py: events.jsonl summary mode ]")
+    test_state_query_summarize_events_jsonl_default_tail_and_footer(tmp / "q5")
+    test_state_query_summarize_events_jsonl_event_type_filter(tmp / "q6")
+    test_state_query_summarize_events_jsonl_all_malformed_never_crashes(tmp / "q7")
 
     print()
     print("[ pretooluse-guard: state-read compaction (Read PreToolUse) ]")

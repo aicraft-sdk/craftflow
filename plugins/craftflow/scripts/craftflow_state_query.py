@@ -100,7 +100,30 @@ def _summarize_workflow_json(content: str) -> str:
 
 
 def _summarize_events_jsonl(content: str, tail: int, event_type: str | None) -> str:
-    return content
+    lines = content.splitlines()
+    valid: list = []
+    malformed_count = 0
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            parsed = json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            malformed_count += 1
+            continue
+        if event_type is not None and parsed.get("event") != event_type:
+            continue
+        valid.append(parsed)
+
+    tailed = valid[-tail:] if tail > 0 else valid
+    out_lines = [json.dumps(entry, ensure_ascii=True) for entry in tailed]
+    footer = (
+        f"# {len(lines)} total lines, {len(valid)} valid entries matching filter, "
+        f"{malformed_count} malformed lines skipped, showing last {len(tailed)}. "
+        "Run --mode full for the complete file."
+    )
+    return "\n".join(out_lines) + ("\n" if out_lines else "") + footer + "\n"
 
 
 def _summarize_markdown(content: str) -> str:
