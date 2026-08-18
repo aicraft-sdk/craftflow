@@ -376,6 +376,34 @@ def _merge_notes_into_body(
     return _reconstruct_section(section_body, current_bullets)
 
 
+def _merge_notes_into_body_with_archive(
+    section_body: str, notes: list, retractions: list, max_bullets, archive_path: str
+) -> tuple:
+    """
+    Like _merge_notes_into_body, but caps via apply_cap_with_archive(archive=True)
+    instead of apply_cap, so excess bullets are archived (not dropped) and a
+    pointer bullet naming archive_path is inserted into the kept section.
+
+    Returns (body, archived_bullets). archived_bullets is [] when max_bullets is
+    None or no eviction was needed.
+    """
+    if retractions:
+        section_body = apply_retractions(section_body, retractions)
+
+    current_bullets = extract_bullets(section_body) if section_body else []
+
+    for note in notes:
+        current_bullets = merge_bullet(current_bullets, note["text"], note["confidence"], note["provenance"])
+
+    archived_bullets = []
+    if max_bullets is not None:
+        current_bullets, archived_bullets = apply_cap_with_archive(
+            current_bullets, max_bullets, archive=True, archive_path=archive_path
+        )
+
+    return _reconstruct_section(section_body, current_bullets), archived_bullets
+
+
 def _find_section_span(file_text: str, section: str):
     """
     Locate the body span of a `## <section>` heading in file_text.
@@ -428,6 +456,36 @@ def merge_section_anchored(
     return file_text[:body_start] + merged_body + "\n" + file_text[body_end:]
 
 
+def merge_section_anchored_with_archive(
+    file_text: str,
+    section: str,
+    raw_notes: list,
+    retractions: list,
+    max_bullets,
+    archive_path: str,
+) -> tuple:
+    """
+    Like merge_section_anchored, but threads apply_cap_with_archive(archive=True)
+    through the merge so excess bullets are archived (not dropped) and a pointer
+    bullet naming archive_path is inserted into the kept section instead.
+
+    Returns (full_file_text_with_section_replaced, archived_bullets). Returns
+    (None, []) if the section heading is not found in file_text.
+    """
+    span = _find_section_span(file_text, section)
+    if span is None:
+        return None, []
+
+    body_start, body_end = span
+    section_body = file_text[body_start:body_end]
+    notes = _normalize_notes(raw_notes)
+    merged_body, archived_bullets = _merge_notes_into_body_with_archive(
+        section_body, notes, retractions or [], max_bullets, archive_path
+    )
+    full_text = file_text[:body_start] + merged_body + "\n" + file_text[body_end:]
+    return full_text, archived_bullets
+
+
 def _reject_json_constant(constant: str):
     """json.loads' parse_constant hook -- called for the non-standard NaN/Infinity/-Infinity
     tokens it accepts by default. Raising here (instead of returning float('nan')/float('inf'))
@@ -470,6 +528,7 @@ def main() -> int:
     raw_notes = payload.get("notes", [])
     retractions = payload.get("retractions", [])
     max_bullets = payload.get("max_bullets")
+    archive_spec = payload.get("archive")
 
     try:
         file_text = payload.get("file_text")
@@ -485,6 +544,38 @@ def main() -> int:
                     "Error: 'section' must be a non-empty string when 'file_text' is provided\n"
                 )
                 return 1
+
+            if archive_spec:
+                # Opt-in archive rotation: caller gets a JSON envelope instead of
+                # plain text, and must write archive_path BEFORE the trimmed
+                # file_text (see the calling instruction sites for the ordering
+                # discipline). Backward compatible: omitting "archive" entirely
+                # (the default) keeps the plain-text return below untouched.
+                if not isinstance(archive_spec, dict):
+                    sys.stderr.write("Error: 'archive' must be an object\n")
+                    return 1
+                dir_rel = archive_spec.get("dir_rel")
+                slug = archive_spec.get("section_slug")
+                month = archive_spec.get("month")
+                if not dir_rel or not slug or not month:
+                    sys.stderr.write(
+                        "Error: 'archive' must include 'dir_rel', 'section_slug', and 'month'\n"
+                    )
+                    return 1
+                archive_path = f"{dir_rel}/{slug}-{month}.md"
+                result, archived_bullets = merge_section_anchored_with_archive(
+                    file_text, section, raw_notes, retractions, max_bullets, archive_path
+                )
+                if result is None:
+                    sys.stderr.write(f"Error: section '{section}' not found in file_text\n")
+                    return 1
+                print(json.dumps({
+                    "file_text": result,
+                    "archived_bullets": archived_bullets,
+                    "archive_path": archive_path,
+                }))
+                return 0
+
             result = merge_section_anchored(
                 file_text, section, raw_notes, retractions, max_bullets
             )

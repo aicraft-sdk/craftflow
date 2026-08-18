@@ -14758,6 +14758,61 @@ def test_memory_merge_apply_cap_archive_preserves_organic_priority() -> None:
     ok(name)
 
 
+def test_memory_merge_cli_without_archive_field_unchanged_output() -> None:
+    name = "memory-merge/cli/without-archive-field-unchanged"
+    payload = {
+        "file_text": "## Common Gotchas\n" + "\n".join(f"- entry {i}" for i in range(10)) + "\n\n## Last Updated\n2026-01-01\n",
+        "section": "Common Gotchas",
+        "notes": [{"text": "new note", "confidence": 0.9}],
+        "max_bullets": 5,
+    }
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit {result.returncode}: {result.stderr}")
+        return
+    # Plain text output (not JSON) -- unchanged shape.
+    try:
+        json.loads(result.stdout)
+        fail(name, "output must stay plain text when 'archive' is not supplied")
+        return
+    except (json.JSONDecodeError, ValueError):
+        pass
+    ok(name)
+
+
+def test_memory_merge_cli_with_archive_field_emits_json_envelope() -> None:
+    name = "memory-merge/cli/with-archive-field-emits-envelope"
+    payload = {
+        "file_text": "## Common Gotchas\n" + "\n".join(f"- entry {i}" for i in range(10)) + "\n\n## Last Updated\n2026-01-01\n",
+        "section": "Common Gotchas",
+        "notes": [],
+        "max_bullets": 5,
+        "archive": {"dir_rel": ".craftflow/state/project/archive", "section_slug": "common-gotchas", "month": "2026-08"},
+    }
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit {result.returncode}: {result.stderr}")
+        return
+    try:
+        out = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        fail(name, "expected a JSON envelope when 'archive' is supplied")
+        return
+    if "file_text" not in out or "archived_bullets" not in out or "archive_path" not in out:
+        fail(name, f"envelope missing required keys: {out.keys()}")
+        return
+    if not out["archive_path"].endswith("common-gotchas-2026-08.md"):
+        fail(name, f"unexpected archive_path: {out['archive_path']}")
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # REM-FIX cycle 4 (silent-failure-hunter, live-reproduced 8x CRITICAL): the
 # same root-cause class already fixed twice for the `workflow` variable
@@ -16271,6 +16326,8 @@ def main() -> int:
     test_memory_merge_apply_cap_backward_compatible_without_archive()
     test_memory_merge_apply_cap_archives_instead_of_dropping()
     test_memory_merge_apply_cap_archive_preserves_organic_priority()
+    test_memory_merge_cli_without_archive_field_unchanged_output()
+    test_memory_merge_cli_with_archive_field_emits_json_envelope()
 
     print()
     print("[ pretooluse-guard / pretooluse-bash-guard: REM-FIX cycle 4 (non-dict JSON top-level crash class) ]")
