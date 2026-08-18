@@ -2534,6 +2534,80 @@ def test_hooklib_latest_live_workflow_file_finds_session_match_outside_scan_wind
     ok(name)
 
 
+def test_hooklib_latest_live_workflow_file_stays_bounded_when_window_lacks_session_id_key(tmp_dir: Path) -> None:
+    # Regression (code-reviewer CHANGES_REQUESTED, confidence 92, REM-FIX
+    # cycle 3, CRITICAL): REM-FIX cycle 2's scan-window-widen fix (see the
+    # test above) over-corrected. It widens past the bounded window
+    # whenever no in-window candidate's `session_id` field MATCHES the
+    # given session_id -- which is unconditionally true in production,
+    # because 0/222 real workflow artifacts under
+    # .craftflow/state/workflows/ carry a `session_id` key at all
+    # (confirmed against this repo's own corpus, 2026-08-18; nothing in
+    # the plugin's non-test code writes this field into a workflow
+    # artifact yet). Every Claude Code hook payload carries a real
+    # session_id, so the session_id-given branch always runs -- meaning
+    # the widen always fired, turning every PreToolUse invocation into an
+    # unconditional full-directory scan and defeating the entire point of
+    # the bounded window.
+    #
+    # The fix: only widen when NONE of the in-window live candidates carry
+    # a `session_id` key AT ALL (the producer side never populated it for
+    # anything in the window) -- not merely when none of them happen to
+    # MATCH the given session_id. This test builds a realistic-sized
+    # corpus (matches this repo's own 222-file corpus) where every
+    # candidate omits `session_id` entirely, and proves the widen never
+    # fires: the cumulative count of candidate paths ever handed to
+    # `_live_workflow_candidates()` must stay within the bounded window,
+    # never reaching into the remainder.
+    name = "hooklib/latest-live-workflow-file-stays-bounded-when-window-lacks-session-id-key"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+
+    now = time.time()
+    total_files = 222  # mirrors this repo's own real workflows/ corpus size
+    for i in range(total_files):
+        # No session_id kwarg passed at all -- matches production reality
+        # (0/222 real workflow artifacts carry the key).
+        p = _write_workflow_json_fixture_full(project_root, f"wf-real-{i}", None)
+        os.utime(p, (now - i, now - i))
+
+    scanned_path_counts: list[int] = []
+    original_live_candidates = hooklib._live_workflow_candidates
+
+    def _counting_live_candidates(paths):
+        paths_list = list(paths)
+        scanned_path_counts.append(len(paths_list))
+        return original_live_candidates(paths_list)
+
+    old_env = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(project_root)
+    hooklib._live_workflow_candidates = _counting_live_candidates
+    try:
+        selected = hooklib.latest_live_workflow_file(session_id="sess-real-invocation")
+    finally:
+        hooklib._live_workflow_candidates = original_live_candidates
+        if old_env is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = old_env
+
+    total_scanned = sum(scanned_path_counts)
+    if total_scanned > hooklib._LATEST_WORKFLOW_SCAN_WINDOW:
+        fail(
+            name,
+            "expected the bounded-window path (<= "
+            f"{hooklib._LATEST_WORKFLOW_SCAN_WINDOW} candidates scanned) when "
+            "no in-window candidate carries a session_id key at all; got "
+            f"{total_scanned} candidates scanned across calls "
+            f"{scanned_path_counts!r} -- the widen fired unconditionally",
+        )
+        return
+    if selected is None or selected.name != "wf-real-0.json":
+        fail(name, f"expected the newest live candidate (wf-real-0) to be selected; got: {selected!r}")
+        return
+    ok(name)
+
+
 def test_precompact_state_snapshot_uses_newest_by_mtime_even_when_terminal_workflow(tmp_dir: Path) -> None:
     # Finding 1 (code-reviewer CHANGES_REQUESTED, REM-FIX cycle 1, CRITICAL):
     # the Item A liveness filter (_workflow_payload_is_live()) had been
@@ -14906,6 +14980,44 @@ def test_workflow_artifact_template_includes_workspace_writable_paths_field() ->
 
 
 # ---------------------------------------------------------------------------
+# craftflow_state_query.py: skeleton + --mode full
+# ---------------------------------------------------------------------------
+
+def test_state_query_full_mode_byte_identical(tmp_dir: Path) -> None:
+    name = "state-query/full-mode-byte-identical"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    target = tmp_dir / "sample.md"
+    content = "## Section\n" + ("- bullet\n" * 500)
+    target.write_text(content, encoding="utf-8")
+    script = SCRIPTS / "craftflow_state_query.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(target), "--mode", "full"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}: {result.stderr}")
+        return
+    if result.stdout != content:
+        fail(name, "full mode output is not byte-identical to source")
+        return
+    ok(name)
+
+
+def test_state_query_full_mode_missing_file_errors_cleanly(tmp_dir: Path) -> None:
+    name = "state-query/full-mode-missing-file"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    script = SCRIPTS / "craftflow_state_query.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(tmp_dir / "nope.md"), "--mode", "full"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        fail(name, "expected non-zero exit for missing file")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # pretooluse-guard: state-read compaction (Read PreToolUse)
 # ---------------------------------------------------------------------------
 
@@ -15046,6 +15158,7 @@ def main() -> int:
         test_hooklib_latest_workflow_file_prefers_session_id_match_when_present(tmp / "g19-itemA-3")
         test_precompact_state_snapshot_uses_newest_by_mtime_even_when_terminal_workflow(tmp / "g19-itemA-4")
         test_hooklib_latest_live_workflow_file_finds_session_match_outside_scan_window(tmp / "g19-itemA-5")
+        test_hooklib_latest_live_workflow_file_stays_bounded_when_window_lacks_session_id_key(tmp / "g19-itemA-6")
         test_pretooluse_guard_edit_write_single_denial_is_not_escalated(tmp / "g19-itemB-1")
         test_pretooluse_guard_edit_write_second_consecutive_denial_is_escalated(tmp / "g19-itemB-2")
         test_pretooluse_guard_bash_second_consecutive_denial_is_escalated(tmp / "g19-itemB-3")
@@ -15781,6 +15894,11 @@ def main() -> int:
     print("[ router: workspace-root allowlist wiring (Phase 4) ]")
     test_workspace_root_config_read_gated_inside_step_1a()
     test_workflow_artifact_template_includes_workspace_writable_paths_field()
+
+    print()
+    print("[ craftflow_state_query.py: skeleton + --mode full ]")
+    test_state_query_full_mode_byte_identical(tmp / "q1")
+    test_state_query_full_mode_missing_file_errors_cleanly(tmp / "q2")
 
     print()
     print("[ pretooluse-guard: state-read compaction (Read PreToolUse) ]")
