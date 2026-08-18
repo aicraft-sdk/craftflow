@@ -220,7 +220,7 @@ Workflow event log:
 
 Hook policy:
 - CRAFTFLOW plugin hooks live in the plugin bundle under `hooks/hooks.json` and should stay minimal:
-  - `PreToolUse` for protected writes (Edit, Write, and Bash matchers; Read events are not intercepted) and for destructive Bash command denial (in-cwd and cwd/worktree-escaping)
+  - `PreToolUse` for protected writes (Edit, Write, and Bash matchers) and for destructive Bash command denial (in-cwd and cwd/worktree-escaping); and for state-read compaction (Read matcher, scoped to oversized `.craftflow/state/**` files only — deny + redirect to `craftflow_state_query.py`, never a content rewrite; see hooks/README.md)
   - `SessionStart` for resume context (fires on startup|resume|compact)
   - `PostToolUse` for workflow artifact integrity audit and memory placeholder restore (defensive, fires on Edit/Write)
   - `TaskCompleted` for task metadata checks (enforced: block mode)
