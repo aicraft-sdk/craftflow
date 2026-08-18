@@ -15350,6 +15350,51 @@ def test_pretooluse_guard_read_branch_does_not_affect_edit_write_dispatch(tmp_di
     ok(name)
 
 
+def test_state_read_compaction_end_to_end(tmp_dir: Path) -> None:
+    name = "state-read-compaction/end-to-end"
+    state_dir = tmp_dir / ".craftflow" / "state" / "project"
+    state_dir.mkdir(parents=True)
+    target = state_dir / "activeContext.md"
+    # Reproduce this session's real trigger shape: many sections, many bullets.
+    body = "## Current Focus\nSome focus text.\n\n## Recent Changes\n"
+    # 3000x here only reaches ~129KB (43 bytes/line), which does not satisfy
+    # the 500KB+ assertion below; use 12000x to actually reproduce the
+    # 500KB+ trigger shape this test asserts.
+    body += "- change entry with some real content here\n" * 12000
+    target.write_text(body, encoding="utf-8")
+    if target.stat().st_size < 500_000:
+        fail(name, "fixture must reproduce a realistic 500KB+ trigger")
+        return
+
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir.resolve())}
+    payload = {"tool_name": "Read", "tool_input": {"file_path": str(target.resolve())}}
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0 or '"permissionDecision": "deny"' not in out:
+        fail(name, f"expected deny, got exit={code} out={out[:200]}")
+        return
+
+    script = SCRIPTS / "craftflow_state_query.py"
+    summary_result = subprocess.run(
+        [sys.executable, str(script), str(target), "--mode", "summary"],
+        capture_output=True, text=True,
+    )
+    if summary_result.returncode != 0:
+        fail(name, f"summary mode failed: {summary_result.stderr}")
+        return
+    if len(summary_result.stdout) >= len(body) / 5:
+        fail(name, "summary must be order-of-magnitude smaller than the 500KB+ source")
+        return
+
+    full_result = subprocess.run(
+        [sys.executable, str(script), str(target), "--mode", "full"],
+        capture_output=True, text=True,
+    )
+    if full_result.stdout != body:
+        fail(name, "full mode must be byte-identical to the source")
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -16179,6 +16224,10 @@ def main() -> int:
     test_pretooluse_guard_allows_under_threshold_state_read(tmp / "r2")
     test_pretooluse_guard_allows_oversized_read_outside_state_dir(tmp / "r3")
     test_pretooluse_guard_read_branch_does_not_affect_edit_write_dispatch(tmp / "r4")
+
+    print()
+    print("[ state-read-compaction: end-to-end integration ]")
+    test_state_read_compaction_end_to_end(tmp / "r5")
 
     print()
     if _errors:
