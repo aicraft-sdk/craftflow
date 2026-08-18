@@ -393,6 +393,35 @@ def has_memory_finalize_permit(workflow_uuid: str | None = None) -> bool:
 CONTROL_OPERATORS = {";", "&&", "||", "|", "&", "\n"}
 
 
+def claude_code_own_memory_root(cwd: Path) -> Path:
+    """Deterministic, non-spoofable root directory for Claude Code's own
+    global auto-memory system for THIS cwd:
+    ~/.claude/projects/<slug-of-cwd>/, where <slug> is the absolute cwd
+    string with every '/' and '.' replaced by '-' (verified empirically
+    against real ~/.claude/projects/* directories on disk -- e.g. cwd
+    /Users/david.gracia/Desktop/projects/own/ai-craft maps to
+    -Users-david-gracia-Desktop-projects-own-ai-craft; note '.' in
+    "david.gracia" is ALSO replaced, not just '/').
+
+    Always derived from the caller's own trusted `cwd` argument -- never
+    from the path being checked -- so it can never be spoofed by tool-call
+    input."""
+    slug = "".join("-" if c in "/." else c for c in str(cwd))
+    return Path.home() / ".claude" / "projects" / slug
+
+
+def _within_claude_code_own_memory_dir(resolved: Path, cwd: Path) -> bool:
+    """True if `resolved` is Claude Code's own auto-memory MEMORY.md file,
+    or lives at/under its memory/ subtree, scoped EXACTLY to the trusted
+    `cwd`'s own slug -- never a blanket ~/.claude/projects/** grant (that
+    would leak into other projects' auto-memory), and never based on a
+    caller-supplied/spoofable slug."""
+    root = claude_code_own_memory_root(cwd)
+    memory_md = root / "MEMORY.md"
+    memory_dir = root / "memory"
+    return resolved == memory_md or resolved == memory_dir or memory_dir in resolved.parents
+
+
 def resolve_confinement(
     path,
     cwd: Path,
@@ -401,8 +430,11 @@ def resolve_confinement(
 ) -> tuple[bool, Path]:
     """Return (is_confined, resolved_path). Confined if resolved_path == cwd,
     is a descendant of cwd, (when worktree_path is set) is cwd/worktree_path
-    itself or a descendant of worktree_path, OR (when extra_exact_paths is
-    set) resolved_path is an EXACT member of extra_exact_paths.
+    itself or a descendant of worktree_path, is Claude Code's OWN global
+    auto-memory dir/file for this cwd (see
+    `claude_code_own_memory_root()`/`_within_claude_code_own_memory_dir()`),
+    OR (when extra_exact_paths is set) resolved_path is an EXACT member of
+    extra_exact_paths.
 
     `extra_exact_paths` (workspace-root file allowlist, see
     docs/plans/2026-08-12-craftflow-workspace-root-allowlist-design.md) is
@@ -415,7 +447,15 @@ def resolve_confinement(
     (mirrors how worktree_path is already caller-resolved before being
     passed in). Omitting this parameter, or passing None/an empty
     collection, reproduces the pre-existing 3-parameter behavior exactly
-    (regression-tested)."""
+    (regression-tested).
+
+    The Claude Code auto-memory allowance is a SEPARATE, unconditional
+    directory-prefix grant -- unlike extra_exact_paths, it is not caller-
+    supplied and not exact-match-only, because it is scoped to a
+    deterministic, non-spoofable path computed only from `cwd` (never from
+    `path`/tool-call input), so a directory-prefix grant here carries none
+    of the sibling-repo-escape-hatch risk extra_exact_paths' docstring
+    warns about."""
     candidate = Path(os.path.expanduser(str(path)))
     if not candidate.is_absolute():
         candidate = cwd / candidate
@@ -428,6 +468,8 @@ def resolve_confinement(
         within_wt = resolved == wt or wt in resolved.parents
         if within_wt:
             return True, resolved
+    if _within_claude_code_own_memory_dir(resolved, cwd):
+        return True, resolved
     if extra_exact_paths and resolved in extra_exact_paths:
         return True, resolved
     return False, resolved

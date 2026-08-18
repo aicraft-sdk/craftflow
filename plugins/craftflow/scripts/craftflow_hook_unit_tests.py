@@ -2133,6 +2133,87 @@ def test_pretooluse_guard_worktree_confinement_degrades_when_no_workflow_json(tm
     ok(name)
 
 
+def _claude_code_memory_slug(cwd: Path) -> str:
+    """Test-side mirror of the slug algorithm, verified empirically against
+    real ~/.claude/projects/* directories on disk (see bug investigation):
+    every '/' and '.' in the absolute cwd string is replaced with '-'."""
+    return "".join("-" if c in "/." else c for c in str(cwd))
+
+
+def test_pretooluse_guard_edit_write_allows_claude_code_own_memory_dir(tmp_dir: Path) -> None:
+    # Regression: Claude Code's own global auto-memory directory
+    # (~/.claude/projects/<slug-of-cwd>/memory/*.md) is Claude Code's own
+    # infrastructure, not project code -- it must never be denied by the
+    # worktree-confinement check just because it sits outside cwd/worktree.
+    name = "pretooluse-guard/edit-write-allows-claude-code-own-memory-dir"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    cwd = project_root.resolve()
+    slug = _claude_code_memory_slug(cwd)
+    target = Path.home() / ".claude" / "projects" / slug / "memory" / "some-file.md"
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(cwd),
+        "tool_input": {"file_path": str(target)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for a Write to Claude Code's own auto-memory dir for this cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_allows_claude_code_own_memory_md_exact_file(tmp_dir: Path) -> None:
+    # Variant: the top-level MEMORY.md file (not under memory/) must also be
+    # allowed -- both documented forms of Claude Code's own auto-memory
+    # surface for this cwd.
+    name = "pretooluse-guard/edit-write-allows-claude-code-own-memory-md-exact-file"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    cwd = project_root.resolve()
+    slug = _claude_code_memory_slug(cwd)
+    target = Path.home() / ".claude" / "projects" / slug / "MEMORY.md"
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Edit",
+        "cwd": str(cwd),
+        "tool_input": {"file_path": str(target)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for an Edit to Claude Code's own MEMORY.md for this cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_denies_other_project_claude_code_memory_dir(tmp_dir: Path) -> None:
+    # Non-regression / anti-blanket-grant: a Claude Code auto-memory dir
+    # for a DIFFERENT cwd's slug (not the trusted cwd on this call) must
+    # still be denied -- the allowance is derived only from the guard's own
+    # trusted cwd, never a blanket ~/.claude/projects/** grant that would
+    # leak into another project's memory.
+    name = "pretooluse-guard/edit-write-denies-other-project-claude-code-memory-dir"
+    project_root = tmp_dir / "project"
+    other_project = tmp_dir / "other-project"
+    project_root.mkdir(parents=True)
+    other_project.mkdir(parents=True)
+    cwd = project_root.resolve()
+    other_slug = _claude_code_memory_slug(other_project.resolve())
+    target = Path.home() / ".claude" / "projects" / other_slug / "memory" / "some-file.md"
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(cwd),
+        "tool_input": {"file_path": str(target)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected deny for a DIFFERENT project's Claude Code memory dir; got: {out!r}")
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_bash_worktree_confinement_only_message_omits_skill_text(tmp_dir: Path) -> None:
     # misleading-deny-message fix (fix-verify cycle 1, live-reproduced): the
     # catch-all deny block in `_handle_bash` fired the SAME hardcoded skill-
@@ -5977,6 +6058,31 @@ def test_bash_guard_denial_reason_includes_all_triggered_categories(tmp_dir: Pat
     ok(name)
 
 
+def test_bash_guard_allows_rm_targeting_claude_code_own_memory_dir(tmp_dir: Path) -> None:
+    # Variant (Bash / destructive-command lane, craftflow_pretooluse_bash_guard.py):
+    # the general (non-protected-path-scoped) resolve_confinement() call
+    # inside the destructive-target loop must also treat Claude Code's own
+    # auto-memory dir as confined -- otherwise `rm` on a stale auto-memory
+    # file for this cwd is wrongly denied as "escapes-cwd".
+    name = "pretooluse-bash-guard/allows-rm-targeting-claude-code-own-memory-dir"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    cwd = project_root.resolve()
+    slug = "".join("-" if c in "/." else c for c in str(cwd))
+    target = Path.home() / ".claude" / "projects" / slug / "memory" / "stale-note.md"
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(cwd),
+        "tool_input": {"command": f"rm {target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for `rm` targeting Claude Code's own auto-memory dir for this cwd; got: {out!r}")
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # REM-FIX (HIGH, build-craftflow-guardrail-harden, doubt-verify cycle 2): the
 # `bashDestructiveTraversal` toggle governing this ENTIRE script's core
@@ -6306,6 +6412,59 @@ def test_hooklib_resolve_confinement_byte_identical_when_extra_exact_paths_omitt
                 f"mismatch for target={target}: 3-arg={baseline} None={with_none} empty={with_empty}",
             )
             return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_allows_claude_code_own_memory_dir(tmp_dir: Path) -> None:
+    # Root-cause regression (white-box): Claude Code's own global auto-memory
+    # directory for THIS cwd (~/.claude/projects/<slug-of-cwd>/memory/*.md)
+    # must be confined=True even though it sits outside cwd/worktree_path/
+    # extra_exact_paths -- it is Claude Code's own infrastructure, not a
+    # confinement escape.
+    name = "hooklib/resolve-confinement-allows-claude-code-own-memory-dir"
+    cwd = (tmp_dir / "cwd")
+    cwd.mkdir(parents=True)
+    cwd = cwd.resolve()
+    slug = "".join("-" if c in "/." else c for c in str(cwd))
+    target = Path.home() / ".claude" / "projects" / slug / "memory" / "note.md"
+    confined, _resolved = hooklib.resolve_confinement(target, cwd, None)
+    if not confined:
+        fail(name, f"expected confined=True for Claude Code's own auto-memory dir under this cwd's slug; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_allows_claude_code_own_memory_md_exact(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-confinement-allows-claude-code-own-memory-md-exact"
+    cwd = (tmp_dir / "cwd")
+    cwd.mkdir(parents=True)
+    cwd = cwd.resolve()
+    slug = "".join("-" if c in "/." else c for c in str(cwd))
+    target = Path.home() / ".claude" / "projects" / slug / "MEMORY.md"
+    confined, _resolved = hooklib.resolve_confinement(target, cwd, None)
+    if not confined:
+        fail(name, f"expected confined=True for Claude Code's own MEMORY.md under this cwd's slug; got confined={confined}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_denies_different_cwd_slug_memory_dir(tmp_dir: Path) -> None:
+    # Anti-blanket-grant: a Claude Code auto-memory dir keyed to a DIFFERENT
+    # cwd's slug must stay confined=False -- the allowance is derived only
+    # from the caller's own trusted cwd, never a blanket ~/.claude/projects/**
+    # grant across projects.
+    name = "hooklib/resolve-confinement-denies-different-cwd-slug-memory-dir"
+    cwd = (tmp_dir / "cwd")
+    other_cwd = (tmp_dir / "other-cwd")
+    cwd.mkdir(parents=True)
+    other_cwd.mkdir(parents=True)
+    cwd = cwd.resolve()
+    other_slug = "".join("-" if c in "/." else c for c in str(other_cwd.resolve()))
+    target = Path.home() / ".claude" / "projects" / other_slug / "memory" / "note.md"
+    confined, _resolved = hooklib.resolve_confinement(target, cwd, None)
+    if confined:
+        fail(name, f"expected confined=False for a DIFFERENT cwd's Claude Code memory dir; got confined={confined}")
+        return
     ok(name)
 
 
@@ -14126,6 +14285,9 @@ def main() -> int:
         test_pretooluse_guard_edit_write_worktree_confinement_denies_outside(tmp / "g16")
         test_pretooluse_guard_edit_write_worktree_confinement_allows_inside_worktree(tmp / "g17")
         test_pretooluse_guard_worktree_confinement_degrades_when_no_workflow_json(tmp / "g18")
+        test_pretooluse_guard_edit_write_allows_claude_code_own_memory_dir(tmp / "g18b")
+        test_pretooluse_guard_edit_write_allows_claude_code_own_memory_md_exact_file(tmp / "g18c")
+        test_pretooluse_guard_edit_write_denies_other_project_claude_code_memory_dir(tmp / "g18d")
         test_pretooluse_guard_edit_write_confinement_allows_workflow_json_when_worktree_path_stale(tmp / "g19")
         test_pretooluse_guard_edit_write_allows_exact_allowlisted_workspace_root_file(tmp / "g19b")
         test_pretooluse_guard_edit_write_denies_non_allowlisted_sibling_workspace_root_file(tmp / "g19c")
@@ -14287,6 +14449,7 @@ def main() -> int:
         test_bash_guard_worktree_path_non_string_type_does_not_crash(tmp / "b54")
         test_bash_guard_main_denies_not_crashes_when_resolve_confinement_raises(tmp / "b55")
         test_bash_guard_denial_reason_includes_all_triggered_categories(tmp / "b56")
+        test_bash_guard_allows_rm_targeting_claude_code_own_memory_dir(tmp / "b56b")
 
         print()
         print("[ pretooluse-bash-guard: doubt-verify generalization gap (find/git dynamic targets) ]")
@@ -14438,6 +14601,9 @@ def main() -> int:
         test_hooklib_resolve_confinement_denies_non_matching_sibling_when_extra_exact_paths_set(tmp / "h7")
         test_hooklib_resolve_confinement_extra_exact_paths_does_not_rescue_unlisted_target_outside_cwd_and_worktree(tmp / "h8")
         test_hooklib_resolve_confinement_byte_identical_when_extra_exact_paths_omitted_or_empty(tmp / "h9")
+        test_hooklib_resolve_confinement_allows_claude_code_own_memory_dir(tmp / "h10")
+        test_hooklib_resolve_confinement_allows_claude_code_own_memory_md_exact(tmp / "h11")
+        test_hooklib_resolve_confinement_denies_different_cwd_slug_memory_dir(tmp / "h12")
         test_hooklib_resolve_workspace_writable_paths_empty_when_key_missing()
         test_hooklib_resolve_workspace_writable_paths_coerces_valid_string_list()
         test_hooklib_resolve_workspace_writable_paths_skips_non_string_entries()
