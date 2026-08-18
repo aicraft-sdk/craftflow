@@ -14813,6 +14813,48 @@ def test_memory_merge_cli_with_archive_field_emits_json_envelope() -> None:
     ok(name)
 
 
+def test_memory_merge_archive_rotation_zero_data_loss_realistic_fixture() -> None:
+    name = "memory-merge/archive/zero-data-loss-realistic-fixture"
+    bullets = [f"- gotcha entry {i} (conf: 0.8)" for i in range(80)]
+    file_text = "## Common Gotchas\n" + "\n".join(bullets) + "\n\n## Last Updated\n2026-01-01\n"
+    payload = {
+        "file_text": file_text,
+        "section": "Common Gotchas",
+        "notes": [],
+        "max_bullets": 60,
+        "archive": {"dir_rel": ".craftflow/state/project/archive", "section_slug": "common-gotchas", "month": "2026-08"},
+    }
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit {result.returncode}: {result.stderr}")
+        return
+    try:
+        out = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        fail(name, f"expected a JSON envelope, got: {result.stdout[:300]}")
+        return
+    archived_bullets = out.get("archived_bullets", [])
+    if len(archived_bullets) != 20:
+        fail(name, f"expected 20 archived bullets, got {len(archived_bullets)}")
+        return
+    span = memory_merge._find_section_span(out["file_text"], "Common Gotchas")
+    if span is None:
+        fail(name, "Common Gotchas section not found in returned file_text")
+        return
+    kept_bullets = hooklib.extract_bullets(out["file_text"][span[0]:span[1]])
+    if len(kept_bullets) != 61:
+        fail(name, f"expected 61 kept bullets (60 kept + 1 pointer), got {len(kept_bullets)}")
+        return
+    kept_without_pointer = [b for b in kept_bullets if "archived: see" not in b]
+    if set(archived_bullets) | set(kept_without_pointer) != set(bullets):
+        fail(name, "archived + kept must reconstruct the original 80-bullet set exactly (zero data loss)")
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # REM-FIX cycle 4 (silent-failure-hunter, live-reproduced 8x CRITICAL): the
 # same root-cause class already fixed twice for the `workflow` variable
@@ -16328,6 +16370,7 @@ def main() -> int:
     test_memory_merge_apply_cap_archive_preserves_organic_priority()
     test_memory_merge_cli_without_archive_field_unchanged_output()
     test_memory_merge_cli_with_archive_field_emits_json_envelope()
+    test_memory_merge_archive_rotation_zero_data_loss_realistic_fixture()
 
     print()
     print("[ pretooluse-guard / pretooluse-bash-guard: REM-FIX cycle 4 (non-dict JSON top-level crash class) ]")
