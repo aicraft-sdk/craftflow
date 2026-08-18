@@ -13,6 +13,17 @@
         ]
       },
       {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_pretooluse_guard.py\"",
+            "timeout": 10,
+            "statusMessage": "CRAFTFLOW state-read compaction guard"
+          }
+        ]
+      },
+      {
         "matcher": "WebFetch",
         "hooks": [
           {
