@@ -14712,6 +14712,53 @@ def test_memory_merge_cli_nan_confidence_fails_cleanly() -> None:
 
 
 # ---------------------------------------------------------------------------
+# craftflow_memory_merge: archive-aware bullet eviction (Phase 5)
+# ---------------------------------------------------------------------------
+
+def test_memory_merge_apply_cap_backward_compatible_without_archive() -> None:
+    name = "memory-merge/apply-cap/backward-compatible-no-archive"
+    bullets = [f"- entry {i} (conf: 0.8)" for i in range(10)]
+    kept, archived = memory_merge.apply_cap_with_archive(bullets, max_bullets=6, archive=False)
+    if archived:
+        fail(name, "archive=False must never return archived bullets")
+        return
+    if kept != memory_merge.apply_cap(bullets, max_bullets=6):
+        fail(name, "kept output must match legacy apply_cap exactly when archive=False")
+        return
+    ok(name)
+
+
+def test_memory_merge_apply_cap_archives_instead_of_dropping() -> None:
+    name = "memory-merge/apply-cap/archives-instead-of-dropping"
+    bullets = [f"- entry {i} (conf: 0.8)" for i in range(10)]
+    kept, archived = memory_merge.apply_cap_with_archive(bullets, max_bullets=6, archive=True)
+    if len(archived) != 4:
+        fail(name, f"expected 4 archived bullets, got {len(archived)}")
+        return
+    # Losslessness: archived + kept (minus the pointer) == original set.
+    kept_without_pointer = [b for b in kept if "archived: see" not in b]
+    if set(archived) | set(kept_without_pointer) != set(bullets):
+        fail(name, "archived + kept must reconstruct the original bullet set exactly")
+        return
+    if not any("archived: see" in b and "organic" in b for b in kept):
+        fail(name, "expected an organic pointer bullet in the live section")
+        return
+    ok(name)
+
+
+def test_memory_merge_apply_cap_archive_preserves_organic_priority() -> None:
+    name = "memory-merge/apply-cap/archive-preserves-organic-priority"
+    bullets = ["- organic entry (conf: 0.9, organic)"] + [
+        f"- imported {i} (conf: 0.8)" for i in range(9)
+    ]
+    kept, archived = memory_merge.apply_cap_with_archive(bullets, max_bullets=5, archive=True)
+    if any("organic entry" in b for b in archived):
+        fail(name, "organic bullet must never be archived while imported bullets remain")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # REM-FIX cycle 4 (silent-failure-hunter, live-reproduced 8x CRITICAL): the
 # same root-cause class already fixed twice for the `workflow` variable
 # (latest_workflow_payload() only guarantees valid JSON, not that the top
@@ -16218,6 +16265,12 @@ def main() -> int:
     test_memory_merge_cli_non_integer_max_bullets_fails_cleanly()
     test_memory_merge_cli_empty_section_with_file_text_fails_cleanly()
     test_memory_merge_cli_nan_confidence_fails_cleanly()
+
+    print()
+    print("[ craftflow_memory_merge: archive-aware bullet eviction (Phase 5) ]")
+    test_memory_merge_apply_cap_backward_compatible_without_archive()
+    test_memory_merge_apply_cap_archives_instead_of_dropping()
+    test_memory_merge_apply_cap_archive_preserves_organic_priority()
 
     print()
     print("[ pretooluse-guard / pretooluse-bash-guard: REM-FIX cycle 4 (non-dict JSON top-level crash class) ]")

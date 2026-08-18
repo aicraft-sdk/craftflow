@@ -270,6 +270,47 @@ def apply_cap(bullets: list, max_bullets) -> list:
     return [bullet for i, bullet in enumerate(bullets) if i not in evict_indices]
 
 
+def apply_cap_with_archive(bullets: list, max_bullets, archive: bool, archive_path: str = None) -> tuple:
+    """Like apply_cap, but when archive=True, excess bullets (same
+    imported-before-organic evict_order as apply_cap) are returned as a
+    second list instead of being dropped, and a single organic pointer
+    bullet ("- Older entries archived: see <archive_path> (conf: 1.0,
+    organic)") is appended to the kept list in their place. archive=False is
+    byte-identical to calling apply_cap directly (backward compatible,
+    zero output-shape change for existing callers that never opt in).
+
+    archive_path is optional: this function is pure and has no knowledge of
+    where the caller will actually write the archive file, so a generic
+    placeholder ("the archive") is used when omitted. The CLI envelope path
+    (main(), via merge_section_anchored_with_archive) passes the real,
+    already-computed archive_path so the pointer bullet names the actual
+    monthly archive file.
+
+    Returns (kept_bullets, archived_bullets). archived_bullets is always []
+    when archive=False or when no eviction is needed.
+    """
+    if not archive:
+        return apply_cap(bullets, max_bullets), []
+    if max_bullets is None or len(bullets) <= max_bullets:
+        return bullets, []
+
+    excess = len(bullets) - max_bullets
+    imported_indices = [
+        i for i, bullet in enumerate(bullets) if parse_provenance(bullet) != "organic"
+    ]
+    organic_indices = [
+        i for i, bullet in enumerate(bullets) if parse_provenance(bullet) == "organic"
+    ]
+    evict_order = imported_indices + organic_indices
+    evict_indices = set(evict_order[:excess])
+
+    archived_bullets = [bullets[i] for i in sorted(evict_indices)]
+    kept_bullets = [bullet for i, bullet in enumerate(bullets) if i not in evict_indices]
+    pointer_target = archive_path or "the archive"
+    kept_bullets.append(f"- Older entries archived: see {pointer_target} (conf: 1.0, organic)")
+    return kept_bullets, archived_bullets
+
+
 def _normalize_provenance(value) -> str:
     """Fail-safe: only the literal string 'organic' grants organic protection. Anything else
     (missing, None, unrecognized string) normalizes to 'imported' -- never crash on malformed
