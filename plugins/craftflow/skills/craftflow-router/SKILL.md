@@ -183,6 +183,12 @@ Always run this before routing or resuming. Memory is organized in two tiers:
 
 Do not parallelize step 1 with reads.
 
+State-read compaction self-heal: if any `Read(...)` in this section is denied with a
+`state-read-compaction` reason (the target `.craftflow/state/**` file is oversized), do not
+treat the denial as a hard failure. Instead, run the exact `craftflow_state_query.py ...
+--mode summary` command named in the deny message via `Bash(...)` and treat its stdout as the
+loaded memory content for that file.
+
 If a project/ memory file is missing:
 - Create it using the `craftflow:session-memory` template.
 - Read it before continuing.

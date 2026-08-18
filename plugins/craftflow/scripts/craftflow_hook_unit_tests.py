@@ -13097,6 +13097,20 @@ def test_skill_distillation_skill_present() -> None:
     ok(name)
 
 
+def test_craftflow_router_documents_state_read_compaction_self_heal() -> None:
+    name = "craftflow-router/skill-md/documents-state-read-compaction-self-heal"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    for marker in ("craftflow_state_query.py", "state-read-compaction"):
+        if marker not in content:
+            fail(name, f"craftflow-router SKILL.md missing expected marker: {marker!r}")
+            return
+    ok(name)
+
+
 def test_rubric_documents_three_rejection_cases() -> None:
     name = "skill-distillation/rubric-documents-three-rejection-cases"
     path = PLUGIN_ROOT / "skills" / "skill-distillation" / "references" / "rubric.md"
@@ -16228,6 +16242,10 @@ def main() -> int:
     print()
     print("[ state-read-compaction: end-to-end integration ]")
     test_state_read_compaction_end_to_end(tmp / "r5")
+
+    print()
+    print("[ craftflow-router: state-read compaction self-heal doc (Phase 3) ]")
+    test_craftflow_router_documents_state_read_compaction_self_heal()
 
     print()
     if _errors:
