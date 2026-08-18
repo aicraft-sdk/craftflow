@@ -129,7 +129,10 @@ def _summarize_events_jsonl(content: str, tail: int, event_type: str | None) -> 
 def _summarize_markdown(content: str) -> str:
     sections = parse_markdown_sections(content)
     if not sections:
-        return _summarize_generic(content)
+        return (
+            "WARNING: no '## ' headings found; falling back to generic "
+            "first/last-line summary.\n\n" + _summarize_generic(content)
+        )
 
     out: list = ["# (compacted summary -- run --mode full for complete content)\n"]
     for heading, body in sections.items():

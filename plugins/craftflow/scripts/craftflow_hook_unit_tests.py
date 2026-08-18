@@ -15467,6 +15467,9 @@ def test_state_query_summarize_markdown_no_headings_falls_back_to_generic(tmp_di
     if result.returncode != 0:
         fail(name, f"exit code {result.returncode}: {result.stderr}")
         return
+    if not result.stdout.startswith("WARNING:"):
+        fail(name, f"expected WARNING: banner prefix on no-headings fallback, got: {result.stdout[:80]!r}")
+        return
     if "plain line 0" not in result.stdout or "plain line 99" not in result.stdout:
         fail(name, "generic fallback must show first and last lines")
         return
