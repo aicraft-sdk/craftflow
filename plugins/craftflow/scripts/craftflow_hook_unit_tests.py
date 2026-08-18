@@ -13133,6 +13133,28 @@ def test_memory_finalize_instruction_sites_use_state_query_full_mode() -> None:
     ok(name)
 
 
+def test_memory_finalize_instruction_sites_wire_archive_rotation() -> None:
+    name = "craftflow-router/references/memory-finalize-wires-archive-rotation"
+    marker = "write archive_path FIRST"
+    expected_counts = {
+        "plan-workflow.md": 1,
+        "build-workflow.md": 2,
+        "debug-workflow.md": 1,
+        "review-workflow.md": 1,
+    }
+    for filename, expected in expected_counts.items():
+        path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / filename
+        if not path.exists():
+            fail(name, f"{filename} not found at {path}")
+            return
+        content = path.read_text(encoding="utf-8")
+        actual = content.count(marker)
+        if actual != expected:
+            fail(name, f"{filename}: expected {expected} occurrence(s) of {marker!r}, found {actual}")
+            return
+    ok(name)
+
+
 def test_rubric_documents_three_rejection_cases() -> None:
     name = "skill-distillation/rubric-documents-three-rejection-cases"
     path = PLUGIN_ROOT / "skills" / "skill-distillation" / "references" / "rubric.md"
@@ -16425,6 +16447,10 @@ def main() -> int:
     print()
     print("[ craftflow-router: memory-finalize sites use --mode full (Phase 4) ]")
     test_memory_finalize_instruction_sites_use_state_query_full_mode()
+
+    print()
+    print("[ craftflow-router: memory-finalize sites wired for archive rotation (Phase 6) ]")
+    test_memory_finalize_instruction_sites_wire_archive_rotation()
 
     print()
     if _errors:
