@@ -127,11 +127,41 @@ def _summarize_events_jsonl(content: str, tail: int, event_type: str | None) -> 
 
 
 def _summarize_markdown(content: str) -> str:
-    return content
+    sections = parse_markdown_sections(content)
+    if not sections:
+        return _summarize_generic(content)
+
+    out: list = ["# (compacted summary -- run --mode full for complete content)\n"]
+    for heading, body in sections.items():
+        out.append(f"## {heading}")
+        bullets = extract_bullets(body)
+        if not bullets:
+            # Non-bullet section body (e.g. free text like "## Current Focus")
+            # -- keep it verbatim, it is usually already short.
+            out.append(body.strip())
+            continue
+        shown = bullets[-DEFAULT_BULLETS_PER_SECTION:]
+        out.extend(shown)
+        if len(bullets) > len(shown):
+            out.append(f"... ({len(bullets)} total bullets, {len(shown)} most recent shown)")
+        out.append("")
+    return "\n".join(out) + "\n"
 
 
 def _summarize_generic(content: str) -> str:
-    return content
+    lines = content.splitlines()
+    head_n, tail_n = 20, 20
+    if len(lines) <= head_n + tail_n:
+        return content
+    head = lines[:head_n]
+    tail = lines[-tail_n:]
+    omitted = len(lines) - head_n - tail_n
+    return (
+        "\n".join(head)
+        + f"\n\n... ({omitted} lines omitted) ...\n\n"
+        + "\n".join(tail)
+        + "\n\nRun --mode full for the complete content.\n"
+    )
 
 
 def main() -> int:

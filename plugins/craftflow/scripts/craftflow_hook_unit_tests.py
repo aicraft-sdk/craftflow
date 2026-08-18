@@ -15194,6 +15194,87 @@ def test_state_query_summarize_events_jsonl_all_malformed_never_crashes(tmp_dir:
 
 
 # ---------------------------------------------------------------------------
+# craftflow_state_query.py: markdown + generic summary modes
+# ---------------------------------------------------------------------------
+
+def _markdown_memory_fixture() -> str:
+    recent_changes = "\n".join(f"- change entry number {i} with some detail text" for i in range(60))
+    learnings = "\n".join(f"- learning entry number {i} with some detail text" for i in range(80))
+    return (
+        "# Active Context\n\n"
+        "## Current Focus\n"
+        "Some short focus text.\n\n"
+        "## Recent Changes\n" + recent_changes + "\n\n"
+        "## Decisions\n"
+        "- decision one\n"
+        "- decision two\n\n"
+        "## Learnings\n" + learnings + "\n\n"
+        "## References\n"
+        "- some reference\n\n"
+        "## Last Updated\n"
+        "2026-08-18\n"
+    )
+
+
+def test_state_query_summarize_markdown_caps_bullets_per_section(tmp_dir: Path) -> None:
+    name = "state-query/summarize-markdown/caps-bullets-per-section"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    content = _markdown_memory_fixture()
+    target = tmp_dir / "activeContext.md"
+    target.write_text(content, encoding="utf-8")
+    script = SCRIPTS / "craftflow_state_query.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(target), "--mode", "summary"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}: {result.stderr}")
+        return
+    out = result.stdout
+    for heading in ("Current Focus", "Recent Changes", "Decisions", "Learnings", "References", "Last Updated"):
+        if f"## {heading}" not in out:
+            fail(name, f"missing heading in summary: {heading!r}")
+            return
+    recent_bullets = out.count("change entry number")
+    if recent_bullets != 10:
+        fail(name, f"expected at most 10 Recent Changes bullets shown, got {recent_bullets}")
+        return
+    if "change entry number 59" not in out:
+        fail(name, "expected the MOST RECENT bullets (highest index) to be shown, not the oldest")
+        return
+    if "(60 total bullets, 10 most recent shown)" not in out:
+        fail(name, "expected a bullet-count note for Recent Changes")
+        return
+    if len(out) >= len(content) / 2:
+        fail(name, f"summary must be materially smaller than input: {len(out)} vs {len(content)}")
+        return
+    ok(name)
+
+
+def test_state_query_summarize_markdown_no_headings_falls_back_to_generic(tmp_dir: Path) -> None:
+    name = "state-query/summarize-markdown/no-headings-falls-back-to-generic"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    content = "\n".join(f"plain line {i}" for i in range(100)) + "\n"
+    target = tmp_dir / "plain.md"
+    target.write_text(content, encoding="utf-8")
+    script = SCRIPTS / "craftflow_state_query.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(target), "--mode", "summary"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}: {result.stderr}")
+        return
+    if "plain line 0" not in result.stdout or "plain line 99" not in result.stdout:
+        fail(name, "generic fallback must show first and last lines")
+        return
+    if "lines omitted" not in result.stdout:
+        fail(name, "generic fallback must disclose omitted line count")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # pretooluse-guard: state-read compaction (Read PreToolUse)
 # ---------------------------------------------------------------------------
 
@@ -16086,6 +16167,11 @@ def main() -> int:
     test_state_query_summarize_events_jsonl_default_tail_and_footer(tmp / "q5")
     test_state_query_summarize_events_jsonl_event_type_filter(tmp / "q6")
     test_state_query_summarize_events_jsonl_all_malformed_never_crashes(tmp / "q7")
+
+    print()
+    print("[ craftflow_state_query.py: markdown + generic summary modes ]")
+    test_state_query_summarize_markdown_caps_bullets_per_section(tmp / "q8")
+    test_state_query_summarize_markdown_no_headings_falls_back_to_generic(tmp / "q9")
 
     print()
     print("[ pretooluse-guard: state-read compaction (Read PreToolUse) ]")
