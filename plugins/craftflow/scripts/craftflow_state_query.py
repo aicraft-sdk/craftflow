@@ -60,7 +60,43 @@ def _detect_shape(path: Path) -> str:
 
 
 def _summarize_workflow_json(content: str) -> str:
-    return content
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, ValueError):
+        return f"WARNING: could not parse as workflow JSON; showing raw content.\n\n{content}"
+    if not isinstance(data, dict):
+        return f"WARNING: workflow JSON top level is not an object; showing raw content.\n\n{content}"
+
+    summary: dict = {}
+    scalar_keys = (
+        "workflow_uuid", "workflow_id", "workflow_type", "plan_mode",
+        "verification_rigor", "proof_status", "pending_gate", "worktree_path",
+        "build_mode",
+    )
+    for key in scalar_keys:
+        if key in data:
+            summary[key] = data[key]
+
+    if "phase_status" in data:
+        summary["phase_status"] = data["phase_status"]
+
+    status_history = data.get("status_history")
+    if isinstance(status_history, list):
+        summary["status_history_tail"] = status_history[-DEFAULT_STATUS_HISTORY_ENTRIES:]
+        summary["status_history_total_entries"] = len(status_history)
+
+    for large_key in ("normalized_phases", "telemetry", "evidence", "traceability"):
+        value = data.get(large_key)
+        if isinstance(value, list):
+            summary[f"{large_key}_entry_count"] = len(value)
+        elif isinstance(value, dict):
+            summary[f"{large_key}_key_count"] = len(value)
+
+    summary["_note"] = (
+        "This is a compacted summary. Run --mode full for complete, "
+        "byte-identical content of this workflow artifact."
+    )
+    return json.dumps(summary, indent=2, ensure_ascii=True) + "\n"
 
 
 def _summarize_events_jsonl(content: str, tail: int, event_type: str | None) -> str:

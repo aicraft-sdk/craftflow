@@ -15018,6 +15018,90 @@ def test_state_query_full_mode_missing_file_errors_cleanly(tmp_dir: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
+# craftflow_state_query.py: workflow-JSON summary mode
+# ---------------------------------------------------------------------------
+
+def _workflow_json_fixture() -> dict:
+    return {
+        "workflow_uuid": "wf-20260818-000000-abcdef01",
+        "pending_gate": "none",
+        "phase_status": "in_progress",
+        "worktree_path": "/tmp/does-not-matter",
+        "normalized_phases": [
+            {"id": f"phase-{i}", "description": "x" * 300} for i in range(3)
+        ],
+        "telemetry": {f"key-{i}": "y" * 300 for i in range(10)},
+        "evidence": [{"id": f"ev-{i}", "content": "z" * 300} for i in range(8)],
+        "status_history": [
+            {"status": f"s{i}", "ts": f"t{i}", "detail": "w" * 300} for i in range(20)
+        ],
+    }
+
+
+def test_state_query_summarize_workflow_json_shrinks_and_keeps_key_fields(tmp_dir: Path) -> None:
+    name = "state-query/summarize-workflow-json/shrinks-and-keeps-key-fields"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    fixture = _workflow_json_fixture()
+    content = json.dumps(fixture)
+    target = tmp_dir / "wf-test.json"
+    target.write_text(content, encoding="utf-8")
+    script = SCRIPTS / "craftflow_state_query.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(target), "--mode", "summary"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}: {result.stderr}")
+        return
+    try:
+        parsed = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        fail(name, f"summary output is not valid JSON: {exc}")
+        return
+    if len(result.stdout) >= len(content) / 3:
+        fail(name, f"summary not order-of-magnitude smaller: {len(result.stdout)} vs {len(content)}")
+        return
+    for key in ("workflow_uuid", "pending_gate", "phase_status"):
+        if parsed.get(key) != fixture[key]:
+            fail(name, f"missing/incorrect key field {key!r}: {parsed.get(key)!r}")
+            return
+    status_tail = parsed.get("status_history_tail")
+    if status_tail != fixture["status_history"][-DEFAULT_STATUS_HISTORY_ENTRIES_FOR_TEST:]:
+        fail(name, f"status_history_tail is not the most recent {DEFAULT_STATUS_HISTORY_ENTRIES_FOR_TEST} entries: {status_tail!r}")
+        return
+    if "--mode full" not in parsed.get("_note", ""):
+        fail(name, f"_note must mention --mode full: {parsed.get('_note')!r}")
+        return
+    ok(name)
+
+
+DEFAULT_STATUS_HISTORY_ENTRIES_FOR_TEST = 5
+
+
+def test_state_query_summarize_workflow_json_malformed_falls_open(tmp_dir: Path) -> None:
+    name = "state-query/summarize-workflow-json/malformed-falls-open"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    raw = "not json at all " + ("x" * 60000)
+    target = tmp_dir / "wf-malformed.json"
+    target.write_text(raw, encoding="utf-8")
+    script = SCRIPTS / "craftflow_state_query.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(target), "--mode", "summary"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}: {result.stderr}")
+        return
+    if not result.stdout.startswith("WARNING:"):
+        fail(name, f"expected WARNING: banner, got: {result.stdout[:80]!r}")
+        return
+    if raw not in result.stdout:
+        fail(name, "fail-open output must contain the full original raw content")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # pretooluse-guard: state-read compaction (Read PreToolUse)
 # ---------------------------------------------------------------------------
 
@@ -15899,6 +15983,11 @@ def main() -> int:
     print("[ craftflow_state_query.py: skeleton + --mode full ]")
     test_state_query_full_mode_byte_identical(tmp / "q1")
     test_state_query_full_mode_missing_file_errors_cleanly(tmp / "q2")
+
+    print()
+    print("[ craftflow_state_query.py: workflow-JSON summary mode ]")
+    test_state_query_summarize_workflow_json_shrinks_and_keeps_key_fields(tmp / "q3")
+    test_state_query_summarize_workflow_json_malformed_falls_open(tmp / "q4")
 
     print()
     print("[ pretooluse-guard: state-read compaction (Read PreToolUse) ]")
