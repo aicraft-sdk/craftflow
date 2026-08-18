@@ -26,6 +26,9 @@
         "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_pretooluse_guard.py\" --tool Bash --event PreToolUse"
       },
       {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_pretooluse_guard.py\" --tool Read --event PreToolUse"
+      },
+      {
         "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_pretooluse_bash_guard.py\" --tool Bash --event PreToolUse"
       },
       {
