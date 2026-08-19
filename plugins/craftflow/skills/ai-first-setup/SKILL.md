@@ -175,7 +175,7 @@ Include every file from the following set, applying the exclusion rules below:
 | `session-handoff.md` | `assets/lifecycle/session-handoff.md.tpl` | Session Lifecycle END; one-screen resume note |
 | `clean-state-checklist.md` | `assets/lifecycle/clean-state-checklist.md.tpl` | Session Lifecycle END; end-of-session gate |
 | `feature_list.json` | `assets/scope/feature_list.json.tpl` | Scope; machine-readable, evidence-gated |
-| `{workspace_root}/.craftflow-workspace.json` | (generated — see Step 4 item 10, no template) | Always written/verified, even if empty; pre-populated from Step 0's `shared_root_files` |
+| `{workspace_root}/.craftflow-workspace.json` | (generated — see Step 4 item 10, no template) | Always proposed to the human for confirmation (never auto-written); pre-populated from Step 0's `shared_root_files` |
 
 ### Shape-conditional — validators, CI, and hooks
 
@@ -268,10 +268,17 @@ Write eligible files in this exact order so that cross-references resolve correc
    - `clean-state-checklist.md` from `assets/lifecycle/clean-state-checklist.md.tpl`; substitute `{{PROJECT_NAME}}`, `{{BUILD_TEST_COMMAND}}`
    - `feature_list.json` from `assets/scope/feature_list.json.tpl`
 9. **`.gitignore` audit** — confirm `CLAUDE.md` and `.claude/` remain ignored; do not add new ignores for `AGENTS.md`, `AI.md`, `TESTS.md`, `docs/ai/**`, or `tools/scripts/**`
-10. **Workspace-root allowlist — `{workspace_root}/.craftflow-workspace.json`** — Always write or verify this file, regardless of repo shape (this is independent of Steps 1–9; `workspace_root` may differ from the project root written into in Steps 1–9, per Step 0):
-    - If it does not exist: write `{"writable_paths": [<shared_root_files from Step 0, or [] if none were named>]}`.
-    - If it already exists: read it, then append any newly-identified `shared_root_files` entries not already present (dedup by exact string match; validated per the entry contract below); never remove existing entries; never overwrite the whole file wholesale.
-    - **Entry contract** (must match `read_workspace_writable_paths()` in `craftflow_resolve_workspace_root.py` exactly, or the entry is silently dropped by that validator — two separate checks apply, both must pass):
+10. **Workspace-root allowlist — `{workspace_root}/.craftflow-workspace.json`** — This file is a security-relevant, **human-authored-only** artifact: its `writable_paths` widens BUILD-phase agent write access outside worktree confinement, and `docs/2026-08-13-craftflow-workspace-root-allowlist-decision.md` ("Alternatives Considered") explicitly rejects auto-generating or scaffolding it — Craftflow only ever *reads* this file, never writes or infers its contents unprompted. This skill must never call `Write()` on it without explicit, in-the-moment human confirmation for this specific file. Always **propose**, never silently write, regardless of repo shape (this is independent of Steps 1–9; `workspace_root` may differ from the project root written into in Steps 1–9, per Step 0):
+    - Construct the proposed content (same rules as before — only the delivery mechanism changes):
+      - If `{workspace_root}/.craftflow-workspace.json` does not exist: propose `{"writable_paths": [<shared_root_files from Step 0, or [] if none were named>]}`.
+      - If it already exists: read it (read-only), then propose an updated `writable_paths` list that appends any newly-identified `shared_root_files` entries not already present (dedup by exact string match; validated per the entry contract below); never propose removing existing entries; never propose overwriting the whole file wholesale.
+    - **Print the proposed content** to the user in a copy-pasteable fenced code block, labeled with the exact target path, e.g.:
+      ```
+      Proposed content for {workspace_root}/.craftflow-workspace.json:
+      { "writable_paths": ["CONTRACTS.md"] }
+      ```
+    - **Ask the human directly:** "Should I create/update this file for you, or would you rather save it yourself?" The Step 3 approval-gate signal for the rest of the file list does NOT cover this file — it requires its own explicit, in-the-moment confirmation because it is a security-relevant, human-authored artifact. Only call `Write()` on `{workspace_root}/.craftflow-workspace.json` after the human gives that confirmation. If the human declines, defers, or does not respond with explicit confirmation, do NOT write the file — record it as a pending item in Step 6's Manual follow-ups instead.
+    - **Entry contract** (unchanged — must match `read_workspace_writable_paths()` in `craftflow_resolve_workspace_root.py` exactly, or the entry is silently dropped by that validator — two separate checks apply, both must pass):
       1. The entry, resolved against `workspace_root` (following any symlink), must land as a **literal direct child of `workspace_root`** — i.e. its resolved parent directory must be `workspace_root` itself. An entry whose resolved path escapes `workspace_root` entirely (e.g. a symlink pointing anywhere outside it) is dropped with reason `resolves_outside_workspace_root`, regardless of whether the escape target happens to be a nested repo.
       2. Additionally, the resolved entry must not equal, or be nested inside, any nested git repo's directory under `workspace_root` — dropped with reason `resolves_inside_nested_repo` if it does.
       Syntactically, each entry is also the bare filename of a direct child only — no path separators (`/` or `\`), no `.` or `..`, no leading `/` or `~` (no absolute paths, no home-dir expansion). When unsure, use the shortest exact filename rather than a path.
@@ -341,11 +348,16 @@ if bad: sys.exit('ERROR: done features with empty evidence: ' + str(bad))
 print('evidence gate: OK')
 "
 
-# 9. Verify {workspace_root}/.craftflow-workspace.json — read it back (or re-run the
-# resolver script) and confirm shared_root_files from Step 0 were actually persisted
+# 9. Verify {workspace_root}/.craftflow-workspace.json — only applicable if the human
+# already confirmed the Step 4 item 10 proposal and the file was written. If the human
+# deferred (declined or did not confirm), this file will not exist yet — that is expected,
+# not an error; skip the check and note it as a manual follow-up in Step 6 instead.
 python3 -c "
-import json, sys
+import json, os, sys
 path = '{workspace_root}/.craftflow-workspace.json'
+if not os.path.exists(path):
+    print('workspace allowlist: SKIPPED (not yet created — human deferred the Step 4 item 10 proposal; see Step 6 Manual follow-ups)')
+    sys.exit(0)
 data = json.load(open(path))
 paths = data.get('writable_paths', [])
 if not isinstance(paths, list):
@@ -354,7 +366,7 @@ print('workspace allowlist: OK (' + str(len(paths)) + ' entries)')
 "
 ```
 
-A passing run shows: `AGENTS.md lint passed`, `AI contract pack lint passed`, build exit 0, test exit 0, `CLAUDE.md` reported ignored, the new files appearing as untracked (not ignored), `init.sh is executable`, `feature_list.json is valid JSON`, and `workspace allowlist: OK`. If the resolver script from Step 0 reported any `workspace_writable_paths_dropped` entries (or if re-running the resolver script here surfaces any), surface them verbatim in the Step 6 report under Manual follow-ups — a dropped entry means a `shared_root_files` answer was silently rejected and the user must re-supply it as a bare filename.
+A passing run shows: `AGENTS.md lint passed`, `AI contract pack lint passed`, build exit 0, test exit 0, `CLAUDE.md` reported ignored, the new files appearing as untracked (not ignored), `init.sh is executable`, `feature_list.json is valid JSON`, and either `workspace allowlist: OK` (the human confirmed the Step 4 item 10 proposal and the file was written) or `workspace allowlist: SKIPPED` (the human deferred — expected, not a failure; carry it into Step 6 Manual follow-ups). If the resolver script from Step 0 reported any `workspace_writable_paths_dropped` entries (or if re-running the resolver script here surfaces any), surface them verbatim in the Step 6 report under Manual follow-ups — a dropped entry means a `shared_root_files` answer was silently rejected and the user must re-supply it as a bare filename.
 
 ---
 
@@ -372,6 +384,7 @@ Emit a summary with the following four sections: **Files created**, **Files skip
 2. Severity ramp: after merging the first real feature spec (`docs/ai/specs/`) and the first ADR (`docs/ai/decisions/`), flip `aiContractPack.severity` from `"warn"` to `"error"` in `.agents-md-validator.json`
 3. Husky initialization (JS repos only): if Husky was newly added, run the package manager install command so the pre-commit hook activates before the next commit
 4. Non-JS pre-commit hook: `.git/hooks/pre-commit` is not committed to the repo; new contributors must re-run the skill or manually copy it from `assets/hooks/pre-commit-nonjs` after cloning
+5. **Workspace-root allowlist (if deferred in Step 4 item 10):** `{workspace_root}/.craftflow-workspace.json` was proposed but not written because the human had not yet confirmed it. Create or update the file yourself using the exact content printed during Apply (Step 4 item 10), or re-run this skill and confirm the write when prompted. Until this file exists with the intended `writable_paths` entries, BUILD-phase Craftflow agents cannot write to those shared workspace-root files.
 
 **Craftflow workspace guards (read before your next session)** — if this repo is operated under Craftflow orchestration (`.craftflow/` present, or this setup was invoked via `craftflow:craftflow-router`):
 - `.craftflow/state/{activeContext,patterns,progress}.md` are router-protected memory files — permit-gated, router-owned finalization only. Never hand-edit them directly.
