@@ -14,23 +14,23 @@ description: |
 
 **Runtime contract only.** v10 restores trust-first orchestration: route intent, hydrate workflow state, write workflow artifacts, execute the task graph, validate agent output, and fail closed on ambiguity, skipped work, or missing persistence.
 
+Mandatory reference read: before routing (## 1.) or dispatching any agent, read
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` once per
+session if not already read. It holds the host-agnostic Intent Routing table and the
+dispatch prompt scaffold, both `Read()` from there rather than inlined below — see backlog
+item 8's hooks-as-bridge redesign. A missing or unreadable shared doc is a hard-stop
+condition, same as any other required reference read in this file — do not silently
+proceed with routing/dispatch decisions from stale in-context memory of its content.
+
 ## 1. Intent Routing
 
-Route using the first matching signal:
-
-| Priority | Signal | Keywords | Workflow | Chain |
-|----------|--------|----------|----------|-------|
-| 1 | ERROR | error, bug, fix, broken, crash, fail, debug, troubleshoot, issue | DEBUG | bug-investigator -> code-reviewer -> integration-verifier |
-| 2 | PLAN | plan, design, architect, roadmap, strategy, spec, brainstorm | PLAN | brainstorming -> planner -> bounded fresh review loop |
-| 3 | REVIEW | review, audit, analyze, assess, "is this good" | REVIEW | code-reviewer |
-| 4 | DEFAULT | Everything else | BUILD | fast path: builder -> verifier -> memory (default); full chain: builder -> [code-reviewer \|\| silent-failure-hunter] -> verifier -> memory (when risk keywords match) |
-
-Rules:
-- NEVER use Claude Code's native plan mode (EnterPlanMode). Craftflow owns planning. All "plan", "design", "architect", "brainstorm" requests route to the Craftflow PLAN workflow — not to the built-in plan mode tool. EnterPlanMode bypasses Craftflow orchestration, memory, workflow artifacts, and verification entirely.
-- ERROR always wins over BUILD.
-- REVIEW is advisory only. Never let REVIEW create code-changing tasks.
-- BUILD uses fast path (builder → verifier → memory) by default when no risk keywords are detected in the request. Full chain (builder → reviewer → hunter → verifier → memory) is used when risk keywords match. See `references/fast-path.md` for detection rules.
-- Before execution, output one line: `-> {WORKFLOW} workflow (signals: {matched keywords})`
+**Shared with Cursor — canonical text lives in
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+"Intent Routing" (Phase 3 of the hooks-as-bridge redesign, backlog item 8). `Read()` that
+file now if you have not already this session; it has the full priority/keyword/chain
+table, routing rules, and the announce-line convention.** See `references/fast-path.md`
+for the risk-keyword detection table used to choose between BUILD's fast path and full
+chain.
 
 ## 0. Resolve Project Root
 
@@ -894,51 +894,26 @@ waiting on this agent.
 
 ### Prompt scaffold for every agent
 
-```text
-## Task Context
-- Task ID: {task_id}
-- Parent Workflow ID: {workflow_uuid}
-- Task Phase: {phase}
-- Plan File: {plan_file or 'None'}
-- Workflow Scope: wf:{workflow_uuid}
-- Workflow Artifact: $PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json
-- Effort Directive: {low|medium|high — from fast-path.md dispatch table; append one-line steering per §4 Effort Steering Directives}
-
-## User Request
-{request}
-
-## Requirements
-{clarified requirements or 'See plan/design files'}
-
-## Memory Summary
-{brief activeContext summary}
-
-## Project Patterns
-{User Standards + Common Gotchas, trimmed if needed}
-
-## Domain Context
-{If UBIQUITOUS_LANGUAGE.md, DOMAIN_GLOSSARY.md, docs/domain/*.md, or project-context.md exist, include content. Otherwise omit section.}
-
-## SKILL_HINTS
-{router-detected skill list or "None"}
-```
-
-Optional sections:
-- `## Pre-Answered Requirements` for BUILD when router already gathered decisions.
-- `## Intent Contract` when a plan or design already defined goal, constraints, acceptance criteria, and named scenarios.
-- `## Research Files` only when at least one research file exists.
-- `## Research Quality` only when at least one research result exists.
-- `## Design File` only for planner.
-- `## Planning Review Findings` only for `re-plan`.
-- `## Original User Request` only for `plan-gap-reviewer`.
-- `## Approved Context Files` only for `plan-gap-reviewer`.
-- `## Previous Agent Findings` only for integration-verifier and only after review/hunt phases.
+**Shared with Cursor — canonical text lives in
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` § "Dispatch
+Prompt Scaffold" (Phase 3 of the hooks-as-bridge redesign, backlog item 8). `Read()` that
+file now if you have not already this session; it has the full field list (`## Task
+Context` including the `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json`
+Workflow Artifact line, `## User Request`, `## Requirements`, `## Memory Summary`, `##
+Project Patterns`, `## Domain Context`, `## SKILL_HINTS`), and the optional-sections
+list.** Claude Code needs no host-specific additions to this scaffold — dispatch via
+`Task()`/`TaskCreate()` on a registered subagent type already loads that agent's own
+system prompt, so unlike Cursor's `generalPurpose`-only dispatch, no extra preamble or
+`## Worktree` block is required here.
 
 ### Prompt assembly rule
 
-- Every routed prompt must be self-contained from the workflow artifact, approved files, and the current task contract.
-- Do not rely on prior chat turns or completed-phase narrative when the same fact already exists in the workflow artifact, plan, design, or research files.
-- Include only the current-phase objective, live blockers, approved decisions, and directly relevant evidence. Omit unrelated completed-phase detail.
+**Shared with Cursor — canonical text lives in the same
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` § "Dispatch
+Prompt Scaffold" section referenced immediately above** (the Prompt assembly rule is the
+final subsection there): every routed prompt must be self-contained from the workflow
+artifact, approved files, and the current task contract, relying on none of prior chat
+turns or completed-phase narrative when the same fact already lives in those sources.
 
 ### Effort Dispatch Rule
 

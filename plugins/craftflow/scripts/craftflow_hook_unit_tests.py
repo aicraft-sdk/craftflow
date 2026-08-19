@@ -879,20 +879,46 @@ def test_just_go_and_scope_decision_resume_anchored_to_project_root() -> None:
 
 
 def test_dispatcher_scaffold_workflow_artifact_anchored_to_project_root() -> None:
+    # Phase 3 of the hooks-as-bridge redesign (backlog item 8) extracted the dispatch
+    # prompt scaffold out of craftflow-router/SKILL.md into the shared
+    # skills/_shared/router-protocol.md doc both hosts Read(). The anchored invariant this
+    # test protects -- the Workflow Artifact line must be $PROJECT_ROOT-anchored, not bare
+    # -- now lives in the shared doc; this test also confirms SKILL.md's own section was
+    # actually replaced with a pointer, not left as (or silently reverted to) a stale
+    # re-embedded copy.
     name = "router/dispatcher-scaffold-workflow-artifact-anchored"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = skill_path.read_text(encoding="utf-8")
-    start = content.find("### Prompt scaffold for every agent")
-    end = content.find("\n### Prompt assembly rule", start)
-    if start == -1 or end == -1:
-        fail(name, "could not bound ### Prompt scaffold for every agent through ### Prompt assembly rule")
+    shared_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md"
+    if not shared_path.exists():
+        fail(name, f"shared router-protocol.md not found at {shared_path}")
         return
-    section = content[start:end]
-    if "- Workflow Artifact: $PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json" not in section:
-        fail(name, "anchored Workflow Artifact line not found in dispatcher scaffold")
+    skill_content = skill_path.read_text(encoding="utf-8")
+    shared_content = shared_path.read_text(encoding="utf-8")
+
+    skill_start = skill_content.find("### Prompt scaffold for every agent")
+    skill_end = skill_content.find("\n### Prompt assembly rule", skill_start)
+    if skill_start == -1 or skill_end == -1:
+        fail(name, "could not bound ### Prompt scaffold for every agent through ### Prompt assembly rule in SKILL.md")
         return
-    if "- Workflow Artifact: .craftflow/state/workflows/{workflow_uuid}.json" in section:
-        fail(name, "bare unanchored Workflow Artifact line still present in dispatcher scaffold")
+    skill_section = skill_content[skill_start:skill_end]
+    if "skills/_shared/router-protocol.md" not in skill_section:
+        fail(name, "SKILL.md's dispatcher scaffold section no longer points at the shared doc")
+        return
+    if "- Workflow Artifact: $PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json" in skill_section:
+        fail(name, "SKILL.md still inlines the full anchored Workflow Artifact line -- stale re-embedded copy alongside the shared-doc pointer")
+        return
+
+    shared_start = shared_content.find("### Prompt scaffold for every agent")
+    shared_end = shared_content.find("\n### Prompt assembly rule", shared_start)
+    if shared_start == -1 or shared_end == -1:
+        fail(name, "could not bound ### Prompt scaffold for every agent through ### Prompt assembly rule in the shared doc")
+        return
+    shared_section = shared_content[shared_start:shared_end]
+    if "- Workflow Artifact: $PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json" not in shared_section:
+        fail(name, "anchored Workflow Artifact line not found in shared doc's dispatcher scaffold")
+        return
+    if "- Workflow Artifact: .craftflow/state/workflows/{workflow_uuid}.json" in shared_section:
+        fail(name, "bare unanchored Workflow Artifact line present in shared doc's dispatcher scaffold")
         return
     ok(name)
 
@@ -13784,6 +13810,53 @@ def test_skill_distillation_skill_present() -> None:
     ok(name)
 
 
+def test_craftflow_router_shared_protocol_extraction_no_stale_reembed() -> None:
+    # Presence-marker test for Phase 3 of the hooks-as-bridge redesign (backlog item 8,
+    # plan Component 7): craftflow-router/SKILL.md must Read() the shared doc for the
+    # sections extracted so far (Intent Routing, dispatch prompt scaffold), not silently
+    # keep a duplicate copy of the literal content alongside the pointer -- and the shared
+    # doc must actually still hold that content, not just claim to.
+    name = "craftflow-router/skill-md/shared-protocol-extraction-no-stale-reembed"
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    shared_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md"
+    if not skill_path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {skill_path}")
+        return
+    if not shared_path.exists():
+        fail(name, f"shared router-protocol.md not found at {shared_path}")
+        return
+    skill_content = skill_path.read_text(encoding="utf-8")
+    shared_content = shared_path.read_text(encoding="utf-8")
+
+    if skill_content.count("skills/_shared/router-protocol.md") < 2:
+        fail(
+            name,
+            f"expected at least 2 references to the shared doc in SKILL.md (mandatory "
+            f"reference read + at least one section pointer), found "
+            f"{skill_content.count('skills/_shared/router-protocol.md')}",
+        )
+        return
+
+    # Old literal content that moved must be ABSENT from SKILL.md (else it's a stale
+    # re-embedded copy sitting alongside the new pointer) and PRESENT in the shared doc.
+    moved_markers = (
+        # Intent Routing priority table -- a full row, not just a loose keyword, so a
+        # false positive can't come from the word appearing incidentally elsewhere.
+        "| 1 | ERROR | error, bug, fix, broken, crash, fail, debug, troubleshoot, issue | DEBUG | bug-investigator -> code-reviewer -> integration-verifier |",
+        # Dispatch prompt scaffold's literal field block.
+        "## Task Context\n- Task ID: {task_id}",
+        "## SKILL_HINTS\n{router-detected skill list or \"None\"}",
+    )
+    for marker in moved_markers:
+        if marker in skill_content:
+            fail(name, f"SKILL.md still contains moved literal content (stale re-embedded copy): {marker!r}")
+            return
+        if marker not in shared_content:
+            fail(name, f"shared doc missing expected extracted content: {marker!r}")
+            return
+    ok(name)
+
+
 def test_craftflow_router_documents_state_read_compaction_self_heal() -> None:
     name = "craftflow-router/skill-md/documents-state-read-compaction-self-heal"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
@@ -17263,6 +17336,10 @@ def main() -> int:
     print()
     print("[ state-read-compaction: end-to-end integration ]")
     test_state_read_compaction_end_to_end(tmp / "r5")
+
+    print()
+    print("[ craftflow-router: shared router-protocol extraction, no stale re-embed (item 8 Phase 3) ]")
+    test_craftflow_router_shared_protocol_extraction_no_stale_reembed()
 
     print()
     print("[ craftflow-router: state-read compaction self-heal doc (Phase 3) ]")
