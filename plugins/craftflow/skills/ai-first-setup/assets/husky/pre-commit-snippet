@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# NOTE: Remove the next line if using Husky v9+ (the _/husky.sh source is v8-only)
+. "$(dirname "$0")/_/husky.sh"
+
+node tools/scripts/agents-md-lint.js
+node tools/scripts/ai-contract-pack-lint.js

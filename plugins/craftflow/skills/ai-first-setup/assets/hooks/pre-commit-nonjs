@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+# AI-first pre-commit hook for non-JS repos (no Husky dependency).
+# Emitted by ai-first-setup to .git/hooks/pre-commit for Go/Rust/Python repos.
+# Must be executable: chmod +x .git/hooks/pre-commit
+
+bash tools/scripts/agents-md-lint.sh
+bash tools/scripts/ai-contract-pack-lint.sh
