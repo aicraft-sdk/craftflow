@@ -25,9 +25,22 @@
 > either violating the purity boundary or the verbatim-move rule; it remains inline in
 > `craftflow-router/SKILL.md` pending a future, deliberately-paraphrased treatment. Phase
 > 3f added "Previous Agent Findings Handoff" — pure prose/template content with no
-> host-specific tool syntax. Phase 3g (this pass) added "Verifier Findings Handoff" — same
-> kind of pure prose, explicitly cross-referenced by Cursor's own text as sharing the same
-> fast-path-omission rule. Several other sections the mapping table classifies
+> host-specific tool syntax. Phase 3g added "Verifier Findings Handoff" — same kind of pure
+> prose, explicitly cross-referenced by Cursor's own text as sharing the same
+> fast-path-omission rule. Phase 3h investigated `### Parent workflow creation` and made a
+> deliberate no-op call: the mapping table classified its JSON artifact schema as "shared"
+> on the strength of Cursor's own prose claim ("same format... required for hook
+> compatibility"), but direct comparison shows the actual schemas are NOT field-identical —
+> Cursor's real schema is a much smaller subset (confirmed via exhaustive grep for ~10
+> Claude-only field names, zero hits in cursor-router/SKILL.md). Moving Claude's full schema
+> here would misrepresent what Cursor's file actually contains; flagged as a mapping-table
+> correction candidate instead of extracted. Phase 3i (this pass) applied the same
+> byte-comparison discipline to `## 2.`'s "shared" classification and found a partial match:
+> the Memory File Required Sections table below IS byte-identical across hosts (moved here),
+> but the JUST_GO rule in the same mapping-table row is NOT (Cursor's is a single terse
+> sentence; Claude's has an AskUserQuestion-gate exception and a separate "v10 trust rule"
+> paragraph with no Cursor equivalent) — JUST_GO stays inline in `craftflow-router/SKILL.md`.
+> Several other sections the mapping table classifies
 > `shared` (`### Parent workflow creation`'s artifact schema, `## 13. Memory
 > Finalization`'s two-tier concept, `### Worktree Isolation`'s project-root-reuse text,
 > `JUST_GO:`) remain deliberately left inline in `craftflow-router/SKILL.md` — see that
@@ -37,6 +50,21 @@
 > shared/host-specific split was not achievable without disproportionate regression risk
 > relative to a follow-up, more carefully scoped sub-phase. This file will grow as those
 > follow-ups land.
+
+## Memory File Required Sections
+
+| File | Required Sections |
+|------|-------------------|
+| `activeContext.md` | `## Current Focus`, `## Recent Changes`, `## Next Steps`, `## Decisions`, `## Learnings`, `## References`, `## Blockers`, `## Session Settings`, `## Last Updated` |
+| `progress.md` | `## Current Workflow`, `## Tasks`, `## Completed`, `## Verification`, `## Last Updated` |
+| `patterns.md` | `## User Standards`, `## Common Gotchas`, `## Project SKILL_HINTS`, `## Last Updated` |
+
+(Host-specific note: this table is byte-identical in both hosts' binding docs — confirmed by
+direct comparison, not just by the mapping table's classification. If a required section is
+missing, both hosts create it before proceeding; Claude Code's auto-heal rule (insert before
+`## Last Updated`, verify via `Read()` after `Edit()`) and JUST_GO rule are meaningfully more
+detailed than Cursor's own versions of those same concepts and are NOT moved here — see each
+binding doc's own section for its real behavior.)
 
 ## Resolve Project Root
 

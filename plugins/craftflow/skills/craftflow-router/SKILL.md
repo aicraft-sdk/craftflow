@@ -82,13 +82,10 @@ If a project/ memory file is missing:
 - Create it using the `craftflow:session-memory` template.
 - Read it before continuing.
 
-Required sections:
-
-| File | Required Sections |
-|------|-------------------|
-| `activeContext.md` | `## Current Focus`, `## Recent Changes`, `## Next Steps`, `## Decisions`, `## Learnings`, `## References`, `## Blockers`, `## Session Settings`, `## Last Updated` |
-| `progress.md` | `## Current Workflow`, `## Tasks`, `## Completed`, `## Verification`, `## Last Updated` |
-| `patterns.md` | `## User Standards`, `## Common Gotchas`, `## Project SKILL_HINTS`, `## Last Updated` |
+Required sections — shared with Cursor — canonical table lives in
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+"Memory File Required Sections". `Read()` that file now if you have not already this
+session.
 
 Auto-heal rule:
 - Insert missing sections before `## Last Updated`.
