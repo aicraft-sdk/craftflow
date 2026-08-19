@@ -1,6 +1,6 @@
 # Enforcement and Husky
 
-How validator scripts work, how to wire pre-commit hooks (Husky for JS, shell hook for non-JS), and the postinstall no-op guard.
+How validator scripts work, and how to wire pre-commit hooks (Husky for JS, shell hook for non-JS).
 
 ---
 
@@ -121,37 +121,6 @@ bash tools/scripts/ai-contract-pack-lint.sh
 This hook is **not committed to the repo** (`.git/` is never tracked). New contributors must re-run the skill or manually copy the hook after cloning. Document this in the project `CONTRIBUTING.md` or `AGENTS.md` if needed.
 
 No `package.json` changes are needed for non-JS repos — do not add Husky, `prepare`, or `postinstall` script entries.
-
----
-
-## `postinstall-ai-resources.sh` — generic no-op stub (JS repos only)
-
-`postinstall-ai-resources.sh` is a **generic stub** — it simply prints a message and exits 0. It is wired into `package.json` as the `postinstall` script so that future providers can be plugged in without changing the wiring.
-
-```bash
-#!/usr/bin/env bash
-echo "AI resources postinstall: no provider configured — skipping."
-exit 0
-```
-
-This script is **only written for JS repos** (where `package.json` is patched). Non-JS repos have no `postinstall` hook.
-
-### Wiring in `package.json` (JS repos only)
-
-```json
-{
-  "scripts": {
-    "prepare": "husky",
-    "postinstall": "tools/scripts/postinstall-ai-resources.sh"
-  }
-}
-```
-
-Make the script executable after writing it:
-
-```bash
-chmod +x tools/scripts/postinstall-ai-resources.sh
-```
 
 ---
 

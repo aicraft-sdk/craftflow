@@ -22,7 +22,7 @@
 - AI-first charter: [AI_FIRST.md](AI_FIRST.md) (spec-first, TDD, evidence in PRs)
 - Mandatory patterns:
   - Use designated shared utilities for logging, config, and testing (see §5)
-  - Follow project skills and rules installed via the AI resources CLI (see `project-config.json`)
+  - Follow craftflow's built-in skills/agents (already installed as a plugin — no separate sync step), plus this project's own skills/rules if any, listed under `resources` in `project-config.json`
   - File length limits: max 500 lines, prefer under 400 lines
   - Functions max 30–40 lines
 - Forbidden patterns:
@@ -95,7 +95,7 @@ End every session with `clean-state-checklist.md` and overwrite `session-handoff
 - This file is authoritative.
 - Prefer existing patterns over introducing new ones.
 - Nearest AGENTS.md wins (subfolder overrides root).
-- Follow skills and rules from the AI resources CLI (synced on install; see `project-config.json`).
+- Follow craftflow (already installed as a plugin; no external CLI or registry involved), plus this project's own skills/rules if any, listed under `resources` in `project-config.json`.
 
 ### AI Context Pack
 
