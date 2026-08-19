@@ -970,15 +970,9 @@ Use telemetry to explain latency. Do not use it to auto-reduce verification scop
 
 ### Read-only contracts
 
-Primary signal:
-- Line 1: `CONTRACT {"s":"...","b":...,"cr":...}`
-
-Fallback heading on line 2:
-- `## Review: Approve|Changes Requested`
-- `## Error Handling Audit: CLEAN|ISSUES_FOUND`
-- `## Verification: PASS|FAIL`
-- `## Fix Verification: LOAD_BEARING|NOT_LOAD_BEARING|SIBLING_FOUND`
-- `## Planning Review: Pass|Findings`
+Primary signal and fallback heading conventions — shared with Cursor — canonical list
+lives in `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+"Agent Verdict Headings". `Read()` that file now if you have not already this session.
 
 Verdict extraction:
 1. Try the envelope on line 1.

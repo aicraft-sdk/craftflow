@@ -13850,15 +13850,15 @@ def test_skill_distillation_skill_present() -> None:
 
 
 def test_craftflow_router_shared_protocol_extraction_no_stale_reembed() -> None:
-    # Presence-marker test for Phase 3/3b/3c/3d/3f/3g/3i of the hooks-as-bridge redesign
+    # Presence-marker test for Phase 3/3b/3c/3d/3f/3g/3i/3k of the hooks-as-bridge redesign
     # (backlog item 8, plan Component 7): craftflow-router/SKILL.md must Read() the shared
     # doc for the sections extracted so far (Intent Routing, dispatch prompt scaffold,
     # Resolve Project Root, Skill-Distill Approval Flow, Explicit Dispatcher table, Previous
-    # Agent Findings Handoff, Verifier Findings Handoff, Memory File Required Sections table),
-    # not silently keep a duplicate copy of the literal content alongside the pointer -- and
-    # the shared doc must actually still hold that content, not just claim to. (Phase 3h
-    # investigated and made a deliberate no-op call -- see the shared doc's own migration
-    # status note for why.)
+    # Agent Findings Handoff, Verifier Findings Handoff, Memory File Required Sections table,
+    # Agent Verdict Headings), not silently keep a duplicate copy of the literal content
+    # alongside the pointer -- and the shared doc must actually still hold that content, not
+    # just claim to. (Phase 3h and 3j investigated and made deliberate no-op calls -- see the
+    # shared doc's own migration status note for why.)
     name = "craftflow-router/skill-md/shared-protocol-extraction-no-stale-reembed"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
     shared_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md"
@@ -13917,6 +13917,10 @@ def test_craftflow_router_shared_protocol_extraction_no_stale_reembed() -> None:
         # Memory File Required Sections table (Phase 3i) -- a full table row, not reproduced
         # in SKILL.md's pointer (which only names the section, not the table content).
         "| `patterns.md` | `## User Standards`, `## Common Gotchas`, `## Project SKILL_HINTS`, `## Last Updated` |",
+        # Agent Verdict Headings (Phase 3k) -- the envelope line and a fallback heading not
+        # reproduced in SKILL.md's pointer (which only names the section, not the list).
+        "Line 1: `CONTRACT {\"s\":\"...\",\"b\":...,\"cr\":...}`",
+        "`## Fix Verification: LOAD_BEARING|NOT_LOAD_BEARING|SIBLING_FOUND`",
     )
     for marker in moved_markers:
         if marker in skill_content:

@@ -40,7 +40,15 @@
 > but the JUST_GO rule in the same mapping-table row is NOT (Cursor's is a single terse
 > sentence; Claude's has an AskUserQuestion-gate exception and a separate "v10 trust rule"
 > paragraph with no Cursor equivalent) — JUST_GO stays inline in `craftflow-router/SKILL.md`.
-> Several other sections the mapping table classifies
+> Phase 3j investigated `## 14. Hard Rules` and found zero bullets pass the
+> byte-match-or-cross-reference test — a full no-op, no shared doc changes. Phase 3k (this
+> pass) investigated `## 13. Memory Finalization` (full no-op — Cursor's own text
+> self-labels it "a simplified subset... deferred to v2", an explicit non-equivalence
+> disclaimer, not a same-rule cross-reference) and `## 8. Post-Agent Validation` (partial
+> match — the read-only-agent fallback heading strings below ARE byte-identical, confirmed
+> via direct grep, because both hosts dispatch the same underlying agent files; the
+> extraction algorithm and full per-agent field tables are not). Several other sections the
+> mapping table classifies
 > `shared` (`### Parent workflow creation`'s artifact schema, `## 13. Memory
 > Finalization`'s two-tier concept, `### Worktree Isolation`'s project-root-reuse text,
 > `JUST_GO:`) remain deliberately left inline in `craftflow-router/SKILL.md` — see that
@@ -65,6 +73,34 @@ missing, both hosts create it before proceeding; Claude Code's auto-heal rule (i
 `## Last Updated`, verify via `Read()` after `Edit()`) and JUST_GO rule are meaningfully more
 detailed than Cursor's own versions of those same concepts and are NOT moved here — see each
 binding doc's own section for its real behavior.)
+
+## Agent Verdict Headings
+
+Primary signal (Claude Code only — see host-specific note below):
+- Line 1: `CONTRACT {"s":"...","b":...,"cr":...}`
+
+Fallback heading on line 2:
+- `## Review: Approve|Changes Requested`
+- `## Error Handling Audit: CLEAN|ISSUES_FOUND`
+- `## Verification: PASS|FAIL`
+- `## Fix Verification: LOAD_BEARING|NOT_LOAD_BEARING|SIBLING_FOUND`
+- `## Planning Review: Pass|Findings`
+
+(Host-specific note: these fallback heading strings are byte-identical across hosts —
+confirmed by direct comparison, not just by the mapping table's classification — because
+both hosts dispatch the same underlying `craftflow:*` agent `.md` files, which emit this
+exact text regardless of which router dispatched them; Cursor's own "Verdict by agent"
+table literally reuses `## Review: Approve`, `## Error Handling Audit: CLEAN`, and `##
+Verification: PASS` as its own pass conditions. The `CONTRACT {"s":...}` envelope line-1
+primary signal is Claude-Code-only — no Cursor equivalent was found; Cursor's own
+extraction mechanics go straight to the `### Router Contract (MACHINE-READABLE)` YAML
+block for both read-only and write agents, with no distinct envelope-then-fallback-heading
+two-path split. The verdict-extraction algorithm itself (5-line scan, `SELF_REMEDIATED`
+task-state detection, scenario reconciliation) and the full per-agent required-fields
+tables are NOT moved here — confirmed host-specific-in-depth: Cursor's own "Verdict by
+agent" table covers fewer agent types than Claude's required-fields table, e.g. no
+doubt-verifier/fix-verify rows exist there. See each binding doc's own section for its
+real extraction mechanics.)
 
 ## Resolve Project Root
 
