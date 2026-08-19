@@ -13850,12 +13850,12 @@ def test_skill_distillation_skill_present() -> None:
 
 
 def test_craftflow_router_shared_protocol_extraction_no_stale_reembed() -> None:
-    # Presence-marker test for Phase 3/3b of the hooks-as-bridge redesign (backlog item 8,
-    # plan Component 7): craftflow-router/SKILL.md must Read() the shared doc for the
+    # Presence-marker test for Phase 3/3b/3c of the hooks-as-bridge redesign (backlog item
+    # 8, plan Component 7): craftflow-router/SKILL.md must Read() the shared doc for the
     # sections extracted so far (Intent Routing, dispatch prompt scaffold, Resolve Project
-    # Root), not silently keep a duplicate copy of the literal content alongside the
-    # pointer -- and the shared doc must actually still hold that content, not just claim
-    # to.
+    # Root, Skill-Distill Approval Flow), not silently keep a duplicate copy of the literal
+    # content alongside the pointer -- and the shared doc must actually still hold that
+    # content, not just claim to.
     name = "craftflow-router/skill-md/shared-protocol-extraction-no-stale-reembed"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
     shared_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md"
@@ -13892,6 +13892,12 @@ def test_craftflow_router_shared_protocol_extraction_no_stale_reembed() -> None:
         "RESOLVE_OUTCOME=$(printf '%s' \"$RESOLVE_RESULT\" | python3 -c \"import json,sys; print(json.load(sys.stdin)['outcome'])\")",
         "WORKSPACE_WRITABLE_PATHS_JSON=$(printf '%s' \"$RESOLVE_RESULT\" | python3 -c \"import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get('workspace_writable_paths', [])))\")",
         "this `AskUserQuestion` gate is NEVER auto-defaulted under `JUST_GO=true`",
+        # Skill-Distill Approval Flow (Phase 3c) -- the full literal --approve invocation and
+        # the ledger revival-condition prose, neither reproduced in SKILL.md's paraphrased
+        # pointer (which does name the two script filenames, so those alone wouldn't be safe
+        # stale-reembed markers).
+        "python3 {plugin_root}/scripts/craftflow_skill_promote.py --approve {candidate_id} --project-root {project_root} --ledger {state_root}/project/skill-candidates.json --proposals-dir {state_root}/project/skill-proposals",
+        "at least doubles from the value recorded at rejection time",
     )
     for marker in moved_markers:
         if marker in skill_content:
@@ -14118,19 +14124,45 @@ def test_router_hard_rules_includes_skill_distill_skip() -> None:
 
 
 def test_router_documents_skill_distill_approval_flow() -> None:
+    # Phase 3c of the hooks-as-bridge redesign (backlog item 8) extracted "### Skill-Distill
+    # Approval Flow" out of craftflow-router/SKILL.md into skills/_shared/router-protocol.md
+    # (as "## Skill-Distill Approval Flow"). Every marker this test protects now lives in
+    # the shared doc; SKILL.md itself only carries a pointer. Verify both: the shared doc
+    # still has the full flow documented, and SKILL.md points at it without re-embedding.
     name = "router/skill-distill-approval-flow-documented"
-    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    if not path.exists():
-        fail(name, f"craftflow-router SKILL.md not found at {path}")
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    shared_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md"
+    if not skill_path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {skill_path}")
         return
-    content = path.read_text(encoding="utf-8")
+    if not shared_path.exists():
+        fail(name, f"shared router-protocol.md not found at {shared_path}")
+        return
+    skill_content = skill_path.read_text(encoding="utf-8")
+    shared_content = shared_path.read_text(encoding="utf-8")
+
+    skill_start = skill_content.find("### Skill-Distill Approval Flow")
+    skill_end = skill_content.find("\n## 9. Remediation And Workflow Rules", skill_start)
+    if skill_start == -1 or skill_end == -1:
+        fail(name, "could not bound ### Skill-Distill Approval Flow through ## 9. in SKILL.md")
+        return
+    skill_section = skill_content[skill_start:skill_end]
+    if "skills/_shared/router-protocol.md" not in skill_section:
+        fail(name, "SKILL.md's Skill-Distill Approval Flow section no longer points at the shared doc")
+        return
+
+    shared_start = shared_content.find("## Skill-Distill Approval Flow")
+    if shared_start == -1:
+        fail(name, "'## Skill-Distill Approval Flow' section not found in shared doc")
+        return
+    shared_section = shared_content[shared_start:]
     for marker in (
         "AskUserQuestion", "Approve + register in SKILL_HINTS", "Reject", "Defer",
         "craftflow_skill_promote.py", "--approve", "craftflow_skill_ledger.py --reject",
         "STATUS: SKIPPED", "STATUS: COMPLETE",
     ):
-        if marker not in content:
-            fail(name, f"Skill-Distill Approval Flow section missing expected marker: {marker!r}")
+        if marker not in shared_section:
+            fail(name, f"shared doc's Skill-Distill Approval Flow section missing expected marker: {marker!r}")
             return
     ok(name)
 
