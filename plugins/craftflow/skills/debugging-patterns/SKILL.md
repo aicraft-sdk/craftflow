@@ -20,6 +20,7 @@ Read only the references needed for the current investigation:
 
 - `references/root-cause-playbooks.md` for build/type failures, flaky tests, runtime crashes, browser errors, git bisect, and boundary tracing
 - `references/investigation-hygiene.md` for context discipline, evidence logging, hypothesis tracking, restart protocol, and architectural escalation
+- `references/defensive-patterns.md` for hard-won bug-class rules to apply proactively when writing or reviewing subprocess/file/lock-handling code (e.g. guard scripts), not just when debugging one
 
 ## The Iron Law
 
