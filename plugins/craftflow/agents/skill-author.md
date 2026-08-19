@@ -215,6 +215,7 @@ After emitting the Router Contract, call `TaskUpdate({ taskId: "{TASK_ID}", stat
 
 ```yaml
 STATUS: COMPLETE|SKIPPED|FAIL
+SUMMARY: "[one-sentence human-readable handoff: what was proposed this round, or why skipped]"
 CANDIDATE_ID: "<id or null>"
 DEDUP_RESULT: new|update|none
 PROPOSAL_PATH: ".craftflow/state/project/skill-proposals/<id>/" # only when COMPLETE

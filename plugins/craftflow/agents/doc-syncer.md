@@ -143,6 +143,7 @@ After emitting the Router Contract, call `TaskUpdate({ taskId: "{TASK_ID}", stat
 
 ```yaml
 STATUS: COMPLETE|SKIPPED|PARTIAL|FAIL
+SUMMARY: "[one-sentence human-readable handoff: what docs changed this round, or why skipped]"
 IMPACT_LEVEL: none|low|medium|high
 DOC_LAYERS_EVALUATED:
   - business

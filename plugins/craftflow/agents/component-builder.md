@@ -315,6 +315,7 @@ EVIDENCE:
 ### Router Contract (MACHINE-READABLE)
 ```yaml
 STATUS: PASS | FAIL
+SUMMARY: "[one-sentence human-readable handoff: what was built/fixed this round]"
 CONFIDENCE: [0-100]
 PHASE_ID: "[phase id]"
 PHASE_STATUS: "completed" | "partial" | "blocked"

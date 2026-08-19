@@ -289,6 +289,7 @@ Call `TaskUpdate({ taskId: "{TASK_ID}", status: "completed" })` where `{TASK_ID}
 ### Router Contract (MACHINE-READABLE)
 ```yaml
 STATUS: FIXED | INVESTIGATING | BLOCKED
+SUMMARY: "[one-sentence human-readable handoff: what was found/fixed this round]"
 VERIFICATION_RIGOR: standard | critical_path
 CONFIDENCE: [0-100]
 ROOT_CAUSE: "[one-line summary of root cause]"

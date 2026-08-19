@@ -366,6 +366,7 @@ Note: Craftflow internal skills such as `frontend-patterns` or `architecture-pat
 ### Router Contract (MACHINE-READABLE)
 ```yaml
 STATUS: PLAN_CREATED | DECISION_RFC_CREATED | NEEDS_CLARIFICATION
+SUMMARY: "[one-sentence human-readable handoff: what was planned this round, or what clarification is needed]"
 PLAN_MODE: direct | execution_plan | decision_rfc
 VERIFICATION_RIGOR: standard | critical_path
 CONFIDENCE: [0-100 from Confidence Score above]

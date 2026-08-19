@@ -129,6 +129,7 @@ Web research complete.
 
 ```yaml
 STATUS: COMPLETE | PARTIAL | DEGRADED | UNAVAILABLE
+SUMMARY: "[one-sentence human-readable handoff: what was researched this round and the headline finding]"
 FILE_PATH: "[exact path written to]"
 BACKEND_MODE: "brightdata+websearch" | "brightdata-only" | "websearch+webfetch" | "websearch-only" | "webfetch-only" | "none"
 SOURCES_ATTEMPTED: ["brightdata", "websearch", "webfetch"]

@@ -147,6 +147,7 @@ GitHub research complete.
 
 ```yaml
 STATUS: COMPLETE | PARTIAL | DEGRADED | UNAVAILABLE
+SUMMARY: "[one-sentence human-readable handoff: what was researched this round and the headline finding]"
 FILE_PATH: "[exact path written to]"
 BACKEND_MODE: "octocode" | "octocode+web" | "web-only" | "none"
 SOURCES_ATTEMPTED: ["octocode", "package-docs", "websearch", "webfetch"]
