@@ -13850,12 +13850,13 @@ def test_skill_distillation_skill_present() -> None:
 
 
 def test_craftflow_router_shared_protocol_extraction_no_stale_reembed() -> None:
-    # Presence-marker test for Phase 3/3b/3c/3d/3f of the hooks-as-bridge redesign (backlog
-    # item 8, plan Component 7): craftflow-router/SKILL.md must Read() the shared doc for the
-    # sections extracted so far (Intent Routing, dispatch prompt scaffold, Resolve Project
-    # Root, Skill-Distill Approval Flow, Explicit Dispatcher table, Previous Agent Findings
-    # Handoff), not silently keep a duplicate copy of the literal content alongside the
-    # pointer -- and the shared doc must actually still hold that content, not just claim to.
+    # Presence-marker test for Phase 3/3b/3c/3d/3f/3g of the hooks-as-bridge redesign
+    # (backlog item 8, plan Component 7): craftflow-router/SKILL.md must Read() the shared
+    # doc for the sections extracted so far (Intent Routing, dispatch prompt scaffold,
+    # Resolve Project Root, Skill-Distill Approval Flow, Explicit Dispatcher table, Previous
+    # Agent Findings Handoff, Verifier Findings Handoff), not silently keep a duplicate copy
+    # of the literal content alongside the pointer -- and the shared doc must actually still
+    # hold that content, not just claim to.
     name = "craftflow-router/skill-md/shared-protocol-extraction-no-stale-reembed"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
     shared_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md"
@@ -13908,6 +13909,9 @@ def test_craftflow_router_shared_protocol_extraction_no_stale_reembed() -> None:
         # be present in both files and make this negative check vacuous.
         "### Code Reviewer\n**Verdict:** {Approve|Changes Requested}",
         "{hunter critical issues or \"None / not in this workflow\"}",
+        # Verifier Findings Handoff (Phase 3g) -- the fast-path-exception sentence, not
+        # reproduced in SKILL.md's pointer (which only names the section, not the rule).
+        "When `build_mode == \"fast_path\"`, omit `## Previous Agent Findings` from the verifier prompt entirely",
     )
     for marker in moved_markers:
         if marker in skill_content:

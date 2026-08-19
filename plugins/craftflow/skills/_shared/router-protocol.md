@@ -24,8 +24,10 @@
 > through literal `TaskList()` mechanics in the real text, not cleanly separable without
 > either violating the purity boundary or the verbatim-move rule; it remains inline in
 > `craftflow-router/SKILL.md` pending a future, deliberately-paraphrased treatment. Phase
-> 3f (this pass) added "Previous Agent Findings Handoff" — pure prose/template content
-> with no host-specific tool syntax. Several other sections the mapping table classifies
+> 3f added "Previous Agent Findings Handoff" — pure prose/template content with no
+> host-specific tool syntax. Phase 3g (this pass) added "Verifier Findings Handoff" — same
+> kind of pure prose, explicitly cross-referenced by Cursor's own text as sharing the same
+> fast-path-omission rule. Several other sections the mapping table classifies
 > `shared` (`### Parent workflow creation`'s artifact schema, `## 13. Memory
 > Finalization`'s two-tier concept, `### Worktree Isolation`'s project-root-reuse text,
 > `JUST_GO:`) remain deliberately left inline in `craftflow-router/SKILL.md` — see that
@@ -262,6 +264,19 @@ DEBUG skips hunter findings.
 (integration-verifier only)" section states it uses the same sub-block format and the same
 fast-path-omission rule as this one — see `cursor-router/SKILL.md` § 5 for its own dispatch
 mechanics around when this block is attached to a `Task` call.)
+
+## Verifier Findings Handoff
+
+Before invoking `integration-verifier` in BUILD:
+- Read `results.reviewer` and `results.hunter` from the workflow artifact.
+- Build `## Previous Agent Findings` exactly in the format verifier expects.
+- Never invoke verifier without that section when review/hunt already ran.
+- **fast-path exception:** When `build_mode == "fast_path"`, omit `## Previous Agent Findings` from the verifier prompt entirely — no reviewer or hunter ran. The verifier must run independent scenario coverage. When `build_mode == "fast_path_escalated"` (after escalation), the merged findings handoff IS required using the standard format above.
+
+(Host-specific note: Cursor's binding doc explicitly cross-references this as using "the
+same fast-path-omission logic already used for the Claude Code router" — see
+`cursor-router/SKILL.md` § 5 for its own dispatch mechanics around when this block is
+attached to a `Task` call.)
 
 ## Skill-Distill Approval Flow
 

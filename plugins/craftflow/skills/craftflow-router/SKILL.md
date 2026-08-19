@@ -1228,11 +1228,9 @@ If any answer is "no" or "unknown", treat as incomplete and apply the fallback v
 
 ### Verifier findings handoff
 
-Before invoking `integration-verifier` in BUILD:
-- Read `results.reviewer` and `results.hunter` from the workflow artifact.
-- Build `## Previous Agent Findings` exactly in the format verifier expects.
-- Never invoke verifier without that section when review/hunt already ran.
-- **fast-path exception:** When `build_mode == "fast_path"`, omit `## Previous Agent Findings` from the verifier prompt entirely — no reviewer or hunter ran. The verifier must run independent scenario coverage. When `build_mode == "fast_path_escalated"` (after escalation), the merged findings handoff IS required using the standard format above.
+Shared with Cursor — canonical text lives in
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+"Verifier Findings Handoff". `Read()` that file now if you have not already this session.
 
 ## 13. Memory Finalization
 
