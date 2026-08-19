@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -733,6 +734,160 @@ def clear_denial(session_id: str | None, target: str) -> None:
         if key in tracker:
             del tracker[key]
             _save_denial_tracker(tracker)
+
+
+# ---------------------------------------------------------------------------
+# Repeat-tool-call advisory nudge (backlog item 3 -- borrowed from
+# deepseek-harness's guard/repeat-tool-reminder)
+# ---------------------------------------------------------------------------
+# Detects the agent stuck retrying the exact same tool call (same tool_name,
+# same normalized tool_input) several times in a row, and injects a
+# non-blocking additionalContext nudge via PostToolUse. Deliberately
+# advisory-only: a PostToolUse hook fires AFTER the tool already executed --
+# there is nothing left to allow/deny -- so this can only ever nudge, never
+# hard-stop the way the denial tracker above does.
+#
+# Single rolling "current streak" per session, not a per-target dict like the
+# denial tracker: this mechanism only cares about immediately consecutive
+# repeats (call N, N+1, N+2 back to back), not independent retry histories
+# for many different targets. A different tool_name/input in between resets
+# the streak to 1, matching "consecutive" in the plain-English sense.
+REPEAT_TOOL_THRESHOLD = 3
+
+# Notify every Nth repeat past the threshold (3, 6, 9, ...) rather than every
+# single call once the threshold is crossed -- a persistently stuck loop
+# still gets nagged periodically, but a 10-call stuck loop does not get 8
+# near-identical nudges in a row.
+REPEAT_TOOL_NOTIFY_EVERY = REPEAT_TOOL_THRESHOLD
+
+# A gap this long between two otherwise-identical calls means the agent moved
+# on and came back independently, not that it is stuck in a tight loop --
+# shorter than the denial tracker's 30 minutes, since tool calls in a stuck
+# loop happen seconds apart, not human-paced.
+REPEAT_TOOL_TRACKER_TTL_SECONDS = 10 * 60
+
+
+def repeat_tool_tracker_path() -> Path:
+    """Guard-owned bookkeeping file for the repeat-tool-call nudge. Never
+    routed back through the tool-call surface it observes, so there is no
+    self-triggering circularity. Deliberately NOT a markdown memory file and
+    NOT a workflow JSON artifact -- same category as `denial_tracker_path()`
+    above."""
+    return state_root() / ".repeat-tool-tracker.json"
+
+
+def _repeat_tool_tracker_lock_path() -> Path:
+    """Dedicated lock file, separate from the tracker JSON itself -- same
+    crash-safety rationale as `_denial_tracker_lock_path()` above: a process
+    that dies mid-write must never leave the actual tracker data locked."""
+    return repeat_tool_tracker_path().with_name(".repeat-tool-tracker.lock")
+
+
+@contextlib.contextmanager
+def _repeat_tool_tracker_locked():
+    """Exclusive lock around a repeat-tool-tracker read-modify-write. Same
+    `fcntl.flock`-on-a-dedicated-lock-file shape as
+    `_denial_tracker_locked()` above, including the same fail-toward-
+    unlocked-not-crash degradation if the lock file itself is unwritable."""
+    lock_path = _repeat_tool_tracker_lock_path()
+    try:
+        lock_path.touch(exist_ok=True)
+        fh = open(lock_path, "r+", encoding="utf-8")
+    except Exception:
+        yield
+        return
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        fh.close()
+
+
+def _load_repeat_tool_tracker() -> Dict[str, Any]:
+    path = repeat_tool_tracker_path()
+    if not path.exists():
+        return {}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _save_repeat_tool_tracker(tracker: Dict[str, Any]) -> None:
+    try:
+        repeat_tool_tracker_path().write_text(
+            json.dumps(tracker, ensure_ascii=True), encoding="utf-8"
+        )
+    except Exception:
+        pass  # never fail the hook on a bookkeeping write error
+
+
+def tool_call_signature(tool_name: str, tool_input: Dict[str, Any]) -> str:
+    """Identity for "this exact call" -- tool name plus a hash of the
+    normalized (key-sorted) input. Hashed rather than stored raw so a large
+    Edit/Write payload (e.g. a big `old_string`/`new_string`) never bloats
+    the tracker file; only the signature and a counter are persisted."""
+    try:
+        normalized = json.dumps(tool_input, sort_keys=True, ensure_ascii=True)
+    except Exception:
+        normalized = repr(tool_input)
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return f"{tool_name}::{digest}"
+
+
+def record_tool_call(session_id: str | None, signature: str) -> Tuple[int, bool]:
+    """Record one tool call for `signature` under `session_id`. Returns
+    `(count, should_notify)`. `count` is the current consecutive-repeat
+    streak (1 for a first/non-matching call). `should_notify` is True once
+    `count` reaches `REPEAT_TOOL_THRESHOLD` and every
+    `REPEAT_TOOL_NOTIFY_EVERY`th repeat after that. A gap older than
+    `REPEAT_TOOL_TRACKER_TTL_SECONDS`, or a different signature than the
+    last recorded one, starts a fresh streak. Never raises -- a corrupt
+    tracker file degrades to an empty one (fresh streak), matching this
+    module's established fail-toward-stricter-not-crash posture."""
+    key = session_id or "nosession"
+    with _repeat_tool_tracker_locked():
+        tracker = _load_repeat_tool_tracker()
+        entry = tracker.get(key)
+        now = datetime.now(timezone.utc).timestamp()
+        count = 1
+        if isinstance(entry, dict):
+            last_signature = entry.get("signature")
+            last_ts = entry.get("last_ts")
+            prior_count = entry.get("count")
+            if (
+                last_signature == signature
+                and isinstance(prior_count, int)
+                and isinstance(last_ts, (int, float))
+                and (now - last_ts) <= REPEAT_TOOL_TRACKER_TTL_SECONDS
+            ):
+                count = prior_count + 1
+        tracker[key] = {"signature": signature, "count": count, "last_ts": now}
+        _save_repeat_tool_tracker(tracker)
+    should_notify = count >= REPEAT_TOOL_THRESHOLD and (
+        (count - REPEAT_TOOL_THRESHOLD) % REPEAT_TOOL_NOTIFY_EVERY == 0
+    )
+    return count, should_notify
+
+
+def posttool_context(message: str) -> None:
+    """Emit a non-blocking PostToolUse additionalContext nudge. PostToolUse
+    fires after the tool already ran -- there is no `permissionDecision` to
+    set here, unlike `pretool_deny()` above; this can only ever add context,
+    never block."""
+    json_print(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": message,
+            }
+        }
+    )
 
 
 def parse_metadata(description: str) -> Dict[str, str]:

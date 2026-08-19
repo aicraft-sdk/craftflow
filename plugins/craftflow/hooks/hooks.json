@@ -121,6 +121,16 @@
             "statusMessage": "CRAFTFLOW SDD URL cache update"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_posttooluse_repeat_guard.py\"",
+            "timeout": 5,
+            "statusMessage": "CRAFTFLOW repeat-tool-call advisory nudge"
+          }
+        ]
       }
     ],
     "TaskCompleted": [
