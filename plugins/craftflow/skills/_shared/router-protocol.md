@@ -14,19 +14,27 @@
 >
 > **Migration status (Phase 3, Claude side):** Phase 3 extracted the plan's two most
 > clearly-delineated, cleanly-separable `shared`-classified sections — Intent Routing and
-> the dispatch prompt scaffold. Phase 3b (this pass) added `## 0. Resolve Project Root`
-> (below, as "Resolve Project Root") — the resolution algorithm itself is identical in
-> substance across hosts (Cursor's own text already said so directly before this
-> extraction: "Resolve exactly as Claude Code's `craftflow-router/SKILL.md` does"). Several
-> other sections the mapping table classifies `shared` (`### Parent workflow creation`'s
-> artifact schema, `## 13. Memory Finalization`'s two-tier concept, `### Worktree
-> Isolation`'s project-root-reuse text, `JUST_GO:`) remain deliberately left inline in
-> `craftflow-router/SKILL.md` — see that file's own inline notes at each section, and the
-> Phase 3/3b completion reports, for why: `craftflow_hook_unit_tests.py` anchors dense,
-> exact-position, and in one case exact-match-paragraph assertions directly inside those
-> sections, and a clean shared/host-specific split was not achievable without
-> disproportionate regression risk relative to a follow-up, more carefully scoped
-> sub-phase. This file will grow as those follow-ups land.
+> the dispatch prompt scaffold. Phase 3b added `## 0. Resolve Project Root` (below, as
+> "Resolve Project Root") — the resolution algorithm itself is identical in substance
+> across hosts (Cursor's own text already said so directly before this extraction:
+> "Resolve exactly as Claude Code's `craftflow-router/SKILL.md` does"). Phase 3c added
+> the Skill-Distill Approval Flow. Phase 3d added the Explicit Dispatcher
+> (Phase-to-Agent) table, as pure data. Phase 3e attempted `## 12. Chain Execution Loop`
+> and made a deliberate no-op call — its policy logic is threaded sentence-by-sentence
+> through literal `TaskList()` mechanics in the real text, not cleanly separable without
+> either violating the purity boundary or the verbatim-move rule; it remains inline in
+> `craftflow-router/SKILL.md` pending a future, deliberately-paraphrased treatment. Phase
+> 3f (this pass) added "Previous Agent Findings Handoff" — pure prose/template content
+> with no host-specific tool syntax. Several other sections the mapping table classifies
+> `shared` (`### Parent workflow creation`'s artifact schema, `## 13. Memory
+> Finalization`'s two-tier concept, `### Worktree Isolation`'s project-root-reuse text,
+> `JUST_GO:`) remain deliberately left inline in `craftflow-router/SKILL.md` — see that
+> file's own inline notes at each section, and the Phase 3/3b completion reports, for why:
+> `craftflow_hook_unit_tests.py` anchors dense, exact-position, and in one case
+> exact-match-paragraph assertions directly inside those sections, and a clean
+> shared/host-specific split was not achievable without disproportionate regression risk
+> relative to a follow-up, more carefully scoped sub-phase. This file will grow as those
+> follow-ups land.
 
 ## Resolve Project Root
 
@@ -230,6 +238,30 @@ Optional sections:
 - Every routed prompt must be self-contained from the workflow artifact, approved files, and the current task contract.
 - Do not rely on prior chat turns or completed-phase narrative when the same fact already exists in the workflow artifact, plan, design, or research files.
 - Include only the current-phase objective, live blockers, approved decisions, and directly relevant evidence. Omit unrelated completed-phase detail.
+
+## Previous Agent Findings Handoff
+
+When invoking `integration-verifier`, pass:
+
+```text
+## Previous Agent Findings
+
+### Code Reviewer
+**Verdict:** {Approve|Changes Requested}
+**Critical Issues:**
+{reviewer critical issues or "None"}
+
+### Silent Failure Hunter
+**Critical Issues:**
+{hunter critical issues or "None / not in this workflow"}
+```
+
+DEBUG skips hunter findings.
+
+(Host-specific note: Cursor's binding doc's own "Previous Agent Findings handoff
+(integration-verifier only)" section states it uses the same sub-block format and the same
+fast-path-omission rule as this one — see `cursor-router/SKILL.md` § 5 for its own dispatch
+mechanics around when this block is attached to a `Task` call.)
 
 ## Skill-Distill Approval Flow
 

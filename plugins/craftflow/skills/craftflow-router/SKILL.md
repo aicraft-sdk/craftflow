@@ -825,22 +825,10 @@ Record the assigned effort in `telemetry.effort.{agent}` in the workflow artifac
 
 ### Previous Agent Findings handoff
 
-When invoking `integration-verifier`, pass:
-
-```text
-## Previous Agent Findings
-
-### Code Reviewer
-**Verdict:** {Approve|Changes Requested}
-**Critical Issues:**
-{reviewer critical issues or "None"}
-
-### Silent Failure Hunter
-**Critical Issues:**
-{hunter critical issues or "None / not in this workflow"}
-```
-
-DEBUG skips hunter findings.
+Shared with Cursor — canonical text lives in
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+"Previous Agent Findings Handoff". `Read()` that file now if you have not already this
+session. DEBUG skips hunter findings.
 
 ### Doubt-Verify Dispatch Rule
 
