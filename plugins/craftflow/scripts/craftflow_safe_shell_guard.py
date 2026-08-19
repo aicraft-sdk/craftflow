@@ -289,10 +289,27 @@ def _split_subcommands(command: str) -> list | None:
     fail-closed signal meaning "could not verify safety" -- the caller MUST
     treat that as "block", not silently reuse the empty-list "nothing to
     check" meaning that `[]` already carries for a genuinely empty command.
+
+    ROOT-CAUSE FIX (2026-08-19 DEBUG workflow, blast-radius twin of the
+    identical bug fixed in craftflow_hooklib.split_subcommands()):
+    CONTROL_OPERATORS has always included "\\n", but shlex's default
+    `whitespace` ALSO contains "\\n" -- with `whitespace_split=True`, a bare
+    newline was silently consumed as ordinary whitespace before ever being
+    emitted as a token, so `token in CONTROL_OPERATORS` could never see it.
+    A multi-line command was therefore always returned as ONE flattened
+    subcommand instead of one per line -- a real security gap for THIS
+    guard specifically: `_check_tokens()` only inspects the FIRST token of
+    each subcommand as the command name, so a catastrophic command on its
+    own SECOND line (e.g. `echo hello\\nrm -rf /`) was silently never
+    checked at all, evading this guard entirely. Fixed the same way as the
+    shared hooklib version: "\\n" added to `punctuation_chars` (tokenized
+    like `;`/`&`/`|`, respecting open quotes) and removed from `whitespace`
+    so it is never swallowed first.
     """
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n")
         lexer.whitespace_split = True
+        lexer.whitespace = lexer.whitespace.replace("\n", "")
         tokens = list(lexer)
     except ValueError:
         return None

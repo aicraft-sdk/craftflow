@@ -1001,15 +1001,48 @@ def resolve_workspace_writable_paths(workflow: Dict[str, Any]) -> "frozenset[Pat
 
 
 def split_subcommands(command: str) -> list:
-    """Split a shell command string on control operators (;, &&, ||, |, &).
+    """Split a shell command string on control operators (;, &&, ||, |, &, a
+    bare newline).
 
     Best-effort tokenization (not a full shell parser) -- intentionally
     blunt, matching the rest of this guard family's deterministic-but-
     imperfect scope.
+
+    ROOT-CAUSE FIX (2026-08-19 DEBUG workflow, live-reproduced): CONTROL_OPERATORS
+    has always included "\\n", but `shlex`'s default `whitespace` ALSO
+    contains "\\n" -- with `whitespace_split=True`, shlex silently consumes a
+    bare newline as ordinary whitespace between tokens before it is ever
+    emitted as a token of its own, so the `token in CONTROL_OPERATORS` check
+    below could never actually see it (dead code for that one operator).
+    Every OTHER control operator here (`;`, `&&`, `||`, `|`, `&`) already
+    works correctly because they are also members of shlex's own
+    `punctuation_chars` set, which forces shlex to emit them as their own
+    token even without surrounding whitespace -- newline was never added to
+    that set, only to CONTROL_OPERATORS, which is this function's own bug,
+    not shlex's.
+
+    Effect: ANY two-or-more-line Bash command (an extremely ordinary shape,
+    not an edge case -- e.g. the router's own SKILL.md-documented
+    `printf ... > .memory-finalize` permit-write sharing a single Bash()
+    call with a second line) was silently glued into ONE flat subcommand
+    token list instead of being split per line, corrupting every
+    per-subcommand shape/target check built on top of this function
+    (`matches_memory_finalize_permit_shape()` in particular -- a 5-token
+    exact-shape match against what should have been the printf line alone
+    saw a 7+-token blob instead and always returned False).
+
+    Fix: explicitly add "\\n" to shlex's own `punctuation_chars` (so it is
+    tokenized the same principled way `;`/`&`/`|` already are -- respecting
+    open quotes, unlike a naive text-level `command.split("\\n")` which
+    would incorrectly split a newline that is part of a quoted argument's
+    literal content, e.g. `printf '%s' 'line1\\nline2' > out` must NOT be
+    split there) and remove it from `whitespace` so it is never
+    double-handled/swallowed before reaching the punctuation scan.
     """
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n")
         lexer.whitespace_split = True
+        lexer.whitespace = lexer.whitespace.replace("\n", "")
         tokens = list(lexer)
     except ValueError:
         return []

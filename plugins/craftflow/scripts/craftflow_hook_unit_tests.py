@@ -2040,6 +2040,41 @@ def test_pretooluse_guard_denies_bash_permit_write_compound_command(tmp_dir: Pat
     ok(name)
 
 
+def test_pretooluse_guard_allows_bash_permit_write_multiline_command(tmp_dir: Path) -> None:
+    # Root-cause regression (2026-08-19 DEBUG workflow, live-reproduced
+    # chicken-and-egg deadlock): the router's own SKILL.md-documented
+    # memory-finalize permit-write is a single Bash() tool call, and real
+    # multi-step router flows routinely combine it with a second command on
+    # its own line in the SAME Bash() call (e.g. a trailing `echo done`
+    # sentinel, or an unrelated earlier setup line) -- the same ordinary
+    # multi-statement shape already covered for a `;`-joined compound
+    # command above, but joined with a bare newline instead. Before the
+    # split_subcommands() fix, the newline never split the command into two
+    # subcommands, so matches_memory_finalize_permit_shape() saw a 7-token
+    # blob instead of the printf line's own 5 tokens and always returned
+    # False, denying the permit write.
+    name = "pretooluse-guard/allows-bash-permit-write-multiline-command"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": "printf '%s' 'wf-test-1234' > .craftflow/state/.memory-finalize\necho done"
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(
+            name,
+            f"expected allow for the documented permit-write shape sharing a Bash() call "
+            f"with a second newline-separated command; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_allows_bash_unrelated_command(tmp_dir: Path) -> None:
     name = "pretooluse-guard/allows-bash-unrelated-command"
     project_root = tmp_dir / "project"
@@ -5970,6 +6005,37 @@ def test_bash_guard_allows_permit_write_dot_slash_spelling(tmp_dir: Path) -> Non
     ok(name)
 
 
+def test_bash_guard_allows_permit_write_multiline_command(tmp_dir: Path) -> None:
+    # Root-cause regression (2026-08-19 DEBUG workflow), blast-radius twin of
+    # pretooluse-guard/allows-bash-permit-write-multiline-command: this
+    # guard's own redirect-confinement lane shares the SAME
+    # hooklib.split_subcommands() tokenizer, so it live-reproduced the exact
+    # same "worktree-confinement" deny (misleading reason label, but same
+    # root cause -- protected-path-ness, not confinement) for a permit-write
+    # sharing a Bash() call with a second newline-separated command.
+    name = "pretooluse-bash-guard/allows-permit-write-multiline-command"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    (project_root / ".craftflow" / "state").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": "printf '%s' 'wf-test-1234' > .craftflow/state/.memory-finalize\necho done"
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if out:
+        fail(
+            name,
+            f"expected allow for the documented permit-write shape sharing a Bash() call "
+            f"with a second newline-separated command; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_bash_guard_denies_permit_shape_targeting_different_file(tmp_dir: Path) -> None:
     # Negative control: the exact 5-token printf/%s/value/>/target shape,
     # but targeting a DIFFERENT file (not the real permit path). Must still
@@ -7759,6 +7825,46 @@ def test_hooklib_matches_permit_shape_false_for_six_token_shape() -> None:
     )[0]
     if hooklib.matches_memory_finalize_permit_shape(tokens):
         fail(name, "expected False for a 6-token shape")
+        return
+    ok(name)
+
+
+def test_hooklib_split_subcommands_splits_on_bare_newline() -> None:
+    # Root-cause regression (2026-08-19 DEBUG workflow): CONTROL_OPERATORS
+    # includes "\n", but shlex's default `whitespace` already contains "\n"
+    # -- with `whitespace_split=True`, shlex silently CONSUMES a bare
+    # newline as ordinary whitespace before it is ever emitted as its own
+    # token, so the `if token in CONTROL_OPERATORS` check below can never
+    # see it. Live-reproduced: any two-line Bash command (the single most
+    # ordinary multi-statement shape, e.g. the router's own documented
+    # `printf ... > .memory-finalize` permit-write followed by a second
+    # line) was silently glued into ONE subcommand token list instead of
+    # being split into two, corrupting every per-subcommand shape/target
+    # check downstream (matches_memory_finalize_permit_shape() in
+    # particular -- see the sibling pretooluse-guard/pretooluse-bash-guard
+    # regression tests below).
+    name = "hooklib/split-subcommands-splits-on-bare-newline"
+    subcommands = hooklib.split_subcommands(
+        "printf '%s' 'wf-1234' > .craftflow/state/.memory-finalize\necho done"
+    )
+    if subcommands != [
+        ["printf", "%s", "wf-1234", ">", ".craftflow/state/.memory-finalize"],
+        ["echo", "done"],
+    ]:
+        fail(name, f"expected the printf and echo lines split into two subcommands; got {subcommands!r}")
+        return
+    ok(name)
+
+
+def test_hooklib_split_subcommands_preserves_newline_inside_quotes() -> None:
+    # Companion coverage for the fix above: a newline INSIDE a quoted
+    # argument is real string content, not a statement separator, and must
+    # stay part of its own token, not be split into a spurious extra
+    # subcommand.
+    name = "hooklib/split-subcommands-preserves-newline-inside-quotes"
+    subcommands = hooklib.split_subcommands("printf '%s' 'line1\nline2' > out.txt")
+    if subcommands != [["printf", "%s", "line1\nline2", ">", "out.txt"]]:
+        fail(name, f"expected the quoted newline to stay inside its own token; got {subcommands!r}")
         return
     ok(name)
 
@@ -16133,6 +16239,7 @@ def main() -> int:
         test_pretooluse_guard_allows_bash_permit_write_shape(tmp / "g12")
         test_pretooluse_guard_denies_bash_permit_write_wrong_shape(tmp / "g13")
         test_pretooluse_guard_denies_bash_permit_write_compound_command(tmp / "g14")
+        test_pretooluse_guard_allows_bash_permit_write_multiline_command(tmp / "g14b")
         test_pretooluse_guard_allows_bash_unrelated_command(tmp / "g15")
         test_pretooluse_guard_edit_write_worktree_confinement_denies_outside(tmp / "g16")
         test_pretooluse_guard_edit_write_worktree_confinement_allows_inside_worktree(tmp / "g17")
@@ -16310,6 +16417,7 @@ def main() -> int:
         test_bash_guard_worktree_confinement_allows_memory_finalize_permit_write_when_worktree_path_stale(tmp / "b49")
         test_bash_guard_allows_permit_write_absolute_spelling(tmp / "b49b")
         test_bash_guard_allows_permit_write_dot_slash_spelling(tmp / "b49c")
+        test_bash_guard_allows_permit_write_multiline_command(tmp / "b49c2")
         test_bash_guard_denies_permit_shape_targeting_different_file(tmp / "b49d")
         test_bash_guard_permit_write_end_to_end_skill_md_literal_project_root_prefixed_spelling(tmp / "b49f")
         test_bash_guard_allows_benign_redirect_to_dev_null(tmp / "b50")
@@ -16501,6 +16609,8 @@ def main() -> int:
         test_hooklib_matches_permit_shape_false_for_substitution_in_value()
         test_hooklib_matches_permit_shape_false_for_substitution_in_value_project_root_prefixed()
         test_hooklib_matches_permit_shape_false_for_six_token_shape()
+        test_hooklib_split_subcommands_splits_on_bare_newline()
+        test_hooklib_split_subcommands_preserves_newline_inside_quotes()
 
         print()
         print("[ hook-selfcheck ]")
