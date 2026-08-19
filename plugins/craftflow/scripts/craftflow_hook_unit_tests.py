@@ -13898,6 +13898,10 @@ def test_craftflow_router_shared_protocol_extraction_no_stale_reembed() -> None:
         # stale-reembed markers).
         "python3 {plugin_root}/scripts/craftflow_skill_promote.py --approve {candidate_id} --project-root {project_root} --ledger {state_root}/project/skill-candidates.json --proposals-dir {state_root}/project/skill-proposals",
         "at least doubles from the value recorded at rejection time",
+        # Explicit Dispatcher (Phase 3d) -- two full table rows not reproduced anywhere in
+        # SKILL.md's pointer text (which does not restate the phase->agent table itself).
+        "| `research-github` | `craftflow:github-researcher` |",
+        "| `kind:remfix` + `origin:bug-investigator` | `craftflow:bug-investigator` |",
     )
     for marker in moved_markers:
         if marker in skill_content:
@@ -14019,15 +14023,41 @@ def test_router_phase_enum_registers_skill_distill_learn_distill_doubt_verify() 
 
 
 def test_router_dispatcher_table_includes_skill_distill() -> None:
+    # Phase 3d of the hooks-as-bridge redesign (backlog item 8) extracted "### Explicit
+    # dispatcher"'s phase-to-agent table out of craftflow-router/SKILL.md into
+    # skills/_shared/router-protocol.md (as "## Explicit Dispatcher (Phase-to-Agent
+    # Table)"). The row this test protects now lives in the shared doc; SKILL.md itself
+    # only carries a pointer. Verify both: the shared doc still has the row, and SKILL.md
+    # points at it without re-embedding a stale copy.
     name = "router/dispatcher-table-includes-skill-distill"
-    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    if not path.exists():
-        fail(name, f"craftflow-router SKILL.md not found at {path}")
+    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    shared_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md"
+    if not skill_path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {skill_path}")
         return
-    content = path.read_text(encoding="utf-8")
-    if "| skill-distill | craftflow:skill-author |" not in content and \
-       "| `skill-distill` | `craftflow:skill-author` |" not in content:
-        fail(name, "Explicit dispatcher table missing 'skill-distill -> craftflow:skill-author' row")
+    if not shared_path.exists():
+        fail(name, f"shared router-protocol.md not found at {shared_path}")
+        return
+    skill_content = skill_path.read_text(encoding="utf-8")
+    shared_content = shared_path.read_text(encoding="utf-8")
+
+    skill_start = skill_content.find("### Explicit dispatcher")
+    skill_end = skill_content.find("\n### Prompt scaffold for every agent", skill_start)
+    if skill_start == -1 or skill_end == -1:
+        fail(name, "could not bound ### Explicit dispatcher through ### Prompt scaffold for every agent in SKILL.md")
+        return
+    skill_section = skill_content[skill_start:skill_end]
+    if "skills/_shared/router-protocol.md" not in skill_section:
+        fail(name, "SKILL.md's Explicit dispatcher section no longer points at the shared doc")
+        return
+    if "| skill-distill | craftflow:skill-author |" in skill_section or \
+       "| `skill-distill` | `craftflow:skill-author` |" in skill_section:
+        fail(name, "SKILL.md still inlines the skill-distill dispatch row -- stale re-embedded copy alongside the shared-doc pointer")
+        return
+
+    if "| skill-distill | craftflow:skill-author |" not in shared_content and \
+       "| `skill-distill` | `craftflow:skill-author` |" not in shared_content:
+        fail(name, "shared doc's Explicit Dispatcher table missing 'skill-distill -> craftflow:skill-author' row")
         return
     ok(name)
 

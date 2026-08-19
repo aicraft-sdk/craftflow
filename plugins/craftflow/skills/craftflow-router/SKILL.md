@@ -756,24 +756,13 @@ Only create child tasks after the v10 artifact and state directory exist.
 
 ### Explicit dispatcher
 
-| Task Phase / Kind | Agent |
-|-------------------|-------|
-| `build-implement` | `craftflow:component-builder` |
-| `debug-investigate` | `craftflow:bug-investigator` |
-| `build-review`, `debug-review`, `review-audit`, `re-review` | `craftflow:code-reviewer` |
-| `build-hunt`, `re-hunt` | `craftflow:silent-failure-hunter` |
-| `build-verify`, `debug-verify`, `re-verify` | `craftflow:integration-verifier` |
-| `doubt-verify` | `craftflow:doubt-verifier` |
-| `fix-verify` | `craftflow:doubt-verifier` |
-| `plan-create`, `re-plan` | `craftflow:planner` |
-| `plan-review-gap-1`, `plan-review-gap-2` | `craftflow:plan-gap-reviewer` |
-| `research-web` | `craftflow:web-researcher` |
-| `research-github` | `craftflow:github-researcher` |
-| `kind:remfix` + `origin:bug-investigator` | `craftflow:bug-investigator` |
-| `build-doc-sync` | `craftflow:doc-syncer` |
-| `learn-distill` | `craftflow:learn-distiller` |
-| `skill-distill` | `craftflow:skill-author` |
-| `kind:remfix` + `origin:code-reviewer|silent-failure-hunter|integration-verifier|router` | `craftflow:component-builder` |
+**Shared with Cursor — canonical text lives in
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+"Explicit Dispatcher (Phase-to-Agent Table)" (Phase 3d of the hooks-as-bridge redesign,
+backlog item 8). `Read()` that file now if you have not already this session; it has the
+full phase→agent mapping.** Claude Code resolves each row via `Task()`/`TaskCreate()`
+against a registered subagent type using the `craftflow:` name directly — no host-specific
+resolution step needed here, unlike Cursor's `## Agent File Paths` literal-path mapping.
 
 `skill-author` is deliberately NOT a `kind:remfix` origin. A `skill-distill` task returning
 `STATUS: FAIL` (or never returning) is not a code defect for `component-builder` to fix — it

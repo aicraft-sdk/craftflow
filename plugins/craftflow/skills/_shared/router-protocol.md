@@ -295,3 +295,35 @@ flow in intent — same four options, same two scripts, same JUST_GO-never-auto-
 carve-out — but presents them via plain-text chat plus `cursor-wf.json`'s
 `pending_skill_approval` field instead of `AskUserQuestion`, since Cursor has no equivalent
 tool. See that file's own section for its host-specific mechanics.)
+
+## Explicit Dispatcher (Phase-to-Agent Table)
+
+| Task Phase / Kind | Agent |
+|-------------------|-------|
+| `build-implement` | `craftflow:component-builder` |
+| `debug-investigate` | `craftflow:bug-investigator` |
+| `build-review`, `debug-review`, `review-audit`, `re-review` | `craftflow:code-reviewer` |
+| `build-hunt`, `re-hunt` | `craftflow:silent-failure-hunter` |
+| `build-verify`, `debug-verify`, `re-verify` | `craftflow:integration-verifier` |
+| `doubt-verify` | `craftflow:doubt-verifier` |
+| `fix-verify` | `craftflow:doubt-verifier` |
+| `plan-create`, `re-plan` | `craftflow:planner` |
+| `plan-review-gap-1`, `plan-review-gap-2` | `craftflow:plan-gap-reviewer` |
+| `research-web` | `craftflow:web-researcher` |
+| `research-github` | `craftflow:github-researcher` |
+| `kind:remfix` + `origin:bug-investigator` | `craftflow:bug-investigator` |
+| `build-doc-sync` | `craftflow:doc-syncer` |
+| `learn-distill` | `craftflow:learn-distiller` |
+| `skill-distill` | `craftflow:skill-author` |
+| `kind:remfix` + `origin:code-reviewer|silent-failure-hunter|integration-verifier|router` | `craftflow:component-builder` |
+
+(Host-specific: this table states WHICH agent role handles each phase — the routing intent
+itself, shared across hosts. HOW each host turns an agent role into something invocable is
+host-specific and stays in each binding doc: Claude Code resolves these via `Task()`/
+`TaskCreate()` against registered subagent types using the `craftflow:` name directly;
+Cursor's `Task` tool cannot select custom subagent types by name at all, so
+`cursor-router/SKILL.md`'s `## Agent File Paths` maps each role to a literal
+`.md` file path instead. See each binding doc's own section for its resolution mechanics.
+`craftflow-router/SKILL.md` also keeps its own short trailing note on `skill-author` not
+being a `kind:remfix` origin inline, since it cross-references that file's own `## 6.`
+section numbering.)
