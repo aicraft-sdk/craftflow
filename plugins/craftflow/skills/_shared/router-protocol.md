@@ -12,18 +12,152 @@
 > host-specific binding docs (`craftflow-router/SKILL.md`, `cursor-router/SKILL.md`) may
 > contain that.
 >
-> **Migration status (Phase 3, Claude side):** this is a first-draft extraction covering
-> the plan's two most clearly-delineated, cleanly-separable `shared`-classified sections —
-> Intent Routing and the dispatch prompt scaffold. Several other sections the mapping table
-> classifies `shared` (`## 0. Resolve Project Root`, `### Parent workflow creation`'s
+> **Migration status (Phase 3, Claude side):** Phase 3 extracted the plan's two most
+> clearly-delineated, cleanly-separable `shared`-classified sections — Intent Routing and
+> the dispatch prompt scaffold. Phase 3b (this pass) added `## 0. Resolve Project Root`
+> (below, as "Resolve Project Root") — the resolution algorithm itself is identical in
+> substance across hosts (Cursor's own text already said so directly before this
+> extraction: "Resolve exactly as Claude Code's `craftflow-router/SKILL.md` does"). Several
+> other sections the mapping table classifies `shared` (`### Parent workflow creation`'s
 > artifact schema, `## 13. Memory Finalization`'s two-tier concept, `### Worktree
-> Isolation`'s project-root-reuse text, `JUST_GO:`) were deliberately left inline in
-> `craftflow-router/SKILL.md` for this pass — see that file's own inline notes at each
-> section, and the Phase 3 completion report, for why: `craftflow_hook_unit_tests.py`
-> anchors dense, exact-position, and in one case exact-match-paragraph assertions directly
-> inside those sections, and a clean shared/host-specific split was not achievable in this
-> pass without disproportionate regression risk relative to a follow-up, more carefully
-> scoped sub-phase. This file will grow as those follow-ups land.
+> Isolation`'s project-root-reuse text, `JUST_GO:`) remain deliberately left inline in
+> `craftflow-router/SKILL.md` — see that file's own inline notes at each section, and the
+> Phase 3/3b completion reports, for why: `craftflow_hook_unit_tests.py` anchors dense,
+> exact-position, and in one case exact-match-paragraph assertions directly inside those
+> sections, and a clean shared/host-specific split was not achievable without
+> disproportionate regression risk relative to a follow-up, more carefully scoped
+> sub-phase. This file will grow as those follow-ups land.
+
+## Resolve Project Root
+
+[EASY TO MISS: `## 0.` sits between `## 1.` and `## 2.` intentionally — a literal "0"
+heading, not a full renumber of `## 2.`-`## 7.`, matching the approved design's own "§0"
+terminology and minimizing blast radius on an already 1000+-line file.]
+
+1. At the start of every workflow (PLAN/DEBUG/REVIEW/BUILD), before any
+   `.craftflow/state/...` path is touched, resolve the project root:
+   ```bash
+   PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+   TOPLEVEL_EXIT=$?
+   ```
+   [EASY TO MISS: Use `git rev-parse --show-toplevel` for the absolute path — never a bare
+   `~/.claude/worktrees/` because `~` may not expand correctly in all shell contexts, and a
+   relative path resolves against cwd, not the project root.]
+
+   - **If `TOPLEVEL_EXIT == 0`**: `PROJECT_ROOT` is set — this is the unchanged single-repo
+     path. `PROJECT_ROOT` is now set for the remainder of this session — every later step in
+     this document (memory load, workflow-artifact creation, resume, and — for BUILD only —
+     worktree creation) consumes this same value. Skip step 1a.
+   - **If `TOPLEVEL_EXIT != 0`**: cwd itself is not a git repo. This happens when a session is
+     launched at a multi-repo workspace root (a directory that is not itself a git repo but
+     contains several independently git-initialized nested repos, e.g. `ai-infra/` containing
+     `ai-platform-core/`, `genai-platform-dev/`, etc.). Run **step 1a** below before deciding
+     whether to proceed.
+
+   **1a. Multi-repo workspace root resolution** (only reached when `TOPLEVEL_EXIT != 0`):
+   ```bash
+   CRAFTFLOW_INSTALL=$(python3 -c "
+   import json, pathlib
+   reg = json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())
+   print(reg['plugins']['craftflow@craftflow'][0]['installPath'])
+   ")
+   CRAFTFLOW_INSTALL_EXIT=$?
+   RESOLVE_RESULT=$(python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_resolve_workspace_root.py" \
+     --cwd "$(pwd)" \
+     --request "USER_REQUEST_SHELL_ESCAPED")
+   RESOLVE_EXIT=$?
+   ```
+   (A non-zero `CRAFTFLOW_INSTALL_EXIT` here is not handled as a separate branch — it surfaces
+   downstream as a non-zero `RESOLVE_EXIT` from the next command, an empty/unusable
+   `$CRAFTFLOW_INSTALL` path, which the existing `RESOLVE_EXIT != 0` handling below already
+   catches.)
+   Replace `USER_REQUEST_SHELL_ESCAPED` with the actual user request, properly shell-quoted
+   (same convention as **Parent workflow creation** step 1). The script never mutates git or
+   filesystem state — it only reads cwd's immediate child directories and runs non-mutating
+   `git rev-parse --show-toplevel` calls.
+
+   - **If `RESOLVE_EXIT != 0`** (the script itself could not complete the scan, e.g. cwd
+     unreadable): do not parse `$RESOLVE_RESULT`. Treat identically to `NO_REPO_FOUND` below.
+   - **Otherwise**, parse the outcome:
+     ```bash
+     RESOLVE_OUTCOME=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin)['outcome'])")
+     ```
+     Also capture the workspace-root file allowlist `$RESOLVE_RESULT` may carry — safe and inert
+     for every outcome reachable in this branch (`DETERMINISTIC`, `AMBIGUOUS`, or `NO_REPO_FOUND`
+     reached via a successful `RESOLVE_EXIT == 0` scan), since the resolver script's
+     `resolve()` never includes these keys for `NO_REPO_FOUND` at all — `.get(..., [])` degrades to
+     an empty list in that case, exactly as intended. This capture is explicitly UNREACHABLE when
+     `RESOLVE_EXIT != 0` (the branch immediately above this one, which never parses
+     `$RESOLVE_RESULT` at all):
+     ```bash
+     WORKSPACE_WRITABLE_PATHS_JSON=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get('workspace_writable_paths', [])))")
+     WORKSPACE_WRITABLE_PATHS_DROPPED_JSON=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get('workspace_writable_paths_dropped', [])))")
+     ```
+     `WORKSPACE_WRITABLE_PATHS_JSON` is held in-session — it is written into the workflow artifact
+     at **Parent workflow creation** (`## 6.`) below, the same ordering constraint the
+     `project_root_resolution_fallback` reason already works around (the artifact doesn't exist
+     yet at this point in `## 0.`). If `WORKSPACE_WRITABLE_PATHS_DROPPED_JSON` is non-empty (`!=
+     '[]'`), fold it into `## 6.`'s own initial event-log write alongside `workflow_started`, the
+     same conditional pattern as `project_root_resolution_fallback` below —
+     `{"event":"workspace_writable_paths_entries_dropped","dropped":<value>}`.
+     **Caveat — the two in-session values are NOT equivalent in what is lost if they never reach
+     `## 6.`:** `project_root_resolution_fallback` is a diagnostic string only — its own note above
+     already documents that nothing functional is lost if it never gets durably recorded.
+     `WORKSPACE_WRITABLE_PATHS_JSON` is a functional payload — nothing else re-echoes or reuses it
+     between this capture and `## 6.`'s write, so if it is lost in-session (e.g. the session ends
+     before `## 6.` runs), the workspace-root allowlist is silently disabled for that workflow
+     (the artifact's `workspace_writable_paths` stays at its `[]` default). The downstream guard
+     in `craftflow_hooklib.py`/`craftflow_pretooluse_guard.py` still fails closed regardless — an
+     empty allowlist only denies writes to the workspace-root files it would otherwise have
+     permitted, it never grants anything extra.
+     - **`DETERMINISTIC`** (exactly one candidate nested repo exists, or the request text
+       uniquely names one among several):
+       ```bash
+       PROJECT_ROOT=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin)['project_root'])")
+       ```
+       `PROJECT_ROOT` is now set for the remainder of this session — every later step in this
+       document (memory load, workflow-artifact creation, resume, and — for BUILD only —
+       worktree creation) consumes this same value.
+     - **`AMBIGUOUS`** (2+ candidate nested repos exist and the request text does not uniquely
+       name one): ask the user once via `AskUserQuestion`, with one option per path in the
+       `candidates` array from `$RESOLVE_RESULT` (optionally enrich each option's label with
+       that repo's `git -C <candidate> log -1 --format=%s` first line, if available). Set
+       `PROJECT_ROOT` to the chosen candidate's absolute path. `PROJECT_ROOT` is now set for
+       the remainder of this session — every later step in this document (memory load,
+       workflow-artifact creation, resume, and — for BUILD only — worktree creation) consumes
+       this same value.
+       [EASY TO MISS: this `AskUserQuestion` gate is NEVER auto-defaulted under `JUST_GO=true`
+       (§ 2 `JUST_GO` rule) — cross-repo routing has no safe "recommended" default the way an
+       ordinary implementation-choice gate does, so it is treated the same as an unresolved
+       plan **Open Decision**: always stop and ask, even in `JUST_GO` mode.]
+     - **`NO_REPO_FOUND`** (or `RESOLVE_EXIT != 0` above): no git-repo children exist under
+       cwd at all (or the resolver script itself could not complete the scan). Set
+       `PROJECT_ROOT=$(pwd)` as the fallback — this raw-cwd value still resolves correctly for
+       the intended purpose; the single-repo case was already handled above, and this branch
+       only covers a workspace root with no nested git repos, or a scan failure, where cwd is
+       the only available candidate.
+       [EASY TO MISS: `## 0.` runs BEFORE `workflow_uuid` is minted (minted later, at
+       **Parent workflow creation** in `## 6.`), so no per-workflow event log
+       (`$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.events.jsonl`) can exist yet
+       at this point — it is filename-keyed on `workflow_uuid`, which literally cannot exist
+       yet. Do not append an event to "the event log" here; there is nothing to append to.
+       Instead, keep `reason:"NO_REPO_FOUND"` (resolver returned that outcome) or
+       `reason:"RESOLVE_SCRIPT_ERROR"` (`RESOLVE_EXIT != 0`) in-session, and fold it into
+       `## 6.`'s own initial `status_history`/event-log write once the workflow artifact is
+       created — e.g.
+       `{"event":"project_root_resolution_fallback","reason":"NO_REPO_FOUND"|"RESOLVE_SCRIPT_ERROR"}`
+       alongside `workflow_started`. This is necessarily a best-effort, undurable signal at
+       this early stage: `PROJECT_ROOT` is already correctly resolved via the raw-cwd fallback
+       regardless of whether the reason is ever durably recorded, so nothing functional is lost
+       if a workflow artifact never ends up being created (e.g. the session ends before `## 6.`
+       runs).] This is an event, not a `pending_gate` — there is nothing to resume or retry.
+       The router continues immediately with this fallback `PROJECT_ROOT` value.
+
+(Host-specific note: both hosts run this exact algorithm; `cursor-router/SKILL.md`
+previously stated "Resolve exactly as Claude Code's `craftflow-router/SKILL.md` does" —
+see its own binding doc for exactly when in its execution order this step runs, which
+differs by host (Claude Code: once at session start, before `## 1.`; Cursor: inline at the
+start of `## 4a. Worktree Isolation`), a sequencing detail, not a content difference.)
 
 ## Intent Routing
 

@@ -660,11 +660,24 @@ def test_shared_preparation_anchored_to_project_root() -> None:
 
 
 def test_worktree_isolation_reuses_project_root_no_duplicate_resolution() -> None:
+    # Phase 3b (backlog item 8) moved the resolver-script reference out of SKILL.md into
+    # skills/_shared/router-protocol.md. The "no duplicate resolution" invariant this test
+    # protects now means: SKILL.md itself has ZERO occurrences (fully delegated, no stale
+    # re-embedded copy), and the shared doc has exactly ONE (the single source of truth) --
+    # together still "exactly one real resolution call site," just relocated.
     name = "router/worktree-isolation-reuses-project-root"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    shared_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md"
     content = skill_path.read_text(encoding="utf-8")
-    if content.count("craftflow_resolve_workspace_root.py") != 1:
-        fail(name, f"expected exactly 1 reference to the resolver script, found {content.count('craftflow_resolve_workspace_root.py')}")
+    if not shared_path.exists():
+        fail(name, f"shared router-protocol.md not found at {shared_path}")
+        return
+    shared_content = shared_path.read_text(encoding="utf-8")
+    if content.count("craftflow_resolve_workspace_root.py") != 0:
+        fail(name, f"expected 0 references to the resolver script in SKILL.md (fully delegated to the shared doc), found {content.count('craftflow_resolve_workspace_root.py')}")
+        return
+    if shared_content.count("craftflow_resolve_workspace_root.py") != 1:
+        fail(name, f"expected exactly 1 reference to the resolver script in the shared doc, found {shared_content.count('craftflow_resolve_workspace_root.py')}")
         return
     start = content.find("### Worktree Isolation (BUILD Default)")
     next_heading = content.find("\n### DEBUG preparation", start)
@@ -970,43 +983,69 @@ def test_reliability_gates_script_present() -> None:
 
 
 def test_worktree_isolation_resolver_gated_on_toplevel_failure() -> None:
+    # Phase 3b of the hooks-as-bridge redesign (backlog item 8) extracted "## 0. Resolve
+    # Project Root" out of craftflow-router/SKILL.md into skills/_shared/router-protocol.md
+    # (as "## Resolve Project Root"). The gate-before-resolver ordering invariant this test
+    # protects now lives entirely in the shared doc; SKILL.md itself no longer contains
+    # either literal marker, only a pointer. Verify both halves: the shared doc still has
+    # the correct internal ordering, AND SKILL.md's pointer to it textually precedes
+    # SKILL.md's own mkdir/worktree-add block (so the resolution step still conceptually
+    # happens before worktree creation, just via a Read() instead of inline text).
     name = "router/worktree-isolation-resolver-gated"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    shared_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md"
     if not skill_path.exists():
         fail(name, f"SKILL.md not found at {skill_path}")
         return
-    content = skill_path.read_text(encoding="utf-8")
-    # NOTE: project-root resolution now lives in "## 0. Resolve Project Root" (a later
-    # refactor anchored router state to a single early PROJECT_ROOT resolution instead of
-    # inline inside "### Worktree Isolation (BUILD Default)"). Worktree Isolation itself now
-    # only *reuses* PROJECT_ROOT. Anchor on the section that actually contains the gate and
-    # the resolver reference, and search to EOF since the mkdir/worktree-add block it must
-    # precede lives in a later top-level section.
-    section_start = content.find("## 0. Resolve Project Root")
-    if section_start == -1:
-        fail(name, "Resolve Project Root section not found")
+    if not shared_path.exists():
+        fail(name, f"shared router-protocol.md not found at {shared_path}")
         return
-    section = content[section_start:]
+    skill_content = skill_path.read_text(encoding="utf-8")
+    shared_content = shared_path.read_text(encoding="utf-8")
 
-    gate_idx = section.find("TOPLEVEL_EXIT != 0")
-    resolver_idx = section.find("craftflow_resolve_workspace_root.py")
-    mkdir_idx = section.find('mkdir -p "$PROJECT_ROOT/.claude/worktrees"')
-
+    shared_section_start = shared_content.find("## Resolve Project Root")
+    if shared_section_start == -1:
+        fail(name, "'## Resolve Project Root' section not found in shared doc")
+        return
+    shared_section = shared_content[shared_section_start:]
+    gate_idx = shared_section.find("TOPLEVEL_EXIT != 0")
+    resolver_idx = shared_section.find("craftflow_resolve_workspace_root.py")
     if gate_idx == -1:
-        fail(name, "TOPLEVEL_EXIT != 0 gate text not found in/after Resolve Project Root section")
+        fail(name, "TOPLEVEL_EXIT != 0 gate text not found in/after shared doc's Resolve Project Root section")
         return
     if resolver_idx == -1:
-        fail(name, "resolver script reference not found in/after Resolve Project Root section")
+        fail(name, "resolver script reference not found in/after shared doc's Resolve Project Root section")
         return
-    if mkdir_idx == -1:
-        fail(name, "mkdir -p .../.claude/worktrees block not found in/after Resolve Project Root section")
-        return
-    if not (gate_idx < resolver_idx < mkdir_idx):
+    if not (gate_idx < resolver_idx):
         fail(
             name,
             f"expected order TOPLEVEL_EXIT!=0 gate ({gate_idx}) < resolver reference "
-            f"({resolver_idx}) < mkdir/worktree-add block ({mkdir_idx}) -- resolver must be "
-            f"textually gated behind the failure branch, never unconditional",
+            f"({resolver_idx}) in the shared doc -- resolver must be textually gated behind "
+            f"the failure branch, never unconditional",
+        )
+        return
+
+    skill_section_start = skill_content.find("## 0. Resolve Project Root")
+    if skill_section_start == -1:
+        fail(name, "'## 0. Resolve Project Root' heading not found in SKILL.md")
+        return
+    skill_section = skill_content[skill_section_start:]
+    pointer_idx = skill_section.find("skills/_shared/router-protocol.md")
+    mkdir_idx = skill_section.find('mkdir -p "$PROJECT_ROOT/.claude/worktrees"')
+    if pointer_idx == -1:
+        fail(name, "SKILL.md's '## 0.' section no longer points at the shared doc")
+        return
+    if mkdir_idx == -1:
+        fail(name, "mkdir -p .../.claude/worktrees block not found after '## 0.' in SKILL.md")
+        return
+    if "TOPLEVEL_EXIT != 0" in skill_section[: skill_section.find("## 2.")]:
+        fail(name, "SKILL.md's '## 0.' section still inlines the resolution branching text -- stale re-embedded copy alongside the shared-doc pointer")
+        return
+    if not (pointer_idx < mkdir_idx):
+        fail(
+            name,
+            f"expected the shared-doc pointer ({pointer_idx}) to textually precede the "
+            f"mkdir/worktree-add block ({mkdir_idx}) in SKILL.md",
         )
         return
     ok(name)
@@ -13811,11 +13850,12 @@ def test_skill_distillation_skill_present() -> None:
 
 
 def test_craftflow_router_shared_protocol_extraction_no_stale_reembed() -> None:
-    # Presence-marker test for Phase 3 of the hooks-as-bridge redesign (backlog item 8,
+    # Presence-marker test for Phase 3/3b of the hooks-as-bridge redesign (backlog item 8,
     # plan Component 7): craftflow-router/SKILL.md must Read() the shared doc for the
-    # sections extracted so far (Intent Routing, dispatch prompt scaffold), not silently
-    # keep a duplicate copy of the literal content alongside the pointer -- and the shared
-    # doc must actually still hold that content, not just claim to.
+    # sections extracted so far (Intent Routing, dispatch prompt scaffold, Resolve Project
+    # Root), not silently keep a duplicate copy of the literal content alongside the
+    # pointer -- and the shared doc must actually still hold that content, not just claim
+    # to.
     name = "craftflow-router/skill-md/shared-protocol-extraction-no-stale-reembed"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
     shared_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md"
@@ -13846,6 +13886,12 @@ def test_craftflow_router_shared_protocol_extraction_no_stale_reembed() -> None:
         # Dispatch prompt scaffold's literal field block.
         "## Task Context\n- Task ID: {task_id}",
         "## SKILL_HINTS\n{router-detected skill list or \"None\"}",
+        # Resolve Project Root's 1a. multi-repo branch (Phase 3b) -- DETERMINISTIC outcome
+        # parse, the workspace_writable_paths capture, and the AMBIGUOUS AskUserQuestion
+        # gate note, none of which have any reason to appear elsewhere in SKILL.md.
+        "RESOLVE_OUTCOME=$(printf '%s' \"$RESOLVE_RESULT\" | python3 -c \"import json,sys; print(json.load(sys.stdin)['outcome'])\")",
+        "WORKSPACE_WRITABLE_PATHS_JSON=$(printf '%s' \"$RESOLVE_RESULT\" | python3 -c \"import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get('workspace_writable_paths', [])))\")",
+        "this `AskUserQuestion` gate is NEVER auto-defaulted under `JUST_GO=true`",
     )
     for marker in moved_markers:
         if marker in skill_content:
@@ -15817,15 +15863,19 @@ def test_bash_guard_truthy_non_dict_tool_input_degrades_to_empty_dict_no_crash(t
 
 
 def test_workspace_root_config_read_gated_inside_step_1a() -> None:
+    # Phase 3b (backlog item 8) moved "## 0. Resolve Project Root" (incl. its 1a. branch)
+    # out of craftflow-router/SKILL.md into skills/_shared/router-protocol.md's
+    # "## Resolve Project Root" section. Every invariant this test protects now lives
+    # there -- re-anchored to the shared doc, unchanged in substance.
     name = "router/workspace-root-config-read-gated-inside-step-1a"
-    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    if not skill_path.exists():
-        fail(name, f"SKILL.md not found at {skill_path}")
+    shared_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md"
+    if not shared_path.exists():
+        fail(name, f"shared router-protocol.md not found at {shared_path}")
         return
-    content = skill_path.read_text(encoding="utf-8")
+    content = shared_path.read_text(encoding="utf-8")
     section_start = content.find("**1a. Multi-repo workspace root resolution**")
     if section_start == -1:
-        fail(name, "step 1a section not found")
+        fail(name, "step 1a section not found in shared doc")
         return
     next_heading = content.find("\n## ", section_start + 1)
     section = content[section_start: next_heading if next_heading != -1 else None]
@@ -15833,8 +15883,8 @@ def test_workspace_root_config_read_gated_inside_step_1a() -> None:
         fail(name, "workspace_writable_paths read/parse not found inside step 1a's own section")
         return
     # Confirm it is NOT also present in the single-repo (TOPLEVEL_EXIT == 0) branch text, which
-    # sits just above step 1a in the same '## 0.' section.
-    zero_section_start = content.find("## 0. Resolve Project Root")
+    # sits just above step 1a in the same 'Resolve Project Root' section.
+    zero_section_start = content.find("## Resolve Project Root")
     single_repo_branch = content[zero_section_start:section_start]
     if "workspace_writable_paths" in single_repo_branch:
         fail(name, "workspace_writable_paths read must not appear in the single-repo (TOPLEVEL_EXIT == 0) branch")
