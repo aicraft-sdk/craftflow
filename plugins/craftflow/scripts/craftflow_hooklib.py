@@ -11,9 +11,64 @@ import sys
 import contextlib
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Literal, Tuple, TypedDict
 
 STATE_VERSION = "v10"
+
+# --- craftflow event contract (item 8 Phase 0) --------------------------------
+# Documents the hook I/O contract this module's load_input()/json_print()/
+# pretool_deny()/posttool_context()/session_context() already implement, and
+# that craftflow_cursor_adapter.py's normalize_input()/translate_output()
+# already bridge onto for Cursor. Additive only -- no runtime behavior change.
+# Full spec: tools/craftflow-plugin/plugins/craftflow/docs/craftflow-event-contract.md
+#
+# NotRequired (PEP 655) is Python 3.11+ only; this repo's hook scripts run
+# under Python 3.9 (see docs above), so optional fields use the total=False
+# subclass pattern instead of per-field NotRequired.
+
+HookEventName = Literal[
+    "PreToolUse",
+    "SessionStart",
+    "PostToolUse",
+    "TaskCompleted",
+    "PostCompact",
+    "SubagentStop",
+    "PreCompact",
+    "Stop",
+    "StopFailure",
+    "InstructionsLoaded",
+]
+
+
+class HookRequest(TypedDict):
+    """Required shape of the JSON object load_input() returns."""
+
+    hook_event_name: HookEventName
+
+
+class HookRequestOptional(TypedDict, total=False):
+    """Fields present on some but not all hook_event_name values, or only
+    on one host. See the spec doc's per-event payload table for which."""
+
+    tool_name: str  # PreToolUse / PostToolUse
+    tool_input: Dict[str, Any]  # PreToolUse / PostToolUse
+    session_id: str
+    cwd: str  # Claude Code native
+    workspace_roots: List[str]  # Cursor native (per ADR-0003)
+
+
+class HookSpecificOutput(TypedDict, total=False):
+    hookEventName: str
+    permissionDecision: Literal["deny"]
+    permissionDecisionReason: str
+    additionalContext: str
+
+
+class HookResponse(TypedDict, total=False):
+    """Shape of the JSON object json_print() emits to stdout."""
+
+    hookSpecificOutput: HookSpecificOutput
+# --------------------------------------------------------------------------
 
 
 def project_dir() -> Path:
