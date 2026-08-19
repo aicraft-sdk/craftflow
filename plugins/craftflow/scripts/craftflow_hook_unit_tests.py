@@ -8836,6 +8836,55 @@ def test_safe_shell_guard_blocks_sudo_rm_rf_root(tmp_dir: Path) -> None:
     ok(name)
 
 
+def test_safe_shell_guard_blocks_catastrophic_command_on_second_line(tmp_dir: Path) -> None:
+    # Regression for the 2026-08-19 DEBUG workflow (commit ebdc67d):
+    # _split_subcommands()'s shlex tokenizer used shlex's default
+    # `whitespace`, which already contains "\n" -- with whitespace_split=True
+    # a bare newline was silently consumed as ordinary whitespace before it
+    # could ever be emitted as its own token, so `token in CONTROL_OPERATORS`
+    # never saw it. A multi-line command was therefore flattened into ONE
+    # subcommand, and `_check_tokens()` -- which only inspects the FIRST
+    # token of each subcommand as the command name -- never inspected
+    # "rm" at all when it appeared alone on its own second line. This is
+    # the exact reported evasion shape: `echo hello` on line 1 (benign,
+    # sets the flattened argv0), `rm -rf /` on line 2 (the real payload).
+    # Before ebdc67d this command was silently ALLOWED; it must now DENY.
+    name = "safe-shell-guard/blocks-catastrophic-command-on-second-line"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": "echo hello\nrm -rf /"},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            f"expected deny for a catastrophic command on line 2 of a multi-line Bash "
+            f"command (echo hello\\nrm -rf /); got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_safe_shell_guard_allows_benign_multiline_command(tmp_dir: Path) -> None:
+    # Companion negative control for the fix above: proves the newline-
+    # splitting fix does not turn every multi-line command into a false
+    # positive -- only a genuinely catastrophic subcommand should deny.
+    name = "safe-shell-guard/allows-benign-multiline-command"
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": "echo hello\ngit status"},
+    }
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    if out:
+        fail(name, f"expected silent allow for a benign multi-line command; got: {out!r}")
+        return
+    ok(name)
+
+
 def test_bash_guard_blocks_rm_rf_wildcard_middle_segment_tools_no_dot_prefix(tmp_dir: Path) -> None:
     # Variant: no leading "./" -- a bare `*/tools` token shape, proving the
     # fix is not keyed to the exact reported command's literal spelling.
@@ -17042,6 +17091,8 @@ def main() -> int:
         test_safe_shell_guard_blocks_flock_wrapped_rm_rf_root(tmp / "sg58")
         test_safe_shell_guard_allows_ssh_wrapped_benign(tmp / "sg59")
         test_safe_shell_guard_allows_su_without_c_flag(tmp / "sg60")
+        test_safe_shell_guard_blocks_catastrophic_command_on_second_line(tmp / "sg61")
+        test_safe_shell_guard_allows_benign_multiline_command(tmp / "sg62")
 
         print()
         print("[ stop-verify ]")

@@ -4,7 +4,7 @@ set -euo pipefail
 # Run at the start of every agent session to verify the environment before work.
 # Subsystem: Session Lifecycle (START)
 #
-# FILL INSTRUCTIONS — replace every {{PLACEHOLDER}} before using:
+# FILL INSTRUCTIONS — replace every {{...}} token listed below before using:
 #   {{TOOL_VERSION_CHECKS}}   — commands to verify required tool versions, e.g.:
 #                               go version; node --version; python --version
 #   {{INSTALL_CMD}}           — install/sync dependencies, e.g.:
