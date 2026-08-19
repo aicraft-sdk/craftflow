@@ -26,6 +26,28 @@ This skill scaffolds a complete 5-subsystem harness. Every artifact maps to a su
 
 ---
 
+## Step 0 — Workspace scope interview
+
+Before any scaffolding, resolve the intended **workspace root** and surface known shared root-level files. Do this before Step 1.
+
+1. **Ask the user:** "Is this a single project, or a workspace/monorepo containing multiple projects (e.g. Nx monorepo, multiple apps/packages)?"
+2. **Resolve `workspace_root`** using the identical method Craftflow BUILD workflows use (see `tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_resolve_workspace_root.py`):
+   - Run `git rev-parse --show-toplevel` at the current working directory.
+     - Succeeds → that toplevel IS `workspace_root` (covers the common case, including an Nx-monorepo that is itself one git repo — Step 1's shape detection handles the internal project layout within it).
+     - Fails (cwd is not itself inside a git repo — e.g. a parent folder containing multiple independent repos as immediate children) → run:
+       ```bash
+       python3 tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_resolve_workspace_root.py --cwd <cwd> --request "<user's setup request text>"
+       ```
+       and branch on `outcome`:
+       - `DETERMINISTIC` → `project_root` from the JSON is `workspace_root`.
+       - `AMBIGUOUS` → present `candidates` to the user and ask which one is `workspace_root` before continuing.
+       - `NO_REPO_FOUND` → treat cwd itself as `workspace_root` (no git repo found among children); note this in the Step 6 report.
+3. **Ask (or detect via a repo scan of `workspace_root`) about shared root-level files:** "Are there known shared, root-level files outside any individual app/package directory that agents will likely need to edit later (for example a root `CONTRACTS.md`, a shared lint/CI config, a monorepo-wide doc)?" A repo scan is: list files directly under `workspace_root` that are not inside any single project/package directory and are not already part of this skill's own emitted set (Step 2). Record the confirmed list as `shared_root_files` (may be empty).
+
+Carry `workspace_root` and `shared_root_files` forward into Step 2 and Step 4.
+
+---
+
 ## Step 1 — Detect repo shape
 
 Read the following files to classify the repository and derive the decision variables that control which templates are emitted:
@@ -142,6 +164,7 @@ Include every file from the following set, applying the exclusion rules below:
 | `session-handoff.md` | `assets/lifecycle/session-handoff.md.tpl` | Session Lifecycle END; one-screen resume note |
 | `clean-state-checklist.md` | `assets/lifecycle/clean-state-checklist.md.tpl` | Session Lifecycle END; end-of-session gate |
 | `feature_list.json` | `assets/scope/feature_list.json.tpl` | Scope; machine-readable, evidence-gated |
+| `{workspace_root}/.craftflow-workspace.json` | (generated — see Step 4 item 10, no template) | Always written/verified, even if empty; pre-populated from Step 0's `shared_root_files` |
 
 ### Shape-conditional — validators, CI, and hooks
 
@@ -234,6 +257,10 @@ Write eligible files in this exact order so that cross-references resolve correc
    - `clean-state-checklist.md` from `assets/lifecycle/clean-state-checklist.md.tpl`; substitute `{{PROJECT_NAME}}`, `{{BUILD_TEST_COMMAND}}`
    - `feature_list.json` from `assets/scope/feature_list.json.tpl`
 9. **`.gitignore` audit** — confirm `CLAUDE.md` and `.claude/` remain ignored; do not add new ignores for `AGENTS.md`, `AI.md`, `TESTS.md`, `docs/ai/**`, or `tools/scripts/**`
+10. **Workspace-root allowlist — `{workspace_root}/.craftflow-workspace.json`** — Always write or verify this file, regardless of repo shape (this is independent of Steps 1–9; `workspace_root` may differ from the project root written into in Steps 1–9, per Step 0):
+    - If it does not exist: write `{"writable_paths": [<shared_root_files from Step 0, or [] if none were named>]}`.
+    - If it already exists: read it, then append any newly-identified `shared_root_files` entries not already present (dedup by exact string match); never remove existing entries; never overwrite the whole file wholesale.
+    - **Entry contract** (must match `read_workspace_writable_paths()` in `craftflow_resolve_workspace_root.py` exactly, or the entry is silently dropped by that validator): each entry is the bare filename of a direct child of `workspace_root` only — no path separators (`/` or `\`), no `.` or `..`, no leading `/` or `~` (no absolute paths, no home-dir expansion), and it must not resolve — including through a symlink — into a nested git repo's directory. When unsure, use the shortest exact filename rather than a path.
 
 ### Built-in rules enforced during Apply
 
@@ -319,6 +346,11 @@ Emit a summary with three sections:
 2. Severity ramp: after merging the first real feature spec (`docs/ai/specs/`) and the first ADR (`docs/ai/decisions/`), flip `aiContractPack.severity` from `"warn"` to `"error"` in `.agents-md-validator.json`
 3. Husky initialization (JS repos only): if Husky was newly added, run the package manager install command so the pre-commit hook activates before the next commit
 4. Non-JS pre-commit hook: `.git/hooks/pre-commit` is not committed to the repo; new contributors must re-run the skill or manually copy it from `assets/hooks/pre-commit-nonjs` after cloning
+
+**Craftflow workspace guards (read before your next session)** — if this repo is operated under Craftflow orchestration (`.craftflow/` present, or this setup was invoked via `craftflow:craftflow-router`):
+- `.craftflow/state/{activeContext,patterns,progress}.md` are router-protected memory files — permit-gated, router-owned finalization only. Never hand-edit them directly.
+- `{workspace_root}/.craftflow-workspace.json`'s `writable_paths` (Step 4 item 10) grants BUILD-phase agents write access to shared root-level files outside their isolated worktree. Add an entry there when a new shared file needs it.
+- Full mechanics: `tools/craftflow-plugin/plugins/craftflow/hooks/README.md` (near the worktree-confinement / `writable_paths` section) and `docs/2026-08-13-craftflow-workspace-root-allowlist-decision.md`.
 
 ---
 
