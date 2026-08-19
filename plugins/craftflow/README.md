@@ -244,6 +244,17 @@ Workflow state lives at `.craftflow/state/` in the project root:
 
 ---
 
+## Architecture graph
+
+`docs/generated/architecture.md` is a generated (not hand-maintained) view of
+this plugin's actual hook/agent/skill wiring — hook event → matcher → script,
+agent → declared skills, agent → declared tools — introspected straight from
+`hooks/hooks.json` and `agents/*.md` / `skills/*/SKILL.md` frontmatter.
+Regenerate with `pnpm run gen:craftflow-graph` after touching any of those;
+`pnpm run verify:craftflow-graph` checks it isn't stale.
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE)
