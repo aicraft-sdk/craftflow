@@ -3,6 +3,7 @@
 ## Table of Contents
 - [Keep Context Lean](#keep-context-lean)
 - [Capture Evidence Before Fixes](#capture-evidence-before-fixes)
+- [Rule Out Sandbox/Environment Failure Before Blaming The Code](#rule-out-sandboxenvironment-failure-before-blaming-the-code)
 - [Track Hypotheses Explicitly](#track-hypotheses-explicitly)
 - [Watch For Stalled Investigation](#watch-for-stalled-investigation)
 - [Restart Cleanly](#restart-cleanly)
@@ -45,6 +46,42 @@ Unknown:
 ```
 
 If you cannot explain what is known versus unknown, you are not ready to fix.
+
+## Rule Out Sandbox/Environment Failure Before Blaming The Code
+
+A command that fails because *your own execution environment* blocks it —
+denied network access, missing credentials, a sandboxed filesystem, a blocked
+IPC/socket call — looks identical at first glance to a command that fails
+because the code under test is actually broken. Treating the first as the
+second is a common, expensive misread: it sends the investigation down a
+code-change path for a problem that has nothing to do with the code.
+
+Before concluding a required command's failure proves a bug:
+
+1. Read the failure text for sandbox/permission signatures, not just the
+   surface error: `EACCES`/`EPERM` on a path outside the project, `ECONNREFUSED`
+   or DNS failures on outbound calls, "operation not permitted," missing
+   credentials that are known to exist outside this session, or a tool that
+   normally works failing at the exact step that needs elevated access.
+2. If any of those signatures are present, retry the **exact same command,
+   unchanged** with the narrowest available escalation (e.g. the minimum
+   broader permission/sandbox mode this environment offers) before writing a
+   single line of code. Do not simplify, mock around, or "fix" the command on
+   this retry — the retry's only job is to tell you whether the environment
+   was the cause.
+3. If the unchanged command now succeeds, the code was never the problem —
+   stop investigating it as one. Record that this step required an
+   escalated/unsandboxed environment (so the next investigator doesn't repeat
+   the misdiagnosis) and move on.
+4. If the unchanged command still fails the same way even with the narrowest
+   escalation, the sandbox hypothesis is refuted — proceed with the normal
+   root-cause investigation above.
+
+**Never bypass a genuine failure to make the symptom disappear** — no
+`--no-verify`, no swallowing the error, no rewriting the check to accept the
+blocked state. The goal of the retry in step 2 is strictly diagnostic:
+confirm or refute the sandbox hypothesis, not route around whichever failure
+is actually occurring.
 
 ## Track Hypotheses Explicitly
 
