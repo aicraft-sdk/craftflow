@@ -31,18 +31,29 @@ This skill scaffolds a complete 5-subsystem harness. Every artifact maps to a su
 Before any scaffolding, resolve the intended **workspace root** and surface known shared root-level files. Do this before Step 1.
 
 1. **Ask the user:** "Is this a single project, or a workspace/monorepo containing multiple projects (e.g. Nx monorepo, multiple apps/packages)?"
-2. **Resolve `workspace_root`** using the identical method Craftflow BUILD workflows use (see `tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_resolve_workspace_root.py`):
+2. **Resolve `workspace_root`** using the identical method Craftflow BUILD workflows use (mirror `craftflow-router/SKILL.md`'s `## 0. Resolve Project Root` step 1a exactly — this skill scaffolds into arbitrary third-party target repos, so the resolver script must be located via the installed plugin path, not a path relative to this skill's own plugin-cache layout):
    - Run `git rev-parse --show-toplevel` at the current working directory.
      - Succeeds → that toplevel IS `workspace_root` (covers the common case, including an Nx-monorepo that is itself one git repo — Step 1's shape detection handles the internal project layout within it).
-     - Fails (cwd is not itself inside a git repo — e.g. a parent folder containing multiple independent repos as immediate children) → run:
+     - Fails (cwd is not itself inside a git repo — e.g. a parent folder containing multiple independent repos as immediate children) → resolve the installed plugin path first, then invoke the resolver script from there:
        ```bash
-       python3 tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_resolve_workspace_root.py --cwd <cwd> --request "<user's setup request text>"
+       CRAFTFLOW_INSTALL=$(python3 -c "
+       import json, pathlib
+       reg = json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())
+       print(reg['plugins']['craftflow@craftflow'][0]['installPath'])
+       ")
+       CRAFTFLOW_INSTALL_EXIT=$?
+       RESOLVE_RESULT=$(python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_resolve_workspace_root.py" \
+         --cwd <cwd> \
+         --request "<user's setup request text>")
+       RESOLVE_EXIT=$?
        ```
-       and branch on `outcome`:
-       - `DETERMINISTIC` → `project_root` from the JSON is `workspace_root`.
-       - `AMBIGUOUS` → present `candidates` to the user and ask which one is `workspace_root` before continuing.
-       - `NO_REPO_FOUND` → treat cwd itself as `workspace_root` (no git repo found among children); note this in the Step 6 report.
-3. **Ask (or detect via a repo scan of `workspace_root`) about shared root-level files:** "Are there known shared, root-level files outside any individual app/package directory that agents will likely need to edit later (for example a root `CONTRACTS.md`, a shared lint/CI config, a monorepo-wide doc)?" A repo scan is: list files directly under `workspace_root` that are not inside any single project/package directory and are not already part of this skill's own emitted set (Step 2). Record the confirmed list as `shared_root_files` (may be empty).
+       (A non-zero `CRAFTFLOW_INSTALL_EXIT` is not handled as a separate branch — it surfaces downstream as a non-zero `RESOLVE_EXIT` from the next command, an empty/unusable `$CRAFTFLOW_INSTALL` path, which the `RESOLVE_EXIT != 0` handling below already catches.)
+       - **If `RESOLVE_EXIT != 0`** (the script itself could not complete, including an unresolved `CRAFTFLOW_INSTALL`): do not parse `$RESOLVE_RESULT`. Treat identically to `NO_REPO_FOUND` — treat cwd itself as `workspace_root`; note this (script exit != 0 → treated as NO_REPO_FOUND) in the Step 6 report.
+       - **Otherwise**, parse `outcome` from `$RESOLVE_RESULT` and branch:
+         - `DETERMINISTIC` → `project_root` from the JSON is `workspace_root`.
+         - `AMBIGUOUS` → present `candidates` to the user and ask which one is `workspace_root` before continuing.
+         - `NO_REPO_FOUND` → treat cwd itself as `workspace_root` (no git repo found among children); note this in the Step 6 report.
+3. **Ask (or detect via a repo scan of `workspace_root`) about shared root-level files:** "Are there known shared, root-level files outside any individual app/package directory that agents will likely need to edit later (for example a root `CONTRACTS.md`, a shared lint/CI config, a monorepo-wide doc)?" Each entry must be a **bare filename that is a direct child of `workspace_root`** — no `/` or `\` path separators, no `.`/`..`, no leading `/` or `~`, and it must not name (or resolve through a symlink into) a nested git repo's directory; if the user offers a nested path, ask them to name the file itself instead, since a nested path will be silently dropped later (see Step 4 item 10's entry contract). A repo scan is: list files directly under `workspace_root` that are not inside any single project/package directory and are not already part of this skill's own emitted set (Step 2). Record the confirmed list as `shared_root_files` (may be empty).
 
 Carry `workspace_root` and `shared_root_files` forward into Step 2 and Step 4.
 
@@ -259,8 +270,11 @@ Write eligible files in this exact order so that cross-references resolve correc
 9. **`.gitignore` audit** — confirm `CLAUDE.md` and `.claude/` remain ignored; do not add new ignores for `AGENTS.md`, `AI.md`, `TESTS.md`, `docs/ai/**`, or `tools/scripts/**`
 10. **Workspace-root allowlist — `{workspace_root}/.craftflow-workspace.json`** — Always write or verify this file, regardless of repo shape (this is independent of Steps 1–9; `workspace_root` may differ from the project root written into in Steps 1–9, per Step 0):
     - If it does not exist: write `{"writable_paths": [<shared_root_files from Step 0, or [] if none were named>]}`.
-    - If it already exists: read it, then append any newly-identified `shared_root_files` entries not already present (dedup by exact string match); never remove existing entries; never overwrite the whole file wholesale.
-    - **Entry contract** (must match `read_workspace_writable_paths()` in `craftflow_resolve_workspace_root.py` exactly, or the entry is silently dropped by that validator): each entry is the bare filename of a direct child of `workspace_root` only — no path separators (`/` or `\`), no `.` or `..`, no leading `/` or `~` (no absolute paths, no home-dir expansion), and it must not resolve — including through a symlink — into a nested git repo's directory. When unsure, use the shortest exact filename rather than a path.
+    - If it already exists: read it, then append any newly-identified `shared_root_files` entries not already present (dedup by exact string match; validated per the entry contract below); never remove existing entries; never overwrite the whole file wholesale.
+    - **Entry contract** (must match `read_workspace_writable_paths()` in `craftflow_resolve_workspace_root.py` exactly, or the entry is silently dropped by that validator — two separate checks apply, both must pass):
+      1. The entry, resolved against `workspace_root` (following any symlink), must land as a **literal direct child of `workspace_root`** — i.e. its resolved parent directory must be `workspace_root` itself. An entry whose resolved path escapes `workspace_root` entirely (e.g. a symlink pointing anywhere outside it) is dropped with reason `resolves_outside_workspace_root`, regardless of whether the escape target happens to be a nested repo.
+      2. Additionally, the resolved entry must not equal, or be nested inside, any nested git repo's directory under `workspace_root` — dropped with reason `resolves_inside_nested_repo` if it does.
+      Syntactically, each entry is also the bare filename of a direct child only — no path separators (`/` or `\`), no `.` or `..`, no leading `/` or `~` (no absolute paths, no home-dir expansion). When unsure, use the shortest exact filename rather than a path.
 
 ### Built-in rules enforced during Apply
 
@@ -326,15 +340,27 @@ bad = [f['id'] for f in data.get('features', []) if f.get('status') == 'done' an
 if bad: sys.exit('ERROR: done features with empty evidence: ' + str(bad))
 print('evidence gate: OK')
 "
+
+# 9. Verify {workspace_root}/.craftflow-workspace.json — read it back (or re-run the
+# resolver script) and confirm shared_root_files from Step 0 were actually persisted
+python3 -c "
+import json, sys
+path = '{workspace_root}/.craftflow-workspace.json'
+data = json.load(open(path))
+paths = data.get('writable_paths', [])
+if not isinstance(paths, list):
+    sys.exit('ERROR: writable_paths is not a list in ' + path)
+print('workspace allowlist: OK (' + str(len(paths)) + ' entries)')
+"
 ```
 
-A passing run shows: `AGENTS.md lint passed`, `AI contract pack lint passed`, build exit 0, test exit 0, `CLAUDE.md` reported ignored, the new files appearing as untracked (not ignored), `init.sh is executable`, and `feature_list.json is valid JSON`.
+A passing run shows: `AGENTS.md lint passed`, `AI contract pack lint passed`, build exit 0, test exit 0, `CLAUDE.md` reported ignored, the new files appearing as untracked (not ignored), `init.sh is executable`, `feature_list.json is valid JSON`, and `workspace allowlist: OK`. If the resolver script from Step 0 reported any `workspace_writable_paths_dropped` entries (or if re-running the resolver script here surfaces any), surface them verbatim in the Step 6 report under Manual follow-ups — a dropped entry means a `shared_root_files` answer was silently rejected and the user must re-supply it as a bare filename.
 
 ---
 
 ## Step 6 — Report
 
-Emit a summary with three sections:
+Emit a summary with the following four sections: **Files created**, **Files skipped (already present)**, **Manual follow-ups**, and **Craftflow workspace guards**.
 
 **Files created** — one line per file with path and brief purpose (only files that were actually written).
 
@@ -383,75 +409,75 @@ After completing the report, score the produced setup against the 5-subsystem ru
 
 ## Reference Disclosure
 
-This skill reads asset files from `~/.claude/skills/ai-first-setup/` when executing. Load them as needed during Steps 2–7:
+This skill reads asset files using skill-relative paths (the same convention used throughout Steps 2, 4, and 8 — e.g. `assets/charter/AI_FIRST.md.tpl`, with no home-directory or installed-skill-path prefix). Load them as needed during Steps 2–7:
 
 ### references/
-- `~/.claude/skills/ai-first-setup/references/playbook-summary.md` — condensed sections 0–11 of the AI-first setup playbook; decisions and ordering rationale
-- `~/.claude/skills/ai-first-setup/references/adaptation-cheatsheet.md` — per-shape variations and no-Nx adaptation rules
-- `~/.claude/skills/ai-first-setup/references/agents-md-validation.md` — required sections, 8 KB cap, forbidden pattern list, subfolder-override contract
-- `~/.claude/skills/ai-first-setup/references/ai-context-pack.md` — structure and rules for `AI.md`, `TESTS.md`, and optional `DESIGN.md` per project
-- `~/.claude/skills/ai-first-setup/references/enforcement-and-husky.md` — how validator scripts work, Husky wiring, pre-commit snippet
-- `~/.claude/skills/ai-first-setup/references/ci-workflow-templates.md` — GitHub Actions YAML reference for all three CI files
-- `~/.claude/skills/ai-first-setup/references/harness-engineering.md` — 5-subsystem harness model, failure catalog, evaluation rubric; load for Step 7 self-evaluation
-- `~/.claude/skills/ai-first-setup/references/harness-invocation-prompts.md` — copy-paste prompts for Evaluate/Answer/Diagnose modes
+- `references/playbook-summary.md` — condensed sections 0–11 of the AI-first setup playbook; decisions and ordering rationale
+- `references/adaptation-cheatsheet.md` — per-shape variations and no-Nx adaptation rules
+- `references/agents-md-validation.md` — required sections, 8 KB cap, forbidden pattern list, subfolder-override contract
+- `references/ai-context-pack.md` — structure and rules for `AI.md`, `TESTS.md`, and optional `DESIGN.md` per project
+- `references/enforcement-and-husky.md` — how validator scripts work, Husky wiring, pre-commit snippet
+- `references/ci-workflow-templates.md` — GitHub Actions YAML reference for all three CI files
+- `references/harness-engineering.md` — 5-subsystem harness model, failure catalog, evaluation rubric; load for Step 7 self-evaluation
+- `references/harness-invocation-prompts.md` — copy-paste prompts for Evaluate/Answer/Diagnose modes
 
 ### assets/charter/
-- `~/.claude/skills/ai-first-setup/assets/charter/AI_FIRST.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/charter/AGENTS.root.md.tpl`
+- `assets/charter/AI_FIRST.md.tpl`
+- `assets/charter/AGENTS.root.md.tpl`
 
 ### assets/governance/
-- `~/.claude/skills/ai-first-setup/assets/governance/WAY_OF_WORK.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/governance/DESIGN.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/governance/SECURITY.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/governance/TESTING.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/governance/QUALITY.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/governance/OBSERVABILITY.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/governance/PROMPTS.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/governance/GLOSSARY.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/governance/RELEASE.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/governance/specs/template.md`
-- `~/.claude/skills/ai-first-setup/assets/governance/rfcs/template.md`
-- `~/.claude/skills/ai-first-setup/assets/governance/decisions/0001-template.md`
+- `assets/governance/WAY_OF_WORK.md.tpl`
+- `assets/governance/DESIGN.md.tpl`
+- `assets/governance/SECURITY.md.tpl`
+- `assets/governance/TESTING.md.tpl`
+- `assets/governance/QUALITY.md.tpl`
+- `assets/governance/OBSERVABILITY.md.tpl`
+- `assets/governance/PROMPTS.md.tpl`
+- `assets/governance/GLOSSARY.md.tpl`
+- `assets/governance/RELEASE.md.tpl`
+- `assets/governance/specs/template.md`
+- `assets/governance/rfcs/template.md`
+- `assets/governance/decisions/0001-template.md`
 
 ### assets/context-pack/
-- `~/.claude/skills/ai-first-setup/assets/context-pack/AGENTS.project.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/context-pack/AI.service.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/context-pack/AI.frontend.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/context-pack/TESTS.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/context-pack/DESIGN.md.tpl`
+- `assets/context-pack/AGENTS.project.md.tpl`
+- `assets/context-pack/AI.service.md.tpl`
+- `assets/context-pack/AI.frontend.md.tpl`
+- `assets/context-pack/TESTS.md.tpl`
+- `assets/context-pack/DESIGN.md.tpl`
 
 ### assets/config/
-- `~/.claude/skills/ai-first-setup/assets/config/project-config.json.tpl`
-- `~/.claude/skills/ai-first-setup/assets/config/agents-md-validator.json.tpl`
-- `~/.claude/skills/ai-first-setup/assets/config/pull_request_template.md.tpl`
+- `assets/config/project-config.json.tpl`
+- `assets/config/agents-md-validator.json.tpl`
+- `assets/config/pull_request_template.md.tpl`
 
 ### assets/tools/
-- `~/.claude/skills/ai-first-setup/assets/tools/agents-md-lint.js`
-- `~/.claude/skills/ai-first-setup/assets/tools/ai-contract-pack-lint.js`
-- `~/.claude/skills/ai-first-setup/assets/tools/agents-md-lint.sh`
-- `~/.claude/skills/ai-first-setup/assets/tools/ai-contract-pack-lint.sh`
+- `assets/tools/agents-md-lint.js`
+- `assets/tools/ai-contract-pack-lint.js`
+- `assets/tools/agents-md-lint.sh`
+- `assets/tools/ai-contract-pack-lint.sh`
 
 ### assets/ci/
-- `~/.claude/skills/ai-first-setup/assets/ci/agents-md-validate.yml.tpl`
-- `~/.claude/skills/ai-first-setup/assets/ci/docs-coverage.yml.tpl`
-- `~/.claude/skills/ai-first-setup/assets/ci/agents-md-validate.sh.yml.tpl`
-- `~/.claude/skills/ai-first-setup/assets/ci/docs-coverage.sh.yml.tpl`
-- `~/.claude/skills/ai-first-setup/assets/ci/ai-checks.nx.yml.tpl`
-- `~/.claude/skills/ai-first-setup/assets/ci/ai-checks.generic.yml.tpl`
+- `assets/ci/agents-md-validate.yml.tpl`
+- `assets/ci/docs-coverage.yml.tpl`
+- `assets/ci/agents-md-validate.sh.yml.tpl`
+- `assets/ci/docs-coverage.sh.yml.tpl`
+- `assets/ci/ai-checks.nx.yml.tpl`
+- `assets/ci/ai-checks.generic.yml.tpl`
 
 ### assets/husky/
-- `~/.claude/skills/ai-first-setup/assets/husky/pre-commit-snippet`
+- `assets/husky/pre-commit-snippet`
 
 ### assets/hooks/
-- `~/.claude/skills/ai-first-setup/assets/hooks/pre-commit-nonjs`
+- `assets/hooks/pre-commit-nonjs`
 
 ### assets/lifecycle/
-- `~/.claude/skills/ai-first-setup/assets/lifecycle/init.sh.tpl`
-- `~/.claude/skills/ai-first-setup/assets/lifecycle/session-handoff.md.tpl`
-- `~/.claude/skills/ai-first-setup/assets/lifecycle/clean-state-checklist.md.tpl`
+- `assets/lifecycle/init.sh.tpl`
+- `assets/lifecycle/session-handoff.md.tpl`
+- `assets/lifecycle/clean-state-checklist.md.tpl`
 
 ### assets/state/
-- `~/.claude/skills/ai-first-setup/assets/state/progress.md.tpl`
+- `assets/state/progress.md.tpl`
 
 ### assets/scope/
-- `~/.claude/skills/ai-first-setup/assets/scope/feature_list.json.tpl`
+- `assets/scope/feature_list.json.tpl`
