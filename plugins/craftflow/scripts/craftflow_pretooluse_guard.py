@@ -1023,6 +1023,53 @@ def _python_suspicious_mechanism_targets(command: str, protected_paths: set, cwd
     return list(hits)
 
 
+def _memory_write_permit_workflow_uuid(path: Path) -> str | None:
+    """Return the workflow_uuid the memory-finalize permit must match for
+    `path` to be treated as lifted, or None when presence of a valid
+    permit alone is sufficient (path is not owned by a single workflow).
+
+    ROOT-CAUSE FIX (2026-08-19 DEBUG workflow, live-reproduced): the
+    permit-lift check used to validate the permit's own stored content
+    against `wf_uuid` sourced from `latest_live_workflow_payload()` -- the
+    mtime-latest LIVE workflow artifact on disk. That is a heuristic for
+    "which workflow is probably active for THIS hook invocation", not
+    "which workflow was the memory-finalize permit actually issued for".
+    In a real multi-workflow session it is entirely ordinary for a SECOND,
+    unrelated, still-live workflow (e.g. a concurrent DEBUG workflow with
+    no worktree, which is always "live") to touch its own JSON artifact
+    AFTER the permit was written for an EARLIER workflow that is
+    mid-memory-finalization -- making the unrelated workflow "latest" by
+    mtime even though it has nothing to do with the write in flight.
+    Comparing the permit's real, correct value against that wrong
+    workflow's uuid always failed, denying a write that held a perfectly
+    valid permit for its own target.
+
+    Fix: trust the permit file's own stored value as ground truth, and
+    derive the uuid to validate it against from the TARGET PATH itself,
+    never from a "latest workflow" heuristic:
+
+      - Workflow-scoped memory files (`workflows/{wf}/activeContext.md`
+        etc.) are owned by exactly one workflow -- the permit must match
+        that path's own `{wf}` directory segment exactly. This keeps
+        protection scoped per workflow (a permit issued for workflow A
+        must still correctly deny a write to workflow B's memory file --
+        see the negative-control regression test).
+      - Project-tier (`project/*.md`) and root-flat-fallback
+        (`state_root()/*.md`) memory files are not owned by any single
+        workflow -- any currently valid permit (uuid check skipped,
+        presence alone via `has_memory_finalize_permit(None)`) is
+        sufficient, matching this permit's pre-existing, documented design
+        intent for those tiers.
+    """
+    try:
+        wf_dir = workflows_dir().resolve()
+        if path.parent.parent == wf_dir:
+            return path.parent.name
+    except Exception:
+        pass
+    return None
+
+
 # Per-violation-type deny explanations for `_handle_edit_write`'s
 # unconditional-violation block (misleading-deny-message fix): the four
 # unconditional violation types are independent and semantically unrelated
@@ -1200,8 +1247,14 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
         return 0
 
     # Router-owned memory finalization: permit token lifts the block for the
-    # active workflow so the router can write memory files inline.
-    if "memory-write" in violations and has_memory_finalize_permit(wf_uuid):
+    # active workflow so the router can write memory files inline. The uuid
+    # validated against the permit is derived from the TARGET PATH itself
+    # (see `_memory_write_permit_workflow_uuid()`), not from `wf_uuid`
+    # (a "latest live workflow" heuristic that is unrelated to which
+    # workflow the permit was actually issued for -- see that helper's
+    # docstring for the live-reproduced bug this replaced).
+    memory_write_permit_uuid = _memory_write_permit_workflow_uuid(path)
+    if "memory-write" in violations and has_memory_finalize_permit(memory_write_permit_uuid):
         # Item B fix: the finalize permit means this write IS proceeding --
         # treat it as an allow for escalation-reset purposes too.
         clear_denial(data.get("session_id"), str(path))

@@ -1081,6 +1081,162 @@ def test_pretooluse_guard_allows_memory_write_with_permit(tmp_dir: Path) -> None
     ok(name)
 
 
+def test_pretooluse_guard_allows_workflow_scoped_memory_write_when_newer_unrelated_workflow_exists(
+    tmp_dir: Path,
+) -> None:
+    # Root-cause regression (2026-08-19 DEBUG workflow, live-reproduced):
+    # the permit-lift check at `_handle_edit_write()` used to compare the
+    # permit file's own stored content against `wf_uuid` sourced from
+    # `latest_live_workflow_payload()` -- the mtime-latest LIVE workflow
+    # artifact on disk, NOT the workflow the permit was actually issued
+    # for. In a real multi-workflow session, a second, unrelated workflow
+    # (e.g. a DEBUG workflow with no worktree, always "live") routinely
+    # touches its own JSON artifact AFTER the permit was written for a
+    # DIFFERENT, earlier workflow that is mid-memory-finalization -- making
+    # that unrelated workflow "latest" by mtime even though it has nothing
+    # to do with the write in flight. `has_memory_finalize_permit(wf_uuid)`
+    # then compared the permit's real value against the WRONG workflow's
+    # uuid and always returned False, denying a write that held a
+    # perfectly valid permit. The fix must derive the uuid to validate
+    # against a workflow-scoped target from the target PATH's own
+    # `workflows/{wf}/` segment, never from a "latest workflow" heuristic.
+    name = "pretooluse-guard/allows-workflow-scoped-memory-write-with-newer-unrelated-workflow"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    state = tmp_dir / ".craftflow" / "state"
+    state.mkdir(parents=True)
+    permitted_wf_uuid = "wf-delete-duplicate-claude-skills-a-20260819-061236-4c389a0d"
+    (state / ".memory-finalize").write_text(permitted_wf_uuid, encoding="utf-8")
+
+    wf_dir = state / "workflows"
+    wf_dir.mkdir(parents=True)
+    # The workflow the permit was actually issued for -- written FIRST.
+    (wf_dir / f"{permitted_wf_uuid}.json").write_text(
+        f'{{"workflow_uuid":"{permitted_wf_uuid}"}}', encoding="utf-8"
+    )
+    # A second, unrelated, main-tree-only (worktree_path=None, always
+    # "live") workflow, written AFTER -- so it is the mtime-latest live
+    # candidate, exactly like a concurrent DEBUG workflow in the same
+    # session.
+    unrelated_wf_uuid = "wf-debug-memory-write-permit-lift-p-20260819-104706-0fce4897"
+    (wf_dir / f"{unrelated_wf_uuid}.json").write_text(
+        f'{{"workflow_uuid":"{unrelated_wf_uuid}","worktree_path":null}}', encoding="utf-8"
+    )
+
+    permitted_wf_memory_dir = wf_dir / permitted_wf_uuid
+    permitted_wf_memory_dir.mkdir(parents=True)
+    target = permitted_wf_memory_dir / "activeContext.md"
+    target.write_text("# Active Context\n", encoding="utf-8")
+
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(tmp_dir),
+        "tool_input": {"file_path": str(target), "content": "# updated\n"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(
+            name,
+            f"guard blocked a workflow-scoped write with a valid permit for that exact "
+            f"workflow, just because a newer, unrelated live workflow existed; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_workflow_scoped_memory_write_with_permit_for_different_workflow(
+    tmp_dir: Path,
+) -> None:
+    # Negative control (critical -- must not widen protection scope while
+    # fixing the false-deny above): a permit that is valid, but for a
+    # DIFFERENT workflow than the one whose memory file is being written,
+    # must still correctly DENY -- lifting must stay scoped per workflow
+    # for workflow-scoped paths, not become "any live permit authorizes
+    # any workflow's memory file."
+    name = "pretooluse-guard/denies-workflow-scoped-memory-write-with-permit-for-different-workflow"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    state = tmp_dir / ".craftflow" / "state"
+    state.mkdir(parents=True)
+    permitted_wf_uuid = "wf-some-other-workflow-1234"
+    (state / ".memory-finalize").write_text(permitted_wf_uuid, encoding="utf-8")
+
+    wf_dir = state / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / f"{permitted_wf_uuid}.json").write_text(
+        f'{{"workflow_uuid":"{permitted_wf_uuid}"}}', encoding="utf-8"
+    )
+
+    target_wf_uuid = "wf-target-workflow-5678"
+    (wf_dir / f"{target_wf_uuid}.json").write_text(
+        f'{{"workflow_uuid":"{target_wf_uuid}"}}', encoding="utf-8"
+    )
+    target_wf_memory_dir = wf_dir / target_wf_uuid
+    target_wf_memory_dir.mkdir(parents=True)
+    target = target_wf_memory_dir / "activeContext.md"
+    target.write_text("# Active Context\n", encoding="utf-8")
+
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(tmp_dir),
+        "tool_input": {"file_path": str(target), "content": "# updated\n"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            f"expected deny: permit is valid for a DIFFERENT workflow than the one "
+            f"whose memory file this write targets; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_project_tier_memory_write_when_newer_unrelated_workflow_exists(
+    tmp_dir: Path,
+) -> None:
+    # Variant (c): the SAME permit must also lift the block for a
+    # project-tier memory file (`.craftflow/state/project/*.md`), which is
+    # not owned by any single workflow -- unlike the workflow-scoped case
+    # above, presence of a valid permit alone (no path-derived workflow
+    # uuid to compare against) is sufficient, and must not regress just
+    # because a newer, unrelated live workflow also exists on disk.
+    name = "pretooluse-guard/allows-project-tier-memory-write-with-newer-unrelated-workflow"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    state = tmp_dir / ".craftflow" / "state"
+    state.mkdir(parents=True)
+    permitted_wf_uuid = "wf-delete-duplicate-claude-skills-a-20260819-061236-4c389a0d"
+    (state / ".memory-finalize").write_text(permitted_wf_uuid, encoding="utf-8")
+
+    wf_dir = state / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / f"{permitted_wf_uuid}.json").write_text(
+        f'{{"workflow_uuid":"{permitted_wf_uuid}"}}', encoding="utf-8"
+    )
+    unrelated_wf_uuid = "wf-debug-memory-write-permit-lift-p-20260819-104706-0fce4897"
+    (wf_dir / f"{unrelated_wf_uuid}.json").write_text(
+        f'{{"workflow_uuid":"{unrelated_wf_uuid}","worktree_path":null}}', encoding="utf-8"
+    )
+
+    project_dir = state / "project"
+    project_dir.mkdir(parents=True)
+    target = project_dir / "patterns.md"
+    target.write_text("# Project Patterns\n", encoding="utf-8")
+
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(tmp_dir),
+        "tool_input": {"file_path": str(target), "content": "# updated\n"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(
+            name,
+            f"guard blocked a project-tier write with a valid permit, just because a "
+            f"newer, unrelated live workflow existed; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # Phase 4: pretooluse_guard.py protected-path extension, Bash-write
 # inspection, Edit/Write worktree confinement, hooks.json Bash registration.
@@ -16224,6 +16380,9 @@ def main() -> int:
         print("[ pretooluse-guard ]")
         test_pretooluse_guard_blocks_memory_write_without_permit(tmp / "g1")
         test_pretooluse_guard_allows_memory_write_with_permit(tmp / "g2")
+        test_pretooluse_guard_allows_workflow_scoped_memory_write_when_newer_unrelated_workflow_exists(tmp / "g2b")
+        test_pretooluse_guard_denies_workflow_scoped_memory_write_with_permit_for_different_workflow(tmp / "g2c")
+        test_pretooluse_guard_allows_project_tier_memory_write_when_newer_unrelated_workflow_exists(tmp / "g2d")
 
         print()
         print("[ pretooluse-guard: Phase 4 protected-path + Bash-write inspection + confinement ]")
