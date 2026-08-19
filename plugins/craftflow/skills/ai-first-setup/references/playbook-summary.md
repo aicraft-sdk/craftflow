@@ -26,8 +26,8 @@ Create `docs/ai/` with these files:
 | `TESTING.md` | TDD contract: RED→GREEN→REFACTOR; test layers; commands |
 | `QUALITY.md` | Size limits, type safety, import boundaries |
 | `OBSERVABILITY.md` | Logging patterns, redaction, correlation IDs |
-| `PROMPTS.md` | AIDLC usage, skills/CLI, practical flow |
-| `GLOSSARY.md` | Project-specific terms, AIDLC concepts |
+| `PROMPTS.md` | Craftflow usage, entry point (`craftflow:craftflow-router`), practical flow |
+| `GLOSSARY.md` | Project-specific terms, craftflow concepts |
 | `RELEASE.md` | Conventional commits, PR title conventions, changelog policy |
 
 Also create subdirectories with starter templates:
@@ -43,7 +43,7 @@ Also create subdirectories with starter templates:
 
 Ten non-negotiable principles. Generic version:
 1. Spec before code (feature spec in `docs/ai/specs/` before implementation)
-2. Plan before build (AIDLC router produces `docs/plans/*.md`)
+2. Plan before build (craftflow router produces `docs/plans/*.md`)
 3. TDD (RED → GREEN → REFACTOR)
 4. Smallest step (one phase at a time; valid CONTRACT envelope where required)
 5. Evidence before claim (paste test/verifier output in PR)
@@ -94,7 +94,7 @@ For each project (or for the repo root in single-app shape):
 
 | File | Purpose |
 |---|---|
-| `project-config.json` | Project identity, tech stack, `resources.sets: ["aidlc"]` |
+| `project-config.json` | Project identity, tech stack, `resources.skills`/`resources.rules` |
 | `.agents-md-validator.json` | Validator config: `maxSizeBytes`, `requiredSections`, `forbiddenPatterns`, `aiContractPack` |
 | `.github/pull_request_template.md` | Mandatory PR sections: Spec, Plan, Verification |
 
@@ -116,14 +116,10 @@ The playbook defines Nx workspace generators for scaffolding new projects. This 
 
 ---
 
-## §8 — AIDLC anchors
+## §8 — Craftflow memory anchors
 
-Write minimal memory seeds to `.cursor/aidlc/v10/`:
-- `activeContext.md` — `AUTO_PROCEED: false`, empty Current Focus
-- `patterns.md` — empty User Standards, Code Conventions, Common Gotchas
-- `progress.md` — `Current Workflow: BUILD`, empty Tasks
+Craftflow memory lives under `.craftflow/state/project/` (`activeContext.md`, `patterns.md`, `progress.md`). These files are created and maintained by craftflow's own router/memory-finalize mechanism (see `craftflow-router/SKILL.md` § 13) — do not hand-author or seed them from this setup skill.
 
-If `.cursor/` appears in `.gitignore`, add narrow negation `!.cursor/aidlc/` before writing.
 `CLAUDE.md` and `.claude/` are NEVER un-ignored.
 
 ---

@@ -191,7 +191,6 @@ Always leave existing entries untouched. Rules:
 |---|---|
 | `CLAUDE.md` | Leave ignored; do NOT remove |
 | `.claude/` | Leave ignored; do NOT remove |
-| `.cursor/` | If present: add `!.cursor/aidlc/` negation before writing AIDLC anchors |
 | `AGENTS.md`, `AI.md`, `TESTS.md`, `docs/ai/**` | These must be TRACKED — do NOT add them to `.gitignore` |
 | `tools/scripts/**` | Must be tracked — do NOT add to `.gitignore` |
 

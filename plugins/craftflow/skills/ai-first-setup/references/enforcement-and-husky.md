@@ -155,23 +155,6 @@ chmod +x tools/scripts/postinstall-ai-resources.sh
 
 ---
 
-## `bcai-postinstall.sh` — BioCatch-internal AIDLC sync (optional)
-
-`bcai-postinstall.sh` (`assets/tools/bcai-postinstall.sh`) wraps `@bcai/ai-resources-cli` for AIDLC project sync. It is **not emitted by default**. To enable it for a BioCatch project:
-
-1. Replace `tools/scripts/postinstall-ai-resources.sh` with `bcai-postinstall.sh`.
-2. Obtain `@bcai` npm registry scope credentials.
-3. Configure your `.npmrc` with the `@bcai:registry` entry.
-
-Outside BioCatch, this file is irrelevant — leave `postinstall-ai-resources.sh` as the generic stub.
-
-Key properties of `bcai-postinstall.sh`:
-- `set -e` but uses `|| true` on CLI calls so non-zero CLI exit does not abort
-- The outer `if npx --yes @bcai/ai-resources-cli --version` check is silent; returns false if `@bcai` is unreachable
-- Always exits 0 when the registry is unavailable (safe as a `postinstall` script)
-
----
-
 ## CI enforcement
 
 The CI workflows run the same scripts as the pre-commit hook, ensuring violations are caught even if the hook is bypassed locally.

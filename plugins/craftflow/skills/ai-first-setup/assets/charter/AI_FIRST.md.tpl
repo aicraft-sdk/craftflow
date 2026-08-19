@@ -3,7 +3,7 @@
 Non-negotiable principles for AI-assisted work in this repository.
 
 1. **Spec before code** — No implementation without a linked feature spec under `docs/ai/specs/` ({{TICKET_PREFIX}}-ticket id in front matter, or a slug when no ticketing system is used).
-2. **Plan before build** — The AIDLC router produces `docs/plans/*.md`; follow the plan phases and gates.
+2. **Plan before build** — The craftflow router produces `docs/plans/*.md`; follow the plan phases and gates.
 3. **TDD** — RED → GREEN → REFACTOR; see [docs/ai/TESTING.md](docs/ai/TESTING.md).
 4. **Smallest step** — One phase at a time; agent output must include a valid CONTRACT envelope where the workflow requires it.
 5. **Evidence before claim** — Paste verifier / test command output in the PR; do not assert "passing" without proof.

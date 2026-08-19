@@ -1,6 +1,6 @@
 # Way of work (AI-first delivery)
 
-Hybrid flow: **human intent in markdown specs** + **AIDLC orchestration** (router → planner → builder → reviewer / silent-failure-hunter → integration-verifier → memory).
+Hybrid flow: **human intent in markdown specs** + **Craftflow orchestration** (router → planner → builder → reviewer / silent-failure-hunter → integration-verifier → memory).
 
 ## 1. Intake
 
@@ -10,7 +10,7 @@ Hybrid flow: **human intent in markdown specs** + **AIDLC orchestration** (route
 ## 2. Plan
 
 - Router produces `docs/plans/<slug>.md` when planning is required.
-- **Open decisions** in the plan must be empty or explicitly approved before implementation (AIDLC `plan_trust_gate`).
+- **Open decisions** in the plan must be empty or explicitly approved before implementation (craftflow's `plan_trust_gate`).
 
 ## 3. Build
 
@@ -20,7 +20,7 @@ Hybrid flow: **human intent in markdown specs** + **AIDLC orchestration** (route
 
 ## 4. Review & verify
 
-- Complete AIDLC review + verification chain for the workflow.
+- Complete craftflow's review + verification chain for the workflow.
 - Paste evidence (commands + outcomes) in the PR body; no "done" without proof.
 
 ## 5. Release
@@ -28,9 +28,9 @@ Hybrid flow: **human intent in markdown specs** + **AIDLC orchestration** (route
 - Conventional commits with mandatory scope; PR title includes {{TICKET_PREFIX}}- reference when applicable ([RELEASE.md](./RELEASE.md)).
 - Update changelog when required by repo policy.
 
-## Session settings (AIDLC)
+## Session settings (Craftflow)
 
-- Memory lives under `.cursor/aidlc/v10/` (`activeContext.md`, `patterns.md`, `progress.md`).
+- Memory lives under `.craftflow/state/project/` (`activeContext.md`, `patterns.md`, `progress.md`), shared by Claude Code and any connected editor integration.
 - Default: `AUTO_PROCEED: false` in `activeContext.md` — explicit user approval between risky steps unless changed deliberately.
 
 ## Branch naming (suggested)
@@ -45,6 +45,6 @@ Hybrid flow: **human intent in markdown specs** + **AIDLC orchestration** (route
 | Artifact        | Owner (default)      |
 |----------------|----------------------|
 | Feature spec   | Author / PM          |
-| Plan           | AIDLC planner        |
+| Plan           | craftflow planner     |
 | Code + tests   | Builder (AI) + human review |
 | Security notes | Author + reviewer    |

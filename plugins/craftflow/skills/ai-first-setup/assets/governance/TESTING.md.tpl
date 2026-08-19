@@ -27,7 +27,7 @@
 
 - Aim for meaningful coverage of new code paths; follow team thresholds per project type when defined in CI.
 
-## AIDLC
+## Craftflow
 
-- Skills under the AIDLC set define the detailed TDD contract when using AIDLC orchestration.
-- See [docs/ai/PROMPTS.md](./PROMPTS.md) for how to invoke the test-driven-development skill.
+- The `component-builder` agent's own contract enforces the RED → GREEN → REFACTOR cycle above when using craftflow orchestration.
+- See [docs/ai/PROMPTS.md](./PROMPTS.md) for how to invoke the craftflow router that dispatches to it.

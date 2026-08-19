@@ -1,18 +1,14 @@
-# Prompts and AIDLC usage
+# Prompts and craftflow usage
 
-## Skills and CLI
+## Skills and entry point
 
-- Development workflows are driven by skills, rules, and commands installed via the AI resources CLI (see `project-config.json`).
-- The **`aidlc`** set is declared in `project-config.json`. After clone, run (with registry auth for the `@bcai` scope if applicable):
-  ```
-  npx --yes @bcai/ai-resources-cli set install aidlc --no-open
-  ```
-  then run `{{INSTALL_CMD}}` (the postinstall wrapper runs project sync / ensure). Commit any updated lock artifacts the CLI produces.
-- If `@bcai/ai-resources-cli` is not available (registry not configured), the `postinstall-ai-resources.sh` wrapper exits 0 and prints a hint.
+- Development workflows are driven by **craftflow**, a Claude Code plugin. If craftflow is running, it is already installed — there is no separate package install step.
+- The entry skill is `craftflow:craftflow-router`. It is always-on: invoke it first on any development task (build, plan, debug, review). See the repository's root `CLAUDE.md` for the always-on directive.
+- The router dispatches to craftflow's own pipeline of skills/agents (planner, component-builder, code-reviewer, silent-failure-hunter, integration-verifier, memory) — no external CLI or registry is involved.
 
 ## Router
 
-- The AIDLC entry skill is the `cc10x-router` (or equivalent AI resources router skill installed in your editor/CLI).
+- The entry skill is `craftflow:craftflow-router` (or the equivalent always-on router rule installed in your editor — e.g. Cursor's `cursor-router`).
 - Use it for build / plan / debug / review routing.
 
 ## Practical flow in this repo
@@ -22,6 +18,7 @@
 3. Implement with TDD; run `{{TEST_CMD}}` (and other targets your plan lists).
 4. Put **Spec:** and **Plan:** links plus verification output in the PR ([pull request template](../../.github/pull_request_template.md)).
 
-## Commands from the `aidlc` set
+## Craftflow memory
 
-Use whatever slash-commands or agent prompts the installed `aidlc` set provides; this file intentionally does not duplicate them (they ship with the set and may vary by version).
+- Craftflow persists session memory under `.craftflow/state/` (`activeContext.md`, `patterns.md`, `progress.md`), shared across Claude Code and any connected editor integration.
+- These files are created and maintained by the router/workflow finalizer — do not hand-author them.

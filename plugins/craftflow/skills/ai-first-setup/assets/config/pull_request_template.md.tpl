@@ -9,7 +9,7 @@ Spec: `docs/ai/specs/{{TICKET_OR_SLUG}}.md`
 
 ## Plan
 
-<!-- Link to the AIDLC plan under docs/plans/ -->
+<!-- Link to the craftflow-generated plan under docs/plans/ -->
 Plan: `docs/plans/{{SLUG}}.md`
 
 ## Changes

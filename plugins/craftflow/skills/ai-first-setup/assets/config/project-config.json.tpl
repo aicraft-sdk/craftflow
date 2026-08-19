@@ -15,7 +15,6 @@
     "packageManager": "{{PACKAGE_MANAGER}}"
   },
   "resources": {
-    "sets": ["aidlc"],
     "skills": [],
     "rules": []
   },
