@@ -23,6 +23,8 @@ from craftflow_memory_merge import (
     apply_cap,
     merge_section_anchored,
     _normalize_notes,
+    _reconstruct_section,
+    extract_bullets,
 )
 
 PASS = 0
@@ -532,6 +534,44 @@ check(
     "_normalize_notes is called exactly once on the section-anchored path (no double-normalization)",
     len(_normalize_calls),
     1,
+)
+
+# --- _reconstruct_section (legacy section_text path): dormant relocation bug ---
+print("\n[_reconstruct_section (legacy path): trailing sentinel must never relocate]")
+section_text_legacy = (
+    "- old gotcha (conf: 0.8)\n"
+    "## Last Updated\n"
+    "\n"
+    "2026-07-31 (sentinel — must never move)"
+)
+merged_legacy = merge_bullet(
+    extract_bullets(section_text_legacy), "new gotcha", 0.9
+)
+result = _reconstruct_section(section_text_legacy, merged_legacy, legacy_safe=True)
+expected_legacy = (
+    "- old gotcha (conf: 0.8)\n"
+    "- new gotcha (conf: 0.9)\n"
+    "## Last Updated\n"
+    "\n"
+    "2026-07-31 (sentinel — must never move)"
+)
+check(
+    "legacy _reconstruct_section never relocates the sentinel line past the bullet block",
+    result,
+    expected_legacy,
+)
+
+section_text_no_bullets = "## Last Updated\n\n2026-07-31 (no bullets yet)"
+result = _reconstruct_section(
+    section_text_no_bullets, ["- first note (conf: 0.9)"], legacy_safe=True
+)
+expected_no_bullets = (
+    "## Last Updated\n\n2026-07-31 (no bullets yet)\n- first note (conf: 0.9)"
+)
+check(
+    "legacy _reconstruct_section appends at end when no existing bullet run",
+    result,
+    expected_no_bullets,
 )
 
 # --- Summary ---

@@ -31,7 +31,11 @@ kept working for callers that have not yet migrated to section-anchored):
       "retractions": ["old note to remove"],
       "max_bullets": 60
     }
-    Output (stdout): merged section_text string.
+    Output (stdout): merged section_text string. Only the contiguous run of
+    existing bullet lines is replaced in place; every other line in
+    section_text — including anything before or after that bullet run —
+    is preserved exactly where it was, even if section_text is an
+    over-wide span containing content beyond the intended section.
 
 "max_bullets" is optional in both modes; when present, the bullet list is
 capped post-merge with oldest-first eviction.
@@ -213,17 +217,45 @@ def apply_retractions(section_body: str, retractions: list) -> str:
     return result.strip()
 
 
-def _reconstruct_section(section_text: str, merged_bullets: list) -> str:
+def _reconstruct_section(
+    section_text: str, merged_bullets: list, legacy_safe: bool = False
+) -> str:
     """
-    Replace the bullet lines in section_text with merged_bullets,
-    preserving non-bullet lines in order.
+    Replace the bullet lines in section_text with merged_bullets.
+
+    legacy_safe=False (default): preserves the historical behavior used by
+    the section-anchored path (via _merge_notes_into_body) — non-bullet
+    lines are hoisted above the bullet block. _find_section_span already
+    bounds section-anchored input so no heading ever ends up inside
+    section_text here; kept as-is to avoid changing anchored-mode output.
+
+    legacy_safe=True: used by the legacy section_text CLI mode, where the
+    caller may hand over an over-wide span containing lines that must never
+    move. Replaces just the contiguous run of existing bullet lines with
+    merged_bullets, in place — every other line, including anything after
+    the bullet run, stays exactly where it was. If section_text has no
+    existing bullet lines, there is no "in place" position to preserve, so
+    merged_bullets are appended at the end (same as the non-legacy-safe
+    behavior in that case).
     """
     lines = section_text.split("\n") if section_text else []
-    non_bullet_lines = [
-        line for line in lines if not line.lstrip().startswith("- ")
-    ]
-    # Combine non-bullet lines (above the bullet block) with merged bullets
-    all_lines = non_bullet_lines + merged_bullets
+
+    if legacy_safe:
+        bullet_indices = [
+            i for i, line in enumerate(lines) if line.lstrip().startswith("- ")
+        ]
+        if not bullet_indices:
+            all_lines = lines + merged_bullets
+        else:
+            first, last = bullet_indices[0], bullet_indices[-1]
+            all_lines = lines[:first] + merged_bullets + lines[last + 1 :]
+    else:
+        non_bullet_lines = [
+            line for line in lines if not line.lstrip().startswith("- ")
+        ]
+        # Combine non-bullet lines (above the bullet block) with merged bullets
+        all_lines = non_bullet_lines + merged_bullets
+
     # Strip leading/trailing blank lines
     result = "\n".join(all_lines).strip()
     return result
@@ -355,12 +387,17 @@ def _normalize_notes(raw_notes: list) -> list:
 
 
 def _merge_notes_into_body(
-    section_body: str, notes: list, retractions: list, max_bullets
+    section_body: str, notes: list, retractions: list, max_bullets, legacy_safe: bool = False
 ) -> str:
     """
     Apply retractions, merge notes, enforce the cap, and reconstruct a
     section body — shared by both the legacy section_text path and the
     section-anchored path.
+
+    legacy_safe is forwarded to _reconstruct_section: the section-anchored
+    path relies on the default (False) to keep its existing, already-correct
+    output unchanged; the legacy section_text CLI path passes True so no
+    line is ever relocated past the bullet block.
     """
     if retractions:
         section_body = apply_retractions(section_body, retractions)
@@ -373,7 +410,7 @@ def _merge_notes_into_body(
     if max_bullets is not None:
         current_bullets = apply_cap(current_bullets, max_bullets)
 
-    return _reconstruct_section(section_body, current_bullets)
+    return _reconstruct_section(section_body, current_bullets, legacy_safe=legacy_safe)
 
 
 def _merge_notes_into_body_with_archive(
@@ -587,10 +624,13 @@ def main() -> int:
 
         # Legacy path: section_text field, caller-supplied span. Only this path
         # needs the separately-normalized notes list -- merge_section_anchored
-        # above normalizes raw_notes itself.
+        # above normalizes raw_notes itself. legacy_safe=True ensures an
+        # over-wide span never relocates any line past the bullet run.
         notes = _normalize_notes(raw_notes)
         section_text = payload.get("section_text", "")
-        result = _merge_notes_into_body(section_text, notes, retractions, max_bullets)
+        result = _merge_notes_into_body(
+            section_text, notes, retractions, max_bullets, legacy_safe=True
+        )
         print(result)
         return 0
     except (TypeError, ValueError) as exc:
