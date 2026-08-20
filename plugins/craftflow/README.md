@@ -185,6 +185,14 @@ curl -fsSL https://raw.githubusercontent.com/aicraft-sdk/craftflow/main/plugins/
 
 Craftflow will activate automatically on every dev request via `alwaysApply: true`.
 
+When run from a local checkout, `install-cursor.sh` also offers an **optional, opt-in** step to
+pre-populate this project's Cursor CLI permission allowlist (`.cursor/cli.json` — not the global
+`~/.cursor/cli-config.json`) with common read-only/safe commands (`grep`, `git status`/`diff`/
+`log`, etc.) so they stop prompting for approval every session. It's off by default; enable it
+with `CRAFTFLOW_CURSOR_PERMISSIONS=1` or by answering `y` at the interactive prompt. See
+`plugins/craftflow/hooks/README.md`'s "Optional: Cursor CLI Permission Allowlist" section for
+details.
+
 ---
 
 ## How it works

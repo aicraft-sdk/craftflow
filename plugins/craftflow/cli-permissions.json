@@ -1,0 +1,20 @@
+{
+  "_comment": "Template for install-cursor.sh's optional, opt-in Cursor CLI permission allowlist step. Only the `permissions` object below is ever merged into a project's .cursor/cli.json -- per Cursor's own docs that file may hold ONLY a `permissions` object, so install-cursor.sh's merge script reads exactly `permissions.allow`/`permissions.deny` from this template and ignores this comment and any other top-level key. Three git subcommands are deliberately excluded because Cursor's matcher accepts trailing subcommand tokens (needed for any of these entries to be useful at all, same as `git:add`/`git:commit`), which also unscopes them into a destructive/discarding form: `git:checkout` (would also permit `git checkout -- <file>` / `git checkout .`, discarding uncommitted local modifications -- the same risk class as `git reset --hard`, which this allowlist also excludes); `git:stash` (would also permit `git stash drop <ref>` / `git stash clear`, permanently and irrecoverably discarding stashed uncommitted changes); `git:branch` (would also permit `git branch -D <branch>`, force-deleting a branch and bypassing git's own unmerged-commit safety check that a plain `-d` respects -- the deleted branch's commits become dangling and are only recoverable via `git reflog`/`git fsck --lost-found` within a bounded pre-gc window, which is not a realistic recovery path for a typical user, so this is treated as the same practical risk class as checkout/stash rather than a lower one). A scoped glob (e.g. `git:checkout -b*`) was considered for all three, but Cursor's exact command:args glob syntax could not be confirmed, so no substitute is included; all three keep prompting for approval. `find` is likewise deliberately excluded (not present, not unscoped): an unscoped `Shell(find)` entry would also permit `find ... -exec <cmd> {} \\;` / `-execdir` / `-ok` / `-okdir` (arbitrary command execution against every matched path, no approval prompt) and `find ... -delete` (mass, non-interactive deletion) -- this project's own Claude-side Bash destructive-command guard (`../hooks/README.md`, `bashDestructiveTraversal`, enforced in `craftflow_hook_unit_tests.py`) already treats exactly these `find` flags as destructive for that reason, so carrying an unscoped allow into the Cursor-side allowlist would silently reopen the same risk class this plugin already guards against on the Claude Code side. As with checkout/stash/branch, no scoped-glob substitute is included since Cursor's exact command:args glob syntax could not be confirmed; `find` keeps prompting for approval. Destructive/high-blast-radius commands (git push, git reset --hard, force-push, rm, mv, npm/pnpm install) are deliberately NOT included so they keep prompting for approval.",
+  "permissions": {
+    "allow": [
+      "Shell(grep)",
+      "Shell(rg)",
+      "Shell(ls)",
+      "Shell(cat)",
+      "Shell(pwd)",
+      "Shell(cd)",
+      "Shell(git:status)",
+      "Shell(git:diff)",
+      "Shell(git:log)",
+      "Shell(git:show)",
+      "Shell(git:add)",
+      "Shell(git:commit)"
+    ],
+    "deny": []
+  }
+}

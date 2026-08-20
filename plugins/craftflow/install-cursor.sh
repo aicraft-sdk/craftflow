@@ -206,6 +206,112 @@ PYEOF
     echo "    Re-run this script (or copy the merge above) inside any other project you want"
     echo "    craftflow's write-guard enforced in — this step is per-project, not global."
   fi
+
+  echo ""
+  echo "→ Cursor CLI permission allowlist (optional, opt-in)..."
+
+  # Cursor's cursor-agent CLI prompts for approval on every shell command unless it is
+  # pre-allowed via permissions. This step pre-populates a project-local .cursor/cli.json
+  # (NOT the global ~/.cursor/cli-config.json) with a curated set of common read-only and
+  # safe-write commands, so they stop triggering an approval prompt on every craftflow
+  # session in Cursor. It is entirely opt-in — default (no flag, no TTY, or declined) is
+  # skip, matching how the rest of this script degrades gracefully.
+  INSTALL_PERMISSIONS=0
+  if [ "${CRAFTFLOW_CURSOR_PERMISSIONS:-}" = "1" ]; then
+    INSTALL_PERMISSIONS=1
+  elif [ -t 0 ]; then
+    printf '  Pre-populate this project'"'"'s Cursor CLI permission allowlist (.cursor/cli.json)\n'
+    printf '  with common read-only/safe commands (grep, git status/diff/log, etc.) so they stop\n'
+    printf '  prompting for approval every session? [y/N] '
+    read -r PERMISSIONS_REPLY || PERMISSIONS_REPLY=""
+    case "$PERMISSIONS_REPLY" in
+      [Yy]*) INSTALL_PERMISSIONS=1 ;;
+      *) INSTALL_PERMISSIONS=0 ;;
+    esac
+  fi
+
+  if [ "$INSTALL_PERMISSIONS" != "1" ]; then
+    echo "  ⚠ skipped (opt-in only — set CRAFTFLOW_CURSOR_PERMISSIONS=1, or answer 'y' at the"
+    echo "    prompt when running this script interactively, to enable). This step never touches"
+    echo "    the global ~/.cursor/cli-config.json — only this project's .cursor/cli.json."
+  else
+    PERMISSIONS_TEMPLATE="$PLUGIN_ROOT/cli-permissions.json"
+    if [ ! -f "$PERMISSIONS_TEMPLATE" ]; then
+      echo "  ✗ error: expected permissions template not found at $PERMISSIONS_TEMPLATE" >&2
+      echo "    (shallow or partial checkout? cannot install Cursor CLI permission allowlist)" >&2
+      exit 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+      echo "  ⚠ python3 not found — skipping Cursor CLI permission allowlist install." >&2
+      echo "    Install python3 and re-run this script with CRAFTFLOW_CURSOR_PERMISSIONS=1." >&2
+    else
+      HOOKS_TARGET_ROOT="${HOOKS_TARGET_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+      PERMISSIONS_TARGET_DIR="$HOOKS_TARGET_ROOT/.cursor"
+      PERMISSIONS_TARGET="$PERMISSIONS_TARGET_DIR/cli.json"
+      mkdir -p "$PERMISSIONS_TARGET_DIR" || {
+        echo "  ✗ failed to create $PERMISSIONS_TARGET_DIR (unwritable project root?)" >&2
+        exit 1
+      }
+      python3 - "$PERMISSIONS_TEMPLATE" "$PERMISSIONS_TARGET" <<'PYEOF'
+import json
+import sys
+
+template_path, target_path = sys.argv[1:3]
+
+with open(template_path, encoding="utf-8") as f:
+    template = json.load(f)
+
+# .cursor/cli.json may hold ONLY a `permissions` object per Cursor's own docs -- read
+# exactly that from the template and ignore any other top-level template key (e.g. the
+# template's own documentation-only "_comment" field) so the live target file's shape
+# never drifts from that contract.
+template_perms = template.get("permissions", {})
+template_allow = template_perms.get("allow", [])
+template_deny = template_perms.get("deny", [])
+
+try:
+    with open(target_path, encoding="utf-8") as f:
+        existing = json.load(f)
+    if not isinstance(existing, dict) or not isinstance(existing.get("permissions"), dict):
+        existing = {"permissions": {"allow": [], "deny": []}}
+except (FileNotFoundError, json.JSONDecodeError):
+    existing = {"permissions": {"allow": [], "deny": []}}
+
+existing.setdefault("permissions", {})
+if not isinstance(existing["permissions"].get("allow"), list):
+    existing["permissions"]["allow"] = []
+if not isinstance(existing["permissions"].get("deny"), list):
+    existing["permissions"]["deny"] = []
+
+added = 0
+for key, template_entries in (("allow", template_allow), ("deny", template_deny)):
+    # Drop non-string entries (e.g. dicts from a hand-edited or tool-generated file)
+    # before building the dedup set -- set(bucket) would otherwise crash with
+    # "TypeError: unhashable type" on any non-hashable element. Reassign the filtered
+    # list back so non-string junk is also dropped from the written output, not just
+    # from dedup consideration.
+    bucket = [e for e in existing["permissions"][key] if isinstance(e, str)]
+    existing["permissions"][key] = bucket
+    existing_set = set(bucket)
+    for entry in template_entries:
+        if entry not in existing_set:
+            bucket.append(entry)
+            existing_set.add(entry)
+            added += 1
+
+with open(target_path, "w", encoding="utf-8") as f:
+    json.dump(existing, f, indent=2)
+    f.write("\n")
+
+print(f"  ✓ {target_path} ({added} new permission entries added, existing entries preserved)")
+PYEOF
+      echo "    This targets .cursor/cli.json (project-local), not the global"
+      echo "    ~/.cursor/cli-config.json. Destructive commands (git push, git reset --hard,"
+      echo "    force-push, rm, mv, npm/pnpm install) are intentionally NOT included and will"
+      echo "    still prompt for approval. Re-run with CRAFTFLOW_CURSOR_PERMISSIONS=1 inside any"
+      echo "    other project you want this allowlist in — this step is per-project, not global."
+    fi
+  fi
 else
   echo "  ⚠ Not running from a local file (likely curl-piped) — skipping the skills symlink."
   echo "    Cursor's router entry point still needs ~/.cursor/skills/cursor-router pointed"

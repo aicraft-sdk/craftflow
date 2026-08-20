@@ -34,6 +34,39 @@ is an open question, not yet confirmed either way. See `../skills/cursor-router/
 "Hook-based write-guard enforcement" note for the full story, including why this silently didn't
 work before 2026-08-18.
 
+## Optional: Cursor CLI Permission Allowlist (`.cursor/cli.json`)
+
+`../install-cursor.sh` also ships a separate, **opt-in** step (unrelated to the write-guard
+`hooks.json` step above) that pre-populates the `cursor-agent` CLI's per-project permission
+allowlist so common read-only/safe commands (`grep`, `rg`, `ls`, `cat`, `pwd`, `cd`, and
+`git status`/`diff`/`log`/`show`/`add`/`commit`) don't trigger an
+approval prompt on every craftflow session in Cursor. It writes/merges
+`../cli-permissions.json`'s `permissions.allow`/`permissions.deny` arrays into the **project-local**
+`.cursor/cli.json` — never the machine's global `~/.cursor/cli-config.json` — using the same
+additive-merge-never-overwrite pattern as the `hooks.json` step (dedup by exact string, existing
+entries preserved, degrades gracefully with a warning if `python3` is unavailable).
+
+Destructive/high-blast-radius commands (`git push`, `git reset --hard`, force-push, `rm`, `mv`,
+`npm`/`pnpm install`) are deliberately excluded and will still prompt. `git:checkout`, `git:stash`,
+`git:branch`, and `find` are also deliberately **excluded** from the allowlist (not present, not
+unscoped) — see `../cli-permissions.json`'s own `_comment` field for the reasoning: each git verb,
+if allowed unscoped, would also permit a destructive/discarding trailing-subcommand form
+(`git checkout -- <file>` / `git checkout .` discarding uncommitted changes; `git stash drop` /
+`git stash clear` permanently discarding stashed changes; `git branch -D` force-deleting a branch
+and bypassing git's own unmerged-commit safety check); an unscoped `find` would likewise permit
+`find ... -exec <cmd> {} \;` / `-execdir` / `-ok` / `-okdir` (arbitrary command execution with zero
+approval prompt) and `find ... -delete` (mass deletion) — this project's own Claude-side Bash
+destructive-command guard (`bashDestructiveTraversal` above, enforced in
+`craftflow_hook_unit_tests.py`) already treats exactly these `find` flags as destructive, so an
+unscoped Cursor-side allow would silently reopen a risk class this plugin already guards against
+on the Claude Code side. None of these four have a scoped-glob substitute available, since
+Cursor's exact command:args glob syntax could not be confirmed. All four keep prompting
+for approval.
+
+Default is **skip** — this step only runs when opted in via `CRAFTFLOW_CURSOR_PERMISSIONS=1`
+(non-interactive/scripted use) or an interactive `y` answer at the TTY prompt install-cursor.sh
+shows when run directly (not curl-piped) with no flag set.
+
 ## Composable Trust Gate (not wired to a hook event)
 
 `craftflow_hook_trust.py` is a standalone CLI (`check` / `update` subcommands),
