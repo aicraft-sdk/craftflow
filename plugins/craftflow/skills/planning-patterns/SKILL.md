@@ -302,7 +302,15 @@ Use this format when a plan involves choosing between multiple valid approaches:
 - Database decisions (SQL vs NoSQL)
 - Authentication approaches (JWT vs sessions)
 
-**Save ADRs to:** `docs/decisions/ADR-NNN-title.md`
+**Before writing a new ADR, check for a project-specific convention first.** Look for
+`docs/ai/decisions/README.md` (or an equivalent documented ADR convention referenced from the
+project's `CLAUDE.md`/`AI_FIRST.md`/`AGENTS.md`). If one exists, follow its exact path,
+numbering, frontmatter, and required sections instead of the generic template above — treat
+the project's own convention as authoritative, since it may be mechanically enforced (e.g. a
+`verify-decision-format`-style script).
+
+**Save ADRs to (generic default, only when no project-specific convention is documented):**
+`docs/decisions/ADR-NNN-title.md`
 
 ## Red Flags - STOP and Revise
 
