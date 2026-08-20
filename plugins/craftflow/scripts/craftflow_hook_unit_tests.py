@@ -14148,6 +14148,48 @@ def test_cursor_bootstrap_mdc_heading_references_resolve() -> None:
     ok(name)
 
 
+def test_install_cursor_sh_raw_github_urls_include_plugin_subpath() -> None:
+    # Found during item 8 Phase 5's live bootstrap verification: install-cursor.sh's
+    # CRAFTFLOW_REPO (and its own header-comment install command) pointed at
+    # raw.githubusercontent.com/aicraft-sdk/craftflow/main/... with no path segment for
+    # where the plugin content actually lives in the published repo. Confirmed live via
+    # curl that the published repo's real layout nests everything under
+    # plugins/craftflow/ (mirroring this checkout's own tools/craftflow-plugin/plugins/
+    # craftflow/ structure) -- the bare .../main/rules/craftflow-router.mdc URL 404s,
+    # .../main/plugins/craftflow/rules/craftflow-router.mdc returns 200. This was true for
+    # BOTH curl calls inside the script AND its own documented curl-pipe bootstrap command
+    # in the header comment -- meaning the documented install instructions never worked.
+    # This test is a static regression guard (no live network call in the unit suite) that
+    # the fix's URL shape doesn't silently regress back to the bare, broken form.
+    name = "install-cursor-sh/raw-github-urls-include-plugin-subpath"
+    path = PLUGIN_ROOT / "install-cursor.sh"
+    if not path.exists():
+        fail(name, f"install-cursor.sh not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+
+    if "raw.githubusercontent.com/aicraft-sdk/craftflow/main/plugins/craftflow" not in content:
+        fail(name, "install-cursor.sh's CRAFTFLOW_REPO no longer includes the required "
+                    "'plugins/craftflow' path segment -- would 404 against the published repo's "
+                    "real layout (root has plugins/craftflow/, not rules/ directly)")
+        return
+
+    # The bare, broken form (.../main followed directly by a quote or /rules or
+    # /install-cursor.sh, with no /plugins/craftflow in between) must not reappear.
+    bare_broken_patterns = (
+        'CRAFTFLOW_REPO="https://raw.githubusercontent.com/aicraft-sdk/craftflow/main"',
+        "raw.githubusercontent.com/aicraft-sdk/craftflow/main/rules/",
+        "raw.githubusercontent.com/aicraft-sdk/craftflow/main/install-cursor.sh",
+    )
+    for pattern in bare_broken_patterns:
+        if pattern in content:
+            fail(name, f"install-cursor.sh still contains the bare, broken URL form "
+                        f"(missing /plugins/craftflow/): {pattern!r}")
+            return
+
+    ok(name)
+
+
 def test_craftflow_router_documents_state_read_compaction_self_heal() -> None:
     name = "craftflow-router/skill-md/documents-state-read-compaction-self-heal"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
@@ -17703,6 +17745,10 @@ def main() -> int:
     print()
     print("[ cursor-router: bootstrap .mdc heading references resolve (item 8 Phase 5) ]")
     test_cursor_bootstrap_mdc_heading_references_resolve()
+
+    print()
+    print("[ install-cursor.sh: raw GitHub URLs include plugin subpath ]")
+    test_install_cursor_sh_raw_github_urls_include_plugin_subpath()
 
     print()
     print("[ craftflow-router: state-read compaction self-heal doc (Phase 3) ]")

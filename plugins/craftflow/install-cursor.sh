@@ -2,11 +2,11 @@
 # install-cursor.sh — install Craftflow MDC rules into Cursor AI
 #
 # Safe to re-run (idempotent). Downloads rules directly; no git clone needed.
-# Run via:  curl -fsSL https://raw.githubusercontent.com/aicraft-sdk/craftflow/main/install-cursor.sh | bash
+# Run via:  curl -fsSL https://raw.githubusercontent.com/aicraft-sdk/craftflow/main/plugins/craftflow/install-cursor.sh | bash
 
 set -euo pipefail
 
-CRAFTFLOW_REPO="https://raw.githubusercontent.com/aicraft-sdk/craftflow/main"
+CRAFTFLOW_REPO="https://raw.githubusercontent.com/aicraft-sdk/craftflow/main/plugins/craftflow"
 CURSOR_RULES_DIR="$HOME/.cursor/rules/core"
 # Override target for testing only — production (no override set) is unaffected.
 CURSOR_SKILLS_DIR="${CURSOR_SKILLS_DIR:-$HOME/.cursor/skills}"

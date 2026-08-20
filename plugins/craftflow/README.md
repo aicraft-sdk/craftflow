@@ -180,7 +180,7 @@ Without a local checkout (curl-piped), the script can only install the MDC rules
 npx skills add aicraft-sdk/craftflow --skill cursor-router
 
 # 2. Install MDC rules (auto-activates Craftflow on every dev request)
-curl -fsSL https://raw.githubusercontent.com/aicraft-sdk/craftflow/main/install-cursor.sh | bash
+curl -fsSL https://raw.githubusercontent.com/aicraft-sdk/craftflow/main/plugins/craftflow/install-cursor.sh | bash
 ```
 
 Craftflow will activate automatically on every dev request via `alwaysApply: true`.
