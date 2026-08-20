@@ -13932,6 +13932,59 @@ def test_craftflow_router_shared_protocol_extraction_no_stale_reembed() -> None:
     ok(name)
 
 
+def test_cursor_router_shared_protocol_read_and_hard_rule_carveout() -> None:
+    # Phase 4a of the hooks-as-bridge redesign (backlog item 8): the first-ever edit to
+    # cursor-router/SKILL.md. Unlike craftflow-router/SKILL.md's Phase 3 series, this
+    # phase does not move any content OUT of cursor-router/SKILL.md yet -- it only adds
+    # (1) a mandatory Read() of the shared doc, and (2) an explicit carve-out in the
+    # pre-existing "NEVER consult craftflow-router/SKILL.md or its references/*.md files"
+    # Hard Rule so that mandatory read doesn't contradict the rule's own letter (Finding 1
+    # from docs/plans/2026-08-19-router-protocol-mapping.md). Both must be present, and
+    # the carve-out must live inside § 10 Hard Rules, not floating disconnected elsewhere.
+    name = "cursor-router/skill-md/shared-protocol-read-and-hard-rule-carveout"
+    path = PLUGIN_ROOT / "skills" / "cursor-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"cursor-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+
+    if content.count("skills/_shared/router-protocol.md") < 2:
+        fail(
+            name,
+            f"expected at least 2 references to the shared doc in cursor-router "
+            f"SKILL.md (mandatory reference read + Hard Rule carve-out), found "
+            f"{content.count('skills/_shared/router-protocol.md')}",
+        )
+        return
+
+    if "Mandatory reference read" not in content:
+        fail(name, "cursor-router SKILL.md missing the 'Mandatory reference read' note")
+        return
+
+    if "## 10. Hard Rules (Cursor)" not in content:
+        fail(name, "cursor-router SKILL.md missing '## 10. Hard Rules (Cursor)' section")
+        return
+    hard_rules_section = content.split("## 10. Hard Rules (Cursor)", 1)[1]
+
+    if "NEVER consult Claude Code's own `craftflow-router/SKILL.md`" not in hard_rules_section:
+        fail(name, "cursor-router SKILL.md § 10 no longer contains the base "
+                    "'NEVER consult craftflow-router/SKILL.md' rule -- test assumptions stale")
+        return
+
+    if "Explicit carve-out" not in hard_rules_section:
+        fail(name, "cursor-router SKILL.md § 10 Hard Rules missing the explicit "
+                    "shared-doc carve-out on the 'NEVER consult' rule")
+        return
+
+    normalized_hard_rules = " ".join(hard_rules_section.split())
+    if "does not violate this rule's intent" not in normalized_hard_rules:
+        fail(name, "cursor-router SKILL.md § 10 carve-out missing its "
+                    "does-not-violate-intent justification")
+        return
+
+    ok(name)
+
+
 def test_craftflow_router_documents_state_read_compaction_self_heal() -> None:
     name = "craftflow-router/skill-md/documents-state-read-compaction-self-heal"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
@@ -17471,6 +17524,10 @@ def main() -> int:
     print()
     print("[ craftflow-router: shared router-protocol extraction, no stale re-embed (item 8 Phase 3) ]")
     test_craftflow_router_shared_protocol_extraction_no_stale_reembed()
+
+    print()
+    print("[ cursor-router: shared router-protocol read + Hard Rule carve-out (item 8 Phase 4a) ]")
+    test_cursor_router_shared_protocol_read_and_hard_rule_carveout()
 
     print()
     print("[ craftflow-router: state-read compaction self-heal doc (Phase 3) ]")

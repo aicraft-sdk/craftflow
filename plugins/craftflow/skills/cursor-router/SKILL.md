@@ -11,6 +11,15 @@ description: |
 
 # Craftflow Router — Cursor Task-Dispatch Mode
 
+Mandatory reference read: before routing (§ 1) or dispatching any agent, read
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` once per
+session if not already read. It holds host-agnostic protocol content this file and
+Claude Code's `craftflow-router/SKILL.md` both draw from (backlog item 8's
+hooks-as-bridge redesign) — see § 10's Hard Rules for the explicit carve-out permitting
+this one read. A missing or unreadable shared doc is a hard-stop condition, same as any
+other required reference read in this file — do not silently proceed with
+routing/dispatch decisions from stale in-context memory of its content.
+
 **You are running in Cursor AI agent mode.** The Craftflow orchestration system has
 detected this via `CRAFTFLOW_PLATFORM: cursor` injected by the MDC rule.
 
@@ -1020,6 +1029,13 @@ When an agent file contains `TaskList()`, `TaskGet()`, or `Agent(...)` calls:
   call syntax describes a different tracking mechanism and must never be treated as
   instructions to follow literally here — the only real dispatch mechanism in Cursor is
   the `Task` tool per § 5.
+  **Explicit carve-out:** this rule does NOT cover
+  `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md`. That file
+  is not part of `craftflow-router/`'s own tree, is owned by neither router, and is the
+  mandatory read named at the top of this file — it holds host-agnostic protocol prose
+  only (no `Task()`/`TaskCreate()` call syntax; see that file's own "Purity boundary"
+  note), never mechanism-specific instructions to follow literally. Reading it does not
+  violate this rule's intent.
 - ALWAYS write cursor-wf.json after each phase completes
 - ALWAYS write the main workflow artifact for hook and resume compatibility
 - NEVER auto-select Approve or Approve + register in SKILL_HINTS for the § 5a
