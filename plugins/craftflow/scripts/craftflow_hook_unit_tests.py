@@ -16925,6 +16925,54 @@ def test_planning_patterns_adr_section_defers_to_project_convention() -> None:
     ok(name)
 
 
+def test_planner_md_has_adr_prior_art_check() -> None:
+    # Backlog item 6 (residual gap 3): planner.md step 5 (Codebase Reality Check) had a
+    # "Living Spec Check" sub-bullet but no equivalent for docs/ai/decisions/ — so a planner
+    # could re-propose an already-rejected or already-accepted convention without ever
+    # searching prior ADRs. This is the exact gap that made backlog item 6's own planning
+    # session need ~10 tool calls of manual archaeology to discover ADR 0024 already existed.
+    name = "planner-md/step-5/documents-adr-prior-art-check"
+    path = PLUGIN_ROOT / "agents" / "planner.md"
+    if not path.exists():
+        fail(name, f"agents/planner.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+
+    if "**ADR Prior-Art Check:**" not in content:
+        fail(name, "agents/planner.md step 5 is missing the "
+                    "'**ADR Prior-Art Check:**' sub-bullet")
+        return
+
+    normalized = " ".join(content.split())
+    required_substrings = (
+        "search `docs/ai/decisions/`",
+        "do not re-propose an already-rejected alternative without",
+        "do not silently duplicate an already-accepted mechanism",
+    )
+    for substring in required_substrings:
+        normalized_substring = " ".join(substring.split())
+        if normalized_substring.lower() not in normalized.lower():
+            fail(name, f"ADR Prior-Art Check sub-bullet is missing required "
+                        f"content: {substring!r}")
+            return
+
+    # Must live in step 5 (Codebase Reality Check), after the Living Spec Check sub-bullet,
+    # not appended as an unrelated later step.
+    living_spec_idx = content.find("**Living Spec Check:**")
+    adr_check_idx = content.find("**ADR Prior-Art Check:**")
+    step6_idx = content.find("**Plan-vs-Code Gaps**")
+    if living_spec_idx == -1 or adr_check_idx == -1 or step6_idx == -1:
+        fail(name, "could not locate Living Spec Check, ADR Prior-Art Check, or "
+                    "Plan-vs-Code Gaps anchors to verify placement")
+        return
+    if not (living_spec_idx < adr_check_idx < step6_idx):
+        fail(name, "ADR Prior-Art Check must be placed after Living Spec Check and "
+                    "before the Plan-vs-Code Gaps step")
+        return
+
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -17836,6 +17884,10 @@ def main() -> int:
     print()
     print("[ planning-patterns: ADR section defers to project convention (backlog item 6) ]")
     test_planning_patterns_adr_section_defers_to_project_convention()
+
+    print()
+    print("[ planner.md: ADR Prior-Art Check documented (backlog item 6) ]")
+    test_planner_md_has_adr_prior_art_check()
 
     print()
     if _errors:
