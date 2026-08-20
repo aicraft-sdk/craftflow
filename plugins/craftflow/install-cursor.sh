@@ -27,6 +27,31 @@ if [ -f "$AIDLC_RULE" ]; then
   echo "  ✓ aidlc-routing.mdc removed"
 fi
 
+# Retire legacy AIDLC Cursor bundle (superseded by Craftflow)
+CURSOR_HOME="${CURSOR_HOME:-$HOME/.cursor}"
+retire_aidlc_path() {
+  local path="$1"
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    rm -rf "$path"
+    echo "  ✓ removed $path"
+  fi
+}
+echo ""
+echo "→ Retiring legacy AIDLC artifacts (if any)..."
+retire_aidlc_path "$CURSOR_HOME/agents/aidlc-web-researcher.md"
+retire_aidlc_path "$CURSOR_HOME/agents/aidlc-silent-failure-hunter.md"
+retire_aidlc_path "$CURSOR_HOME/agents/aidlc-planner.md"
+retire_aidlc_path "$CURSOR_HOME/agents/aidlc-plan-gap-reviewer.md"
+retire_aidlc_path "$CURSOR_HOME/agents/aidlc-integration-verifier.md"
+retire_aidlc_path "$CURSOR_HOME/agents/aidlc-github-researcher.md"
+retire_aidlc_path "$CURSOR_HOME/agents/aidlc-component-builder.md"
+retire_aidlc_path "$CURSOR_HOME/agents/aidlc-code-reviewer.md"
+retire_aidlc_path "$CURSOR_HOME/agents/aidlc-bug-investigator.md"
+retire_aidlc_path "$CURSOR_HOME/commands/aidlc"
+retire_aidlc_path "$CURSOR_HOME/skills/aidlc.bak"
+retire_aidlc_path "$CURSOR_HOME/skills/aidlc"
+retire_aidlc_path "$CURSOR_HOME/hooks/aidlc"
+
 echo ""
 echo "Craftflow MDC rules installed."
 echo "  ~/.cursor/rules/core/craftflow-router.mdc"
