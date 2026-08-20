@@ -426,6 +426,115 @@ def test_router_records_reliability_gates_evidence_in_fix_verify_and_doubt_verif
     ok(name)
 
 
+def test_router_documents_task_tool_capability_detection() -> None:
+    name = "router/task-tool-capability-detection-documented"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    section_idx = content.find("## 0a. Task Tool Capability Detection")
+    if section_idx == -1:
+        fail(name, "missing '## 0a. Task Tool Capability Detection' section")
+        return
+    next_heading_idx = content.find("\n## ", section_idx + 1)
+    section = content[section_idx:next_heading_idx if next_heading_idx != -1 else len(content)]
+    if "task_tools_available" not in section:
+        fail(name, "## 0a section missing 'task_tools_available' marker")
+        return
+    if "ToolSearch" not in section:
+        fail(name, "## 0a section missing 'ToolSearch' reference")
+        return
+    ok(name)
+
+
+def test_router_task_tool_fallback_wired_through_resume_and_chain_loop() -> None:
+    name = "router/task-tool-fallback-wired-resume-and-chain-loop"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    resume_idx = content.find("## 4. Resume And Hydration")
+    next_after_resume = content.find("\n## 5.", resume_idx) if resume_idx != -1 else -1
+    if resume_idx == -1 or next_after_resume == -1:
+        fail(name, "could not locate '## 4. Resume And Hydration' section bounds")
+        return
+    resume_section = content[resume_idx:next_after_resume]
+    if "task_tools_available" not in resume_section:
+        fail(name, "## 4. Resume And Hydration missing 'task_tools_available' wiring")
+        return
+
+    chain_idx = content.find("## 12. Chain Execution Loop")
+    next_after_chain = content.find("\n## 13.", chain_idx) if chain_idx != -1 else -1
+    if chain_idx == -1 or next_after_chain == -1:
+        fail(name, "could not locate '## 12. Chain Execution Loop' section bounds")
+        return
+    chain_section = content[chain_idx:next_after_chain]
+    if "task_tools_available" not in chain_section:
+        fail(name, "## 12. Chain Execution Loop missing 'task_tools_available' wiring")
+        return
+    ok(name)
+
+
+def test_workflow_artifact_schema_documents_task_tools_available() -> None:
+    name = "workflow-artifact-policy/capabilities-documents-task-tools-available"
+    path = (
+        PLUGIN_ROOT
+        / "skills"
+        / "craftflow-router"
+        / "references"
+        / "workflow-artifact-and-hook-policy.md"
+    )
+    if not path.exists():
+        fail(name, f"workflow-artifact-and-hook-policy.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    cap_idx = content.find("`capabilities` records the session-level research backend")
+    if cap_idx == -1:
+        fail(name, "missing '`capabilities`' detail block")
+        return
+    next_bullet_idx = content.find("\n- `results", cap_idx)
+    section = content[cap_idx:next_bullet_idx if next_bullet_idx != -1 else len(content)]
+    if "task_tools_available" not in section:
+        fail(name, "`capabilities` detail block missing 'task_tools_available'")
+        return
+    ok(name)
+
+
+def test_self_dispatch_guard_present_in_task_update_agents() -> None:
+    name = "agents/self-dispatch-guard-present-after-task-update"
+    agent_files = [
+        "bug-investigator.md",
+        "component-builder.md",
+        "doc-syncer.md",
+        "github-researcher.md",
+        "planner.md",
+        "skill-author.md",
+        "web-researcher.md",
+    ]
+    guard_phrase = "do NOT self-report another agent's role or verdict"
+    for filename in agent_files:
+        path = PLUGIN_ROOT / "agents" / filename
+        if not path.exists():
+            fail(name, f"agent file not found at {path}")
+            return
+        content = path.read_text(encoding="utf-8")
+        normalized = " ".join(content.split())
+        task_update_idx = normalized.find("TaskUpdate")
+        guard_idx = normalized.find(guard_phrase)
+        if task_update_idx == -1:
+            fail(name, f"{filename} missing 'TaskUpdate' instruction")
+            return
+        if guard_idx == -1:
+            fail(name, f"{filename} missing self-dispatch guard phrase")
+            return
+        if guard_idx <= task_update_idx:
+            fail(name, f"{filename} guard phrase does not follow its TaskUpdate instruction")
+            return
+    ok(name)
+
+
 def test_router_dispatches_intent_interview() -> None:
     name = "router/intent-interview-gate-registered"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
@@ -17888,6 +17997,13 @@ def main() -> int:
     print()
     print("[ planner.md: ADR Prior-Art Check documented (backlog item 6) ]")
     test_planner_md_has_adr_prior_art_check()
+
+    print()
+    print("[ craftflow-router: task-tool capability detection + fallback wiring (backlog item 10 Phase 5) ]")
+    test_router_documents_task_tool_capability_detection()
+    test_router_task_tool_fallback_wired_through_resume_and_chain_loop()
+    test_workflow_artifact_schema_documents_task_tools_available()
+    test_self_dispatch_guard_present_in_task_update_agents()
 
     print()
     if _errors:
