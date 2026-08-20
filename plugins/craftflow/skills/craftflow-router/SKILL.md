@@ -804,7 +804,7 @@ or `references/remediation-and-research.md` would create a child task, and
 `capabilities.task_tools_available == false`: skip that `TaskCreate()` call and instead append a
 `{phase}` entry with `status: "pending"` directly into the workflow artifact's `phase_status` map
 (and into `normalized_phases`, where the referenced block also populates that field) instead of
-calling `TaskCreate()`. This is the same fallback mechanism as the rest of this draft (skip
+calling `TaskCreate()`. This is the same fallback mechanism as the other `capabilities.task_tools_available == false` branches in this document (skip
 `TaskCreate()`, append the equivalent tracking entry to the workflow artifact instead), applied to
 every `TaskCreate()` site in these 5 files — the rule is scoped to "any `TaskCreate()` call site
 in these 5 files," never gated on matching a specific heading name or pattern, so it is not
