@@ -16858,33 +16858,140 @@ def test_state_read_compaction_end_to_end(tmp_dir: Path) -> None:
 # Runner
 # ---------------------------------------------------------------------------
 
+def test_hooklib_record_tool_call_streak_and_notify_cadence(tmp_dir: Path) -> None:
+    # Backlog item 3: craftflow_posttooluse_repeat_guard.py had zero unit test coverage even
+    # though it was already shipped and wired into hooks.json PostToolUse. This directly tests
+    # record_tool_call()'s streak/threshold/cadence contract (REPEAT_TOOL_THRESHOLD=3,
+    # REPEAT_TOOL_NOTIFY_EVERY=3): counts 1-2 don't notify, count 3 notifies, counts 4-5 don't,
+    # count 6 notifies again -- and a different signature resets the streak to 1.
+    name = "hooklib/record-tool-call-streak-and-notify-cadence"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+
+    old_project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(project_root)
+    try:
+        signature_a = hooklib.tool_call_signature("Bash", {"command": "flaky-thing"})
+        observed = [hooklib.record_tool_call("sess-repeat-unit", signature_a) for _ in range(6)]
+
+        expected = [(1, False), (2, False), (3, True), (4, False), (5, False), (6, True)]
+        if observed != expected:
+            fail(name, f"expected streak/notify sequence {expected!r} for 6 identical calls; "
+                        f"got {observed!r}")
+            return
+
+        signature_b = hooklib.tool_call_signature("Bash", {"command": "different-thing"})
+        reset_count, reset_notify = hooklib.record_tool_call("sess-repeat-unit", signature_b)
+        if (reset_count, reset_notify) != (1, False):
+            fail(name, f"expected a different signature to reset the streak to (1, False); "
+                        f"got {(reset_count, reset_notify)!r}")
+            return
+    finally:
+        if old_project_dir is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = old_project_dir
+
+    ok(name)
+
+
+def test_posttooluse_repeat_guard_end_to_end_advisory_at_threshold(tmp_dir: Path) -> None:
+    # End-to-end (subprocess, real stdin/stdout) counterpart to the unit test above: exercises
+    # the actual hook script craftflow_posttooluse_repeat_guard.py, not just the hooklib
+    # helper it calls. PostToolUse can only add advisory context, never deny (see the script's
+    # own module docstring) -- so the only observable behavior is stdout being empty on calls
+    # below threshold and carrying an additionalContext nudge once the threshold is crossed.
+    name = "posttooluse-repeat-guard/end-to-end-advisory-at-threshold"
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "session_id": "sess-repeat-e2e",
+        "tool_input": {"command": "flaky-thing"},
+    }
+
+    _, out1 = run_hook("craftflow_posttooluse_repeat_guard.py", payload, env)
+    _, out2 = run_hook("craftflow_posttooluse_repeat_guard.py", payload, env)
+    if out1 or out2:
+        fail(name, f"expected no output (no notify) on calls 1-2 below threshold; "
+                    f"got out1={out1!r} out2={out2!r}")
+        return
+
+    _, out3 = run_hook("craftflow_posttooluse_repeat_guard.py", payload, env)
+    if '"hookEventName": "PostToolUse"' not in out3 or '"additionalContext"' not in out3:
+        fail(name, f"expected an additionalContext advisory nudge on the 3rd identical call; "
+                    f"got {out3!r}")
+        return
+    if "3 times" not in out3 or "Bash" not in out3:
+        fail(name, f"expected the advisory to name the tool and the repeat count; got {out3!r}")
+        return
+
+    different_payload = {
+        "tool_name": "Bash",
+        "session_id": "sess-repeat-e2e",
+        "tool_input": {"command": "a-different-thing"},
+    }
+    _, out4 = run_hook("craftflow_posttooluse_repeat_guard.py", different_payload, env)
+    if out4:
+        fail(name, f"expected a different tool_input to reset the streak (no notify on the "
+                    f"1st occurrence); got {out4!r}")
+        return
+
+    ok(name)
+
+
 def test_systematic_debugging_documents_sandbox_vs_real_failure_protocol() -> None:
     # Backlog item 2: distinguish an agent-sandbox-imposed failure (credentials/network/IPC
-    # blocked by the execution sandbox itself) from a genuine code bug. Without this, a
-    # sandbox denial reads identically to a real failure and gets "fixed" as if it were one.
-    name = "systematic-debugging/skill-md/documents-sandbox-vs-real-failure-protocol"
-    path = PLUGIN_ROOT / "skills" / "systematic-debugging" / "SKILL.md"
-    if not path.exists():
-        fail(name, f"systematic-debugging/SKILL.md not found at {path}")
+    # blocked by the execution sandbox itself) from a genuine code bug. The canonical version
+    # of this rule lives in debugging-patterns/references/investigation-hygiene.md (predates
+    # this test, commit f8003bc) -- systematic-debugging/SKILL.md only carries a pointer to it,
+    # deliberately, to avoid two independently-maintained copies of the same rule drifting
+    # apart. This test checks both ends of that pointer: the pointer itself, and that its
+    # target still exists with the real protocol content (a dangling pointer would be worse
+    # than no pointer at all).
+    name = "systematic-debugging/skill-md/points-at-canonical-sandbox-vs-real-failure-protocol"
+    skill_path = PLUGIN_ROOT / "skills" / "systematic-debugging" / "SKILL.md"
+    if not skill_path.exists():
+        fail(name, f"systematic-debugging/SKILL.md not found at {skill_path}")
         return
-    content = path.read_text(encoding="utf-8")
+    skill_content = skill_path.read_text(encoding="utf-8")
 
-    if "## Sandbox-vs-Real-Failure Protocol" not in content:
+    if "## Sandbox-vs-Real-Failure Protocol" not in skill_content:
         fail(name, "systematic-debugging/SKILL.md is missing the "
-                    "'## Sandbox-vs-Real-Failure Protocol' section")
+                    "'## Sandbox-vs-Real-Failure Protocol' pointer section")
+        return
+    if "investigation-hygiene.md" not in skill_content:
+        fail(name, "systematic-debugging/SKILL.md's Sandbox-vs-Real-Failure Protocol section "
+                    "no longer points at investigation-hygiene.md")
         return
 
-    normalized = " ".join(content.split())
+    target_path = (
+        PLUGIN_ROOT / "skills" / "debugging-patterns" / "references" / "investigation-hygiene.md"
+    )
+    if not target_path.exists():
+        fail(name, f"pointer target not found at {target_path}")
+        return
+    target_content = target_path.read_text(encoding="utf-8")
+
+    if "## Rule Out Sandbox/Environment Failure Before Blaming The Code" not in target_content:
+        fail(name, "investigation-hygiene.md is missing the "
+                    "'## Rule Out Sandbox/Environment Failure Before Blaming The Code' section "
+                    "that systematic-debugging/SKILL.md points at")
+        return
+
+    normalized_target = " ".join(target_content.split())
     required_substrings = (
-        "retry the exact same command, unchanged",
-        "narrowest possible",
+        "retry the",
+        "unchanged",
+        "narrowest available escalation",
         "Never bypass a genuine failure to make the symptom disappear",
     )
     for substring in required_substrings:
         normalized_substring = " ".join(substring.split())
-        if normalized_substring.lower() not in normalized.lower():
-            fail(name, f"Sandbox-vs-Real-Failure Protocol section is missing required "
-                        f"content: {substring!r}")
+        if normalized_substring.lower() not in normalized_target.lower():
+            fail(name, f"investigation-hygiene.md's sandbox-vs-real-failure section is "
+                        f"missing required content: {substring!r}")
             return
 
     ok(name)
@@ -17878,7 +17985,12 @@ def main() -> int:
     test_memory_finalize_instruction_sites_wire_archive_rotation()
 
     print()
-    print("[ systematic-debugging: sandbox-vs-real-failure protocol documented (backlog item 2) ]")
+    print("[ repeat-tool-call guard: streak/notify cadence + end-to-end (backlog item 3) ]")
+    test_hooklib_record_tool_call_streak_and_notify_cadence(tmp / "repeat-guard-unit")
+    test_posttooluse_repeat_guard_end_to_end_advisory_at_threshold(tmp / "repeat-guard-e2e")
+
+    print()
+    print("[ systematic-debugging: points at canonical sandbox-vs-real-failure protocol (backlog item 2) ]")
     test_systematic_debugging_documents_sandbox_vs_real_failure_protocol()
 
     print()
