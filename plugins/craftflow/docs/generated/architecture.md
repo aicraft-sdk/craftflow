@@ -138,5 +138,5 @@ flowchart LR
 ## Inventory
 
 - 13 agents (`agents/*.md`)
-- 27 skills (`skills/*/SKILL.md`)
+- 28 skills (`skills/*/SKILL.md`)
 - 19 hook scripts wired in `hooks/hooks.json`
