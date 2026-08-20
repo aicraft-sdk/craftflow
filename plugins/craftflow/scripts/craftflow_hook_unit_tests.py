@@ -426,6 +426,146 @@ def test_router_records_reliability_gates_evidence_in_fix_verify_and_doubt_verif
     ok(name)
 
 
+def test_router_documents_task_tool_capability_detection() -> None:
+    name = "router/task-tool-capability-detection-documented"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    section_idx = content.find("## 0a. Task Tool Capability Detection")
+    if section_idx == -1:
+        fail(name, "missing '## 0a. Task Tool Capability Detection' section")
+        return
+    next_heading_idx = content.find("\n## ", section_idx + 1)
+    section = content[section_idx:next_heading_idx if next_heading_idx != -1 else len(content)]
+    if "task_tools_available" not in section:
+        fail(name, "## 0a section missing 'task_tools_available' marker")
+        return
+    if "ToolSearch" not in section:
+        fail(name, "## 0a section missing 'ToolSearch' reference")
+        return
+    ok(name)
+
+
+def test_router_task_tool_fallback_wired_through_resume_and_chain_loop() -> None:
+    name = "router/task-tool-fallback-wired-resume-and-chain-loop"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"craftflow-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    # NOTE: "## 4. Resume And Hydration" and "## 12. Chain Execution Loop" also
+    # appear earlier in this file as backtick-quoted prose cross-references
+    # (e.g. inside the "## 0a." section). A bare content.find() on either
+    # string matches those earlier prose mentions instead of the real
+    # heading, silently absorbing several unrelated earlier sections into
+    # the computed bounds (false negative — the check would pass even if
+    # the real section were missing the wiring). Anchor with a leading "\n"
+    # so only the real heading (always preceded by a blank line) matches.
+    resume_match = content.find("\n## 4. Resume And Hydration")
+    resume_idx = resume_match + 1 if resume_match != -1 else -1
+    next_after_resume = content.find("\n## 5.", resume_idx) if resume_idx != -1 else -1
+    if resume_idx == -1 or next_after_resume == -1:
+        fail(name, "could not locate '## 4. Resume And Hydration' section bounds")
+        return
+    resume_section = content[resume_idx:next_after_resume]
+    if "task_tools_available" not in resume_section:
+        fail(name, "## 4. Resume And Hydration missing 'task_tools_available' wiring")
+        return
+
+    chain_match = content.find("\n## 12. Chain Execution Loop")
+    chain_idx = chain_match + 1 if chain_match != -1 else -1
+    next_after_chain = content.find("\n## 13.", chain_idx) if chain_idx != -1 else -1
+    if chain_idx == -1 or next_after_chain == -1:
+        fail(name, "could not locate '## 12. Chain Execution Loop' section bounds")
+        return
+    chain_section = content[chain_idx:next_after_chain]
+    if "task_tools_available" not in chain_section:
+        fail(name, "## 12. Chain Execution Loop missing 'task_tools_available' wiring")
+        return
+    ok(name)
+
+
+def test_workflow_artifact_schema_documents_task_tools_available() -> None:
+    name = "workflow-artifact-policy/capabilities-documents-task-tools-available"
+    path = (
+        PLUGIN_ROOT
+        / "skills"
+        / "craftflow-router"
+        / "references"
+        / "workflow-artifact-and-hook-policy.md"
+    )
+    if not path.exists():
+        fail(name, f"workflow-artifact-and-hook-policy.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    cap_idx = content.find("`capabilities` records the session-level research backend")
+    if cap_idx == -1:
+        fail(name, "missing '`capabilities`' detail block")
+        return
+    next_bullet_idx = content.find("\n- `results", cap_idx)
+    section = content[cap_idx:next_bullet_idx if next_bullet_idx != -1 else len(content)]
+    if "task_tools_available" not in section:
+        fail(name, "`capabilities` detail block missing 'task_tools_available'")
+        return
+    ok(name)
+
+
+def test_self_dispatch_guard_present_in_task_update_agents() -> None:
+    name = "agents/self-dispatch-guard-present-after-task-update"
+    agent_files = [
+        "bug-investigator.md",
+        "component-builder.md",
+        "doc-syncer.md",
+        "github-researcher.md",
+        "planner.md",
+        "skill-author.md",
+        "web-researcher.md",
+    ]
+    guard_phrase = "do NOT self-report another agent's role or verdict"
+    # Anchors on the actual call-site instruction wording, not the bare
+    # "TaskUpdate" token — the bare token also appears in the `tools:`
+    # frontmatter line, which is not a real instruction site. Requiring
+    # `(` (a real call/invocation) excludes the frontmatter mention.
+    # `bug-investigator.md`, `component-builder.md`, and `planner.md` each
+    # have a SECOND real site inside their `### Task Status` block that
+    # doesn't use call syntax, so that phrasing is matched too.
+    call_site_pattern = re.compile(r"TaskUpdate\(|execute the `TaskUpdate` tool to mark")
+    # Generous window covering the largest observed real distance (~1060
+    # normalized chars) with margin, while staying well under the gap
+    # between the two distinct sites in dual-block files (~4700+ chars) so
+    # a guard near one site can't be mistaken for covering the other.
+    proximity_window = 1500
+    for filename in agent_files:
+        path = PLUGIN_ROOT / "agents" / filename
+        if not path.exists():
+            fail(name, f"agent file not found at {path}")
+            return
+        content = path.read_text(encoding="utf-8")
+        normalized = " ".join(content.split())
+        first_heading_idx = normalized.find("## ")
+        call_sites = [
+            m.start()
+            for m in call_site_pattern.finditer(normalized)
+            if first_heading_idx == -1 or m.start() > first_heading_idx
+        ]
+        if not call_sites:
+            fail(name, f"{filename} missing a real 'TaskUpdate' call-site instruction")
+            return
+        for site_idx in call_sites:
+            guard_idx = normalized.find(guard_phrase, site_idx)
+            if guard_idx == -1 or guard_idx - site_idx > proximity_window:
+                fail(
+                    name,
+                    f"{filename} TaskUpdate call-site at normalized offset {site_idx} "
+                    f"has no self-dispatch guard phrase within {proximity_window} chars "
+                    "afterward",
+                )
+                return
+    ok(name)
+
+
 def test_router_dispatches_intent_interview() -> None:
     name = "router/intent-interview-gate-registered"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
@@ -875,7 +1015,13 @@ def test_just_go_and_scope_decision_resume_anchored_to_project_root() -> None:
         fail(name, "bare unanchored JUST_GO Session Settings reference still present")
         return
 
-    resume_start = content.find("## 4. Resume And Hydration")
+    # Same anchor fragility as the fallback-wired test above: "## 4. Resume
+    # And Hydration" also appears earlier in this file as a backtick-quoted
+    # prose cross-reference. Anchor with a leading "\n" so only the real
+    # heading matches (currently coincidentally safe here since both
+    # interpretations agree, but not a durable guarantee).
+    resume_match = content.find("\n## 4. Resume And Hydration")
+    resume_start = resume_match + 1 if resume_match != -1 else -1
     resume_end = content.find("\n## 5. Workflow Preparation", resume_start)
     if resume_start == -1 or resume_end == -1:
         fail(name, "could not bound ## 4. Resume And Hydration through ## 5. Workflow Preparation")
@@ -908,7 +1054,17 @@ def test_dispatcher_scaffold_workflow_artifact_anchored_to_project_root() -> Non
     skill_content = skill_path.read_text(encoding="utf-8")
     shared_content = shared_path.read_text(encoding="utf-8")
 
-    skill_start = skill_content.find("### Prompt scaffold for every agent")
+    # Same anchor fragility class as the fallback-wired test above: "### Prompt
+    # scaffold for every agent" also appears earlier in SKILL.md as
+    # backtick-quoted prose cross-references (the "Task*-tool fallback"
+    # paragraph immediately above the real heading). Currently a bare find()
+    # still resolves correctly here only because the next-heading boundary
+    # ("\n### Prompt assembly rule") is itself unique and sits after both the
+    # prose mentions and the real heading, making the captured span a
+    # superset that still contains the real section -- not a durable
+    # guarantee, so anchor it the same way for consistency and future-proofing.
+    skill_match = skill_content.find("\n### Prompt scaffold for every agent")
+    skill_start = skill_match + 1 if skill_match != -1 else -1
     skill_end = skill_content.find("\n### Prompt assembly rule", skill_start)
     if skill_start == -1 or skill_end == -1:
         fail(name, "could not bound ### Prompt scaffold for every agent through ### Prompt assembly rule in SKILL.md")
@@ -18000,6 +18156,13 @@ def main() -> int:
     print()
     print("[ planner.md: ADR Prior-Art Check documented (backlog item 6) ]")
     test_planner_md_has_adr_prior_art_check()
+
+    print()
+    print("[ craftflow-router: task-tool capability detection + fallback wiring (backlog item 10 Phase 5) ]")
+    test_router_documents_task_tool_capability_detection()
+    test_router_task_tool_fallback_wired_through_resume_and_chain_loop()
+    test_workflow_artifact_schema_documents_task_tools_available()
+    test_self_dispatch_guard_present_in_task_update_agents()
 
     print()
     if _errors:
