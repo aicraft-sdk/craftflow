@@ -455,7 +455,16 @@ def test_router_task_tool_fallback_wired_through_resume_and_chain_loop() -> None
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
     content = path.read_text(encoding="utf-8")
-    resume_idx = content.find("## 4. Resume And Hydration")
+    # NOTE: "## 4. Resume And Hydration" and "## 12. Chain Execution Loop" also
+    # appear earlier in this file as backtick-quoted prose cross-references
+    # (e.g. inside the "## 0a." section). A bare content.find() on either
+    # string matches those earlier prose mentions instead of the real
+    # heading, silently absorbing several unrelated earlier sections into
+    # the computed bounds (false negative — the check would pass even if
+    # the real section were missing the wiring). Anchor with a leading "\n"
+    # so only the real heading (always preceded by a blank line) matches.
+    resume_match = content.find("\n## 4. Resume And Hydration")
+    resume_idx = resume_match + 1 if resume_match != -1 else -1
     next_after_resume = content.find("\n## 5.", resume_idx) if resume_idx != -1 else -1
     if resume_idx == -1 or next_after_resume == -1:
         fail(name, "could not locate '## 4. Resume And Hydration' section bounds")
@@ -465,7 +474,8 @@ def test_router_task_tool_fallback_wired_through_resume_and_chain_loop() -> None
         fail(name, "## 4. Resume And Hydration missing 'task_tools_available' wiring")
         return
 
-    chain_idx = content.find("## 12. Chain Execution Loop")
+    chain_match = content.find("\n## 12. Chain Execution Loop")
+    chain_idx = chain_match + 1 if chain_match != -1 else -1
     next_after_chain = content.find("\n## 13.", chain_idx) if chain_idx != -1 else -1
     if chain_idx == -1 or next_after_chain == -1:
         fail(name, "could not locate '## 12. Chain Execution Loop' section bounds")
@@ -1005,7 +1015,13 @@ def test_just_go_and_scope_decision_resume_anchored_to_project_root() -> None:
         fail(name, "bare unanchored JUST_GO Session Settings reference still present")
         return
 
-    resume_start = content.find("## 4. Resume And Hydration")
+    # Same anchor fragility as the fallback-wired test above: "## 4. Resume
+    # And Hydration" also appears earlier in this file as a backtick-quoted
+    # prose cross-reference. Anchor with a leading "\n" so only the real
+    # heading matches (currently coincidentally safe here since both
+    # interpretations agree, but not a durable guarantee).
+    resume_match = content.find("\n## 4. Resume And Hydration")
+    resume_start = resume_match + 1 if resume_match != -1 else -1
     resume_end = content.find("\n## 5. Workflow Preparation", resume_start)
     if resume_start == -1 or resume_end == -1:
         fail(name, "could not bound ## 4. Resume And Hydration through ## 5. Workflow Preparation")
@@ -1038,7 +1054,17 @@ def test_dispatcher_scaffold_workflow_artifact_anchored_to_project_root() -> Non
     skill_content = skill_path.read_text(encoding="utf-8")
     shared_content = shared_path.read_text(encoding="utf-8")
 
-    skill_start = skill_content.find("### Prompt scaffold for every agent")
+    # Same anchor fragility class as the fallback-wired test above: "### Prompt
+    # scaffold for every agent" also appears earlier in SKILL.md as
+    # backtick-quoted prose cross-references (the "Task*-tool fallback"
+    # paragraph immediately above the real heading). Currently a bare find()
+    # still resolves correctly here only because the next-heading boundary
+    # ("\n### Prompt assembly rule") is itself unique and sits after both the
+    # prose mentions and the real heading, making the captured span a
+    # superset that still contains the real section -- not a durable
+    # guarantee, so anchor it the same way for consistency and future-proofing.
+    skill_match = skill_content.find("\n### Prompt scaffold for every agent")
+    skill_start = skill_match + 1 if skill_match != -1 else -1
     skill_end = skill_content.find("\n### Prompt assembly rule", skill_start)
     if skill_start == -1 or skill_end == -1:
         fail(name, "could not bound ### Prompt scaffold for every agent through ### Prompt assembly rule in SKILL.md")
