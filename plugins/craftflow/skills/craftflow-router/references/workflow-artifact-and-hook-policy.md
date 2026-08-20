@@ -61,11 +61,15 @@ Rules:
   - `exit_criteria`
 - Bright Data MCP and Octocode MCP are optional accelerators. Base CRAFTFLOW installs must continue to work with built-in Claude Code tools only.
 - When optional user-configured Claude Code MCP servers are available, use the server names `brightdata` and `octocode` so the research agents can auto-detect them without prompt edits.
-- `capabilities` records the session-level research backend availability model:
+- `capabilities` records the session-level research backend availability model, plus
+  Task*-tool availability:
   - `brightdata_available`
   - `octocode_available`
   - `websearch_available`
   - `webfetch_available`
+  - `task_tools_available` — `true`/`false` once probed by `## 0a. Task Tool Capability
+    Detection`, `"unknown"` before the first probe of a session. Never trusted as durable across
+    sessions; always re-probed fresh each session.
 - `results.research` must be structured as `web`, `github`, and `synthesis`.
 - `intent` stores the durable spec header for the workflow:
   - `goal`

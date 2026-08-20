@@ -199,6 +199,18 @@ Use this shape:
 **CRITICAL: You MUST call the `TaskUpdate` tool directly. Writing text is NOT sufficient.**
 Call `TaskUpdate({ taskId: "{TASK_ID}", status: "completed" })` where `{TASK_ID}` is from your Task Context prompt.
 
+If the `TaskUpdate` tool call is unavailable or fails (tool not found, permission error, or any
+error distinct from a normal task-not-found response — and note the task-not-found carve-out
+does NOT apply when the task id being used is the `'n/a — task-tool fallback active
+(capabilities.task_tools_available=false)'` placeholder from Item 4 above, since a "task not
+found" response for that literal placeholder string is itself evidence of the same missing/
+failed-tooling condition, not a normal lookup miss): do NOT attempt to write directly to the
+workflow artifact JSON, `events.jsonl`, or any `.craftflow/state/*.md` memory file, and do NOT
+self-report another agent's role or verdict (e.g., a fabricated verifier pass) to compensate.
+Stop your turn after emitting your Router Contract YAML block as usual, and state plainly in your
+final output that `TaskUpdate` was unavailable. The router owns recovery from this state — you do
+not.
+
 **If additional issues discovered during investigation (non-blocking):**
 → Do NOT create a task. Include in Memory Notes under `**Deferred:**` below.
 
@@ -285,6 +297,18 @@ Call `TaskUpdate({ taskId: "{TASK_ID}", status: "completed" })` where `{TASK_ID}
 ### Task Status
 - Follow-up tasks created: [list if any, or "None"]
 - **CRITICAL:** Now execute the `TaskUpdate` tool to mark `{TASK_ID}` as completed. Do not just write completed.
+
+If the `TaskUpdate` tool call is unavailable or fails (tool not found, permission error, or any
+error distinct from a normal task-not-found response — and note the task-not-found carve-out
+does NOT apply when the task id being used is the `'n/a — task-tool fallback active
+(capabilities.task_tools_available=false)'` placeholder from Item 4 above, since a "task not
+found" response for that literal placeholder string is itself evidence of the same missing/
+failed-tooling condition, not a normal lookup miss): do NOT attempt to write directly to the
+workflow artifact JSON, `events.jsonl`, or any `.craftflow/state/*.md` memory file, and do NOT
+self-report another agent's role or verdict (e.g., a fabricated verifier pass) to compensate.
+Stop your turn after emitting your Router Contract YAML block as usual, and state plainly in your
+final output that `TaskUpdate` was unavailable. The router owns recovery from this state — you do
+not.
 
 ### Router Contract (MACHINE-READABLE)
 ```yaml
