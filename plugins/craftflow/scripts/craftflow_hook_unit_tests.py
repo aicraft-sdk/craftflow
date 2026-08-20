@@ -16858,6 +16858,38 @@ def test_state_read_compaction_end_to_end(tmp_dir: Path) -> None:
 # Runner
 # ---------------------------------------------------------------------------
 
+def test_systematic_debugging_documents_sandbox_vs_real_failure_protocol() -> None:
+    # Backlog item 2: distinguish an agent-sandbox-imposed failure (credentials/network/IPC
+    # blocked by the execution sandbox itself) from a genuine code bug. Without this, a
+    # sandbox denial reads identically to a real failure and gets "fixed" as if it were one.
+    name = "systematic-debugging/skill-md/documents-sandbox-vs-real-failure-protocol"
+    path = PLUGIN_ROOT / "skills" / "systematic-debugging" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"systematic-debugging/SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+
+    if "## Sandbox-vs-Real-Failure Protocol" not in content:
+        fail(name, "systematic-debugging/SKILL.md is missing the "
+                    "'## Sandbox-vs-Real-Failure Protocol' section")
+        return
+
+    normalized = " ".join(content.split())
+    required_substrings = (
+        "retry the exact same command, unchanged",
+        "narrowest possible",
+        "Never bypass a genuine failure to make the symptom disappear",
+    )
+    for substring in required_substrings:
+        normalized_substring = " ".join(substring.split())
+        if normalized_substring.lower() not in normalized.lower():
+            fail(name, f"Sandbox-vs-Real-Failure Protocol section is missing required "
+                        f"content: {substring!r}")
+            return
+
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -17761,6 +17793,10 @@ def main() -> int:
     print()
     print("[ craftflow-router: memory-finalize sites wired for archive rotation (Phase 6) ]")
     test_memory_finalize_instruction_sites_wire_archive_rotation()
+
+    print()
+    print("[ systematic-debugging: sandbox-vs-real-failure protocol documented (backlog item 2) ]")
+    test_systematic_debugging_documents_sandbox_vs_real_failure_protocol()
 
     print()
     if _errors:

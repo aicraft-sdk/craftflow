@@ -275,6 +275,39 @@ If systematic investigation reveals issue is truly environmental, timing-depende
 
 **But:** 95% of "no root cause" cases are incomplete investigation.
 
+## Sandbox-vs-Real-Failure Protocol
+
+A required command can fail for two very different reasons that look identical
+in the output: the **code is actually broken**, or the **agent's own
+execution sandbox** is blocking something the command needs — credentials,
+network access, IPC, a keychain, a privileged syscall. Treating the second as
+the first is a common misread that leads to "fixing" working code, or
+bypassing a check that was correctly protecting something.
+
+**When a command fails, before concluding the code is broken:**
+
+1. **Check whether the failure signature matches a sandbox/permission denial**
+   — not a normal application error. Look for: permission denied on something
+   that should be readable/writable, a credential/keychain/auth prompt that
+   never resolves, a network call that times out or is refused at the
+   transport level (not an application-level 4xx/5xx), or an IPC/socket
+   operation that fails immediately with no partial output.
+2. **Retry the exact same command, unchanged**, with the narrowest possible
+   host-permission escalation that plausibly grants just the missing access
+   (e.g. re-running outside a sandboxed tool wrapper, requesting the specific
+   permission needed) — not a broader "disable all sandboxing" jump.
+3. **If the retry succeeds unchanged:** the failure was sandbox-imposed, not
+   a code bug. Do not modify the code to "fix" it.
+4. **If the retry still fails identically:** the sandbox was not the cause —
+   return to Phase 1 and investigate the code as a genuine failure.
+
+**Never bypass a genuine failure to make the symptom disappear** — the
+narrowest-escalation retry in step 2 exists to *distinguish* sandbox noise
+from a real bug, not to work around a real bug once one is confirmed. If step
+4 confirms the code is broken, fix the root cause through the normal Four
+Phases process; do not weaken a check, silence an error, or route around a
+confirmed-real failure just because escalating once didn't help.
+
 ## Supporting Techniques
 
 Use Grep/Bash to trace data flow inline.
