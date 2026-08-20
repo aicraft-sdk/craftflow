@@ -58,6 +58,23 @@
 > shared/host-specific split was not achievable without disproportionate regression risk
 > relative to a follow-up, more carefully scoped sub-phase. This file will grow as those
 > follow-ups land.
+>
+> **Migration status (Phase 4, Cursor side):** Phase 4a made `cursor-router/SKILL.md`
+> aware of this file for the first time — a mandatory `Read()` note plus an explicit
+> carve-out on the pre-existing "NEVER consult `craftflow-router/SKILL.md`" Hard Rule
+> (Finding 1 from `docs/plans/2026-08-19-router-protocol-mapping.md`) — with zero content
+> moved out of `cursor-router/SKILL.md` yet. Phase 4b replaced four low-risk items with
+> pointers here: the Memory File Required Sections table, the Resolve Project Root
+> multi-repo cross-reference (previously pointing at `craftflow-router/SKILL.md`, now
+> pointing here directly since the algorithm no longer lives inline there either), the
+> Previous Agent Findings Handoff template block, and the fast-path-omission
+> cross-reference (previously citing `craftflow-router/SKILL.md` §12, now citing this
+> file's own "Verifier Findings Handoff" section) plus the Skill-Distill Gate's intro
+> cross-reference. Deliberately NOT yet touched: the Dispatch Prompt Scaffold's literal
+> fenced runtime template in `cursor-router/SKILL.md` § 5, and the Verdict-by-agent table /
+> Phase-chains-by-workflow-type section — reserved for a later Phase 4c given their higher
+> structural complexity (interleaved host-specific content within a single coherent
+> runtime-dispatched block).
 
 ## Memory File Required Sections
 

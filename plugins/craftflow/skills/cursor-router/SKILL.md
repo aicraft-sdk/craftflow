@@ -165,13 +165,10 @@ Run this before routing. Memory lives at `.craftflow/state/`.
    Read(".craftflow/state/progress.md")
 ```
 
-Required sections per file:
-
-| File | Required Sections |
-|------|-------------------|
-| `activeContext.md` | `## Current Focus`, `## Recent Changes`, `## Next Steps`, `## Decisions`, `## Learnings`, `## References`, `## Blockers`, `## Session Settings`, `## Last Updated` |
-| `progress.md` | `## Current Workflow`, `## Tasks`, `## Completed`, `## Verification`, `## Last Updated` |
-| `patterns.md` | `## User Standards`, `## Common Gotchas`, `## Project SKILL_HINTS`, `## Last Updated` |
+Required sections per file — shared with Claude Code, canonical table lives in
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+"Memory File Required Sections". `Read()` that file now if you have not already this
+session.
 
 If a required section is missing, create it before proceeding.
 
@@ -281,9 +278,11 @@ Cursor's `Task`-dispatch model: instead of a `## Worktree` block appended to a
    ```
    - If `TOPLEVEL_EXIT == 0`: unchanged single-repo path, `PROJECT_ROOT` is set.
    - If `TOPLEVEL_EXIT != 0`: cwd is a multi-repo workspace root (not itself a git repo but
-     containing immediate-child nested git repos). Resolve exactly as Claude Code's
-     `craftflow-router/SKILL.md` does in its own "1a. Multi-repo workspace root resolution"
-     step: invoke the same `craftflow_resolve_workspace_root.py` helper (located via the same
+     containing immediate-child nested git repos). Resolve exactly per
+     `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+     "Resolve Project Root"'s "1a. Multi-repo workspace root resolution" step (`Read()`
+     that file now if you have not already this session): invoke the same
+     `craftflow_resolve_workspace_root.py` helper (located via the same
      `installed_plugins.json` lookup) with `--cwd "$(pwd)" --request "<user request>"`, and:
      - `DETERMINISTIC` → set `PROJECT_ROOT` to the returned `project_root`.
      - `AMBIGUOUS` → ask the user once which candidate repo this workflow targets (Cursor has
@@ -508,25 +507,14 @@ receive your result.
 a `## Previous Agent Findings` section — this is load-bearing, not decoration. When
 building the integration-verifier dispatch prompt AND code-reviewer and/or
 silent-failure-hunter ran this round (standard BUILD/DEBUG chain), append this section
-to the template above, in the same sub-block format
-`craftflow-router/SKILL.md`'s own "Previous Agent Findings handoff" section uses:
-
-```text
-## Previous Agent Findings
-
-### Code Reviewer
-**Verdict:** {Approve|Changes Requested}
-**Critical Issues:**
-{reviewer critical issues or "None"}
-
-### Silent Failure Hunter
-**Critical Issues:**
-{hunter critical issues or "None / not in this workflow"}
-```
+to the template above, in the exact sub-block format given in
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+"Previous Agent Findings Handoff" (`Read()` that file now if you have not already this
+session).
 
 - **Fast path (no reviewer/hunter ran this round):** omit the `## Previous Agent
-  Findings` section entirely — same fast-path-omission logic already used for the
-  Claude Code router (`craftflow-router/SKILL.md` §12).
+  Findings` section entirely — same fast-path-omission logic given in the shared doc's
+  § "Verifier Findings Handoff".
 - **DEBUG chain:** Silent Failure Hunter is not in the chain — omit its sub-block (or
   state "not in this workflow" per the format above); Code Reviewer's sub-block still
   applies.
@@ -630,8 +618,10 @@ added to this file without touching Claude Code files.
 This section wires the post-implementation skill-distillation feature's `skill-distill`
 phase into Cursor's task-dispatch model, replacing the "deferred to v2" status this file
 previously carried. It mirrors Claude Code's `references/build-workflow.md` "#### Skill-
-Distill Gate" and `craftflow-router/SKILL.md` "### Skill-Distill Approval Flow" in intent,
-using this file's own established mechanisms instead of `TaskCreate`/`AskUserQuestion`
+Distill Gate" and the shared doc's
+(`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md`) §
+"Skill-Distill Approval Flow" in intent, using this file's own established mechanisms
+instead of `TaskCreate`/`AskUserQuestion`
 (neither exists in Cursor): a real `Task` dispatch (§ 5's dispatch loop) for the
 gate-check body, and a router-own-turn plain-text question/answer exchange for the
 approval decision — a dispatched `generalPurpose` subagent has no channel back to the

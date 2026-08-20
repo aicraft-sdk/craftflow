@@ -13985,6 +13985,63 @@ def test_cursor_router_shared_protocol_read_and_hard_rule_carveout() -> None:
     ok(name)
 
 
+def test_cursor_router_shared_protocol_extraction_batch1_no_stale_reembed() -> None:
+    # Phase 4b of the hooks-as-bridge redesign (backlog item 8): the first content
+    # actually moved OUT of cursor-router/SKILL.md (Phase 4a only added a new mandatory
+    # read + Hard Rule carve-out, moving nothing). Four items were pointer-replaced this
+    # phase: the Memory File Required Sections table, the Resolve Project Root multi-repo
+    # cross-reference (now pointing at the shared doc directly instead of
+    # craftflow-router/SKILL.md), the Previous Agent Findings Handoff template block, and
+    # the fast-path-omission cross-reference (previously citing craftflow-router/SKILL.md
+    # "§12", now citing the shared doc's own "Verifier Findings Handoff" section).
+    name = "cursor-router/skill-md/shared-protocol-extraction-batch1-no-stale-reembed"
+    skill_path = PLUGIN_ROOT / "skills" / "cursor-router" / "SKILL.md"
+    shared_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md"
+    if not skill_path.exists():
+        fail(name, f"cursor-router SKILL.md not found at {skill_path}")
+        return
+    if not shared_path.exists():
+        fail(name, f"shared router-protocol.md not found at {shared_path}")
+        return
+    skill_content = skill_path.read_text(encoding="utf-8")
+    shared_content = shared_path.read_text(encoding="utf-8")
+
+    if skill_content.count("skills/_shared/router-protocol.md") < 6:
+        fail(
+            name,
+            f"expected at least 6 references to the shared doc in cursor-router "
+            f"SKILL.md (Phase 4a's 2 + Phase 4b's 4 new pointers), found "
+            f"{skill_content.count('skills/_shared/router-protocol.md')}",
+        )
+        return
+
+    # The stale cross-reference to craftflow-router/SKILL.md's own "§12" for the
+    # fast-path-omission rule must be gone -- that content no longer lives there either.
+    if "Claude Code router (`craftflow-router/SKILL.md` §12)" in skill_content:
+        fail(name, "cursor-router SKILL.md still cites the stale "
+                    "'craftflow-router/SKILL.md §12' cross-reference for the "
+                    "fast-path-omission rule")
+        return
+
+    # Old literal content that moved must be ABSENT from cursor-router/SKILL.md (else
+    # it's a stale re-embedded copy sitting alongside the new pointer) and PRESENT in
+    # the shared doc -- same markers already validated against craftflow-router/SKILL.md
+    # in the sibling stale-reembed test above, now also checked against cursor-router.
+    moved_markers = (
+        "| `patterns.md` | `## User Standards`, `## Common Gotchas`, `## Project SKILL_HINTS`, `## Last Updated` |",
+        "### Code Reviewer\n**Verdict:** {Approve|Changes Requested}",
+        "{hunter critical issues or \"None / not in this workflow\"}",
+    )
+    for marker in moved_markers:
+        if marker in skill_content:
+            fail(name, f"cursor-router SKILL.md still contains moved literal content (stale re-embedded copy): {marker!r}")
+            return
+        if marker not in shared_content:
+            fail(name, f"shared doc missing expected extracted content: {marker!r}")
+            return
+    ok(name)
+
+
 def test_craftflow_router_documents_state_read_compaction_self_heal() -> None:
     name = "craftflow-router/skill-md/documents-state-read-compaction-self-heal"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
@@ -17528,6 +17585,10 @@ def main() -> int:
     print()
     print("[ cursor-router: shared router-protocol read + Hard Rule carve-out (item 8 Phase 4a) ]")
     test_cursor_router_shared_protocol_read_and_hard_rule_carveout()
+
+    print()
+    print("[ cursor-router: shared router-protocol extraction batch 1, no stale re-embed (item 8 Phase 4b) ]")
+    test_cursor_router_shared_protocol_extraction_batch1_no_stale_reembed()
 
     print()
     print("[ craftflow-router: state-read compaction self-heal doc (Phase 3) ]")
