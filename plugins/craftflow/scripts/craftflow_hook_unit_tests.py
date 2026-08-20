@@ -514,6 +514,19 @@ def test_self_dispatch_guard_present_in_task_update_agents() -> None:
         "web-researcher.md",
     ]
     guard_phrase = "do NOT self-report another agent's role or verdict"
+    # Anchors on the actual call-site instruction wording, not the bare
+    # "TaskUpdate" token — the bare token also appears in the `tools:`
+    # frontmatter line, which is not a real instruction site. Requiring
+    # `(` (a real call/invocation) excludes the frontmatter mention.
+    # `bug-investigator.md`, `component-builder.md`, and `planner.md` each
+    # have a SECOND real site inside their `### Task Status` block that
+    # doesn't use call syntax, so that phrasing is matched too.
+    call_site_pattern = re.compile(r"TaskUpdate\(|execute the `TaskUpdate` tool to mark")
+    # Generous window covering the largest observed real distance (~1060
+    # normalized chars) with margin, while staying well under the gap
+    # between the two distinct sites in dual-block files (~4700+ chars) so
+    # a guard near one site can't be mistaken for covering the other.
+    proximity_window = 1500
     for filename in agent_files:
         path = PLUGIN_ROOT / "agents" / filename
         if not path.exists():
@@ -521,17 +534,25 @@ def test_self_dispatch_guard_present_in_task_update_agents() -> None:
             return
         content = path.read_text(encoding="utf-8")
         normalized = " ".join(content.split())
-        task_update_idx = normalized.find("TaskUpdate")
-        guard_idx = normalized.find(guard_phrase)
-        if task_update_idx == -1:
-            fail(name, f"{filename} missing 'TaskUpdate' instruction")
+        first_heading_idx = normalized.find("## ")
+        call_sites = [
+            m.start()
+            for m in call_site_pattern.finditer(normalized)
+            if first_heading_idx == -1 or m.start() > first_heading_idx
+        ]
+        if not call_sites:
+            fail(name, f"{filename} missing a real 'TaskUpdate' call-site instruction")
             return
-        if guard_idx == -1:
-            fail(name, f"{filename} missing self-dispatch guard phrase")
-            return
-        if guard_idx <= task_update_idx:
-            fail(name, f"{filename} guard phrase does not follow its TaskUpdate instruction")
-            return
+        for site_idx in call_sites:
+            guard_idx = normalized.find(guard_phrase, site_idx)
+            if guard_idx == -1 or guard_idx - site_idx > proximity_window:
+                fail(
+                    name,
+                    f"{filename} TaskUpdate call-site at normalized offset {site_idx} "
+                    f"has no self-dispatch guard phrase within {proximity_window} chars "
+                    "afterward",
+                )
+                return
     ok(name)
 
 
