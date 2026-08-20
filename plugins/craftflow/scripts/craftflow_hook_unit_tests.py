@@ -14104,6 +14104,50 @@ def test_cursor_router_verdict_table_cross_ref_and_scaffold_no_op_documented() -
     ok(name)
 
 
+def test_cursor_bootstrap_mdc_heading_references_resolve() -> None:
+    # Item 8 Phase 5 (hooks-as-bridge redesign): verify rules/craftflow-router.mdc's
+    # documented entry sequence -- the sole bootstrap for every Cursor session -- still
+    # points at real content in cursor-router/SKILL.md. A fresh walkthrough this phase
+    # found Step 3 citing a stale heading ('## 5. Cursor Inline Execution Loop') that
+    # predated Cursor's real Task-tool dispatch mode; the actual current heading is
+    # '## 5. Cursor Task-Dispatch Execution Loop'. This test generically checks every
+    # `## N. ...`-style heading reference quoted in the .mdc against cursor-router/SKILL.md's
+    # real headings, so this exact class of drift (a section renamed in SKILL.md without its
+    # cross-reference in the .mdc being updated) gets caught automatically going forward,
+    # rather than silently persisting until the next manual walkthrough.
+    name = "cursor-router/mdc/heading-references-resolve"
+    mdc_path = PLUGIN_ROOT / "rules" / "craftflow-router.mdc"
+    skill_path = PLUGIN_ROOT / "skills" / "cursor-router" / "SKILL.md"
+    if not mdc_path.exists():
+        fail(name, f"craftflow-router.mdc not found at {mdc_path}")
+        return
+    if not skill_path.exists():
+        fail(name, f"cursor-router SKILL.md not found at {skill_path}")
+        return
+    mdc_content = mdc_path.read_text(encoding="utf-8")
+    skill_content = skill_path.read_text(encoding="utf-8")
+
+    skill_headings = set(re.findall(r"^(##\s+\d+[a-z]?\.\s+.+)$", skill_content, re.MULTILINE))
+
+    # Every backtick-quoted `## N. ...`-style reference in the .mdc must be a real,
+    # currently-existing heading in cursor-router/SKILL.md.
+    mdc_heading_refs = re.findall(r"`(##\s+\d+[a-z]?\.\s+[^`]+)`", mdc_content)
+    if not mdc_heading_refs:
+        fail(name, "expected at least one backtick-quoted '## N. ...' heading reference "
+                    "in craftflow-router.mdc -- test assumptions stale, or the .mdc's Entry "
+                    "Point section was restructured without updating this test")
+        return
+
+    for ref in mdc_heading_refs:
+        if ref not in skill_headings:
+            fail(name, f"craftflow-router.mdc references heading {ref!r}, which does not "
+                        f"exist in cursor-router/SKILL.md -- stale cross-reference, Cursor's "
+                        f"bootstrap Step pointing at it may silently fail to find real content")
+            return
+
+    ok(name)
+
+
 def test_craftflow_router_documents_state_read_compaction_self_heal() -> None:
     name = "craftflow-router/skill-md/documents-state-read-compaction-self-heal"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
@@ -17655,6 +17699,10 @@ def main() -> int:
     print()
     print("[ cursor-router: verdict table cross-ref + scaffold no-op documented (item 8 Phase 4c) ]")
     test_cursor_router_verdict_table_cross_ref_and_scaffold_no_op_documented()
+
+    print()
+    print("[ cursor-router: bootstrap .mdc heading references resolve (item 8 Phase 5) ]")
+    test_cursor_bootstrap_mdc_heading_references_resolve()
 
     print()
     print("[ craftflow-router: state-read compaction self-heal doc (Phase 3) ]")
