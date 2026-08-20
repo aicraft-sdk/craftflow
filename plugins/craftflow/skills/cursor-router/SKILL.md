@@ -433,6 +433,17 @@ that has no tool restriction.
 
 ### Dispatch prompt template
 
+**Not a pointer to the shared doc's Dispatch Prompt Scaffold — kept fully inline
+deliberately.** Item 8 Phase 4c compared this template against
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+"Dispatch Prompt Scaffold" byte-for-byte and found real content differences, not just a
+host-specific preamble: this template omits `## Domain Context` and `## SKILL_HINTS`
+entirely (see § "Simplified execution model" above) and the `Effort Directive` field
+(already tracked separately). Pointer-izing this section would either misrepresent what
+Cursor's actual dispatch prompts contain, or silently add untested new sections to real
+subagent prompts as a side effect of a documentation cleanup — neither is acceptable, so
+this template stays fully self-contained and literal, unlike the smaller sections above.
+
 Construct this prompt for every phase before calling `Task`. Fill in `{agent-name}` and
 the scaffold fields (reusing the same field names the router already assembles in § 2
 Memory Load / § 3 Workflow Preparation / § 4 Workflow Artifact Creation):
@@ -583,6 +594,17 @@ In v1 Cursor Task-Dispatch Mode, the following Claude Code features are NOT supp
   Dispatch Rule wired yet, so the `## Task Context` block in § 5 intentionally omits
   this field rather than fabricate a value with no steering logic behind it. All
   dispatched phases run without effort steering until this is implemented.
+- `## Domain Context` and `## SKILL_HINTS` sections (deferred to v2, found during item 8
+  Phase 4c's byte-comparison against
+  `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md`'s
+  canonical Dispatch Prompt Scaffold) — the canonical scaffold includes both: `##
+  Domain Context` (project glossary/domain files, when present) and `## SKILL_HINTS`
+  (the router-detected skill list — see § "Deterministic skill hints," one of this
+  plan's confirmed needs-reconciliation items). § 5's dispatch prompt template below
+  intentionally omits both rather than fabricate content with no detection/routing logic
+  behind it on the Cursor side yet. This means Cursor-dispatched agents currently receive
+  no domain-glossary context and no router-selected skill hints at all, unlike Claude
+  Code-dispatched agents. Deferred to v2 for the same reason as the items above.
 - Full memory-finalization safety hardening (deferred to v2) — § 8 below writes memory markdown
   directly instead of invoking `craftflow_memory_merge.py` (the routing-table-driven,
   confidence-filtered, dedup-capped, retraction-aware merge Claude Code's real memory-finalize task
@@ -810,6 +832,16 @@ the workflow, emit a BLOCKED progress block, and ask the user for direction. Do 
 silently retry the `Task` call more than once before surfacing BLOCKED to the user.
 
 ### Verdict by agent
+
+The three read-only-agent heading strings below (`code-reviewer`, `silent-failure-hunter`,
+`integration-verifier`) are byte-identical to the fallback headings in
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+"Agent Verdict Headings" — both routers dispatch the same underlying agent `.md` files,
+which emit this exact text regardless of which router dispatched them. The remaining
+rows' `STATUS=...` field checks have no shared-doc equivalent (the extraction algorithm
+and full per-agent required-fields tables stay host-specific-in-depth on both sides — see
+that section's own host-specific note). Every cell value below stays inline verbatim,
+unchanged, since these are operationally load-bearing pass/fail checks, not documentation:
 
 | Agent | Pass condition |
 |-------|---------------|

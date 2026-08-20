@@ -14042,6 +14042,68 @@ def test_cursor_router_shared_protocol_extraction_batch1_no_stale_reembed() -> N
     ok(name)
 
 
+def test_cursor_router_verdict_table_cross_ref_and_scaffold_no_op_documented() -> None:
+    # Phase 4c of the hooks-as-bridge redesign (backlog item 8): a mixed-outcome phase.
+    # The Verdict-by-agent table (section 6) got a cross-reference note to the shared
+    # doc's Agent Verdict Headings, with every pass-condition cell value kept byte-for-byte
+    # unchanged (they're operationally load-bearing, not documentation -- a router bug
+    # here silently breaks PASS/FAIL decisions). The Dispatch Prompt Scaffold (section 5)
+    # was investigated and found to NOT be safely pointer-izable -- Cursor's real template
+    # omits '## Domain Context' and '## SKILL_HINTS' entirely, contradicting the mapping
+    # table's original "field names and order match" claim -- so it was deliberately left
+    # inline, with the gap self-documented instead of silently ported or silently ignored.
+    name = "cursor-router/skill-md/verdict-table-crossref-and-scaffold-no-op-documented"
+    path = PLUGIN_ROOT / "skills" / "cursor-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"cursor-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+
+    # Verdict-by-agent: cross-reference note present, all 8 pass-condition cells intact.
+    if "### Verdict by agent" not in content:
+        fail(name, "cursor-router SKILL.md missing '### Verdict by agent' section")
+        return
+    verdict_section = content.split("### Verdict by agent", 1)[1].split("### Override rules", 1)[0]
+
+    if "Agent Verdict Headings" not in verdict_section:
+        fail(name, "cursor-router SKILL.md § 'Verdict by agent' missing the cross-reference "
+                    "note to the shared doc's Agent Verdict Headings section")
+        return
+
+    for cell in (
+        "| component-builder | `STATUS=PASS`, `PHASE_EXIT_READY=true`, `PROOF_STATUS=passed`, non-empty `SCENARIOS` |",
+        "| code-reviewer | `## Review: Approve` (no critical issues) |",
+        "| silent-failure-hunter | `## Error Handling Audit: CLEAN` (no critical issues) |",
+        "| integration-verifier | `## Verification: PASS` (scenario totals reconcile with evidence) |",
+        "| skill-author | `STATUS=COMPLETE` (non-empty `PROPOSAL_PATH` + `CANDIDATE_ID`) or `STATUS=SKIPPED` (non-empty `SKIP_REASON`, a passing state) — see § 5a for the full gate + approval flow |",
+    ):
+        if cell not in verdict_section:
+            fail(name, f"cursor-router SKILL.md Verdict-by-agent table cell changed or missing "
+                        f"(these are operationally load-bearing, must stay byte-for-byte): {cell!r}")
+            return
+
+    # Dispatch Prompt Scaffold: deliberate no-op is documented, not silent.
+    if "Not a pointer to the shared doc's Dispatch Prompt Scaffold" not in content:
+        fail(name, "cursor-router SKILL.md § 'Dispatch prompt template' missing the "
+                    "documented deliberate-no-op note")
+        return
+
+    if "## Domain Context` and `## SKILL_HINTS` sections (deferred to v2" not in content:
+        fail(name, "cursor-router SKILL.md § 'Simplified execution model' missing the "
+                    "self-documented Domain Context / SKILL_HINTS gap bullet")
+        return
+
+    # The literal template itself must remain fully inline -- these lines are the actual
+    # runtime dispatch prompt content and must never be replaced with a pointer sentence.
+    for marker in ("## Task Context", "## User Request", "## Requirements", "## Memory Summary", "## Project Patterns"):
+        if marker not in content:
+            fail(name, f"cursor-router SKILL.md § 5 dispatch template missing expected "
+                        f"literal field (should never have been pointer-ized): {marker!r}")
+            return
+
+    ok(name)
+
+
 def test_craftflow_router_documents_state_read_compaction_self_heal() -> None:
     name = "craftflow-router/skill-md/documents-state-read-compaction-self-heal"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
@@ -17589,6 +17651,10 @@ def main() -> int:
     print()
     print("[ cursor-router: shared router-protocol extraction batch 1, no stale re-embed (item 8 Phase 4b) ]")
     test_cursor_router_shared_protocol_extraction_batch1_no_stale_reembed()
+
+    print()
+    print("[ cursor-router: verdict table cross-ref + scaffold no-op documented (item 8 Phase 4c) ]")
+    test_cursor_router_verdict_table_cross_ref_and_scaffold_no_op_documented()
 
     print()
     print("[ craftflow-router: state-read compaction self-heal doc (Phase 3) ]")

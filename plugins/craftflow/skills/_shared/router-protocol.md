@@ -70,11 +70,17 @@
 > Previous Agent Findings Handoff template block, and the fast-path-omission
 > cross-reference (previously citing `craftflow-router/SKILL.md` §12, now citing this
 > file's own "Verifier Findings Handoff" section) plus the Skill-Distill Gate's intro
-> cross-reference. Deliberately NOT yet touched: the Dispatch Prompt Scaffold's literal
-> fenced runtime template in `cursor-router/SKILL.md` § 5, and the Verdict-by-agent table /
-> Phase-chains-by-workflow-type section — reserved for a later Phase 4c given their higher
-> structural complexity (interleaved host-specific content within a single coherent
-> runtime-dispatched block).
+> cross-reference. Phase 4c added a cross-reference note to the Verdict-by-agent table
+> (§ "Agent Verdict Headings" above is byte-identical for the 3 read-only-agent rows) —
+> the table's actual pass-condition cell values stay inline verbatim, since they're
+> operationally load-bearing, not documentation. Phase 4c also investigated the Dispatch
+> Prompt Scaffold's literal fenced runtime template in `cursor-router/SKILL.md` § 5 and
+> made a deliberate no-op call: see this section's own "Correction (Phase 4c)" note above
+> for why — Cursor's real template is missing whole sections this shared scaffold has,
+> not just a host-specific preamble. Still not touched: `### Phase chains by workflow
+> type` (§5) — the phase→agent routing intent already lives in the Explicit Dispatcher
+> table above; that section's own remaining content is Cursor-specific chain-execution
+> mechanics with no clean shared/host-specific split attempted yet.
 
 ## Memory File Required Sections
 
@@ -314,7 +320,9 @@ Optional sections:
 - `## Approved Context Files` only for `plan-gap-reviewer`.
 - `## Previous Agent Findings` only for integration-verifier and only after review/hunt phases.
 
-(Host-specific additions: Cursor's dispatch prompt additionally injects a `## Worktree` block and a "you are an isolated subagent, read your own brief" preamble, both necessary only because `Task`'s `generalPurpose` subagent doesn't natively load an agent's system prompt the way Claude Code's registered subagent types do. Claude Code needs neither — see each binding doc's own dispatch section.)
+(Host-specific additions: Cursor's dispatch prompt additionally injects a `## Worktree` block and a "you are an isolated subagent, read your own brief" preamble, both necessary only because `Task`'s `generalPurpose` subagent doesn't natively load an agent's system prompt the way Claude Code's registered subagent types do. Claude Code needs neither — see each binding doc's own dispatch section.
+
+**Correction (Phase 4c):** this scaffold's field list is NOT actually shared across hosts, despite the mapping table's original "field names and order match" claim — direct comparison found Cursor's real dispatch template omits `## Domain Context` and `## SKILL_HINTS` entirely, in addition to the already-known `Effort Directive` field gap. `cursor-router/SKILL.md` § 5's "Dispatch prompt template" therefore stays fully inline and literal — not pointer-ized — and self-documents this gap in its own "Simplified execution model" list. See `docs/plans/2026-08-19-router-protocol-mapping.md`'s Phase 3 corrections section for the mapping-table row fix.)
 
 ### Prompt assembly rule
 
