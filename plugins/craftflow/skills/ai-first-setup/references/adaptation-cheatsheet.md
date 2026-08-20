@@ -193,6 +193,7 @@ Always leave existing entries untouched. Rules:
 | `.claude/` | Leave ignored; do NOT remove |
 | `AGENTS.md`, `AI.md`, `TESTS.md`, `docs/ai/**` | These must be TRACKED — do NOT add them to `.gitignore` |
 | `tools/scripts/**` | Must be tracked — do NOT add to `.gitignore` |
+| `docs/plans/**/*.md` | Must be IGNORED — add `/docs/plans/**/*.md` if the repo's `.gitignore` doesn't already cover it. Plans are working documents; no agent commits them. `docs/plans/.gitkeep` stays tracked so the directory itself persists. |
 
 ---
 

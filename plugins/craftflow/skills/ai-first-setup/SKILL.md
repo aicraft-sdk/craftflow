@@ -267,7 +267,7 @@ Write eligible files in this exact order so that cross-references resolve correc
    - `session-handoff.md` from `assets/lifecycle/session-handoff.md.tpl`; substitute `{{PROJECT_NAME}}`
    - `clean-state-checklist.md` from `assets/lifecycle/clean-state-checklist.md.tpl`; substitute `{{PROJECT_NAME}}`, `{{BUILD_TEST_COMMAND}}`
    - `feature_list.json` from `assets/scope/feature_list.json.tpl`
-9. **`.gitignore` audit** — confirm `CLAUDE.md` and `.claude/` remain ignored; do not add new ignores for `AGENTS.md`, `AI.md`, `TESTS.md`, `docs/ai/**`, or `tools/scripts/**`
+9. **`.gitignore` audit** — confirm `CLAUDE.md` and `.claude/` remain ignored; do not add new ignores for `AGENTS.md`, `AI.md`, `TESTS.md`, `docs/ai/**`, or `tools/scripts/**`. Ensure `/docs/plans/**/*.md` IS ignored — append it (with a short comment: plans are working documents, not deliverables; their durable content belongs in Craftflow's memory system, not git history) if the repo's `.gitignore` doesn't already cover it. `docs/plans/.gitkeep` (written in Step 4.1) stays tracked so the directory exists; only its `.md` plan content is ignored. No agent may `git add`/`git commit` a file under `docs/plans/` — see `craftflow-router` `## 14. Hard Rules`.
 10. **Workspace-root allowlist — `{workspace_root}/.craftflow-workspace.json`** — This file is a security-relevant, **human-authored-only** artifact: its `writable_paths` widens BUILD-phase agent write access outside worktree confinement, and `docs/2026-08-13-craftflow-workspace-root-allowlist-decision.md` ("Alternatives Considered") explicitly rejects auto-generating or scaffolding it — Craftflow only ever *reads* this file, never writes or infers its contents unprompted. This skill must never call `Write()` on it without explicit, in-the-moment human confirmation for this specific file. Always **propose**, never silently write, regardless of repo shape (this is independent of Steps 1–9; `workspace_root` may differ from the project root written into in Steps 1–9, per Step 0):
     - Construct the proposed content (same rules as before — only the delivery mechanism changes):
       - If `{workspace_root}/.craftflow-workspace.json` does not exist: propose `{"writable_paths": [<shared_root_files from Step 0, or [] if none were named>]}`.
@@ -328,6 +328,7 @@ bash tools/scripts/ai-contract-pack-lint.sh
 # 4. Confirm gitignore policy is intact
 git check-ignore CLAUDE.md
 git check-ignore .claude/foo
+git check-ignore docs/plans/scratch-check.md   # must be ignored — plans are never committed
 
 # 5. Confirm newly written files are not ignored
 git status --short AGENTS.md AI.md TESTS.md docs/ai/WAY_OF_WORK.md
