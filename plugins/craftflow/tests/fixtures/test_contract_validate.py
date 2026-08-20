@@ -7,6 +7,7 @@ Run from the plugin root:
 """
 import sys
 import os
+import json
 
 # Allow importing scripts from scripts/ directory
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../scripts"))
@@ -17,6 +18,11 @@ from craftflow_contract_validate import (
     validate_contract,
     VALID_GAP_TYPES,
     VALID_GAP_SEVERITIES,
+    REQUIRED_FIELDS,
+)
+
+SCHEMA_PATH = os.path.join(
+    os.path.dirname(__file__), "../../contracts/agent_contract.schema.json"
 )
 
 PASS = 0
@@ -59,6 +65,7 @@ def check_contains(name: str, haystack, needle):
 
 BUILDER_YAML = """\
 STATUS: PASS
+SUMMARY: "built the contract validator fixture"
 CONFIDENCE: 90
 PHASE_ID: track3
 PHASE_STATUS: completed
@@ -131,6 +138,7 @@ PLANNER_TEXT = """\
 ### Router Contract (MACHINE-READABLE)
 ```yaml
 STATUS: PASS
+SUMMARY: "planned the contract validator fix"
 PLAN_FILE: docs/plans/my-plan.md
 PLAN_MODE: full
 CONFIDENCE: 85
@@ -200,7 +208,7 @@ check("SCENARIOS is a list", isinstance(fields.get("SCENARIOS"), list), True)
 # ---------------------------------------------------------------------------
 print("\n[test_valid_builder_contract]")
 
-result = validate_contract(BUILDER_TEXT, "builder")
+result = validate_contract(BUILDER_TEXT, "component-builder")
 check("valid=True for complete builder contract", result["valid"], True)
 check("errors=[] for complete builder contract", result["errors"], [])
 
@@ -209,7 +217,7 @@ check("errors=[] for complete builder contract", result["errors"], [])
 # ---------------------------------------------------------------------------
 print("\n[test_missing_status]")
 
-result = validate_contract(BUILDER_TEXT_NO_STATUS, "builder")
+result = validate_contract(BUILDER_TEXT_NO_STATUS, "component-builder")
 check("valid=False when STATUS missing", result["valid"], False)
 check_contains("errors mention STATUS", result["errors"], "STATUS")
 
@@ -218,7 +226,7 @@ check_contains("errors mention STATUS", result["errors"], "STATUS")
 # ---------------------------------------------------------------------------
 print("\n[test_missing_phase_id]")
 
-result = validate_contract(BUILDER_TEXT_NO_PHASE_ID, "builder")
+result = validate_contract(BUILDER_TEXT_NO_PHASE_ID, "component-builder")
 check("valid=False when PHASE_ID missing", result["valid"], False)
 check_contains("errors mention PHASE_ID", result["errors"], "PHASE_ID")
 
@@ -255,7 +263,7 @@ check("errors=['no Router Contract YAML block found']",
 # ---------------------------------------------------------------------------
 print("\n[test_invalid_status_value]")
 
-result = validate_contract(BUILDER_TEXT_INVALID_STATUS, "builder")
+result = validate_contract(BUILDER_TEXT_INVALID_STATUS, "component-builder")
 check("valid=False for invalid STATUS value", result["valid"], False)
 check_contains("errors mention STATUS", result["errors"], "STATUS")
 
@@ -374,6 +382,112 @@ result = validate_contract(VERIFIER_GAP_FALSE_POSITIVE, "verifier")
 check("valid=False when type is 'partially done' (substring match must not fire)",
       result["valid"], False)
 check_contains("errors flag the bad type token", result["errors"], "GAP_CLASSIFICATION")
+
+# ---------------------------------------------------------------------------
+# test_valid_skill_author_contract
+# ---------------------------------------------------------------------------
+print("\n[test_valid_skill_author_contract]")
+
+SKILL_AUTHOR_COMPLETE_TEXT = """\
+### Router Contract (MACHINE-READABLE)
+```yaml
+STATUS: COMPLETE
+SUMMARY: "proposed a new skill for repo-conductor lock retry backoff"
+CANDIDATE_ID: "cand-042"
+DEDUP_RESULT: new
+PROPOSAL_PATH: ".craftflow/state/project/skill-proposals/cand-042/"
+SKIP_REASON: ""
+```
+"""
+
+result = validate_contract(SKILL_AUTHOR_COMPLETE_TEXT, "skill-author")
+check("valid=True for complete skill-author contract", result["valid"], True)
+check("errors=[] for complete skill-author contract", result["errors"], [])
+
+# ---------------------------------------------------------------------------
+# test_skipped_skill_author_missing_proposal_path_still_valid
+# ---------------------------------------------------------------------------
+print("\n[test_skipped_skill_author_missing_proposal_path_still_valid]")
+
+SKILL_AUTHOR_SKIPPED_TEXT = """\
+### Router Contract (MACHINE-READABLE)
+```yaml
+STATUS: SKIPPED
+SUMMARY: "no candidate was gate-eligible this round"
+CANDIDATE_ID: "null"
+DEDUP_RESULT: none
+SKIP_REASON: "rubric rule 3 failed: pattern seen in only 1 example"
+```
+"""
+
+result = validate_contract(SKILL_AUTHOR_SKIPPED_TEXT, "skill-author")
+check("valid=True for SKIPPED skill-author with no PROPOSAL_PATH (conditional field)",
+      result["valid"], True)
+check("errors=[] for SKIPPED skill-author with no PROPOSAL_PATH", result["errors"], [])
+
+# ---------------------------------------------------------------------------
+# test_valid_researcher_contracts
+# ---------------------------------------------------------------------------
+print("\n[test_valid_researcher_contracts]")
+
+WEB_RESEARCHER_TEXT = """\
+### Router Contract (MACHINE-READABLE)
+```yaml
+STATUS: COMPLETE
+SUMMARY: "researched retry-backoff libraries and found exponential-backoff to be the standard"
+FILE_PATH: docs/research/2026-08-20-retry-backoff.md
+QUALITY_LEVEL: high
+BLOCKING: false
+```
+"""
+
+GITHUB_RESEARCHER_TEXT = """\
+### Router Contract (MACHINE-READABLE)
+```yaml
+STATUS: COMPLETE
+SUMMARY: "surveyed 3 OSS implementations of lock-retry backoff on GitHub"
+FILE_PATH: docs/research/2026-08-20-lock-retry-survey.md
+QUALITY_LEVEL: high
+BLOCKING: false
+```
+"""
+
+result = validate_contract(WEB_RESEARCHER_TEXT, "web-researcher")
+check("valid=True for complete web-researcher contract", result["valid"], True)
+check("errors=[] for complete web-researcher contract", result["errors"], [])
+
+result = validate_contract(GITHUB_RESEARCHER_TEXT, "github-researcher")
+check("valid=True for complete github-researcher contract", result["valid"], True)
+check("errors=[] for complete github-researcher contract", result["errors"], [])
+
+# ---------------------------------------------------------------------------
+# test_required_fields_matches_json_schema (structural cross-check)
+# ---------------------------------------------------------------------------
+print("\n[test_required_fields_matches_json_schema]")
+
+with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
+    _schema = json.load(f)
+
+_schema_overlays = _schema.get("kind_overlays", {})
+
+check(
+    "REQUIRED_FIELDS kind keys match agent_contract.schema.json kind_overlays keys",
+    sorted(REQUIRED_FIELDS.keys()),
+    sorted(_schema_overlays.keys()),
+)
+
+_mismatched_kinds = []
+for _kind, _fields in REQUIRED_FIELDS.items():
+    _overlay = _schema_overlays.get(_kind, {})
+    _schema_fields = _overlay.get("required_fields", [])
+    if sorted(_fields) != sorted(_schema_fields):
+        _mismatched_kinds.append(_kind)
+
+check(
+    "every kind's required_fields list matches between .py and .json (no mismatched kinds)",
+    _mismatched_kinds,
+    [],
+)
 
 # ---------------------------------------------------------------------------
 # Summary
