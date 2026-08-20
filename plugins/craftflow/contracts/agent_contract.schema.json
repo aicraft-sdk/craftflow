@@ -38,16 +38,17 @@
       "type": "object",
       "required": ["STATUS"],
       "properties": {
-        "STATUS": {"type": "string", "enum": ["COMPLETE","PASS","BLOCKED","SKIPPED","FAIL","FIXED"]},
+        "STATUS": {"type": "string", "enum": ["COMPLETE","PASS","BLOCKED","SKIPPED","FAIL","FIXED","INVESTIGATING","PLAN_CREATED","DECISION_RFC_CREATED","NEEDS_CLARIFICATION","PARTIAL","DEGRADED","UNAVAILABLE"]},
         "BLOCKING": {"type": "boolean"},
         "USER_INPUT_NEEDED": {"type": "boolean"},
         "MEMORY_NOTES": {"$ref": "#/definitions/memory_notes"}
       }
     }
   },
+  "kind_overlays_comment": "Keys in kind_overlays are real agent_type slugs (the string after 'craftflow:'), matching craftflow_contract_validate.py's REQUIRED_FIELDS exactly (checked by the structural cross-check test in tests/fixtures/test_contract_validate.py). 'verifier'/'reviewer' are deliberately kept as free-standing, permanently unreachable kind names -- the read-only agents using this contract shape (integration-verifier, code-reviewer, doubt-verifier, plan-gap-reviewer, silent-failure-hunter) emit the envelope+heading shape, not the YAML-block heading this schema applies to.",
   "kind_overlays": {
-    "builder": {
-      "required_fields": ["STATUS","CONFIDENCE","PHASE_ID","PHASE_STATUS","PHASE_EXIT_READY","PROOF_STATUS","TDD_RED_EXIT","TDD_GREEN_EXIT","SCENARIOS","BLOCKING","REMEDIATION_NEEDED"]
+    "component-builder": {
+      "required_fields": ["STATUS","SUMMARY","CONFIDENCE","PHASE_ID","PHASE_STATUS","PHASE_EXIT_READY","PROOF_STATUS","TDD_RED_EXIT","TDD_GREEN_EXIT","SCENARIOS","BLOCKING","REMEDIATION_NEEDED"]
     },
     "verifier": {
       "required_fields": ["STATUS","SCENARIOS","BLOCKING","REMEDIATION_NEEDED"],
@@ -58,16 +59,22 @@
       "required_fields": ["STATUS","BLOCKING","REMEDIATION_NEEDED"]
     },
     "planner": {
-      "required_fields": ["STATUS","PLAN_FILE","PLAN_MODE","CONFIDENCE","GATE_PASSED","OPEN_DECISIONS","SCENARIOS","BLOCKING","REMEDIATION_NEEDED"]
+      "required_fields": ["STATUS","SUMMARY","PLAN_FILE","PLAN_MODE","CONFIDENCE","GATE_PASSED","OPEN_DECISIONS","SCENARIOS","BLOCKING","REMEDIATION_NEEDED"]
     },
-    "investigator": {
-      "required_fields": ["STATUS","ROOT_CAUSE","TDD_RED_EXIT","TDD_GREEN_EXIT","BLOCKING","REMEDIATION_NEEDED"]
+    "bug-investigator": {
+      "required_fields": ["STATUS","SUMMARY","ROOT_CAUSE","TDD_RED_EXIT","TDD_GREEN_EXIT","BLOCKING","REMEDIATION_NEEDED"]
     },
-    "doc_syncer": {
-      "required_fields": ["STATUS","IMPACT_LEVEL","DOC_LAYERS_EVALUATED","BLOCKING"]
+    "doc-syncer": {
+      "required_fields": ["STATUS","SUMMARY","IMPACT_LEVEL","DOC_LAYERS_EVALUATED"]
     },
-    "researcher": {
-      "required_fields": ["STATUS","FILE_PATH","QUALITY_LEVEL","BLOCKING"]
+    "web-researcher": {
+      "required_fields": ["STATUS","SUMMARY","FILE_PATH","QUALITY_LEVEL","BLOCKING"]
+    },
+    "github-researcher": {
+      "required_fields": ["STATUS","SUMMARY","FILE_PATH","QUALITY_LEVEL","BLOCKING"]
+    },
+    "skill-author": {
+      "required_fields": ["STATUS","SUMMARY","CANDIDATE_ID"]
     }
   }
 }

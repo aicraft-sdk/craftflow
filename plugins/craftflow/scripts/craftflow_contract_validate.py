@@ -31,27 +31,62 @@ import sys
 # Required fields per agent kind
 # ---------------------------------------------------------------------------
 
+# NOTE (2026-08-20, ADR-0023 addendum): keys below are real `agent_type` slugs
+# (the string after "craftflow:" in the agent_type field), not the old
+# free-standing "kind" names this dict used before. `craftflow_subagent_stop_audit.py`
+# passes `agent_type.split(":")[-1]` as `kind`, so keys here must equal those
+# slugs exactly. This validator is still dormant against live WRITE-agent
+# traffic today: its only caller gates on `contract_found = "CONTRACT {" in
+# message`, a pattern only the 5 envelope-shaped read-only agents emit — none
+# of the 7 kinds below ever reach validate_contract() via that gate as of this
+# fix. See docs/ai/decisions/0023-craftflow-write-agent-summary-round-handoff-field.md
+# Addendum (2026-08-20) for the full context. Widening that gate is an
+# explicitly separate, deferred, live-behavior change — not part of this fix.
 REQUIRED_FIELDS: dict = {
-    "builder": [
-        "STATUS", "CONFIDENCE", "PHASE_ID", "PHASE_STATUS", "PHASE_EXIT_READY",
-        "PROOF_STATUS", "TDD_RED_EXIT", "TDD_GREEN_EXIT", "SCENARIOS",
-        "BLOCKING", "REMEDIATION_NEEDED",
+    "component-builder": [
+        "STATUS", "SUMMARY", "CONFIDENCE", "PHASE_ID", "PHASE_STATUS",
+        "PHASE_EXIT_READY", "PROOF_STATUS", "TDD_RED_EXIT", "TDD_GREEN_EXIT",
+        "SCENARIOS", "BLOCKING", "REMEDIATION_NEEDED",
     ],
+    # "verifier"/"reviewer" are deliberately kept as free-standing kind names,
+    # not real agent_type slugs. The read-only agents that use this contract
+    # shape (integration-verifier, code-reviewer, doubt-verifier,
+    # plan-gap-reviewer, silent-failure-hunter) emit the envelope+heading
+    # shape, not the "### Router Contract (MACHINE-READABLE)" YAML-block
+    # heading extract_yaml_block() searches for — so no real agent_type value
+    # can ever reach these two entries via craftflow_subagent_stop_audit.py's
+    # contract_found gate. Left in place only as a documented, permanently
+    # unreachable fallback shape (in case a future agent adopts this shape).
     "verifier": ["STATUS", "SCENARIOS", "BLOCKING", "REMEDIATION_NEEDED"],
     "reviewer": ["STATUS", "BLOCKING", "REMEDIATION_NEEDED"],
     "planner": [
-        "STATUS", "PLAN_FILE", "PLAN_MODE", "CONFIDENCE", "GATE_PASSED",
-        "OPEN_DECISIONS", "SCENARIOS", "BLOCKING", "REMEDIATION_NEEDED",
+        "STATUS", "SUMMARY", "PLAN_FILE", "PLAN_MODE", "CONFIDENCE",
+        "GATE_PASSED", "OPEN_DECISIONS", "SCENARIOS", "BLOCKING",
+        "REMEDIATION_NEEDED",
     ],
-    "investigator": [
-        "STATUS", "ROOT_CAUSE", "TDD_RED_EXIT", "TDD_GREEN_EXIT",
+    "bug-investigator": [
+        "STATUS", "SUMMARY", "ROOT_CAUSE", "TDD_RED_EXIT", "TDD_GREEN_EXIT",
         "BLOCKING", "REMEDIATION_NEEDED",
     ],
-    "doc_syncer": ["STATUS", "IMPACT_LEVEL", "DOC_LAYERS_EVALUATED", "BLOCKING"],
-    "researcher": ["STATUS", "FILE_PATH", "QUALITY_LEVEL", "BLOCKING"],
+    # BLOCKING intentionally absent: doc-syncer.md's real contract has no
+    # BLOCKING field — STATUS=FAIL alone is the blocking signal.
+    "doc-syncer": ["STATUS", "SUMMARY", "IMPACT_LEVEL", "DOC_LAYERS_EVALUATED"],
+    "web-researcher": ["STATUS", "SUMMARY", "FILE_PATH", "QUALITY_LEVEL", "BLOCKING"],
+    "github-researcher": ["STATUS", "SUMMARY", "FILE_PATH", "QUALITY_LEVEL", "BLOCKING"],
+    # PROPOSAL_PATH/DEDUP_RESULT are conditional (PROPOSAL_PATH only on
+    # COMPLETE) — not required unconditionally, per skill-author.md's own
+    # Completion State Rules table.
+    "skill-author": ["STATUS", "SUMMARY", "CANDIDATE_ID"],
 }
 
-VALID_STATUSES = {"COMPLETE", "PASS", "BLOCKED", "SKIPPED", "FAIL", "FIXED"}
+VALID_STATUSES = {
+    "COMPLETE", "PASS", "BLOCKED", "SKIPPED", "FAIL", "FIXED",
+    # Widened 2026-08-20 (ADR-0023 addendum) to cover every real STATUS value
+    # emitted by the 7 true WRITE agents plus bug-investigator's mid-cycle
+    # states, per `grep -rn "^STATUS:" agents/*.md`.
+    "INVESTIGATING", "PLAN_CREATED", "DECISION_RFC_CREATED",
+    "NEEDS_CLARIFICATION", "PARTIAL", "DEGRADED", "UNAVAILABLE",
+}
 
 # spec-kit gap classification taxonomy (borrow #2)
 VALID_GAP_TYPES = {"Missing", "Partial", "Contradicts", "Unrequested"}
