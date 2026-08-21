@@ -1,0 +1,48 @@
+{
+  "name": "craftflow-release",
+  "workdir": ".",
+  "environment": { "CI": "true" },
+  "healthcheck": {
+    "name": "Release tooling is present",
+    "command": "python3 -c \"from pathlib import Path; import sys; ok = Path('plugins/craftflow/scripts/craftflow_version_bump.py').exists() and Path('plugins/craftflow/scripts/craftflow_version_consistency_check.py').exists(); print('ok' if ok else 'missing'); sys.exit(0 if ok else 1)\"",
+    "expected": "Prints ok"
+  },
+  "scenarios": [
+    {
+      "name": "Version consistency gate passes against the live tree",
+      "mode": "proof",
+      "given": "All 6 version-bearing files are at the same version",
+      "when": "The standalone consistency gate runs",
+      "then": "It exits cleanly",
+      "command": "python3 plugins/craftflow/scripts/craftflow_version_consistency_check.py",
+      "expected": "Gate exits 0"
+    },
+    {
+      "name": "Version bump classifier and writer tests pass",
+      "mode": "proof",
+      "given": "The pure classifier, semver arithmetic, and 10-field writers are implemented",
+      "when": "The bump fixture suite runs",
+      "then": "Every case including properties P1, P2, P3, P6 passes",
+      "command": "python3 plugins/craftflow/tests/fixtures/test_version_bump.py",
+      "expected": "Suite exits 0"
+    },
+    {
+      "name": "Version consistency evaluator tests pass",
+      "mode": "proof",
+      "given": "evaluate_consistency is pure and collects all errors",
+      "when": "The consistency fixture suite runs",
+      "then": "All 20 cases including the drift and empty-expect-version negatives pass",
+      "command": "python3 plugins/craftflow/tests/fixtures/test_version_consistency.py",
+      "expected": "Suite exits 0"
+    },
+    {
+      "name": "Baseline subtree split determinism holds",
+      "mode": "proof",
+      "given": "The craftflow-v1.0.0 baseline tag exists locally",
+      "when": "git subtree split runs against that tag",
+      "then": "It reproduces the historical published head exactly, which is what makes every push to craftflow-public a fast-forward",
+      "command": "bash -c 'test \"$(git -C ../.. subtree split --prefix=tools/craftflow-plugin craftflow-v1.0.0)\" = \"d74bf0f382b3b61b1c5c6a75aaf17418cbe1cb9c\"'",
+      "expected": "Exits 0 (takes ~75s; measured 1m11s on a cold clone)"
+    }
+  ]
+}
