@@ -507,6 +507,16 @@ agent-name. See "Previous Agent Findings handoff" below for the exact format.}
 Execute the phase's actual work per your operating brief (Step 1) and these overrides
 (Step 2).
 
+Before running any shell command likely to trigger a Cursor CLI permission prompt (i.e.
+anything not already covered by this project's `.cursor/cli.json` allowlist —
+destructive or high-blast-radius commands such as `git push`, `git checkout`, `git
+stash`, `git branch -D`, `find -exec`, `rm`, `mv`, `npm`/`pnpm install`, or any other
+command Cursor itself gates): state in your own output, before invoking the command,
+that you are about to run a command that may need approval and to check the Task panel
+for the approval control. The approval UI renders inside this Task's own nested panel,
+not the main chat thread, so without this heads-up the request is easy to miss and the
+session can appear stuck.
+
 Your final message MUST end with the `### Router Contract (MACHINE-READABLE)` fenced
 YAML block exactly as `{agent-name}.md` specifies. This is the only way the router will
 receive your result.
