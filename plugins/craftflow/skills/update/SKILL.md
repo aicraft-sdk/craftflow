@@ -76,7 +76,23 @@ Read(file_path="$MARKETPLACE_ROOT/.claude-plugin/marketplace.json")
 
 Extract `MARKETPLACE_VERSION` → `.metadata.version`
 
-### 1.3 Check upstream for new commits
+### 1.3 Check for a new version (primary signal)
+
+Compare `MARKETPLACE_VERSION` (from 1.2) against `INSTALLED_VERSION` (from 1.1) using semver
+ordering.
+
+- **`MARKETPLACE_VERSION > INSTALLED_VERSION`** → a real release is available. Skip straight to
+  the changelog preview in 1.4; no SHA comparison is needed.
+- **Versions equal** → fall through to the SHA comparison below. This is the path that catches
+  non-version drift (e.g. a marketplace clone that has diverged without a release).
+- **`MARKETPLACE_VERSION < INSTALLED_VERSION`** → registry drift. Report it and offer a re-sync;
+  do not silently downgrade.
+
+Since 2026-08, `MARKETPLACE_VERSION` is maintained automatically by
+`.github/workflows/publish-craftflow-plugin.yml` and is a trustworthy signal. The SHA comparison
+below is retained as a fallback, not as the primary check.
+
+#### 1.3.1 Fallback: upstream commit comparison
 
 ```bash
 cd "$MARKETPLACE_ROOT" && git fetch origin main --quiet 2>&1

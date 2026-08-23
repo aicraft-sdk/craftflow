@@ -170,6 +170,47 @@ claude plugin update craftflow
 
 ---
 
+## Releases
+
+Releases are fully automatic. Merging to `main` with changes under
+`tools/craftflow-plugin/**` triggers `.github/workflows/publish-craftflow-plugin.yml`, which
+bumps the version, writes a `CHANGELOG.md` entry, runs a fail-closed consistency gate across all
+6 version-bearing files, commits + tags (`craftflow-vX.Y.Z` on `ai-craft`), splits and pushes
+`tools/craftflow-plugin` to `craftflow-public`, and cuts a GitHub release (`vX.Y.Z`) there. This
+push trigger was armed deliberately in a separate commit, only after a dry run, a determinism
+cross-check, and one human-initiated real release had all proven the pipeline safe — see
+`docs/ai/decisions/0030-craftflow-plugin-release-automation.md`.
+
+**Bump rules** (from conventional-commit messages in the range since the last `craftflow-v*`
+tag):
+
+| Commit type | Bump |
+|---|---|
+| `feat` | minor |
+| `fix`, `perf`, `revert` | patch |
+| `!` suffix or `BREAKING CHANGE:` footer | major |
+| everything else (`docs`, `chore`, `refactor`, `test`, ...) | no bump — still listed in the CHANGELOG |
+
+**Manual dispatch** (`workflow_dispatch`) inputs:
+
+| Input | Purpose |
+|---|---|
+| `dry_run` | Compute and validate the bump, but perform no commit/tag/push/release |
+| `resume_publish` | Skip bump/commit/tag; re-run split + push + release for an already-tagged version (recovery from a failed push) |
+| `resume_version` | The version to resume publishing; required when `resume_publish` is true |
+
+**Why there is no bump override.** A docs/chore-only batch does not cut a release on its own —
+that is deliberate, not a gap. Forcing a version bump over a range with no release-worthy
+commits would publish a version with an empty CHANGELOG section, which is exactly what the
+pipeline's fail-closed design forbids. To ship such a batch, land it alongside a real `feat`/
+`fix` commit instead.
+
+**Do not hand-edit `CHANGELOG.md`'s released sections or any version field.** CI owns all 10
+fields across the 6 version-bearing files (see the ADR for the full file/field table). Manual
+edits will be overwritten or will fail the consistency gate on the next release.
+
+---
+
 ## Plugin structure
 
 ```

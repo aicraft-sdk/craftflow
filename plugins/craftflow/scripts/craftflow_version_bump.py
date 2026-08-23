@@ -315,7 +315,7 @@ def resolve_base_ref(repo_root: Path, since: str | None) -> str:
     if result.returncode != 0:
         print(
             "ERROR: no craftflow-v* baseline tag reachable from HEAD. "
-            "Bootstrap one first (see docs/ai/decisions/0029-*.md).",
+            "Bootstrap one first (see docs/ai/decisions/0030-*.md).",
             file=sys.stderr,
         )
         raise BaselineTagNotFoundError()
