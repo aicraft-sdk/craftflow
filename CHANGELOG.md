@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.2.1] - 2026-08-23
+
+### Fixes
+
+- wire ai-craft repo-root marketplace.json into the version-consistency surface
+
 ## [1.2.0] - 2026-08-23
 
 ### Features
