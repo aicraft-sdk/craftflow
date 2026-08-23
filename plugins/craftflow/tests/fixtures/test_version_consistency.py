@@ -50,7 +50,7 @@ VERSION = "1.2.3"
 
 
 def make_snapshot(version: str = VERSION) -> dict:
-    """Baseline snapshot with all 10 version-bearing fields consistent at
+    """Baseline snapshot with all 13 version-bearing fields consistent at
     `version`. Each test case deep-copies this and mutates exactly one field."""
     return {
         "version": version,
@@ -83,11 +83,29 @@ def make_snapshot(version: str = VERSION) -> dict:
                 }
             ],
         },
+        # ai-craft repo-ROOT .claude-plugin/marketplace.json -- a SEPARATE
+        # github-based-marketplace-install manifest, two levels above the
+        # tools/craftflow-plugin subtree. Its plugins[0].source legitimately
+        # differs from both files above ("./tools/craftflow-plugin/plugins/craftflow"),
+        # so the source assertion must not apply to it (see case 24).
+        "root_marketplace": {
+            "metadata": {
+                "version": version,
+                "description": f"craftflow v{version} — owned orchestration flow.",
+            },
+            "plugins": [
+                {
+                    "name": "craftflow",
+                    "version": version,
+                    "source": "./tools/craftflow-plugin/plugins/craftflow",
+                }
+            ],
+        },
     }
 
 
-# --- Case 1: all 10 fields consistent ---
-print("\n[case 1: all 10 fields at 1.2.3]")
+# --- Case 1: all 13 fields consistent ---
+print("\n[case 1: all 13 fields at 1.2.3]")
 snap = make_snapshot()
 check_errors("no errors when everything matches", evaluate_consistency(snap), 0)
 
@@ -257,6 +275,49 @@ snap = make_snapshot()
 check_errors(
     "no errors -- None means not requested",
     evaluate_consistency(snap, expect_version=None),
+    0,
+)
+
+# --- Case 21: root marketplace.json metadata.version drift ---
+print("\n[case 21: root marketplace.json metadata.version drift]")
+snap = make_snapshot()
+snap["root_marketplace"]["metadata"]["version"] = "9.9.9"
+check_errors(
+    "1 error naming root marketplace.json",
+    evaluate_consistency(snap),
+    1,
+    contains="root marketplace.json",
+)
+
+# --- Case 22: root marketplace.json plugins[0].version drift ---
+print("\n[case 22: root marketplace.json plugins[0].version drift]")
+snap = make_snapshot()
+snap["root_marketplace"]["plugins"][0]["version"] = "9.9.9"
+check_errors(
+    "1 error naming root marketplace.json",
+    evaluate_consistency(snap),
+    1,
+    contains="root marketplace.json",
+)
+
+# --- Case 23: root marketplace.json metadata.description embeds stale version ---
+print("\n[case 23: root marketplace.json metadata.description embeds craftflow v9.9.9]")
+snap = make_snapshot()
+snap["root_marketplace"]["metadata"]["description"] = "craftflow v9.9.9 — stale."
+check_errors(
+    "1 error naming root marketplace.json's description",
+    evaluate_consistency(snap),
+    1,
+    contains="root marketplace.json metadata.description",
+)
+
+# --- Case 24: root marketplace.json plugins[0].source must NOT error ---
+print("\n[case 24: root marketplace.json plugins[0].source changed -- must not error]")
+snap = make_snapshot()
+snap["root_marketplace"]["plugins"][0]["source"] = "./somewhere-else"
+check_errors(
+    "no errors -- the source assertion does not apply to the root marketplace file",
+    evaluate_consistency(snap),
     0,
 )
 

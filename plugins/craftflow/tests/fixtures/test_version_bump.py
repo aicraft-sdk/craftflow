@@ -279,12 +279,20 @@ check(
 
 
 def _build_temp_plugin_tree(base_version: str = "1.0.0") -> Path:
-    """Builds a throwaway 6-file plugin tree (mirrors the real subtree layout)
-    for exercising apply_bump without touching the real working tree."""
-    tmp = Path(tempfile.mkdtemp(prefix="version-bump-fixture-"))
+    """Builds a throwaway repo-root-shaped tree (fake repo root containing
+    tools/craftflow-plugin as the subtree, mirroring the real ai-craft
+    layout) for exercising apply_bump/write_all without touching the real
+    working tree. Returns the SUBTREE root (repo_root/tools/craftflow-plugin)
+    -- exactly what the real script receives as --subtree-root. The 7th
+    version-bearing file (the repo-root marketplace.json) lives two levels
+    above the returned path, so callers must clean up via
+    shutil.rmtree(returned_path.parent.parent), not the returned path alone."""
+    repo_root = Path(tempfile.mkdtemp(prefix="version-bump-fixture-"))
+    tmp = repo_root / "tools" / "craftflow-plugin"
     (tmp / "plugins/craftflow/.claude-plugin").mkdir(parents=True)
     (tmp / "plugins/craftflow/.cursor-plugin").mkdir(parents=True)
     (tmp / ".claude-plugin").mkdir(parents=True)
+    (repo_root / ".claude-plugin").mkdir(parents=True)
 
     plugin = {"name": "craftflow", "version": base_version}
     (tmp / "plugins/craftflow/.claude-plugin/plugin.json").write_text(
@@ -307,11 +315,26 @@ def _build_temp_plugin_tree(base_version: str = "1.0.0") -> Path:
         },
         "plugins": [{"version": base_version, "source": "."}],
     }
+    root_marketplace = {
+        "metadata": {
+            "description": f"craftflow v{base_version} — test",
+            "version": base_version,
+        },
+        "plugins": [
+            {
+                "version": base_version,
+                "source": "./tools/craftflow-plugin/plugins/craftflow",
+            }
+        ],
+    }
     (tmp / ".claude-plugin/marketplace.json").write_text(
         json.dumps(marketplace, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     (tmp / "plugins/craftflow/.cursor-plugin/marketplace.json").write_text(
         json.dumps(cursor_marketplace, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    (repo_root / ".claude-plugin/marketplace.json").write_text(
+        json.dumps(root_marketplace, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     (tmp / "README.md").write_text(
         f"# Craftflow\n\n**Current version:** {base_version}\n", encoding="utf-8"
@@ -338,14 +361,15 @@ try:
     }
     check("apply_bump(bump=None) returns no changed files", changed, [])
     check_true(
-        "all 6 files byte-identical (SHA-256) after no-op apply",
+        "all 7 files byte-identical (SHA-256) after no-op apply, including "
+        "the root marketplace.json",
         before_hashes == after_hashes,
     )
 finally:
-    shutil.rmtree(p1_tmp)
+    shutil.rmtree(p1_tmp.parent.parent)
 
 # --- P3: total consistency ---
-print("\n[P3: total consistency — minor bump writes all 10 fields, gate passes]")
+print("\n[P3: total consistency — minor bump writes all 13 fields, gate passes]")
 p3_tmp = _build_temp_plugin_tree()
 try:
     p3_groups = {
@@ -354,7 +378,7 @@ try:
     }
     changed = apply_bump(p3_tmp, "minor", "1.1.0", p3_groups, "2026-01-02")
     check(
-        "apply_bump returns all 6 changed file paths",
+        "apply_bump returns all 7 changed file paths",
         sorted(changed),
         sorted(CHANGED_FILE_PATHS),
     )
@@ -370,52 +394,98 @@ try:
         )
     )["version"]
 
-    check("field 1/10: plugin.json version", snapshot["version"], "1.1.0")
+    check("field 1/13: plugin.json version", snapshot["version"], "1.1.0")
     check(
-        "field 2/10: .cursor-plugin/plugin.json version",
+        "field 2/13: .cursor-plugin/plugin.json version",
         cursor_plugin_version,
         "1.1.0",
     )
     check(
-        "field 3/10: marketplace.json metadata.version",
+        "field 3/13: marketplace.json metadata.version",
         snapshot["marketplace"]["metadata"]["version"],
         "1.1.0",
     )
     check(
-        "field 4/10: marketplace.json metadata.description embeds new version",
+        "field 4/13: marketplace.json metadata.description embeds new version",
         snapshot["marketplace"]["metadata"]["description"],
         "craftflow v1.1.0 — test",
     )
     check(
-        "field 5/10: marketplace.json plugins[0].version",
+        "field 5/13: marketplace.json plugins[0].version",
         snapshot["marketplace"]["plugins"][0]["version"],
         "1.1.0",
     )
     check(
-        "field 6/10: cursor marketplace.json metadata.version",
+        "field 6/13: cursor marketplace.json metadata.version",
         snapshot["cursor_marketplace"]["metadata"]["version"],
         "1.1.0",
     )
     check(
-        "field 7/10: cursor marketplace.json metadata.description embeds new version",
+        "field 7/13: cursor marketplace.json metadata.description embeds new version",
         snapshot["cursor_marketplace"]["metadata"]["description"],
         "craftflow v1.1.0 — test",
     )
     check(
-        "field 8/10: cursor marketplace.json plugins[0].version",
+        "field 8/13: cursor marketplace.json plugins[0].version",
         snapshot["cursor_marketplace"]["plugins"][0]["version"],
         "1.1.0",
     )
     check_true(
-        "field 9/10: README current version is 1.1.0",
+        "field 9/13: README current version is 1.1.0",
         "**Current version:** 1.1.0" in snapshot["readme"],
     )
     check_true(
-        "field 10/10: CHANGELOG has new release section",
+        "field 10/13: CHANGELOG has new release section",
         "## [1.1.0]" in snapshot["changelog"],
     )
+    check(
+        "field 11/13: root marketplace.json metadata.version",
+        snapshot["root_marketplace"]["metadata"]["version"],
+        "1.1.0",
+    )
+    check(
+        "field 12/13: root marketplace.json metadata.description embeds new version",
+        snapshot["root_marketplace"]["metadata"]["description"],
+        "craftflow v1.1.0 — test",
+    )
+    check(
+        "field 13/13: root marketplace.json plugins[0].version",
+        snapshot["root_marketplace"]["plugins"][0]["version"],
+        "1.1.0",
+    )
 finally:
-    shutil.rmtree(p3_tmp)
+    shutil.rmtree(p3_tmp.parent.parent)
+
+# --- Direct field-by-field write test: root marketplace.json ---
+print("\n[write_all: root marketplace.json 3-field write, direct check]")
+direct_tmp = _build_temp_plugin_tree()
+try:
+    apply_bump(direct_tmp, "patch", "1.0.1", {}, "2026-01-03")
+    root_marketplace_json_path = direct_tmp.parent.parent / ".claude-plugin" / "marketplace.json"
+    root_marketplace = json.loads(root_marketplace_json_path.read_text(encoding="utf-8"))
+    check(
+        "root marketplace.json metadata.version written",
+        root_marketplace["metadata"]["version"],
+        "1.0.1",
+    )
+    check(
+        "root marketplace.json metadata.description version substring rewritten",
+        root_marketplace["metadata"]["description"],
+        "craftflow v1.0.1 — test",
+    )
+    check(
+        "root marketplace.json plugins[0].version written",
+        root_marketplace["plugins"][0]["version"],
+        "1.0.1",
+    )
+    check(
+        "root marketplace.json plugins[0].source left untouched by the write "
+        "(write_all never touches source)",
+        root_marketplace["plugins"][0]["source"],
+        "./tools/craftflow-plugin/plugins/craftflow",
+    )
+finally:
+    shutil.rmtree(direct_tmp.parent.parent)
 
 # --- Summary ---
 print(f"\n{'='*40}")

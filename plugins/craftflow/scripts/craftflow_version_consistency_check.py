@@ -61,7 +61,8 @@ def _check_marketplace_block(block, version, label, errors, check_source):
 
 def evaluate_consistency(snapshot, allow_missing_changelog=False, expect_version=None):
     """Pure. snapshot keys: version, readme, changelog (str|None),
-    marketplace, cursor_plugin, cursor_marketplace. Returns list[str] of errors."""
+    marketplace, cursor_plugin, cursor_marketplace, root_marketplace.
+    Returns list[str] of errors."""
     errors = []
 
     version = snapshot.get("version")
@@ -70,6 +71,7 @@ def evaluate_consistency(snapshot, allow_missing_changelog=False, expect_version
     marketplace = snapshot.get("marketplace") or {}
     cursor_plugin = snapshot.get("cursor_plugin") or {}
     cursor_marketplace = snapshot.get("cursor_marketplace") or {}
+    root_marketplace = snapshot.get("root_marketplace") or {}
 
     # README.md must carry exactly one unambiguous "**Current version:**" line
     # that matches plugin.json.
@@ -127,6 +129,32 @@ def evaluate_consistency(snapshot, allow_missing_changelog=False, expect_version
         check_source=False,
     )
 
+    # ai-craft repo-ROOT .claude-plugin/marketplace.json — a separate
+    # github-based-marketplace-install manifest two levels above the
+    # tools/craftflow-plugin subtree (added 2026-06-14, never wired in until
+    # now). Its plugins[0].source is legitimately
+    # "./tools/craftflow-plugin/plugins/craftflow" — different from both
+    # EXPECTED_MARKETPLACE_SOURCE and the cursor file's "." — so the source
+    # assertion does NOT apply here either, same reasoning as the cursor file.
+    _check_marketplace_block(
+        root_marketplace,
+        version,
+        "root marketplace.json",
+        errors,
+        check_source=False,
+    )
+
+    # metadata.description may embed "craftflow vX.Y.Z" here too; same
+    # tolerant treatment as the top-level marketplace.json above (skip
+    # silently when no version substring is embedded).
+    root_description = (root_marketplace.get("metadata") or {}).get("description") or ""
+    root_desc_match = DESCRIPTION_VERSION_RE.search(root_description)
+    if root_desc_match and root_desc_match.group(1) != version:
+        errors.append(
+            f"root marketplace.json metadata.description embeds stale version "
+            f"({root_desc_match.group(1)!r}) vs plugin.json ({version!r})"
+        )
+
     # --expect-version: None means "not requested" (fine). "" is a malformed
     # argument (never treat it as unset) and must always be flagged. A non-empty
     # mismatch is a plain consistency error.
@@ -166,6 +194,13 @@ def build_snapshot(subtree_root: Path):
     cursor_marketplace_json_path = plugin_root / ".cursor-plugin" / "marketplace.json"
     readme_path = subtree_root / "README.md"
     changelog_path = subtree_root / "CHANGELOG.md"
+    # ai-craft repo-ROOT marketplace.json — two parents above the subtree
+    # root (tools/craftflow-plugin -> tools -> repo root). A separate
+    # github-based-marketplace-install manifest; not the subtree's own
+    # top-level marketplace_json_path above.
+    root_marketplace_json_path = (
+        subtree_root.parent.parent / ".claude-plugin" / "marketplace.json"
+    )
 
     load_errors = []
 
@@ -181,6 +216,9 @@ def build_snapshot(subtree_root: Path):
     cursor_marketplace, err = _read_json(cursor_marketplace_json_path)
     if err:
         load_errors.append(err)
+    root_marketplace, err = _read_json(root_marketplace_json_path)
+    if err:
+        load_errors.append(err)
 
     readme = readme_path.read_text(encoding="utf-8")
     changelog = (
@@ -194,6 +232,7 @@ def build_snapshot(subtree_root: Path):
         "marketplace": marketplace or {},
         "cursor_plugin": cursor_plugin or {},
         "cursor_marketplace": cursor_marketplace or {},
+        "root_marketplace": root_marketplace or {},
     }
     return snapshot, load_errors
 

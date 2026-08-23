@@ -105,8 +105,11 @@ README_VERSION_LINE_RE = re.compile(r"^\*\*Current version:\*\* .+$", re.MULTILI
 DESCRIPTION_VERSION_RE = re.compile(r"craftflow v\d+\.\d+\.\d+")
 CHANGELOG_SECTION_HEADER_RE = re.compile(r"^## \[", re.MULTILINE)
 
-# The 6 version-bearing files, relative to the subtree root, in the exact
-# order write_all() writes them.
+# The 7 version-bearing files, relative to the subtree root, in the exact
+# order write_all() writes them. Index 6 (the ai-craft repo-ROOT
+# marketplace.json, a separate github-based-marketplace-install manifest --
+# NOT the subtree's own top-level one at index 2) resolves OUTSIDE the
+# subtree via "../..", to two levels above the subtree root.
 CHANGED_FILE_PATHS = [
     "plugins/craftflow/.claude-plugin/plugin.json",
     "plugins/craftflow/.cursor-plugin/plugin.json",
@@ -114,6 +117,7 @@ CHANGED_FILE_PATHS = [
     "plugins/craftflow/.cursor-plugin/marketplace.json",
     "README.md",
     "CHANGELOG.md",
+    "../../.claude-plugin/marketplace.json",
 ]
 
 
@@ -207,7 +211,7 @@ def _write_json(path: Path, obj) -> None:
 
 
 def write_all(subtree_root: Path, next_version: str, section: str) -> None:
-    """Write all 6 version-bearing files under `subtree_root`, in the same
+    """Write all 7 version-bearing files under `subtree_root`, in the same
     order as CHANGED_FILE_PATHS."""
     plugin_json_path = subtree_root / CHANGED_FILE_PATHS[0]
     cursor_plugin_json_path = subtree_root / CHANGED_FILE_PATHS[1]
@@ -215,6 +219,7 @@ def write_all(subtree_root: Path, next_version: str, section: str) -> None:
     cursor_marketplace_json_path = subtree_root / CHANGED_FILE_PATHS[3]
     readme_path = subtree_root / CHANGED_FILE_PATHS[4]
     changelog_path = subtree_root / CHANGED_FILE_PATHS[5]
+    root_marketplace_json_path = subtree_root / CHANGED_FILE_PATHS[6]
 
     # 1. plugins/craftflow/.claude-plugin/plugin.json -> version
     plugin = json.loads(plugin_json_path.read_text(encoding="utf-8"))
@@ -267,6 +272,26 @@ def write_all(subtree_root: Path, next_version: str, section: str) -> None:
     changelog_path.write_text(
         insert_changelog_section(changelog, section), encoding="utf-8"
     )
+
+    # 7. ai-craft repo-ROOT .claude-plugin/marketplace.json -> same three
+    #    fields as the other marketplace.json writes above (metadata.version,
+    #    metadata.description, plugins[0].version). Never touches
+    #    plugins[0].source.
+    root_marketplace = json.loads(root_marketplace_json_path.read_text(encoding="utf-8"))
+    root_marketplace = set_json_version(
+        root_marketplace, ["metadata", "version"], next_version
+    )
+    root_marketplace = set_json_version(
+        root_marketplace,
+        ["metadata", "description"],
+        rewrite_description_version(
+            root_marketplace.get("metadata", {}).get("description", ""), next_version
+        ),
+    )
+    root_marketplace = set_json_version(
+        root_marketplace, ["plugins", 0, "version"], next_version
+    )
+    _write_json(root_marketplace_json_path, root_marketplace)
 
 
 def apply_bump(
