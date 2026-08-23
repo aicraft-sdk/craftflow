@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.1.0] - 2026-08-23
+
+### Features
+
+- heads-up permission-prompt note in cursor-router dispatch template
+- dispatch-only CI publish workflow and release live-harness manifest
+- version bump writers, CHANGELOG generation, and CLI
+- conventional-commit bump classifier (pure core)
+- standalone version-consistency gate extracted from harness audit
+
+### Chores
+
+- add version-surface baseline (README line + CHANGELOG)
+
 ## [1.0.0] - 2026-06-14
 
 ### Added
