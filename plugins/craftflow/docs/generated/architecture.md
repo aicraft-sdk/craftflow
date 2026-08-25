@@ -85,6 +85,7 @@ flowchart LR
   agent_component_builder["component-builder"]
   agent_doc_syncer["doc-syncer"]
   agent_integration_verifier["integration-verifier"]
+  agent_plan_bakeoff_judge["plan-bakeoff-judge"]
   agent_planner["planner"]
   agent_silent_failure_hunter["silent-failure-hunter"]
   agent_skill_author["skill-author"]
@@ -110,6 +111,8 @@ flowchart LR
   agent_doc_syncer --> skill_craftflow_diff_driven_docs
   agent_doc_syncer --> skill_craftflow_verification_before_completion
   agent_integration_verifier --> skill_craftflow_verification_before_completion
+  agent_plan_bakeoff_judge --> skill_craftflow_session_memory
+  agent_plan_bakeoff_judge --> skill_craftflow_planning_patterns
   agent_planner --> skill_craftflow_session_memory
   agent_planner --> skill_craftflow_planning_patterns
   agent_silent_failure_hunter --> skill_craftflow_code_review_patterns
@@ -129,6 +132,7 @@ flowchart LR
 | `github-researcher` | `Read`, `Write`, `Edit`, `Bash`, `WebFetch`, `WebSearch`, `TaskUpdate` |
 | `integration-verifier` | `Read`, `Bash`, `Grep`, `Glob`, `Skill`, `LSP`, `WebFetch` |
 | `learn-distiller` | `Read`, `Bash`, `Grep`, `Glob` |
+| `plan-bakeoff-judge` | `Read`, `Grep`, `Glob`, `LSP`, `Write`, `Edit`, `Bash` |
 | `plan-gap-reviewer` | `Read`, `Grep`, `Glob`, `LSP` |
 | `planner` | `Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `Skill`, `LSP`, `WebFetch`, `TaskUpdate` |
 | `silent-failure-hunter` | `Read`, `Bash`, `Grep`, `Glob`, `Skill`, `LSP`, `WebFetch` |
@@ -137,6 +141,6 @@ flowchart LR
 
 ## Inventory
 
-- 13 agents (`agents/*.md`)
+- 14 agents (`agents/*.md`)
 - 28 skills (`skills/*/SKILL.md`)
 - 19 hook scripts wired in `hooks/hooks.json`
