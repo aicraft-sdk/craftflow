@@ -44,6 +44,19 @@ def check_contains(name: str, haystack: str, needle: str):
         FAIL += 1
 
 
+def check_count(name: str, haystack: str, needle: str, expected_count: int):
+    global PASS, FAIL
+    actual_count = haystack.count(needle)
+    if actual_count == expected_count:
+        print(f"  PASS: {name}")
+        PASS += 1
+    else:
+        print(f"  FAIL: {name}")
+        print(f"    expected count: {expected_count}")
+        print(f"    actual count:   {actual_count}")
+        FAIL += 1
+
+
 with open(PLANNER_MD_PATH, "r", encoding="utf-8") as f:
     planner_text = f.read()
 
@@ -310,6 +323,119 @@ for _value in _PHASE_ENUM_VALUES:
         _phase_enum_line or "",
         _value,
     )
+
+# ---------------------------------------------------------------------------
+# test_skill_md_chain_loop_has_5b_bakeoff_step (Phase 5 Step 1)
+# ---------------------------------------------------------------------------
+print("\n[test_skill_md_chain_loop_has_5b_bakeoff_step]")
+
+check_count(
+    "§ 12 Chain Execution Loop has exactly one '5b.' bake-off dispatch step",
+    skill_text,
+    "5b. If N-1 `plan-bakeoff-candidate-*` tasks are all runnable in the same round (PLAN workflow,",
+    1,
+)
+
+check_contains(
+    "step 5b waits for all dispatched candidates before creating the plan-bakeoff-judge task",
+    skill_text,
+    "Wait for ALL dispatched candidates to return (validly or failed) before creating the\n"
+    "     `plan-bakeoff-judge` task.",
+)
+
+check_contains(
+    "step 5b falls back to sequential dispatch and logs event=parallel_fallback",
+    skill_text,
+    "fall back to sequential dispatch, one\n"
+    "     candidate at a time. Log event=parallel_fallback.",
+)
+
+# ---------------------------------------------------------------------------
+# test_skill_md_write_agent_table_has_judge_row (Phase 5 Step 2)
+# ---------------------------------------------------------------------------
+print("\n[test_skill_md_write_agent_table_has_judge_row]")
+
+check_count(
+    "write-agent YAML-fields table has exactly one plan-bakeoff-judge row",
+    skill_text,
+    "| plan-bakeoff-judge | `STATUS`, `SUMMARY`, `PLAN_MODE`, `VERIFICATION_RIGOR`, `CONFIDENCE`, "
+    "`PLAN_FILE`, `WINNING_MODEL`, `SYNTHESIZED`, `CANDIDATES_COMPARED`,",
+    1,
+)
+
+check_contains(
+    "write-agent table judge row includes CANDIDATES_COMPARED field",
+    skill_text,
+    "`CANDIDATES_COMPARED`",
+)
+
+# ---------------------------------------------------------------------------
+# test_skill_md_contract_overrides_has_judge_row (Phase 5 Step 3)
+# ---------------------------------------------------------------------------
+print("\n[test_skill_md_contract_overrides_has_judge_row]")
+
+check_count(
+    "Contract overrides table has exactly one plan-bakeoff-judge row",
+    skill_text,
+    "| plan-bakeoff-judge | `STATUS=PLAN_CREATED` or `STATUS=DECISION_RFC_CREATED` requires every "
+    "threshold the `planner` override row already requires",
+    1,
+)
+
+check_contains(
+    "contract override judge row requires a router-run Glob confirming zero surviving candidate files",
+    skill_text,
+    "A router-run `Glob` confirming zero surviving `docs/plans/{plan_file_stem}-candidate-*.md` "
+    "files is required",
+)
+
+# ---------------------------------------------------------------------------
+# test_skill_md_phase_enum_lists_bakeoff_opus_exact_count (Phase 5 Step 4 cross-check)
+# ---------------------------------------------------------------------------
+print("\n[test_skill_md_phase_enum_lists_bakeoff_opus_exact_count]")
+
+check_count(
+    "§ 3 phase enum line contains plan-bakeoff-candidate-opus exactly once",
+    _phase_enum_line or "",
+    "plan-bakeoff-candidate-opus",
+    1,
+)
+
+# ---------------------------------------------------------------------------
+# test_router_protocol_dispatcher_has_judge_row_exact_count (Phase 5 Step 4 cross-check)
+# ---------------------------------------------------------------------------
+print("\n[test_router_protocol_dispatcher_has_judge_row_exact_count]")
+
+check_count(
+    "_shared/router-protocol.md dispatcher table has exactly one plan-bakeoff-judge row",
+    router_protocol_text,
+    "| `plan-bakeoff-judge` | `craftflow:plan-bakeoff-judge` |",
+    1,
+)
+
+# ---------------------------------------------------------------------------
+# test_router_protocol_optional_sections_lists_target_plan_file
+# (Phase 5 Step 4, fresh-review finding: under_scoped_integrations)
+# ---------------------------------------------------------------------------
+print("\n[test_router_protocol_optional_sections_lists_target_plan_file]")
+
+check_contains(
+    "Optional sections list has '## Target Plan File' bullet for planner/plan-bakeoff-judge",
+    router_protocol_text,
+    "- `## Target Plan File` for `planner`/`plan-bakeoff-judge` dispatches",
+)
+
+# ---------------------------------------------------------------------------
+# test_plan_workflow_has_dispatch_time_prompt_assembly_heading
+# (Phase 5 Step 4, fresh-review finding: under_scoped_integrations)
+# ---------------------------------------------------------------------------
+print("\n[test_plan_workflow_has_dispatch_time_prompt_assembly_heading]")
+
+check_contains(
+    "plan-workflow.md contains the literal heading '### PLAN dispatch-time prompt assembly'",
+    plan_workflow_text,
+    "### PLAN dispatch-time prompt assembly",
+)
 
 # ---------------------------------------------------------------------------
 # Summary

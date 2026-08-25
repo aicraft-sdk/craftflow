@@ -1130,6 +1130,7 @@ Expected fields:
 | web-researcher | `STATUS`, `SUMMARY`, `FILE_PATH`, `BACKEND_MODE`, `SOURCES_ATTEMPTED`, `SOURCES_USED`, `QUALITY_LEVEL`, `KEY_FINDINGS_COUNT`, `WHAT_CHANGED_RECOMMENDATION`, `MEMORY_NOTES` |
 | github-researcher | `STATUS`, `SUMMARY`, `FILE_PATH`, `BACKEND_MODE`, `SOURCES_ATTEMPTED`, `SOURCES_USED`, `QUALITY_LEVEL`, `IMPLEMENTATIONS_FOUND`, `WHAT_CHANGED_RECOMMENDATION`, `MEMORY_NOTES` |
 | doc-syncer | `STATUS`, `SUMMARY`, `IMPACT_LEVEL`, `DOC_LAYERS_EVALUATED`, `DOC_FILES_UPDATED`, `DOC_FILES_SKIPPED`, `SKIP_REASON`, `AUDIT_DOCS_CREATED`, `AUDIT_DOCS_UPDATED`, `MEMORY_NOTES` |
+| plan-bakeoff-judge | `STATUS`, `SUMMARY`, `PLAN_MODE`, `VERIFICATION_RIGOR`, `CONFIDENCE`, `PLAN_FILE`, `WINNING_MODEL`, `SYNTHESIZED`, `CANDIDATES_COMPARED`, `PHASES`, `RISKS_IDENTIFIED`, `SCENARIOS`, `ASSUMPTIONS`, `DECISIONS`, `OPEN_DECISIONS`, `DIFFERENCES_FROM_AGREEMENT`, `ALTERNATIVES`, `DRAWBACKS`, `PROVABLE_PROPERTIES`, `BLOCKING`, `NEXT_ACTION`, `REMEDIATION_NEEDED`, `REQUIRES_REMEDIATION`, `REMEDIATION_REASON`, `GATE_PASSED`, `MEMORY_NOTES` |
 
 (`skill-author`'s required fields, including `SUMMARY`, are documented in
 its own row in the Contract overrides table below rather than duplicated
@@ -1195,6 +1196,7 @@ If present:
 | silent-failure-hunter | `CLEAN` with zero error-handling sites inspected OR zero files scanned → trigger fallback inline verification. A CLEAN verdict requires stated scope. |
 | integration-verifier | `PASS` + critical issues becomes `FAIL`; scenario totals must reconcile with the scenario table and evidence array; every counted scenario must map to a concrete evidence row; every scenario row must contain non-empty `Expected` and `Actual` values |
 | planner | `PLAN_CREATED` or `DECISION_RFC_CREATED` requires non-empty `PLAN_FILE`, explicit `PLAN_MODE`, explicit `VERIFICATION_RIGOR`, `CONFIDENCE>=50`, `GATE_PASSED=true`, a non-empty `SUMMARY`, a non-empty `SCENARIOS` array, `OPEN_DECISIONS=[]`, and `DIFFERENCES_FROM_AGREEMENT` explicitly present. `PLAN_MODE=decision_rfc` also requires non-empty `ALTERNATIVES` and `DRAWBACKS`; `VERIFICATION_RIGOR=critical_path` requires non-empty `PROVABLE_PROPERTIES`. |
+| plan-bakeoff-judge | `STATUS=PLAN_CREATED` or `STATUS=DECISION_RFC_CREATED` requires every threshold the `planner` override row already requires (non-empty `PLAN_FILE`, explicit `PLAN_MODE`, explicit `VERIFICATION_RIGOR`, `CONFIDENCE>=50`, `GATE_PASSED=true`, non-empty `SUMMARY`, non-empty `SCENARIOS`, `OPEN_DECISIONS=[]`, `DIFFERENCES_FROM_AGREEMENT` present; `PLAN_MODE=decision_rfc` also requires `ALTERNATIVES`/`DRAWBACKS`; `VERIFICATION_RIGOR=critical_path` requires `PROVABLE_PROPERTIES`) PLUS non-empty `WINNING_MODEL`, an explicit boolean `SYNTHESIZED`, and a `CANDIDATES_COMPARED` array whose length matches the number of candidates the router actually dispatched to it. A router-run `Glob` confirming zero surviving `docs/plans/{plan_file_stem}-candidate-*.md` files is required before accepting either `STATUS` value — a surviving candidate file downgrades the contract to invalid regardless of the agent's own claim (mirrors "APPROVE + critical issues becomes CHANGES_REQUESTED"). `STATUS=FAIL` is a hard stop, same posture as any other malformed write-agent output. |
 | doc-syncer | `STATUS=COMPLETE` requires `DOC_LAYERS_EVALUATED` non-empty, a non-empty `SUMMARY`, and at least one entry in `DOC_FILES_UPDATED` or `AUDIT_DOCS_CREATED`; `STATUS=SKIPPED` requires non-empty `SKIP_REASON` and non-empty `SUMMARY` — `DOC_LAYERS_EVALUATED` MAY be empty (fast-path classifier exits before per-layer evaluation when `IMPACT_LEVEL=none` is detected immediately); `STATUS=PARTIAL` requires at least one entry in `DOC_FILES_UPDATED` or `AUDIT_DOCS_CREATED` and at least one layer in `DOC_LAYERS_EVALUATED` — router advances to Memory Update and persists `doc_sync_partial=true` in `results.doc_syncer`; `STATUS=FAIL` blocks workflow. |
 | skill-author | `STATUS=COMPLETE` requires non-empty `PROPOSAL_PATH`, non-empty `CANDIDATE_ID`, and non-empty `SUMMARY`; `STATUS=SKIPPED` requires non-empty `SKIP_REASON` and non-empty `SUMMARY` — `SKIPPED` is explicitly a passing state (never blocks workflow advance), matching the doc-syncer `SKIPPED` precedent exactly; `STATUS=FAIL` blocks workflow. |
 | plan-gap-reviewer | `PASS` requires `BLOCKING_FINDINGS_COUNT=0` and `REPLAN_NEEDED=false`; `FINDINGS` requires explicit finding buckets and a non-empty `REPLAN_REASON` when blocking findings exist. |
@@ -1281,6 +1283,18 @@ behavior change on that path.
    - Both are read-only with no file-write overlap — safe to parallelize
    - If parallel invocation fails (rate limit, API error): fall back to sequential (web first, then github). Log `event=parallel_fallback` in the event log.
    - Wait for BOTH to complete before proceeding to planner or investigator.
+5b. If N-1 `plan-bakeoff-candidate-*` tasks are all runnable in the same round (PLAN workflow,
+    qualifying bake-off only):
+   - mark all in_progress first
+   - dispatch all of them in the same message (see `references/plan-workflow.md → ### PLAN task
+     graph` for the exact per-candidate model/target-file construction)
+   - If parallel invocation fails (rate limit, API error): fall back to sequential dispatch, one
+     candidate at a time. Log event=parallel_fallback.
+   - Wait for ALL dispatched candidates to return (validly or failed) before creating the
+     `plan-bakeoff-judge` task. A candidate returning an invalid contract does not block the
+     others — see `references/plan-workflow.md`'s degraded-bake-off tolerance rule (a scoped
+     exception to this section's own step 6 hard-stop-on-malformed-output default, applying only
+     to `phase:plan-bakeoff-candidate-*`).
 6. After each agent returns:
    - capture memory payload immediately
    - validate output
