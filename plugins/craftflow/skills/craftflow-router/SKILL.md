@@ -1130,7 +1130,7 @@ Expected fields:
 | web-researcher | `STATUS`, `SUMMARY`, `FILE_PATH`, `BACKEND_MODE`, `SOURCES_ATTEMPTED`, `SOURCES_USED`, `QUALITY_LEVEL`, `KEY_FINDINGS_COUNT`, `WHAT_CHANGED_RECOMMENDATION`, `MEMORY_NOTES` |
 | github-researcher | `STATUS`, `SUMMARY`, `FILE_PATH`, `BACKEND_MODE`, `SOURCES_ATTEMPTED`, `SOURCES_USED`, `QUALITY_LEVEL`, `IMPLEMENTATIONS_FOUND`, `WHAT_CHANGED_RECOMMENDATION`, `MEMORY_NOTES` |
 | doc-syncer | `STATUS`, `SUMMARY`, `IMPACT_LEVEL`, `DOC_LAYERS_EVALUATED`, `DOC_FILES_UPDATED`, `DOC_FILES_SKIPPED`, `SKIP_REASON`, `AUDIT_DOCS_CREATED`, `AUDIT_DOCS_UPDATED`, `MEMORY_NOTES` |
-| plan-bakeoff-judge | `STATUS`, `SUMMARY`, `PLAN_MODE`, `VERIFICATION_RIGOR`, `CONFIDENCE`, `PLAN_FILE`, `WINNING_MODEL`, `SYNTHESIZED`, `CANDIDATES_COMPARED`, `PHASES`, `RISKS_IDENTIFIED`, `SCENARIOS`, `ASSUMPTIONS`, `DECISIONS`, `OPEN_DECISIONS`, `DIFFERENCES_FROM_AGREEMENT`, `ALTERNATIVES`, `DRAWBACKS`, `PROVABLE_PROPERTIES`, `BLOCKING`, `NEXT_ACTION`, `REMEDIATION_NEEDED`, `REQUIRES_REMEDIATION`, `REMEDIATION_REASON`, `GATE_PASSED`, `MEMORY_NOTES` |
+| plan-bakeoff-judge | `STATUS`, `SUMMARY`, `PLAN_MODE`, `VERIFICATION_RIGOR`, `CONFIDENCE`, `PLAN_FILE`, `WINNING_MODEL`, `SYNTHESIZED`, `CANDIDATES_COMPARED`, `PHASES`, `RISKS_IDENTIFIED`, `SCENARIOS`, `OPEN_DECISIONS`, `DIFFERENCES_FROM_AGREEMENT`, `ALTERNATIVES`, `DRAWBACKS`, `PROVABLE_PROPERTIES`, `BLOCKING`, `REMEDIATION_NEEDED`, `REQUIRES_REMEDIATION`, `REMEDIATION_REASON`, `GATE_PASSED`, `MEMORY_NOTES` |
 
 (`skill-author`'s required fields, including `SUMMARY`, are documented in
 its own row in the Contract overrides table below rather than duplicated
@@ -1285,11 +1285,12 @@ behavior change on that path.
    - Wait for BOTH to complete before proceeding to planner or investigator.
 5b. If N-1 `plan-bakeoff-candidate-*` tasks are all runnable in the same round (PLAN workflow,
     qualifying bake-off only):
-   - mark all in_progress first
-   - dispatch all of them in the same message (see `references/plan-workflow.md → ### PLAN task
-     graph` for the exact per-candidate model/target-file construction)
+   - Mark all in_progress first
+   - Dispatch all of them in the same message (see `references/plan-workflow.md → ### PLAN
+     dispatch-time prompt assembly` for the exact per-candidate model/target-file construction
+     formula and `### PLAN bake-off fan-out` for the actual per-candidate dispatch loop)
    - If parallel invocation fails (rate limit, API error): fall back to sequential dispatch, one
-     candidate at a time. Log event=parallel_fallback.
+     candidate at a time. Log `event=parallel_fallback` in the event log.
    - Wait for ALL dispatched candidates to return (validly or failed) before creating the
      `plan-bakeoff-judge` task. A candidate returning an invalid contract does not block the
      others — see `references/plan-workflow.md`'s degraded-bake-off tolerance rule (a scoped

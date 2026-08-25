@@ -347,7 +347,16 @@ check_contains(
     "step 5b falls back to sequential dispatch and logs event=parallel_fallback",
     skill_text,
     "fall back to sequential dispatch, one\n"
-    "     candidate at a time. Log event=parallel_fallback.",
+    "     candidate at a time. Log `event=parallel_fallback` in the event log.",
+)
+
+check_contains(
+    "step 5b cross-references PLAN dispatch-time prompt assembly and PLAN bake-off fan-out"
+    " (not the incorrect PLAN task graph section)",
+    skill_text,
+    "see `references/plan-workflow.md → ### PLAN\n"
+    "     dispatch-time prompt assembly` for the exact per-candidate model/target-file construction\n"
+    "     formula and `### PLAN bake-off fan-out` for the actual per-candidate dispatch loop)",
 )
 
 # ---------------------------------------------------------------------------
@@ -355,11 +364,19 @@ check_contains(
 # ---------------------------------------------------------------------------
 print("\n[test_skill_md_write_agent_table_has_judge_row]")
 
-check_count(
-    "write-agent YAML-fields table has exactly one plan-bakeoff-judge row",
-    skill_text,
+_JUDGE_ROW_FULL = (
     "| plan-bakeoff-judge | `STATUS`, `SUMMARY`, `PLAN_MODE`, `VERIFICATION_RIGOR`, `CONFIDENCE`, "
-    "`PLAN_FILE`, `WINNING_MODEL`, `SYNTHESIZED`, `CANDIDATES_COMPARED`,",
+    "`PLAN_FILE`, `WINNING_MODEL`, `SYNTHESIZED`, `CANDIDATES_COMPARED`, `PHASES`, "
+    "`RISKS_IDENTIFIED`, `SCENARIOS`, `OPEN_DECISIONS`, `DIFFERENCES_FROM_AGREEMENT`, "
+    "`ALTERNATIVES`, `DRAWBACKS`, `PROVABLE_PROPERTIES`, `BLOCKING`, `REMEDIATION_NEEDED`, "
+    "`REQUIRES_REMEDIATION`, `REMEDIATION_REASON`, `GATE_PASSED`, `MEMORY_NOTES` |"
+)
+
+check_count(
+    "write-agent YAML-fields table has exactly one plan-bakeoff-judge row matching the full,"
+    " corrected field list (no trailing-field truncation)",
+    skill_text,
+    _JUDGE_ROW_FULL,
     1,
 )
 
@@ -368,6 +385,27 @@ check_contains(
     skill_text,
     "`CANDIDATES_COMPARED`",
 )
+
+_JUDGE_ROW_LINE = None
+for _line in skill_text.splitlines():
+    if _line.startswith("| plan-bakeoff-judge | `STATUS`, `SUMMARY`, `PLAN_MODE`"):
+        _JUDGE_ROW_LINE = _line
+        break
+
+check(
+    "found the write-agent table plan-bakeoff-judge row as a single line",
+    _JUDGE_ROW_LINE is not None,
+    True,
+)
+
+for _wrong_field in ("`ASSUMPTIONS`", "`DECISIONS`", "`NEXT_ACTION`"):
+    check(
+        f"write-agent table plan-bakeoff-judge row does NOT list {_wrong_field}"
+        " (agent's actual Router Contract YAML never emits it — copy-paste artifact from"
+        " the planner row regression guard)",
+        _wrong_field in (_JUDGE_ROW_LINE or ""),
+        False,
+    )
 
 # ---------------------------------------------------------------------------
 # test_skill_md_contract_overrides_has_judge_row (Phase 5 Step 3)
