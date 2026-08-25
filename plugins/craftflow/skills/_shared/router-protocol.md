@@ -315,6 +315,10 @@ Optional sections:
 - `## Research Files` only when at least one research file exists.
 - `## Research Quality` only when at least one research result exists.
 - `## Design File` only for planner.
+- `## Target Plan File` for `planner`/`plan-bakeoff-judge` dispatches where the router assigns a
+  non-default target path (every PLAN scout/candidate/judge dispatch under the bake-off mechanism;
+  omitted for a direct/manual planner invocation that self-derives its own filename per
+  `planner.md` Process step 14).
 - `## Planning Review Findings` only for `re-plan`.
 - `## Original User Request` only for `plan-gap-reviewer`.
 - `## Approved Context Files` only for `plan-gap-reviewer`.

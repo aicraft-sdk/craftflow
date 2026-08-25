@@ -11,6 +11,7 @@ import os
 
 _FIXTURES_DIR = os.path.dirname(__file__)
 PLANNER_MD_PATH = os.path.join(_FIXTURES_DIR, "../../agents/planner.md")
+SKILL_MD_PATH = os.path.join(_FIXTURES_DIR, "../../skills/craftflow-router/SKILL.md")
 
 PASS = 0
 FAIL = 0
@@ -58,6 +59,47 @@ check_contains(
     planner_text,
     "Save plan** - use `## Target Plan File`",
 )
+
+# ---------------------------------------------------------------------------
+# test_skill_md_write_literal_declares_bakeoff_fields (Phase 3 Step 1b/Step 8)
+# ---------------------------------------------------------------------------
+print("\n[test_skill_md_write_literal_declares_bakeoff_fields]")
+
+with open(SKILL_MD_PATH, "r", encoding="utf-8") as f:
+    skill_text = f.read()
+
+_write_literal_line = None
+for _line in skill_text.splitlines():
+    if "workflow_started" in _line and '\\"task_ids\\"' in _line:
+        _write_literal_line = _line
+        break
+
+check(
+    "found the § 6 Parent Workflow Creation Write() literal line "
+    "(contains both workflow_started and task_ids)",
+    _write_literal_line is not None,
+    True,
+)
+
+_WRITE_LITERAL_FIELDS = [
+    '\\"plan_file_stem\\":null',
+    '\\"bakeoff_n\\":null',
+    '\\"bakeoff_n_requested\\":null',
+    '\\"bakeoff_models\\":[]',
+    '\\"bakeoff_triggered\\":false',
+    '\\"bakeoff_all_failed\\":false',
+    '\\"bakeoff_candidate_failures\\":[]',
+    '\\"plan_bakeoff_candidates\\":{}',
+    '\\"plan_bakeoff_judge\\":null',
+    '\\"bakeoff\\":[]',
+]
+
+for _field in _WRITE_LITERAL_FIELDS:
+    check_contains(
+        f"Write() literal declares {_field}",
+        _write_literal_line or "",
+        _field,
+    )
 
 # ---------------------------------------------------------------------------
 # Summary

@@ -492,6 +492,22 @@ check("valid=False for plan-bakeoff-judge contract missing CANDIDATES_COMPARED",
 check_contains("errors mention CANDIDATES_COMPARED", result["errors"], "CANDIDATES_COMPARED")
 
 # ---------------------------------------------------------------------------
+# test_valid_plan_bakeoff_scout_contracts (fixture-driven, Phase 3 Step 8)
+# ---------------------------------------------------------------------------
+print("\n[test_valid_plan_bakeoff_scout_contracts]")
+
+QUALIFY_TRIGGERED_TEXT = _load_judge_fixture_text("plan-bakeoff-qualify-triggered.json")
+NO_QUALIFY_TEXT = _load_judge_fixture_text("plan-bakeoff-no-qualify.json")
+
+result = validate_contract(QUALIFY_TRIGGERED_TEXT, "planner")
+check("valid=True for qualify-triggered scout (decision_rfc) contract", result["valid"], True)
+check("errors=[] for qualify-triggered scout contract", result["errors"], [])
+
+result = validate_contract(NO_QUALIFY_TEXT, "planner")
+check("valid=True for no-qualify scout (execution_plan/standard) contract", result["valid"], True)
+check("errors=[] for no-qualify scout contract", result["errors"], [])
+
+# ---------------------------------------------------------------------------
 # test_required_fields_matches_json_schema (structural cross-check)
 # ---------------------------------------------------------------------------
 print("\n[test_required_fields_matches_json_schema]")

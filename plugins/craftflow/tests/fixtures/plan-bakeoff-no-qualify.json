@@ -1,0 +1,32 @@
+{
+  "id": "plan-bakeoff-no-qualify",
+  "workflow_type": "PLAN",
+  "agent_outputs": {
+    "planner_contract": {
+      "STATUS": "PLAN_CREATED",
+      "SUMMARY": "scout returned execution_plan/standard, no bake-off fan-out needed",
+      "PLAN_FILE": "docs/plans/2026-08-25-readme-candidate-inherit.md",
+      "PLAN_MODE": "execution_plan",
+      "VERIFICATION_RIGOR": "standard",
+      "CONFIDENCE": 90,
+      "GATE_PASSED": true,
+      "OPEN_DECISIONS": [],
+      "SCENARIOS": [
+        {
+          "name": "scout does not qualify for bake-off",
+          "given": "a low-risk execution_plan request",
+          "when": "the scout planner returns its own contract",
+          "then": "the router renames the scout's candidate file to the canonical plan path with zero added cost",
+          "command": "plan",
+          "expected": "bakeoff_triggered = false",
+          "actual": "bakeoff_triggered = false",
+          "exit_code": 0,
+          "status": "PASS"
+        }
+      ],
+      "BLOCKING": false,
+      "REMEDIATION_NEEDED": false
+    }
+  },
+  "agent_output_text": "### Router Contract (MACHINE-READABLE)\n```yaml\nSTATUS: PLAN_CREATED\nSUMMARY: \"scout returned execution_plan/standard, no bake-off fan-out needed\"\nPLAN_FILE: docs/plans/2026-08-25-readme-candidate-inherit.md\nPLAN_MODE: execution_plan\nVERIFICATION_RIGOR: standard\nCONFIDENCE: 90\nGATE_PASSED: true\nOPEN_DECISIONS: []\nSCENARIOS:\n  - name: \"scout does not qualify for bake-off\"\nBLOCKING: false\nREMEDIATION_NEEDED: false\n```\n"
+}

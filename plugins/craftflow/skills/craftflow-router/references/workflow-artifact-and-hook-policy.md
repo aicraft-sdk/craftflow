@@ -13,9 +13,16 @@ Artifact schema must include:
 - `state_root`
 - `user_request`
 - `plan_file`
+- `plan_file_stem`
 - `design_file`
 - `research_files`
 - `approved_decisions`
+- `bakeoff_n`
+- `bakeoff_n_requested`
+- `bakeoff_models`
+- `bakeoff_triggered`
+- `bakeoff_all_failed`
+- `bakeoff_candidate_failures`
 - `intent`
 - `capabilities`
 - `phase_cursor`
@@ -71,6 +78,30 @@ Rules:
     Detection`, `"unknown"` before the first probe of a session. Never trusted as durable across
     sessions; always re-probed fresh each session.
 - `results.research` must be structured as `web`, `github`, and `synthesis`.
+- `plan_file_stem` — PLAN-only, `null` for BUILD/DEBUG/REVIEW; set once at PLAN workflow creation
+  from `{iso_timestamp date part}-{WF_INFO.slug}`, collision-checked via `Glob` against
+  `WF_INFO.short_hex` as documented in `plan-workflow.md`.
+- `results.bakeoff`: `[]` (array) — PLAN-only; one entry per surviving bake-off candidate the judge
+  compared, mirroring how `results.research` is already documented as `{web, github, synthesis}`.
+- `results.plan_bakeoff_judge`: `null` by default — PLAN-only; the judge's own contract result once
+  it runs.
+- `task_ids` additionally carries two bake-off keys alongside the existing fixed shape
+  (`planner_create`, `planning_review_pass1`, `planner_replan`, `planning_review_pass2`,
+  `memory_finalize`): `plan_bakeoff_candidates` (object, `{model: task_id}`, default `{}`) and
+  `plan_bakeoff_judge` (string or `null`, default `null`) — every bake-off task id is durably
+  persisted in the artifact rather than relying on in-session-only variables.
+- `bakeoff_n_requested` (integer or `null`) — the user's raw requested candidate count before
+  qualify is known; independent of whether the bake-off ever actually triggers.
+- `bakeoff_n` (integer or `null`) — the actual number of candidates dispatched, set only once the
+  scout qualifies (`min(bakeoff_n_requested, 4)`).
+- `bakeoff_models` (array, default `[]`) — the fixed-rotation slice of models dispatched for this
+  bake-off (`[opus, sonnet, haiku, fable]`, first `bakeoff_n - 1` entries).
+- `bakeoff_triggered` (boolean, default `false`) — whether the scout's own contract qualified this
+  PLAN workflow for bake-off fan-out.
+- `bakeoff_all_failed` (boolean, default `false`) — set when every bake-off candidate (scout
+  included) is contract-invalid, triggering the fresh single-planner fallback.
+- `bakeoff_candidate_failures` (array, default `[]`) — dispatch/contract failures recorded per
+  candidate during fan-out.
 - `intent` stores the durable spec header for the workflow:
   - `goal`
   - `non_goals`

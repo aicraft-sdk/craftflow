@@ -1,0 +1,32 @@
+{
+  "id": "plan-bakeoff-qualify-triggered",
+  "workflow_type": "PLAN",
+  "agent_outputs": {
+    "planner_contract": {
+      "STATUS": "DECISION_RFC_CREATED",
+      "SUMMARY": "scout returned decision_rfc plan mode, qualifying for bake-off fan-out",
+      "PLAN_FILE": "docs/plans/2026-08-25-auth-candidate-inherit.md",
+      "PLAN_MODE": "decision_rfc",
+      "VERIFICATION_RIGOR": "standard",
+      "CONFIDENCE": 82,
+      "GATE_PASSED": true,
+      "OPEN_DECISIONS": [],
+      "SCENARIOS": [
+        {
+          "name": "scout qualifies for bake-off",
+          "given": "a high-risk decision_rfc request",
+          "when": "the scout planner returns its own contract",
+          "then": "the router evaluates PLAN_MODE == decision_rfc and triggers the bake-off fan-out",
+          "command": "plan",
+          "expected": "bakeoff_triggered = true",
+          "actual": "bakeoff_triggered = true",
+          "exit_code": 0,
+          "status": "PASS"
+        }
+      ],
+      "BLOCKING": false,
+      "REMEDIATION_NEEDED": false
+    }
+  },
+  "agent_output_text": "### Router Contract (MACHINE-READABLE)\n```yaml\nSTATUS: DECISION_RFC_CREATED\nSUMMARY: \"scout returned decision_rfc plan mode, qualifying for bake-off fan-out\"\nPLAN_FILE: docs/plans/2026-08-25-auth-candidate-inherit.md\nPLAN_MODE: decision_rfc\nVERIFICATION_RIGOR: standard\nCONFIDENCE: 82\nGATE_PASSED: true\nOPEN_DECISIONS: []\nSCENARIOS:\n  - name: \"scout qualifies for bake-off\"\nBLOCKING: false\nREMEDIATION_NEEDED: false\n```\n"
+}
