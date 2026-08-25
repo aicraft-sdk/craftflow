@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.3.0] - 2026-08-25
+
+### Features
+
+- wire plan-bakeoff-judge into SKILL.md contract/dispatch tables
+- PLAN bake-off fan-out, judge dispatch, degraded-candidate tolerance
+- PLAN scout-then-qualify branch, stem derivation, N parsing, artifact defaults
+- planner supports router-supplied Target Plan File override
+- add plan-bakeoff-judge agent and contract overlay
+
+### Fixes
+
+- correct plan-bakeoff-judge field list and step 5b cross-reference
+
+### Documentation
+
+- regenerate architecture graph for plan-bakeoff-judge agent
+
 ## [1.2.1] - 2026-08-23
 
 ### Fixes
