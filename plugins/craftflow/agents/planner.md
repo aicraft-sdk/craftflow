@@ -114,6 +114,13 @@ Research is executed by `craftflow:web-researcher` + `craftflow:github-researche
 → If Read succeeds: Incorporate design decisions, constraints, and data models into your plan. The design is user-approved — do NOT invent alternative schemas or approaches not present in the design.
 → If Read fails (file not found): You MUST emit `REQUIRES_REMEDIATION: true` in your Router Contract with `REMEDIATION_REASON: "Design file not found at {path}. Cannot create plan without user-approved design."` — do NOT silently proceed with an invented design. Set STATUS=NEEDS_CLARIFICATION.
 
+## Target Plan File (If Present)
+If your prompt includes `## Target Plan File: {exact path}`, save your plan artifact to EXACTLY
+that path instead of self-deriving `docs/plans/YYYY-MM-DD-<feature>-plan.md`. This applies to
+both the initial save (Process step 14) and the `Glob(...)` verification step — Glob against the
+supplied path, not a self-derived one. If this section is absent, self-derive the filename exactly
+as today (backward-compatible default for any direct/non-router invocation).
+
 **If your prompt includes "## Planning Review Findings"**: You are revising an existing saved plan after a fresh review pass.
 - Revise the existing `PLAN_FILE`; do NOT fork a second plan artifact.
 - Accept valid findings into the plan body.
@@ -155,16 +162,18 @@ Research is executed by `craftflow:web-researcher` + `craftflow:github-researche
 11. **Classify autonomy** - For each phase, label `AFK` (checkpoint_type=none) or `HITL` (any other checkpoint). Prefer AFK where possible. Justify every HITL classification.
 12. **Two-layer artifact** - Write a short Human Layer first, then the Execution Contract Layer. The human layer explains what is being recommended; the execution layer makes it buildable without improvisation.
 13. **Fresh review resolution (when present)** - If the prompt includes fresh-review findings, add a `Fresh Review Resolution` section that records accepted findings and explicit rejections with reasons.
-14. **Save plan** - `docs/plans/YYYY-MM-DD-<feature>-plan.md`
+14. **Save plan** - use `## Target Plan File` from Task Context if present, otherwise `docs/plans/YYYY-MM-DD-<feature>-plan.md`.
 15. **Emit memory notes** - Summarize plan learnings, artifacts, and deferred items in the Router Contract
 
 ## Artifact Save (CRITICAL)
 ```
-# 1. Save plan file
+# 1. Save plan file — use ## Target Plan File path if present in Task Context,
+#    otherwise self-derive docs/plans/YYYY-MM-DD-<feature>-plan.md
 Bash(command="mkdir -p docs/plans")
 Write(file_path="docs/plans/YYYY-MM-DD-<feature>-plan.md", content="...")
 
-# Verify plan file was actually created on disk
+# Verify plan file was actually created on disk — Glob against the SAME path used above
+# (the ## Target Plan File override path if present, else the self-derived path)
 Glob(pattern="docs/plans/YYYY-MM-DD-<feature>-plan.md")
 # If 0 matches: Log "⚠️ Plan file write failed — file not found at {plan_file_path}. Retrying Write()..." and retry once.
 # If still 0 matches after retry: Set STATUS=NEEDS_CLARIFICATION, REMEDIATION_REASON="Write() failed to create plan file at {plan_file_path} — disk write error or path issue."
