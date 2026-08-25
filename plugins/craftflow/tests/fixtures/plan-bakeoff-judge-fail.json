@@ -1,0 +1,33 @@
+{
+  "id": "plan-bakeoff-judge-fail",
+  "workflow_type": "PLAN",
+  "agent_outputs": {
+    "judge_contract": {
+      "STATUS": "PLAN_CREATED",
+      "SUMMARY": "picked the opus candidate verbatim",
+      "PLAN_FILE": "docs/plans/2026-08-25-auth-plan.md",
+      "PLAN_MODE": "execution_plan",
+      "CONFIDENCE": 88,
+      "GATE_PASSED": true,
+      "OPEN_DECISIONS": [],
+      "SCENARIOS": [
+        {
+          "name": "judge output missing CANDIDATES_COMPARED",
+          "given": "2 surviving candidate plans",
+          "when": "the judge emits its Router Contract without CANDIDATES_COMPARED",
+          "then": "contract validation rejects the output as invalid",
+          "command": "plan",
+          "expected": "valid: false, missing-field error naming CANDIDATES_COMPARED",
+          "actual": "valid: false, missing-field error naming CANDIDATES_COMPARED",
+          "exit_code": 0,
+          "status": "PASS"
+        }
+      ],
+      "WINNING_MODEL": "opus",
+      "SYNTHESIZED": false,
+      "BLOCKING": false,
+      "REMEDIATION_NEEDED": false
+    }
+  },
+  "agent_output_text": "### Router Contract (MACHINE-READABLE)\n```yaml\nSTATUS: PLAN_CREATED\nSUMMARY: \"picked the opus candidate verbatim\"\nPLAN_FILE: docs/plans/2026-08-25-auth-plan.md\nPLAN_MODE: execution_plan\nCONFIDENCE: 88\nGATE_PASSED: true\nOPEN_DECISIONS: []\nSCENARIOS:\n  - name: \"judge output missing CANDIDATES_COMPARED\"\nWINNING_MODEL: opus\nSYNTHESIZED: false\nBLOCKING: false\nREMEDIATION_NEEDED: false\n```\n"
+}

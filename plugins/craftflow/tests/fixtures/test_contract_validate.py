@@ -461,6 +461,37 @@ check("valid=True for complete github-researcher contract", result["valid"], Tru
 check("errors=[] for complete github-researcher contract", result["errors"], [])
 
 # ---------------------------------------------------------------------------
+# test_valid_plan_bakeoff_judge_contracts (fixture-driven)
+# ---------------------------------------------------------------------------
+print("\n[test_valid_plan_bakeoff_judge_contracts]")
+
+_FIXTURES_DIR = os.path.dirname(__file__)
+
+
+def _load_judge_fixture_text(filename: str) -> str:
+    path = os.path.join(_FIXTURES_DIR, filename)
+    with open(path, "r", encoding="utf-8") as f:
+        fixture = json.load(f)
+    return fixture["agent_output_text"]
+
+
+JUDGE_PICKED_TEXT = _load_judge_fixture_text("plan-bakeoff-judge-picked.json")
+JUDGE_SYNTHESIZED_TEXT = _load_judge_fixture_text("plan-bakeoff-judge-synthesized.json")
+JUDGE_FAIL_TEXT = _load_judge_fixture_text("plan-bakeoff-judge-fail.json")
+
+result = validate_contract(JUDGE_PICKED_TEXT, "plan-bakeoff-judge")
+check("valid=True for verbatim-pick plan-bakeoff-judge contract", result["valid"], True)
+check("errors=[] for verbatim-pick plan-bakeoff-judge contract", result["errors"], [])
+
+result = validate_contract(JUDGE_SYNTHESIZED_TEXT, "plan-bakeoff-judge")
+check("valid=True for synthesized plan-bakeoff-judge contract", result["valid"], True)
+check("errors=[] for synthesized plan-bakeoff-judge contract", result["errors"], [])
+
+result = validate_contract(JUDGE_FAIL_TEXT, "plan-bakeoff-judge")
+check("valid=False for plan-bakeoff-judge contract missing CANDIDATES_COMPARED", result["valid"], False)
+check_contains("errors mention CANDIDATES_COMPARED", result["errors"], "CANDIDATES_COMPARED")
+
+# ---------------------------------------------------------------------------
 # test_required_fields_matches_json_schema (structural cross-check)
 # ---------------------------------------------------------------------------
 print("\n[test_required_fields_matches_json_schema]")

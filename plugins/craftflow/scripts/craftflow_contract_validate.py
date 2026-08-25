@@ -64,6 +64,12 @@ REQUIRED_FIELDS: dict = {
         "GATE_PASSED", "OPEN_DECISIONS", "SCENARIOS", "BLOCKING",
         "REMEDIATION_NEEDED",
     ],
+    "plan-bakeoff-judge": [
+        "STATUS", "SUMMARY", "PLAN_FILE", "PLAN_MODE", "CONFIDENCE",
+        "GATE_PASSED", "OPEN_DECISIONS", "SCENARIOS", "WINNING_MODEL",
+        "SYNTHESIZED", "CANDIDATES_COMPARED", "BLOCKING",
+        "REMEDIATION_NEEDED",
+    ],
     "bug-investigator": [
         "STATUS", "SUMMARY", "ROOT_CAUSE", "TDD_RED_EXIT", "TDD_GREEN_EXIT",
         "BLOCKING", "REMEDIATION_NEEDED",

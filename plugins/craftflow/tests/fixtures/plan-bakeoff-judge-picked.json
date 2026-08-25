@@ -1,0 +1,37 @@
+{
+  "id": "plan-bakeoff-judge-picked",
+  "workflow_type": "PLAN",
+  "agent_outputs": {
+    "judge_contract": {
+      "STATUS": "PLAN_CREATED",
+      "SUMMARY": "picked the opus candidate verbatim after comparing 2 surviving candidates",
+      "PLAN_FILE": "docs/plans/2026-08-25-auth-plan.md",
+      "PLAN_MODE": "execution_plan",
+      "CONFIDENCE": 88,
+      "GATE_PASSED": true,
+      "OPEN_DECISIONS": [],
+      "SCENARIOS": [
+        {
+          "name": "judge picks the stronger candidate verbatim",
+          "given": "2 surviving candidate plans (opus, sonnet)",
+          "when": "the judge compares them against the original request",
+          "then": "the opus candidate is selected without grafting from sonnet",
+          "command": "plan",
+          "expected": "single canonical plan file, N candidate files deleted",
+          "actual": "single canonical plan file, N candidate files deleted",
+          "exit_code": 0,
+          "status": "PASS"
+        }
+      ],
+      "WINNING_MODEL": "opus",
+      "SYNTHESIZED": false,
+      "CANDIDATES_COMPARED": [
+        {"model": "opus", "plan_file": "docs/plans/2026-08-25-auth-plan-opus.md", "confidence": 88},
+        {"model": "sonnet", "plan_file": "docs/plans/2026-08-25-auth-plan-sonnet.md", "confidence": 79}
+      ],
+      "BLOCKING": false,
+      "REMEDIATION_NEEDED": false
+    }
+  },
+  "agent_output_text": "### Router Contract (MACHINE-READABLE)\n```yaml\nSTATUS: PLAN_CREATED\nSUMMARY: \"picked the opus candidate verbatim after comparing 2 surviving candidates\"\nPLAN_FILE: docs/plans/2026-08-25-auth-plan.md\nPLAN_MODE: execution_plan\nCONFIDENCE: 88\nGATE_PASSED: true\nOPEN_DECISIONS: []\nSCENARIOS:\n  - name: \"judge picks the stronger candidate verbatim\"\nWINNING_MODEL: opus\nSYNTHESIZED: false\nCANDIDATES_COMPARED:\n  - model: opus\n  - model: sonnet\nBLOCKING: false\nREMEDIATION_NEEDED: false\n```\n"
+}

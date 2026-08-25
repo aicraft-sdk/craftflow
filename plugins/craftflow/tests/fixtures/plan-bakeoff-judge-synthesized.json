@@ -1,0 +1,38 @@
+{
+  "id": "plan-bakeoff-judge-synthesized",
+  "workflow_type": "PLAN",
+  "agent_outputs": {
+    "judge_contract": {
+      "STATUS": "PLAN_CREATED",
+      "SUMMARY": "synthesized the final plan from the opus base plus a grafted risk-mitigation idea from the sonnet candidate",
+      "PLAN_FILE": "docs/plans/2026-08-25-auth-plan.md",
+      "PLAN_MODE": "execution_plan",
+      "CONFIDENCE": 91,
+      "GATE_PASSED": true,
+      "OPEN_DECISIONS": [],
+      "SCENARIOS": [
+        {
+          "name": "judge synthesizes a stronger plan from two candidates",
+          "given": "3 surviving candidate plans (opus, sonnet, haiku)",
+          "when": "the judge compares them and finds a genuinely additive idea in sonnet",
+          "then": "the final plan is based on opus with sonnet's mitigation grafted in",
+          "command": "plan",
+          "expected": "single canonical plan file, N candidate files deleted",
+          "actual": "single canonical plan file, N candidate files deleted",
+          "exit_code": 0,
+          "status": "PASS"
+        }
+      ],
+      "WINNING_MODEL": "opus",
+      "SYNTHESIZED": true,
+      "CANDIDATES_COMPARED": [
+        {"model": "opus", "plan_file": "docs/plans/2026-08-25-auth-plan-opus.md", "confidence": 85},
+        {"model": "sonnet", "plan_file": "docs/plans/2026-08-25-auth-plan-sonnet.md", "confidence": 83},
+        {"model": "haiku", "plan_file": "docs/plans/2026-08-25-auth-plan-haiku.md", "confidence": 61}
+      ],
+      "BLOCKING": false,
+      "REMEDIATION_NEEDED": false
+    }
+  },
+  "agent_output_text": "### Router Contract (MACHINE-READABLE)\n```yaml\nSTATUS: PLAN_CREATED\nSUMMARY: \"synthesized the final plan from the opus base plus a grafted risk-mitigation idea from the sonnet candidate\"\nPLAN_FILE: docs/plans/2026-08-25-auth-plan.md\nPLAN_MODE: execution_plan\nCONFIDENCE: 91\nGATE_PASSED: true\nOPEN_DECISIONS: []\nSCENARIOS:\n  - name: \"judge synthesizes a stronger plan from two candidates\"\nWINNING_MODEL: opus\nSYNTHESIZED: true\nCANDIDATES_COMPARED:\n  - model: opus\n  - model: sonnet\n  - model: haiku\nBLOCKING: false\nREMEDIATION_NEEDED: false\n```\n"
+}
