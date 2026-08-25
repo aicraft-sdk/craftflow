@@ -150,7 +150,7 @@ Every CRAFTFLOW task description starts with normalized metadata lines:
 wf:{workflow_uuid}
 kind:{workflow|agent|remfix|memory|reverify|research}
 origin:{router|component-builder|bug-investigator|code-reviewer|silent-failure-hunter|integration-verifier|planner}
-phase:{build|build-implement|build-review|build-hunt|build-verify|build-doc-sync|learn-distill|skill-distill|debug|debug-investigate|debug-review|debug-verify|doubt-verify|review|review-audit|plan|plan-create|plan-review-gap-1|plan-review-gap-2|memory-finalize|re-review|re-hunt|re-verify|re-plan|research-web|research-github}
+phase:{build|build-implement|build-review|build-hunt|build-verify|build-doc-sync|learn-distill|skill-distill|debug|debug-investigate|debug-review|debug-verify|doubt-verify|review|review-audit|plan|plan-create|plan-review-gap-1|plan-review-gap-2|memory-finalize|re-review|re-hunt|re-verify|re-plan|research-web|research-github|plan-bakeoff-candidate-opus|plan-bakeoff-candidate-sonnet|plan-bakeoff-candidate-haiku|plan-bakeoff-candidate-fable|plan-bakeoff-judge}
 plan:{path|N/A}
 scope:{ALL_ISSUES|CRITICAL_ONLY|N/A}
 reason:{short reason or N/A}

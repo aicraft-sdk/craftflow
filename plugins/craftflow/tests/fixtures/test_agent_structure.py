@@ -12,6 +12,10 @@ import os
 _FIXTURES_DIR = os.path.dirname(__file__)
 PLANNER_MD_PATH = os.path.join(_FIXTURES_DIR, "../../agents/planner.md")
 SKILL_MD_PATH = os.path.join(_FIXTURES_DIR, "../../skills/craftflow-router/SKILL.md")
+ROUTER_PROTOCOL_MD_PATH = os.path.join(_FIXTURES_DIR, "../../skills/_shared/router-protocol.md")
+PLAN_WORKFLOW_MD_PATH = os.path.join(
+    _FIXTURES_DIR, "../../skills/craftflow-router/references/plan-workflow.md"
+)
 
 PASS = 0
 FAIL = 0
@@ -99,6 +103,212 @@ for _field in _WRITE_LITERAL_FIELDS:
         f"Write() literal declares {_field}",
         _write_literal_line or "",
         _field,
+    )
+
+# ---------------------------------------------------------------------------
+# test_dispatcher_table_lists_bakeoff_phases (Phase 4 Step 1)
+# ---------------------------------------------------------------------------
+print("\n[test_dispatcher_table_lists_bakeoff_phases]")
+
+with open(ROUTER_PROTOCOL_MD_PATH, "r", encoding="utf-8") as f:
+    router_protocol_text = f.read()
+
+check_contains(
+    "dispatcher table has a row for the 4 plan-bakeoff-candidate-{model} phases",
+    router_protocol_text,
+    "| `plan-bakeoff-candidate-opus`, `plan-bakeoff-candidate-sonnet`, "
+    "`plan-bakeoff-candidate-haiku`, `plan-bakeoff-candidate-fable` | `craftflow:planner`",
+)
+
+check_contains(
+    "dispatcher table has a row for plan-bakeoff-judge -> craftflow:plan-bakeoff-judge",
+    router_protocol_text,
+    "| `plan-bakeoff-judge` | `craftflow:plan-bakeoff-judge` |",
+)
+
+# ---------------------------------------------------------------------------
+# test_optional_sections_lists_candidates (Phase 4 Step 1b)
+# ---------------------------------------------------------------------------
+print("\n[test_optional_sections_lists_candidates]")
+
+check_contains(
+    "Optional sections list has '## Candidates' scoped to plan-bakeoff-judge, sourced from results.bakeoff[]",
+    router_protocol_text,
+    "- `## Candidates` only for `plan-bakeoff-judge`, assembled from `results.bakeoff[]`.",
+)
+
+# ---------------------------------------------------------------------------
+# test_dispatch_time_prompt_assembly_covers_bakeoff (Phase 4 Step 1b)
+# ---------------------------------------------------------------------------
+print("\n[test_dispatch_time_prompt_assembly_covers_bakeoff]")
+
+with open(PLAN_WORKFLOW_MD_PATH, "r", encoding="utf-8") as f:
+    plan_workflow_text = f.read()
+
+check_contains(
+    "dispatch-time prompt assembly derives Target Plan File per candidate model from the phase suffix",
+    plan_workflow_text,
+    'phase matches "plan-bakeoff-candidate-{model}":\n'
+    "  assemble ## Target Plan File: docs/plans/{plan_file_stem}-candidate-{model}.md",
+)
+
+check_contains(
+    "dispatch-time prompt assembly derives judge's Target Plan File as the canonical path",
+    plan_workflow_text,
+    'phase == "plan-bakeoff-judge":\n'
+    "  assemble ## Target Plan File: docs/plans/{plan_file_stem}-plan.md",
+)
+
+check_contains(
+    "dispatch-time prompt assembly derives judge's Candidates from results.bakeoff[]",
+    plan_workflow_text,
+    "assemble ## Candidates from results.bakeoff[]",
+)
+
+# ---------------------------------------------------------------------------
+# test_bakeoff_fanout_block (Phase 4 Step 3/4)
+# ---------------------------------------------------------------------------
+print("\n[test_bakeoff_fanout_block]")
+
+check_contains(
+    "plan-workflow.md has a '### PLAN bake-off fan-out' section heading",
+    plan_workflow_text,
+    "### PLAN bake-off fan-out",
+)
+
+check_contains(
+    "N-1 dispatch loop creates one task per model with phase:plan-bakeoff-candidate-{model}",
+    plan_workflow_text,
+    "phase:plan-bakeoff-candidate-{model}",
+)
+
+check_contains(
+    "N-1 dispatch loop has no addBlockedBy among candidates (all parallel)",
+    plan_workflow_text,
+    "# No addBlockedBy — all N-1 are parallel, no ordering among themselves.",
+)
+
+check_contains(
+    "degraded-tolerance rule marks a failing candidate bakeoff_candidate_failed and excludes it",
+    plan_workflow_text,
+    "Mark that candidate `bakeoff_candidate_failed`, persist to `bakeoff_candidate_failures` with the\n"
+    "reason, exclude it from `results.bakeoff[]`, and continue.",
+)
+
+check_contains(
+    "router-owned cleanup section is explicitly labeled ROUTER-OWNED CLEANUP",
+    plan_workflow_text,
+    "**ROUTER-OWNED CLEANUP.**",
+)
+
+check_contains(
+    "router-owned cleanup Globs the failed candidate's OWN assigned path only",
+    plan_workflow_text,
+    'Glob(f"docs/plans/{plan_file_stem}-candidate-{model}.md")',
+)
+
+check_contains(
+    "router-owned cleanup deletes via an exact literal rm path, never a wildcard",
+    plan_workflow_text,
+    "Bash(f\"rm 'docs/plans/{plan_file_stem}-candidate-{model}.md'\")",
+)
+
+check_contains(
+    "all-candidates-failed fallback dispatches one fresh planner with model: inherit and no override",
+    plan_workflow_text,
+    "IF valid_count == 0: abandon the bake-off. Dispatch ONE fresh planner task, model: inherit,",
+)
+
+check_contains(
+    "all-candidates-failed fallback persists bakeoff_all_failed = true",
+    plan_workflow_text,
+    "bakeoff_all_failed = true is also persisted.",
+)
+
+check_contains(
+    "all-candidates-failed fallback constructs Block B with upstream_task_id = the fresh planner's own task id",
+    plan_workflow_text,
+    "construct Block B (`### PLAN task graph`) NOW,\n"
+    "    with upstream_task_id = this fresh planner task's own task id",
+)
+
+# ---------------------------------------------------------------------------
+# test_judge_dispatch_and_post_judge_validation_blocks (Phase 4 Step 5/6/7)
+# ---------------------------------------------------------------------------
+print("\n[test_judge_dispatch_and_post_judge_validation_blocks]")
+
+check_contains(
+    "plan-workflow.md has a '### PLAN judge dispatch' section heading",
+    plan_workflow_text,
+    "### PLAN judge dispatch",
+)
+
+check_contains(
+    "judge dispatch creates a task with phase:plan-bakeoff-judge",
+    plan_workflow_text,
+    "phase:plan-bakeoff-judge",
+)
+
+check_contains(
+    "judge dispatch blocks on every valid candidate's task_id",
+    plan_workflow_text,
+    "TaskUpdate({ taskId: judge_task_id, addBlockedBy: [every valid candidate's task_id] })",
+)
+
+check_contains(
+    "plan-workflow.md has a '### PLAN post-judge validation' section heading",
+    plan_workflow_text,
+    "### PLAN post-judge validation",
+)
+
+check_contains(
+    "post-judge Glob check for leftover candidate files MUST return zero matches",
+    plan_workflow_text,
+    'Glob(f"docs/plans/{plan_file_stem}-candidate-*.md") — MUST return zero matches.',
+)
+
+check_contains(
+    "post-judge success constructs Block B with upstream_task_id = judge_task_id",
+    plan_workflow_text,
+    "<invoke Block B, upstream_task_id = judge_task_id>",
+)
+
+check_contains(
+    "Task*-tool-fallback note cross-references the existing SKILL.md § 6 generalized rule",
+    plan_workflow_text,
+    "**Task*-tool-fallback note (cross-reference, not new logic):**",
+)
+
+# ---------------------------------------------------------------------------
+# test_skill_md_phase_enum_lists_bakeoff_phases (Phase 4 Step 2)
+# ---------------------------------------------------------------------------
+print("\n[test_skill_md_phase_enum_lists_bakeoff_phases]")
+
+_phase_enum_line = None
+for _line in skill_text.splitlines():
+    if _line.startswith("phase:{") and "plan-create" in _line:
+        _phase_enum_line = _line
+        break
+
+check(
+    "found the § 3 Task Metadata Contract phase enum line (starts with phase:{, contains plan-create)",
+    _phase_enum_line is not None,
+    True,
+)
+
+_PHASE_ENUM_VALUES = [
+    "plan-bakeoff-candidate-opus",
+    "plan-bakeoff-candidate-sonnet",
+    "plan-bakeoff-candidate-haiku",
+    "plan-bakeoff-candidate-fable",
+    "plan-bakeoff-judge",
+]
+
+for _value in _PHASE_ENUM_VALUES:
+    check_contains(
+        f"§ 3 phase enum lists {_value}",
+        _phase_enum_line or "",
+        _value,
     )
 
 # ---------------------------------------------------------------------------

@@ -319,6 +319,7 @@ Optional sections:
   non-default target path (every PLAN scout/candidate/judge dispatch under the bake-off mechanism;
   omitted for a direct/manual planner invocation that self-derives its own filename per
   `planner.md` Process step 14).
+- `## Candidates` only for `plan-bakeoff-judge`, assembled from `results.bakeoff[]`.
 - `## Planning Review Findings` only for `re-plan`.
 - `## Original User Request` only for `plan-gap-reviewer`.
 - `## Approved Context Files` only for `plan-gap-reviewer`.
@@ -448,6 +449,8 @@ tool. See that file's own section for its host-specific mechanics.)
 | `doubt-verify` | `craftflow:doubt-verifier` |
 | `fix-verify` | `craftflow:doubt-verifier` |
 | `plan-create`, `re-plan` | `craftflow:planner` |
+| `plan-bakeoff-candidate-opus`, `plan-bakeoff-candidate-sonnet`, `plan-bakeoff-candidate-haiku`, `plan-bakeoff-candidate-fable` | `craftflow:planner` (Mechanism A: router passes `model` as a literal runtime dispatch parameter on each call — see workflow `activeContext.md ## Decisions`, Phase 0) |
+| `plan-bakeoff-judge` | `craftflow:plan-bakeoff-judge` |
 | `plan-review-gap-1`, `plan-review-gap-2` | `craftflow:plan-gap-reviewer` |
 | `research-web` | `craftflow:web-researcher` |
 | `research-github` | `craftflow:github-researcher` |
