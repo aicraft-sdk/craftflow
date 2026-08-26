@@ -990,7 +990,11 @@ finalization — see § 5's "Simplified execution model (v1 differences from Cla
 3. Write to .craftflow/state/project/patterns.md ## Common Gotchas (durable patterns)
 4. Write to .craftflow/state/workflows/{wf_id}/progress.md ## Verification (evidence)
 5. Update .craftflow/state/project/activeContext.md ## Recent Changes
-6. Update .craftflow/state/project/progress.md ## Completed (one-line summary)
+6. Update .craftflow/state/project/progress.md ## Completed (one-line summary), capped at the
+   most recent 20 entries with the oldest archived to
+   .craftflow/state/project/archive/completed-2026-08.md (matching Common Gotchas' cap+archive
+   discipline) -- without this cap, this section regrows unbounded (see craftflow-router/SKILL.md
+   § 13 for the full mechanism this simplified Cursor step defers to)
 7. Write final status to .craftflow/state/workflows/{wf_id}.json
 ```
 

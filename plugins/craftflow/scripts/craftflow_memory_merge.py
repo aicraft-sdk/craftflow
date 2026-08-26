@@ -40,6 +40,19 @@ kept working for callers that have not yet migrated to section-anchored):
 "max_bullets" is optional in both modes; when present, the bullet list is
 capped post-merge with oldest-first eviction.
 
+Optional "unit" field (section-anchored mode only; default "bullets" — fully
+backward compatible, unchanged behavior when omitted): set to "entries" for
+paragraph-shaped sections whose content is NOT "- " bullet lines (e.g.
+`## Last Updated`'s dated free-text paragraphs, one per finished workflow,
+separated by blank lines — see extract_entries). In "entries" mode, notes are
+PREPENDED as new raw-text entries (newest-first, matching this repo's own
+`## Last Updated` convention — the opposite of bullets-mode's append/oldest-
+first-at-index-0 convention), "max_bullets" caps the number of most-recent
+entries kept, "retractions" is not supported (ignored with a stderr warning),
+and confidence/provenance formatting/dedupe does not apply (entries are free
+text, not deduped bullets). The opt-in "archive" field works identically in
+both unit modes.
+
 Each note's "provenance" field is optional: "organic" | "imported", defaults to "imported" when
 absent or unrecognized (fail-safe — an incoming note is never treated as organic unless
 explicitly marked). An existing bullet marked organic is never auto-replaced by an incoming
@@ -441,6 +454,195 @@ def _merge_notes_into_body_with_archive(
     return _reconstruct_section(section_body, current_bullets), archived_bullets
 
 
+def extract_entries(section_body: str) -> list:
+    """
+    Split a section body into paragraph-shaped "entries" -- an alternative
+    capping unit to extract_bullets' single-bullet-line unit, for sections
+    whose content is NOT "- " bullet lines (e.g. `## Last Updated`'s dated
+    free-text paragraphs, one per finished workflow).
+
+    An entry boundary is either (a) one or more blank lines, OR (b) a line
+    starting with a "YYYY-MM-DD" date prefix immediately following another
+    non-blank line -- confirmed against this repo's own real `## Last
+    Updated` content across all three project-tier files: activeContext.md
+    separates consecutive dated entries with a blank line, but patterns.md
+    and (partially) progress.md do NOT -- back-to-back dated lines with zero
+    blank line between them. Without the (b) boundary, blank-line-only
+    splitting silently FUSES many real per-workflow entries into one giant
+    block for those two files (verified live: patterns.md's real content
+    fused ~24 real entries into 3 blocks) -- max_bullets would then almost
+    never trigger eviction, and when it finally did, would archive many
+    workflows' worth of entries as one atomic unit instead of oldest-first,
+    one at a time. Leading/trailing blank lines are ignored. Order is
+    preserved exactly as found in section_body.
+
+    Ordering contract (see apply_entry_cap_with_archive): the router's own
+    convention for these sections is to PREPEND each new entry (newest
+    first), the opposite of extract_bullets' append/oldest-first convention
+    -- this function does not assume or enforce that ordering itself, it
+    only extracts entries in document order; callers interpret entries[0]
+    per their own convention.
+    """
+    if not section_body:
+        return []
+    date_prefix = re.compile(r"^\d{4}-\d{2}-\d{2}[ (]")
+    blocks = []
+    current: list = []
+    for line in section_body.split("\n"):
+        if line.strip():
+            if current and date_prefix.match(line):
+                blocks.append("\n".join(current))
+                current = []
+            current.append(line)
+        else:
+            if current:
+                blocks.append("\n".join(current))
+                current = []
+    if current:
+        blocks.append("\n".join(current))
+    return blocks
+
+
+def apply_entry_cap(entries: list, max_entries) -> list:
+    """
+    Trim an entries list (see extract_entries) to at most max_entries,
+    keeping the FIRST max_entries entries -- the newest ones, per this
+    module's documented "entries[0] is newest" convention (the opposite of
+    apply_cap's oldest-at-index-0 bullets convention).
+
+    - max_entries is None: no-op, return entries unchanged
+    - len(entries) <= max_entries: no-op, return entries unchanged
+    """
+    if max_entries is None or len(entries) <= max_entries:
+        return entries
+    return entries[:max_entries]
+
+
+def apply_entry_cap_with_archive(
+    entries: list, max_entries, archive: bool, archive_path: str = None
+) -> tuple:
+    """
+    Like apply_entry_cap, but when archive=True, the overflow (oldest)
+    entries -- everything past index max_entries-1, since entries[0] is the
+    newest -- are returned as a second list instead of being dropped, and a
+    single pointer entry ("Older entries archived: see <archive_path>") is
+    appended to the kept list in their place.
+
+    archive=False: byte-identical to apply_entry_cap (no archived list).
+
+    Returns (kept_entries, archived_entries). archived_entries is always []
+    when max_entries is None, archive is False, or no eviction is needed.
+    """
+    if not archive:
+        return apply_entry_cap(entries, max_entries), []
+    if max_entries is None or len(entries) <= max_entries:
+        return entries, []
+
+    kept = entries[:max_entries]
+    archived_entries = entries[max_entries:]
+    pointer_target = archive_path or "the archive"
+    kept = kept + [f"Older entries archived: see {pointer_target}"]
+    return kept, archived_entries
+
+
+def _reconstruct_entries_section(entries: list) -> str:
+    """Join entries (see extract_entries) back into a section body, one
+    blank line between each -- the inverse of extract_entries' split."""
+    return "\n\n".join(entries).strip()
+
+
+def _merge_notes_into_entries_body(section_body: str, notes: list, max_entries) -> str:
+    """
+    Entries-shaped counterpart to _merge_notes_into_body: notes are
+    PREPENDED as new entries (newest-first, matching the router's own
+    convention for `## Last Updated`) rather than bullet-merged/superseded
+    -- paragraph entries are free text, not deduped against existing
+    entries the way bullets are. Confidence < 0.7 notes are still dropped
+    (non-silent stderr warning), matching merge_bullet's drop-below-
+    threshold behavior. Retractions are not supported in entries mode
+    (see main()'s CLI envelope for the caller-facing warning).
+    """
+    current_entries = extract_entries(section_body) if section_body else []
+    new_entries = []
+    for note in notes:
+        if note["confidence"] < 0.7:
+            sys.stderr.write(
+                f"Warning: dropping note below confidence threshold (0.7): {note['text']!r} (confidence={note['confidence']})\n"
+            )
+            continue
+        new_entries.append(note["text"].strip())
+    current_entries = new_entries + current_entries
+    if max_entries is not None:
+        current_entries = apply_entry_cap(current_entries, max_entries)
+    return _reconstruct_entries_section(current_entries)
+
+
+def _merge_notes_into_entries_body_with_archive(
+    section_body: str, notes: list, max_entries, archive_path: str
+) -> tuple:
+    """Like _merge_notes_into_entries_body, but caps via
+    apply_entry_cap_with_archive(archive=True) instead of apply_entry_cap,
+    so excess (oldest) entries are archived (not dropped) and a pointer
+    entry naming archive_path is inserted into the kept section.
+
+    Returns (body, archived_entries). archived_entries is [] when
+    max_entries is None or no eviction was needed.
+    """
+    current_entries = extract_entries(section_body) if section_body else []
+    new_entries = []
+    for note in notes:
+        if note["confidence"] < 0.7:
+            sys.stderr.write(
+                f"Warning: dropping note below confidence threshold (0.7): {note['text']!r} (confidence={note['confidence']})\n"
+            )
+            continue
+        new_entries.append(note["text"].strip())
+    current_entries = new_entries + current_entries
+
+    archived_entries = []
+    if max_entries is not None:
+        current_entries, archived_entries = apply_entry_cap_with_archive(
+            current_entries, max_entries, archive=True, archive_path=archive_path
+        )
+    return _reconstruct_entries_section(current_entries), archived_entries
+
+
+def merge_section_anchored_entries(
+    file_text: str, section: str, raw_notes: list, max_entries=None
+) -> str:
+    """Entries-mode counterpart to merge_section_anchored (see extract_entries
+    for the capping unit). Returns None if the section heading is not found."""
+    span = _find_section_span(file_text, section)
+    if span is None:
+        return None
+
+    body_start, body_end = span
+    section_body = file_text[body_start:body_end]
+    notes = _normalize_notes(raw_notes)
+    merged_body = _merge_notes_into_entries_body(section_body, notes, max_entries)
+    return file_text[:body_start] + merged_body + "\n" + file_text[body_end:]
+
+
+def merge_section_anchored_entries_with_archive(
+    file_text: str, section: str, raw_notes: list, max_entries, archive_path: str
+) -> tuple:
+    """Entries-mode counterpart to merge_section_anchored_with_archive.
+    Returns (full_file_text_with_section_replaced, archived_entries).
+    Returns (None, []) if the section heading is not found in file_text."""
+    span = _find_section_span(file_text, section)
+    if span is None:
+        return None, []
+
+    body_start, body_end = span
+    section_body = file_text[body_start:body_end]
+    notes = _normalize_notes(raw_notes)
+    merged_body, archived_entries = _merge_notes_into_entries_body_with_archive(
+        section_body, notes, max_entries, archive_path
+    )
+    full_text = file_text[:body_start] + merged_body + "\n" + file_text[body_end:]
+    return full_text, archived_entries
+
+
 def _find_section_span(file_text: str, section: str):
     """
     Locate the body span of a `## <section>` heading in file_text.
@@ -566,6 +768,7 @@ def main() -> int:
     retractions = payload.get("retractions", [])
     max_bullets = payload.get("max_bullets")
     archive_spec = payload.get("archive")
+    unit = payload.get("unit", "bullets")
 
     try:
         file_text = payload.get("file_text")
@@ -581,6 +784,53 @@ def main() -> int:
                     "Error: 'section' must be a non-empty string when 'file_text' is provided\n"
                 )
                 return 1
+
+            if unit not in ("bullets", "entries"):
+                sys.stderr.write(
+                    f"Error: 'unit' must be 'bullets' or 'entries', got {unit!r}\n"
+                )
+                return 1
+
+            if unit == "entries":
+                # Paragraph-shaped sections (see extract_entries): retractions and
+                # confidence-based supersede have no bullets-mode equivalent here --
+                # never silently drop a caller-supplied retractions list, warn instead.
+                if retractions:
+                    sys.stderr.write(
+                        "Warning: 'retractions' is not supported in 'entries' unit mode; ignoring\n"
+                    )
+                if archive_spec:
+                    if not isinstance(archive_spec, dict):
+                        sys.stderr.write("Error: 'archive' must be an object\n")
+                        return 1
+                    dir_rel = archive_spec.get("dir_rel")
+                    slug = archive_spec.get("section_slug")
+                    month = archive_spec.get("month")
+                    if not dir_rel or not slug or not month:
+                        sys.stderr.write(
+                            "Error: 'archive' must include 'dir_rel', 'section_slug', and 'month'\n"
+                        )
+                        return 1
+                    archive_path = f"{dir_rel}/{slug}-{month}.md"
+                    result, archived_entries = merge_section_anchored_entries_with_archive(
+                        file_text, section, raw_notes, max_bullets, archive_path
+                    )
+                    if result is None:
+                        sys.stderr.write(f"Error: section '{section}' not found in file_text\n")
+                        return 1
+                    print(json.dumps({
+                        "file_text": result,
+                        "archived_bullets": archived_entries,
+                        "archive_path": archive_path,
+                    }))
+                    return 0
+
+                result = merge_section_anchored_entries(file_text, section, raw_notes, max_bullets)
+                if result is None:
+                    sys.stderr.write(f"Error: section '{section}' not found in file_text\n")
+                    return 1
+                print(result)
+                return 0
 
             if archive_spec:
                 # Opt-in archive rotation: caller gets a JSON envelope instead of

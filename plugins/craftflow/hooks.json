@@ -46,6 +46,9 @@
       },
       {
         "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_memory_protect_restore.py\" --tool Read --event PostToolUse"
+      },
+      {
+        "command": "python3 \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_cursor_adapter.py\" \"${CURSOR_PLUGIN_ROOT}/scripts/craftflow_posttooluse_repeat_guard.py\" --event PostToolUse"
       }
     ],
     "subagentStop": [

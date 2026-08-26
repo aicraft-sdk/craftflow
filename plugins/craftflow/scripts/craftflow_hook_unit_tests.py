@@ -8842,6 +8842,46 @@ def test_root_hooks_json_registers_selfcheck_sessionstart() -> None:
     ok(name)
 
 
+def test_root_hooks_json_registers_repeat_tool_call_guard() -> None:
+    # bug-investigator DEBUG (Defect 2): craftflow_posttooluse_repeat_guard.py
+    # was wired into hooks/hooks.json's PostToolUse (Claude Code) but never
+    # into this root hooks.json (the Cursor-flavored manifest that
+    # install-cursor.sh copies verbatim into every consumer project's
+    # .cursor/hooks.json -- see HOOKS_TEMPLATE in install-cursor.sh). On
+    # Cursor specifically, the advisory nudge never fired at all -- a strict
+    # regression from the Claude Code behavior, not just "advisory but
+    # unblockable". No matcher/--tool restriction, matching hooks/hooks.json's
+    # own "observes every tool call" registration (no Edit/Write/Bash-only
+    # scoping) and this file's own subagentStop/TaskCompleted precedent for
+    # omitting --tool.
+    name = "hooks/root-cursor-repeat-tool-call-guard-registered"
+    path = PLUGIN_ROOT / "hooks.json"
+    if not path.exists():
+        fail(name, f"root hooks.json not found at {path}")
+        return
+    hooks = json.loads(path.read_text(encoding="utf-8"))
+    post_tool_use_entries = hooks.get("hooks", {}).get("postToolUse", [])
+    matching = [
+        entry.get("command", "")
+        for entry in post_tool_use_entries
+        if "craftflow_posttooluse_repeat_guard" in entry.get("command", "")
+    ]
+    if not matching:
+        fail(name, "root hooks.json postToolUse missing an entry for craftflow_posttooluse_repeat_guard.py")
+        return
+    command = matching[0]
+    if "craftflow_cursor_adapter" not in command:
+        fail(name, f"expected the new entry to route through craftflow_cursor_adapter.py; got: {command!r}")
+        return
+    if "--event PostToolUse" not in command:
+        fail(name, f"expected the new entry to pass --event PostToolUse; got: {command!r}")
+        return
+    if "--tool" in command:
+        fail(name, f"expected no --tool restriction (observes every tool call, matching hooks/hooks.json); got: {command!r}")
+        return
+    ok(name)
+
+
 def test_cursor_adapter_logs_target_crash_but_stays_fail_open(tmp_dir: Path) -> None:
     # REM-FIX (silent-failure-hunter, CRITICAL): translate_output() in
     # craftflow_cursor_adapter.py fails open (exit 0) whenever the delegated
@@ -14404,6 +14444,63 @@ def test_memory_finalize_instruction_sites_wire_archive_rotation() -> None:
     ok(name)
 
 
+def test_memory_finalize_instruction_sites_document_entries_unit() -> None:
+    # bug-investigator DEBUG (unbounded project-tier memory growth): all 5
+    # memory-finalize instruction sites must document the "entries" unit
+    # mode so the router knows to use it for paragraph-shaped project-tier
+    # sections (## Last Updated) rather than silently no-op'ing bullets-mode
+    # against them again.
+    name = "craftflow-router/references/memory-finalize-documents-entries-unit"
+    marker = "unit mode, notes are prepended as new raw-text entries"
+    expected_counts = {
+        "plan-workflow.md": 1,
+        "build-workflow.md": 2,
+        "debug-workflow.md": 1,
+        "review-workflow.md": 1,
+    }
+    for filename, expected in expected_counts.items():
+        path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / filename
+        if not path.exists():
+            fail(name, f"{filename} not found at {path}")
+            return
+        content = path.read_text(encoding="utf-8")
+        actual = content.count(marker)
+        if actual != expected:
+            fail(name, f"{filename}: expected {expected} occurrence(s) of {marker!r}, found {actual}")
+            return
+    ok(name)
+
+
+def test_skill_md_wires_project_tier_last_updated_and_completed_caps() -> None:
+    name = "craftflow-router/skill-md/wires-project-tier-last-updated-and-completed-caps"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+    content = path.read_text(encoding="utf-8")
+    for marker in (
+        "section_slug\": \"completed\"",
+        "activecontext-last-updated",
+        "progress-last-updated",
+        "patterns-last-updated",
+    ):
+        if marker not in content:
+            fail(name, f"SKILL.md missing expected memory-finalize marker: {marker!r}")
+            return
+    ok(name)
+
+
+def test_cursor_router_skill_md_wires_completed_cap() -> None:
+    # Blast-radius scan (bug-investigator DEBUG): cursor-router/SKILL.md § 8
+    # is a SEPARATE, independent memory-finalize routing list (not derived
+    # from craftflow-router/SKILL.md § 13) and had the identical undocumented
+    # unbounded-append gap for project/progress.md ## Completed.
+    name = "cursor-router/skill-md/wires-completed-cap"
+    path = PLUGIN_ROOT / "skills" / "cursor-router" / "SKILL.md"
+    content = path.read_text(encoding="utf-8")
+    if "capped at the" not in content or "completed-2026-08.md" not in content:
+        fail(name, "cursor-router/SKILL.md § 8 step 6 missing the ## Completed cap+archive note")
+        return
+    ok(name)
+
+
 def test_rubric_documents_three_rejection_cases() -> None:
     name = "skill-distillation/rubric-documents-three-rejection-cases"
     path = PLUGIN_ROOT / "skills" / "skill-distillation" / "references" / "rubric.md"
@@ -16174,6 +16271,319 @@ def test_memory_merge_archive_rotation_zero_data_loss_realistic_fixture() -> Non
     kept_without_pointer = [b for b in kept_bullets if "archived: see" not in b]
     if set(archived_bullets) | set(kept_without_pointer) != set(bullets):
         fail(name, "archived + kept must reconstruct the original 80-bullet set exactly (zero data loss)")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# craftflow_memory_merge: "entries" unit -- paragraph-shaped cap+archive for
+# project-tier `## Last Updated` / `## Completed` (bug-investigator DEBUG,
+# unbounded project-tier memory growth). These sections are NOT "- " bullet
+# lines (see extract_entries) -- bullets-mode's max_bullets is a silent no-op
+# against this shape, which is the actual root cause of the unbounded growth
+# this fixes.
+# ---------------------------------------------------------------------------
+
+def _last_updated_fixture(count: int, *, irregular_spacing: bool = False) -> str:
+    """Build a realistic `## Last Updated`-shaped fixture: newest-first
+    (entries[0] is newest, matching the router's own prepend convention),
+    dated free-text paragraphs separated by blank lines -- mirrors the real
+    project/activeContext.md shape found in this repo. When
+    irregular_spacing=True, alternates 1 vs 3 blank lines between entries --
+    a non-default variant proving extract_entries tolerates real-world
+    inconsistent blank-line counts, not just a clean single-blank-line
+    fixture."""
+    entries = []
+    for i in range(count):
+        day = 25 - (i % 20)
+        entries.append(
+            f"2026-08-{day:02d} (BUILD COMPLETE, workflow wf-example-{i:03d} -- "
+            f"synthetic fixture entry {i} spanning enough words to resemble a "
+            "real multi-hundred-word memory-finalize paragraph for this test.)"
+        )
+    if irregular_spacing:
+        sep_cycle = ["\n\n", "\n\n\n\n"]
+        body = ""
+        for i, e in enumerate(entries):
+            body += e
+            if i < len(entries) - 1:
+                body += sep_cycle[i % 2]
+        return body
+    return "\n\n".join(entries)
+
+
+def test_memory_merge_extract_entries_splits_on_blank_lines() -> None:
+    name = "memory-merge/extract-entries/splits-on-blank-lines"
+    body = _last_updated_fixture(5)
+    entries = memory_merge.extract_entries(body)
+    if len(entries) != 5:
+        fail(name, f"expected 5 entries, got {len(entries)}")
+        return
+    if "wf-example-000" not in entries[0]:
+        fail(name, f"expected entries[0] to be the newest (wf-example-000), got: {entries[0][:80]!r}")
+        return
+    ok(name)
+
+
+def test_memory_merge_extract_entries_splits_back_to_back_dated_entries_without_blank_lines() -> None:
+    # Variant coverage (real bug found during this repo's own remediation):
+    # this repo's ACTUAL patterns.md ## Last Updated content has ZERO blank
+    # lines between consecutive dated entries (unlike activeContext.md,
+    # which does separate them with a blank line) -- a pure blank-line
+    # splitter silently fuses ~24 real per-workflow entries into a handful
+    # of giant blocks, which would almost never trigger eviction and would
+    # archive many workflows at once when it finally did. extract_entries
+    # must also split at a "YYYY-MM-DD " date-prefix boundary, not just
+    # blank lines.
+    name = "memory-merge/extract-entries/splits-back-to-back-dated-entries-no-blank-lines"
+    entries_in = [f"2026-08-{25 - i:02d} (BUILD COMPLETE, workflow wf-example-{i:03d} -- synthetic.)" for i in range(24)]
+    body = "\n".join(entries_in)  # zero blank lines between entries -- the real patterns.md shape
+    entries_out = memory_merge.extract_entries(body)
+    if len(entries_out) != 24:
+        fail(name, f"expected 24 entries split purely on date-prefix boundaries (no blank lines), got {len(entries_out)}")
+        return
+    if entries_out != entries_in:
+        fail(name, f"expected entries to round-trip exactly; got: {entries_out[:2]!r}")
+        return
+    ok(name)
+
+
+def test_memory_merge_extract_entries_tolerates_irregular_blank_spacing() -> None:
+    # Variant coverage: real project-tier files do not always use exactly one
+    # blank line between entries -- extract_entries must not under/over-count
+    # entries when the gap is 1 blank line vs 3 blank lines in the same body.
+    name = "memory-merge/extract-entries/tolerates-irregular-blank-spacing"
+    body = _last_updated_fixture(6, irregular_spacing=True)
+    entries = memory_merge.extract_entries(body)
+    if len(entries) != 6:
+        fail(name, f"expected 6 entries despite irregular spacing, got {len(entries)}")
+        return
+    ok(name)
+
+
+def test_memory_merge_entries_unit_regression_bullets_mode_is_a_silent_noop() -> None:
+    # This is the literal reproduction of the reported defect: today's ONLY
+    # cap mechanism (bullets mode, the default when "unit" is omitted) finds
+    # zero "- " bullet lines in a `## Last Updated`-shaped paragraph section
+    # and silently leaves it completely uncapped -- proving max_bullets alone
+    # (without "unit": "entries") does NOT close the unbounded-growth bug.
+    name = "memory-merge/entries/regression-bullets-mode-silent-noop-on-paragraphs"
+    body = _last_updated_fixture(30)
+    file_text = f"## Last Updated\n{body}\n\n## Next Section\nplaceholder\n"
+    payload = {
+        "file_text": file_text,
+        "section": "Last Updated",
+        "notes": [],
+        "max_bullets": 20,
+    }
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit {result.returncode}: {result.stderr}")
+        return
+    span = memory_merge._find_section_span(result.stdout, "Last Updated")
+    kept_entries = memory_merge.extract_entries(result.stdout[span[0]:span[1]])
+    if len(kept_entries) != 30:
+        fail(name, f"expected bullets-mode to be a no-op (30 entries still present), got {len(kept_entries)}")
+        return
+    ok(name)
+
+
+def test_memory_merge_entries_unit_caps_and_archives_oldest() -> None:
+    name = "memory-merge/entries/caps-and-archives-oldest"
+    body = _last_updated_fixture(30)
+    file_text = f"## Last Updated\n{body}\n\n## Next Section\nplaceholder\n"
+    payload = {
+        "file_text": file_text,
+        "section": "Last Updated",
+        "notes": [],
+        "max_bullets": 20,
+        "unit": "entries",
+        "archive": {"dir_rel": ".craftflow/state/project/archive", "section_slug": "activecontext-last-updated", "month": "2026-08"},
+    }
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit {result.returncode}: {result.stderr}")
+        return
+    try:
+        out = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        fail(name, f"expected a JSON envelope, got: {result.stdout[:300]}")
+        return
+    archived_entries = out.get("archived_bullets", [])
+    if len(archived_entries) != 10:
+        fail(name, f"expected 10 archived entries, got {len(archived_entries)}")
+        return
+    if not out["archive_path"].endswith("activecontext-last-updated-2026-08.md"):
+        fail(name, f"unexpected archive_path: {out['archive_path']}")
+        return
+    span = memory_merge._find_section_span(out["file_text"], "Last Updated")
+    if span is None:
+        fail(name, "Last Updated section not found in returned file_text")
+        return
+    kept_entries = memory_merge.extract_entries(out["file_text"][span[0]:span[1]])
+    if len(kept_entries) != 21:
+        fail(name, f"expected 21 kept entries (20 kept + 1 pointer), got {len(kept_entries)}")
+        return
+    if "wf-example-000" not in kept_entries[0]:
+        fail(name, f"expected the newest entry (wf-example-000) to stay first, got: {kept_entries[0][:80]!r}")
+        return
+    if not any("archived: see" in e for e in kept_entries):
+        fail(name, "expected a pointer entry naming the archive file in the kept section")
+        return
+    # Losslessness: archived + kept (minus the pointer) reconstructs the original 30 entries.
+    original_entries = memory_merge.extract_entries(body)
+    kept_without_pointer = [e for e in kept_entries if "archived: see" not in e]
+    if set(archived_entries) | set(kept_without_pointer) != set(original_entries):
+        fail(name, "archived + kept must reconstruct the original 30-entry set exactly (zero data loss)")
+        return
+    # A neighboring `## ` section must be untouched.
+    if "## Next Section\nplaceholder" not in out["file_text"]:
+        fail(name, "unrelated neighboring section was corrupted by entries-mode merge")
+        return
+    ok(name)
+
+
+def test_memory_merge_entries_unit_without_archive_plain_truncate() -> None:
+    name = "memory-merge/entries/without-archive-plain-truncate"
+    body = _last_updated_fixture(25)
+    file_text = f"## Last Updated\n{body}\n"
+    payload = {
+        "file_text": file_text,
+        "section": "Last Updated",
+        "notes": [],
+        "max_bullets": 20,
+        "unit": "entries",
+    }
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit {result.returncode}: {result.stderr}")
+        return
+    # Plain text output (not JSON) when archive is omitted -- unchanged shape convention.
+    try:
+        json.loads(result.stdout)
+        fail(name, "output must stay plain text when 'archive' is not supplied")
+        return
+    except (json.JSONDecodeError, ValueError):
+        pass
+    span = memory_merge._find_section_span(result.stdout, "Last Updated")
+    kept_entries = memory_merge.extract_entries(result.stdout[span[0]:span[1]])
+    if len(kept_entries) != 20:
+        fail(name, f"expected 20 kept entries (no pointer, archive omitted), got {len(kept_entries)}")
+        return
+    ok(name)
+
+
+def test_memory_merge_entries_unit_prepends_new_notes_as_newest() -> None:
+    name = "memory-merge/entries/prepends-new-notes-as-newest"
+    body = _last_updated_fixture(3)
+    file_text = f"## Last Updated\n{body}\n"
+    payload = {
+        "file_text": file_text,
+        "section": "Last Updated",
+        "notes": [{"text": "2026-08-26 (BUILD COMPLETE, brand new entry)", "confidence": 0.95}],
+        "unit": "entries",
+    }
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit {result.returncode}: {result.stderr}")
+        return
+    span = memory_merge._find_section_span(result.stdout, "Last Updated")
+    kept_entries = memory_merge.extract_entries(result.stdout[span[0]:span[1]])
+    if len(kept_entries) != 4:
+        fail(name, f"expected 4 entries (3 existing + 1 new), got {len(kept_entries)}")
+        return
+    if "brand new entry" not in kept_entries[0]:
+        fail(name, f"expected the new note to be prepended (newest-first), got: {kept_entries[0][:80]!r}")
+        return
+    ok(name)
+
+
+def test_memory_merge_entries_unit_default_unit_still_bullets_backward_compatible() -> None:
+    # Omitting "unit" entirely must stay byte-identical to pre-entries-mode
+    # behavior for an ordinary bullets-shaped section (Common Gotchas) --
+    # zero regression risk for the 5 existing production callers.
+    name = "memory-merge/entries/default-unit-still-bullets-backward-compatible"
+    file_text = "## Common Gotchas\n" + "\n".join(f"- entry {i}" for i in range(10)) + "\n\n## Last Updated\n2026-01-01\n"
+    payload_no_unit = {
+        "file_text": file_text,
+        "section": "Common Gotchas",
+        "notes": [{"text": "new note", "confidence": 0.9}],
+        "max_bullets": 5,
+    }
+    payload_explicit_bullets = dict(payload_no_unit, unit="bullets")
+    out1 = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload_no_unit), capture_output=True, text=True,
+    )
+    out2 = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload_explicit_bullets), capture_output=True, text=True,
+    )
+    if out1.returncode != 0 or out2.returncode != 0:
+        fail(name, f"non-zero exit: {out1.returncode}, {out2.returncode}")
+        return
+    if out1.stdout != out2.stdout:
+        fail(name, "omitting 'unit' must be byte-identical to explicit 'unit': 'bullets'")
+        return
+    ok(name)
+
+
+def test_memory_merge_entries_unit_rejects_unknown_unit_value() -> None:
+    name = "memory-merge/entries/rejects-unknown-unit-value"
+    payload = {
+        "file_text": "## Last Updated\nsomething\n",
+        "section": "Last Updated",
+        "notes": [],
+        "unit": "paragraphs",
+    }
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload), capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        fail(name, "expected non-zero exit for an unrecognized 'unit' value")
+        return
+    ok(name)
+
+
+def test_memory_merge_entries_unit_progress_completed_fixture_bullets_mode_cap() -> None:
+    # Variant: the OTHER required destination, progress.md project-tier
+    # ## Completed, is bullet-shaped (confirmed against this repo's real
+    # file, which already carries one prior manual archive pointer bullet)
+    # -- proves the EXISTING bullets-mode mechanism (no new "unit" needed)
+    # closes that half of the bug once max_bullets/archive are wired in.
+    name = "memory-merge/entries/progress-completed-bullets-mode-cap"
+    bullets = [f"- BUILD COMPLETE, workflow wf-example-{i:03d} (conf: 0.9)" for i in range(30)]
+    file_text = "## Completed\n" + "\n".join(bullets) + "\n\n## Verification\nplaceholder\n"
+    payload = {
+        "file_text": file_text,
+        "section": "Completed",
+        "notes": [],
+        "max_bullets": 20,
+        "archive": {"dir_rel": ".craftflow/state/project/archive", "section_slug": "completed", "month": "2026-08"},
+    }
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_merge.py")],
+        input=json.dumps(payload), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        fail(name, f"exit {result.returncode}: {result.stderr}")
+        return
+    out = json.loads(result.stdout)
+    if len(out.get("archived_bullets", [])) != 10:
+        fail(name, f"expected 10 archived bullets, got {len(out.get('archived_bullets', []))}")
         return
     ok(name)
 
@@ -17968,6 +18378,7 @@ def main() -> int:
     test_selfcheck_resolves_bare_python3_not_sys_executable()
     test_hooks_json_registers_selfcheck_sessionstart()
     test_root_hooks_json_registers_selfcheck_sessionstart()
+    test_root_hooks_json_registers_repeat_tool_call_guard()
     test_cursor_adapter_logs_target_crash_but_stays_fail_open(tmp / "ca1")
     test_selfcheck_internal_budget_stays_under_registered_hook_timeout()
     test_workflow_id_script_present()
@@ -18056,6 +18467,19 @@ def main() -> int:
     test_memory_merge_archive_rotation_zero_data_loss_realistic_fixture()
 
     print()
+    print("[ craftflow_memory_merge: 'entries' unit -- project-tier ## Last Updated / ## Completed cap+archive (bug-investigator DEBUG) ]")
+    test_memory_merge_extract_entries_splits_on_blank_lines()
+    test_memory_merge_extract_entries_splits_back_to_back_dated_entries_without_blank_lines()
+    test_memory_merge_extract_entries_tolerates_irregular_blank_spacing()
+    test_memory_merge_entries_unit_regression_bullets_mode_is_a_silent_noop()
+    test_memory_merge_entries_unit_caps_and_archives_oldest()
+    test_memory_merge_entries_unit_without_archive_plain_truncate()
+    test_memory_merge_entries_unit_prepends_new_notes_as_newest()
+    test_memory_merge_entries_unit_default_unit_still_bullets_backward_compatible()
+    test_memory_merge_entries_unit_rejects_unknown_unit_value()
+    test_memory_merge_entries_unit_progress_completed_fixture_bullets_mode_cap()
+
+    print()
     print("[ pretooluse-guard / pretooluse-bash-guard: REM-FIX cycle 4 (non-dict JSON top-level crash class) ]")
     test_pretooluse_guard_non_dict_stdin_top_level_does_not_crash_degrades_to_allow(tmp / "j1")
     test_pretooluse_guard_non_dict_hook_mode_json_does_not_crash_degrades_to_fail_closed_deny(tmp / "j2")
@@ -18139,6 +18563,12 @@ def main() -> int:
     print()
     print("[ craftflow-router: memory-finalize sites wired for archive rotation (Phase 6) ]")
     test_memory_finalize_instruction_sites_wire_archive_rotation()
+
+    print()
+    print("[ craftflow-router: project-tier ## Last Updated / ## Completed cap+archive wiring (bug-investigator DEBUG) ]")
+    test_memory_finalize_instruction_sites_document_entries_unit()
+    test_skill_md_wires_project_tier_last_updated_and_completed_caps()
+    test_cursor_router_skill_md_wires_completed_cap()
 
     print()
     print("[ repeat-tool-call guard: streak/notify cadence + end-to-end (backlog item 3) ]")
