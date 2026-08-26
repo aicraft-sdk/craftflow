@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.3.1] - 2026-08-26
+
+### Fixes
+
+- cap+archive project-tier ## Last Updated / ## Completed
+
 ## [1.3.0] - 2026-08-25
 
 ### Features
