@@ -1,6 +1,7 @@
 ---
 name: skill-author
 description: "Internal agent. Use craftflow-router for all development tasks."
+model: haiku
 tools: Read, Edit, Write, Bash, Grep, Glob
 skills:
   - craftflow:skill-distillation
