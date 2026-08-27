@@ -258,67 +258,12 @@ The scenario must map back to the plan or prompt intent. STATUS=PASS without a p
 
 **CRITICAL: Cannot mark task complete without exit code evidence for BOTH red and green phases.**
 
-```
-## Built: [feature]
-
-### Implementation Notes
-- Decisions:
-  - [Decision + why]
-- Assumptions:
-  - [Assumption that could affect correctness]
-- Deferred Findings:
-  - [Non-blocking follow-up or "None"]
-
-### Phase Record (REQUIRED)
-- Phase ID: [phase id from plan or prompt]
-- Phase objective: [what this phase delivers]
-- Phase inputs: [required inputs or `None`]
-- Files/surfaces in scope: [list]
-- Expected artifacts: [files/components/endpoints produced or updated]
-- Checkpoint type: `none` | `human_verify` | `decision` | `human_action`
-- Exit criteria: [list]
-- Phase status: `completed` | `partial` | `blocked`
-- Proof status: `passed` | `gaps_found` | `human_needed`
-- Newly discovered scope increases: [list or `None`]
-
-### TDD Evidence (REQUIRED)
-**RED Phase:**
-- Test file: `path/to/test.ts`
-- Command: `[exact command run]`
-- Exit code: **1** (MUST be 1, not 0)
-- Failure message: `[actual error shown]`
-
-**GREEN Phase:**
-- Implementation file: `path/to/implementation.ts`
-- Command: `[exact command run]`
-- Exit code: **0** (MUST be 0, not 1)
-- Tests passed: `[X/X]`
-
-**Evidence Array:**
-```
-EVIDENCE:
-  red: ["[test command] → exit 1: [failure message]"]
-  green: ["[test command] → exit 0: [X/X passed]"]
-  build: ["[build command] → exit 0: [result]"]
-```
-
-**GATE: If either exit code is missing above, task is NOT complete.**
-
-### Scenario Evidence (REQUIRED)
-| Scenario | Given | When | Then | Command | Expected | Actual | Exit |
-|----------|-------|------|------|---------|----------|--------|------|
-| [name] | [state] | [action] | [result] | [command] | [expected] | [actual] | [0/1] |
-
-**Rule:** At least one scenario row must be a PASS with non-empty `name`, `command`, `expected`, `actual`, and `exit`.
-
-**Confidence**: [High/Medium/Low - based on assumption certainty]
-
-### Changes Made
-- Files: [created/modified]
-- Tests: [added]
-
-### Findings
-- [any issues or recommendations]
+Emit only the `### Router Contract (MACHINE-READABLE)` YAML block below — it is the sole
+output the router parses (see `craftflow-router/SKILL.md` § Write-agent YAML contracts).
+Every field a prose report would restate — phase record, TDD evidence, scenario table,
+decisions, assumptions, findings — already has a home in that YAML (`PHASE_ID`/
+`PHASE_STATUS`/`PHASE_EXIT_READY`, `TDD_RED_EXIT`/`TDD_GREEN_EXIT`/`EVIDENCE`, `SCENARIOS`,
+`DECISIONS`/`ASSUMPTIONS`, `MEMORY_NOTES.deferred`). Do not duplicate it as narrative.
 
 ### Task Status
 - Follow-up tasks created: [list if any, or "None"]

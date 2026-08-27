@@ -64,20 +64,12 @@ final output that `TaskUpdate` was unavailable. The router owns recovery from th
 not.
 
 ## Output
-```
-## Plan Bakeoff: [feature]
 
-### Candidates Compared
-- [model]: [plan_file] — confidence [N], [one-line assessment]
-
-### Decision
-- Winner base: [model]
-- Synthesized: [true/false]
-- Grafted ideas: [what was grafted from which non-winning candidate, or `None`]
-
-### Summary
-- Plan saved: [PLAN_FILE]
-- Candidates deleted: [list of deleted candidate file paths]
+Emit only the `### Router Contract (MACHINE-READABLE)` YAML block below — it is the sole
+output the router parses (see `craftflow-router/SKILL.md` § Write-agent YAML contracts).
+Every field a prose report would restate — candidates compared, winner, synthesis decision,
+saved plan path — already has a home in that YAML (`CANDIDATES_COMPARED`, `WINNING_MODEL`,
+`SYNTHESIZED`, `PLAN_FILE`, `MEMORY_NOTES.learnings`). Do not duplicate it as narrative.
 
 ### Task Status
 - Follow-up tasks created: [list if any, or "None"]

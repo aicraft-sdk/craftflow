@@ -227,72 +227,18 @@ not.
 | "I fixed the repro — adjacent duplicates are deferred" | Deferred duplicates must be named in BLAST_RADIUS_SCAN.result and MEMORY_NOTES.deferred. Silent omission is a false FIXED. |
 
 ## Output
-```
-## Bug Fixed: [issue]
 
-### Root Cause Record
-- Symptom: [what was visible]
-- Root cause: [why it actually happened]
-- Affected variants: [list]
-- Regression proof: [what now proves the bug is fixed]
+**Rule:** For `STATUS=FIXED`, `SCENARIOS` must include at least one `Regression:`-named entry
+and one `Variant:`-named entry, each with non-empty `command`, `expected`, `actual`, and
+`exit_code`.
 
-### Investigation Notes
-- Decisions:
-  - [Decision + why]
-- Assumptions:
-  - [Assumption that affects the fix]
-- Research quality impact:
-  - [How degraded or partial research changed confidence, or "Not applicable"]
-
-### Summary
-- Root cause: [what failed]
-- Fix applied: [file:line change]
-
-### TDD Evidence (REQUIRED)
-**RED Phase:**
-- Test (or repro script): [path]
-- Command: [exact command]
-- Exit code: **1**
-- Failure: [key failure line]
-
-**GREEN Phase:**
-- Command: [exact command]
-- Exit code: **0**
-- Tests: [X/X pass]
-
-### Variant Coverage (REQUIRED)
-- Variant dimensions considered: [list]
-- Regression cases added: [baseline + non-default case(s)]
-- Hardcoding check: [explicitly state "no hardcoding" OR explain any unavoidable constants]
-
-### Blast Radius Scan (REQUIRED)
-- Same-file duplicates: [found/fixed/deferred]
-- Adjacent-file scan: [paths searched or "Not needed"]
-- Result: `fixed_all_safe_duplicates` | `fixed_repro_only_with_deferred_duplicates` | `blocked_scope_expansion`
-
-### Scenario Evidence (REQUIRED)
-| Scenario | Given | When | Then | Command | Expected | Actual | Exit |
-|----------|-------|------|------|---------|----------|--------|------|
-| Regression: [name] | [state] | [action] | [result] | [command] | [expected] | [actual] | [0/1] |
-| Variant: [name] | [state] | [action] | [result] | [command] | [expected] | [actual] | [0/1] |
-
-**Rule:** For `STATUS=FIXED`, include at least one `Regression:` scenario and one `Variant:` scenario. Both must have non-empty `command`, `expected`, `actual`, and `exit`.
-
-### Assumptions
-- [Assumptions about root cause]
-- [Assumptions about fix approach]
-
-**Confidence**: [High/Medium/Low]
-
-### Changes Made
-- [list of files modified]
-
-### Evidence
-- [command] → exit 0
-- Regression test: [test file]
-
-### Findings
-- [additional issues discovered, if any]
+Emit only the `### Router Contract (MACHINE-READABLE)` YAML block below — it is the sole
+output the router parses (see `craftflow-router/SKILL.md` § Write-agent YAML contracts).
+Every field a prose report would restate — root cause, TDD evidence, variant coverage,
+blast-radius scan, scenario table, decisions, assumptions, findings — already has a home in
+that YAML (`ROOT_CAUSE`, `TDD_RED_EXIT`/`TDD_GREEN_EXIT`, `VARIANTS_COVERED`,
+`BLAST_RADIUS_SCAN`, `SCENARIOS`, `DECISIONS`/`ASSUMPTIONS`, `MEMORY_NOTES.deferred`). Do not
+duplicate it as narrative.
 
 ### Task Status
 - Follow-up tasks created: [list if any, or "None"]
