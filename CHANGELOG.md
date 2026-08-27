@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.3.2] - 2026-08-27
+
+### Fixes
+
+- dispatch housekeeping agents on haiku
+- drop duplicate prose report from write-agent output
+
 ## [1.3.1] - 2026-08-26
 
 ### Fixes
