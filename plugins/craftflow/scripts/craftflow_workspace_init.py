@@ -37,6 +37,7 @@ Read-only w.r.t. anything outside `{workspace_root}/.craftflow/state/workspace/`
 """
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import tempfile
@@ -186,8 +187,6 @@ def init_workspace(workspace_root: Path, north_star: str) -> None:
 
 
 def main() -> int:
-    import argparse
-
     parser = argparse.ArgumentParser(description="Provision workspace-tier Craftflow memory.")
     parser.add_argument("--workspace-root", required=True, help="Absolute path to the workspace root")
     parser.add_argument("--north-star", required=True, help="North Star text for activeContext.md")
