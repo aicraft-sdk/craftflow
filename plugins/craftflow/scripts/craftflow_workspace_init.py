@@ -15,6 +15,12 @@ Usage (library, called by the `craftflow:workspace-setup` skill):
   from craftflow_workspace_init import init_workspace
   init_workspace(workspace_root, north_star="...")
 
+CLI: exactly one of --north-star (inline text) or --north-star-file (path to a file
+containing the text) is required. The skill prefers --north-star-file for free-text
+interview answers, since interpolating raw text into a double-quoted shell argument
+risks command injection (a north-star answer containing `"`, a backtick, `$(...)`, or
+a newline could break out of the quotes).
+
 Behavior:
   - Idempotent: re-running never clobbers existing file content. Missing
     required sections are auto-healed by inserting them before
@@ -189,11 +195,30 @@ def init_workspace(workspace_root: Path, north_star: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Provision workspace-tier Craftflow memory.")
     parser.add_argument("--workspace-root", required=True, help="Absolute path to the workspace root")
-    parser.add_argument("--north-star", required=True, help="North Star text for activeContext.md")
+    parser.add_argument(
+        "--north-star",
+        help="North Star text for activeContext.md. Prefer --north-star-file for "
+        "free-text answers that may contain shell metacharacters ('\"', backticks, "
+        "$(...), newlines) -- passing them inline risks command injection.",
+    )
+    parser.add_argument(
+        "--north-star-file",
+        help="Path to a file containing the North Star text, read byte-for-byte "
+        "(minus a single trailing newline). Safer than --north-star for free-text "
+        "answers, since the content never touches the shell command line.",
+    )
     args = parser.parse_args()
 
+    if (args.north_star is None) == (args.north_star_file is None):
+        parser.error("exactly one of --north-star or --north-star-file is required")
+
+    if args.north_star_file is not None:
+        north_star = Path(args.north_star_file).read_text(encoding="utf-8").rstrip("\n")
+    else:
+        north_star = args.north_star
+
     try:
-        init_workspace(Path(args.workspace_root), north_star=args.north_star)
+        init_workspace(Path(args.workspace_root), north_star=north_star)
     except SystemExit as exc:
         return int(exc.code) if exc.code is not None else 1
     print(f"craftflow_workspace_init: provisioned workspace tier at {args.workspace_root}")

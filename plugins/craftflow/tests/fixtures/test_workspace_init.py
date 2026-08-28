@@ -5,6 +5,7 @@ Run: python3 tests/fixtures/test_workspace_init.py
 """
 from __future__ import annotations
 
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -120,6 +121,34 @@ def test_unwritable_target_degrades_gracefully_no_partial_file() -> None:
                     fail("unwritable-target", f"exit={exc.code}, partial_files={partial_files}")
 
 
+def test_north_star_file_captures_shell_metacharacters_byte_for_byte() -> None:
+    # Regression test for command-injection risk: the workspace-setup skill's Bash
+    # template must never interpolate free-text interview answers directly into a
+    # double-quoted shell argument (a north-star answer containing `"`, a backtick,
+    # `$(...)`, or a newline could break out of the quotes or inject a command).
+    # `--north-star-file` reads the text from disk instead, so the malicious content
+    # never touches the shell command line at all. Invoke via `subprocess` (not the
+    # library function) to exercise the actual CLI path the skill drives.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        malicious = 'Ship "quoted" `backtick` $(id) text\nwith an embedded newline'
+        ns_file = root / "north-star-input.txt"
+        ns_file.write_text(malicious, encoding="utf-8")
+        script = SCRIPTS / "craftflow_workspace_init.py"
+        # Mirrors the skill's Step 3 Bash template exactly: double-quoted args.
+        cmd = f'python3 "{script}" --workspace-root "{root}" --north-star-file "{ns_file}"'
+        result = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
+        active_path = root / ".craftflow/state/workspace/activeContext.md"
+        active = active_path.read_text(encoding="utf-8") if active_path.exists() else ""
+        if result.returncode == 0 and malicious in active and "uid=" not in result.stdout:
+            ok("--north-star-file captures shell metacharacters byte-for-byte, no injection")
+        else:
+            fail(
+                "north-star-file-injection",
+                f"exit={result.returncode}, stdout={result.stdout!r}, stderr={result.stderr!r}, active={active!r}",
+            )
+
+
 def main() -> int:
     print("test_workspace_init: running")
     test_creates_all_three_files_with_required_sections()
@@ -128,6 +157,7 @@ def main() -> int:
     test_refuses_home_directory_as_workspace_root()
     test_refuses_filesystem_root_as_workspace_root()
     test_unwritable_target_degrades_gracefully_no_partial_file()
+    test_north_star_file_captures_shell_metacharacters_byte_for_byte()
 
     print()
     print("=" * 40)

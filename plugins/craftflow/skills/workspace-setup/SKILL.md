@@ -1,7 +1,7 @@
 ---
 name: workspace-setup
 description: "Use when the user asks to 'set up craftflow workspace memory', 'provision workspace-tier memory', 'add a north star for this workspace', 'set up cross-repo memory', or 'initialize .craftflow/state/workspace'."
-allowed-tools: Read Bash Edit Grep Glob
+allowed-tools: Read Write Bash Edit Grep Glob
 ---
 
 ## Mission
@@ -64,11 +64,22 @@ resolution a third time):
 
 ## Step 1 — Interview
 
+Before asking anything, check whether a North Star already exists for this workspace:
+`Read()` `{workspace_root}/.craftflow/state/workspace/activeContext.md` if it exists, and
+check whether its `## North Star` section already has a non-empty body (any non-blank line
+between that heading and the next `##` heading). If it does, tell the user explicitly:
+"A North Star already exists for this workspace and will NOT be overwritten by this run —
+`craftflow_workspace_init.py` never clobbers existing section content on re-run." Do this
+before Step 1's question so the user isn't misled into thinking a new answer will replace
+the existing one.
+
 Ask the user:
 
 1. **North Star** (required): "What is the north-star goal for this workspace — the 1-2
    sentence outcome every repo under it is working toward?" Do not proceed to Step 2 without
-   a non-empty answer.
+   a non-empty answer. (If an existing North Star was found above, still collect this answer
+   for the Step 2 preview and Step 3 invocation, but the warning already told the user it
+   will not overwrite what's already there.)
 2. **Shared cross-project conventions/gotchas** (optional, may be empty): "Are there any
    conventions or recurring gotchas that apply across every repo in this workspace, not just
    one repo?" Record as free text; may be left empty — do not press the user for an answer.
@@ -77,16 +88,22 @@ Ask the user:
 
 ## Step 2 — Propose, never silently write
 
-Construct the exact content `craftflow_workspace_init.py` will produce for each of the three
-target files (mirrors that script's own template shape):
+Construct the exact content that will result from this run for each of the three target
+files. Two different mechanisms populate them, and the preview must reflect both
+accurately — do not imply the script alone produces all of it:
 
-- `activeContext.md`: `## Current Focus`, `## North Star` (populated with the Step 1
-  north-star text), `## Recent Changes`, `## Next Steps`, `## Decisions`, `## Learnings`,
+- `activeContext.md`: `craftflow_workspace_init.py` (Step 3's `Bash(...)` call) writes
+  `## Current Focus`, `## North Star` (populated with the Step 1 north-star text, unless an
+  existing non-empty North Star was found in Step 1 — in that case the script leaves it
+  untouched), `## Recent Changes`, `## Next Steps`, `## Decisions`, `## Learnings`,
   `## References`, `## Blockers`, `## Session Settings`, `## Last Updated`
-- `patterns.md`: `## User Standards`, `## Common Gotchas` (populated with any Step 1
-  conventions text), `## Project SKILL_HINTS`, `## Last Updated`
-- `progress.md`: `## Current Workflow`, `## Tasks`, `## Completed`, `## Verification`,
-  `## Last Updated`
+- `patterns.md`: the script writes `## User Standards`, `## Common Gotchas` (empty
+  skeleton — the script has no flag for conventions text), `## Project SKILL_HINTS`,
+  `## Last Updated`. Any Step 1 conventions/gotchas text is then appended into
+  `## Common Gotchas` by *this skill's own* separate `Edit()` in Step 3, immediately after
+  the script succeeds — not by the script itself.
+- `progress.md`: the script writes `## Current Workflow`, `## Tasks`, `## Completed`,
+  `## Verification`, `## Last Updated`
 
 If a target file already exists, `Read()` it first and show only the sections that will be
 newly added — the underlying script auto-heals missing required sections and never clobbers
@@ -119,22 +136,49 @@ run the provisioning script before this explicit confirmation is given.
 
 ## Step 3 — Apply
 
-After confirmation, invoke the Phase 1 script:
+After confirmation, invoke the Phase 1 script. **Never interpolate the Step 1 north-star
+text directly into a Bash command as a double-quoted argument** — it is free-text the user
+typed, and a north-star answer containing `"`, a backtick, `$(...)`, or a newline could
+break out of the quoted argument or inject a command. Instead:
 
-```bash
-python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_workspace_init.py" \
-  --workspace-root "<workspace_root>" \
-  --north-star "<north-star text>"
-```
+1. Write the exact Step 1 north-star text (verbatim, byte-for-byte, no escaping applied by
+   you) to a private temp file using `Write()` — never via a shell heredoc or echo, since
+   that would reintroduce the same interpolation risk:
 
-(`$CRAFTFLOW_INSTALL` resolved the same way as Step 0 — the installed plugin path, not a
-path relative to this skill's own plugin-cache layout. If Step 0 already resolved and
-exported `$CRAFTFLOW_INSTALL` in this session, reuse it rather than re-resolving.)
+   ```
+   Write(file_path="/tmp/craftflow-workspace-north-star-<random>.txt", content="<verbatim Step 1 north-star text>")
+   ```
 
-The script only accepts `--workspace-root` and `--north-star`; it has no flag for shared
-conventions text. If the user gave conventions/gotchas text in Step 1, append it into
-`patterns.md`'s `## Common Gotchas` section via a targeted `Edit()` immediately after the
-script's own write succeeds — never before, and never if the script exits non-zero.
+2. Invoke the script with `--north-star-file` pointing at that path instead of
+   `--north-star`:
+
+   ```bash
+   python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_workspace_init.py" \
+     --workspace-root "<workspace_root>" \
+     --north-star-file "/tmp/craftflow-workspace-north-star-<random>.txt"
+   ```
+
+   (`$CRAFTFLOW_INSTALL` resolved the same way as Step 0 — the installed plugin path, not a
+   path relative to this skill's own plugin-cache layout. If Step 0 already resolved and
+   exported `$CRAFTFLOW_INSTALL` in this session, reuse it rather than re-resolving.
+   `workspace_root` itself is safe to interpolate directly here: it is always a filesystem
+   path resolved in Step 0 via `git rev-parse --show-toplevel` or the JSON `project_root`
+   from `craftflow_resolve_workspace_root.py` — never raw keyboard-typed free text — so it
+   cannot carry shell metacharacters in practice.)
+
+3. After the script exits (success or failure), delete the temp file
+   (`rm -f "/tmp/craftflow-workspace-north-star-<random>.txt"`) — do not leave the raw
+   north-star text lying around in `/tmp`.
+
+The script only accepts `--workspace-root` and one of `--north-star`/`--north-star-file`; it
+has no flag for shared conventions text. If the user gave conventions/gotchas text in
+Step 1, append it into `patterns.md`'s `## Common Gotchas` section via a targeted `Edit()`
+immediately after the script's own write succeeds — never before, and never if the script
+exits non-zero. After that `Edit()`, `Read()` `patterns.md`'s `## Common Gotchas` section
+again and confirm the new conventions text is actually present verbatim. If it is not
+present, do not silently continue — report the failure to the user explicitly (the
+conventions text was lost) alongside the rest of the Step 4 report, rather than claiming
+the run fully succeeded.
 
 ---
 
