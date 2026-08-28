@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.4.0] - 2026-08-28
+
+### Features
+
+- add workspace-tier discovery to router memory load (both hosts)
+- add workspace-setup skill for workspace-tier memory provisioning
+- add craftflow_workspace_init.py for workspace-tier memory provisioning
+
+### Fixes
+
+- close command-injection risk and stale-doc gaps in workspace-setup skill
+
+### Refactoring
+
+- hoist argparse import to top-level in craftflow_workspace_init.py
+
 ## [1.3.2] - 2026-08-27
 
 ### Fixes
