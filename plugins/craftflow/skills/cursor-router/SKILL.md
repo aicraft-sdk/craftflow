@@ -157,6 +157,30 @@ Run this before routing. Memory lives at `.craftflow/state/`.
 2. Read(".craftflow/state/project/activeContext.md")
 3. Read(".craftflow/state/project/patterns.md")
 4. Read(".craftflow/state/project/progress.md")
+4a. Workspace-tier discovery (capped upward walk, max 3 levels above the project root, to
+    avoid runaway scans): starting at the project root's parent, check each ancestor for
+    EITHER a `.craftflow-workspace.json` file OR a `.craftflow/state/workspace/`
+    directory. Stop at the first match, or after 3 levels, or at the filesystem root,
+    whichever comes first. Never select `$HOME` or `/` itself as a matched workspace
+    root even if a marker is somehow present there (defense in depth alongside Phase 1's
+    own refusal list).
+    - No marker found: skip silently -- zero behavior change (existing production
+      reality for every non-workspace session today).
+    - Marker found at {workspace_root}:
+      Read("{workspace_root}/.craftflow/state/workspace/activeContext.md")
+      Read("{workspace_root}/.craftflow/state/workspace/patterns.md")
+      Read("{workspace_root}/.craftflow/state/workspace/progress.md")
+      Missing/malformed file: auto-heal via craftflow:session-memory template (same rule
+      as project/'s own auto-heal), never a hard stop.
+      Unreadable (permission error): skip with a logged note, never a hard stop.
+    - workspace_root == the project root (the current project IS itself the configured
+      workspace root): do not double-load; treat workspace tier as absent for this
+      session to avoid merging a tier with itself.
+    Merge precedence (lowest to highest): workspace/ < project/ < workflows/{wf-id}/ --
+    for ## Current Focus / ## Next Steps / ## Tasks, the highest-precedence tier present
+    wins; ## Decisions / ## User Standards / ## Architecture Patterns always come from
+    project/ (unchanged rule) with workspace/'s own such sections available as
+    additional read-only context, never overriding project/'s.
 5. If resuming a known workflow, also read:
    Read(".craftflow/state/cursor-wf.json")
 6. Fallback: if project/ files are missing, read root-flat files:

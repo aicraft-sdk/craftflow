@@ -76,9 +76,10 @@ algorithm is shared or host-specific.
 
 ## 2. Memory Load And Template Validation
 
-Always run this before routing or resuming. Memory is organized in two tiers:
+Always run this before routing or resuming. Memory is organized in three tiers:
 - **project/** — long-lived cross-workflow state (architecture decisions, durable patterns, ongoing blockers). Always load first.
 - **workflows/{wf-id}/** — per-workflow isolated state (current focus, active phase, in-flight tasks). Load only when a `workflow_uuid` is already known (resume path).
+- **workspace/** — long-lived, cross-repo state shared by every project under a configured workspace root. Lowest precedence; loaded only when a workspace marker is discovered.
 
 ```text
 1. Bash("mkdir -p \"$PROJECT_ROOT/.craftflow/state/project\"")
@@ -86,6 +87,30 @@ Always run this before routing or resuming. Memory is organized in two tiers:
 3. Read("$PROJECT_ROOT/.craftflow/state/project/patterns.md")
 4. Read("$PROJECT_ROOT/.craftflow/state/project/progress.md")
 5. Read("$PROJECT_ROOT/.craftflow/state/project/constitution.md") — skip gracefully if absent; when present, MUST constraints are active for this session
+5a. Workspace-tier discovery (capped upward walk, max 3 levels above PROJECT_ROOT, to
+    avoid runaway scans): starting at PROJECT_ROOT's parent, check each ancestor for
+    EITHER a `.craftflow-workspace.json` file OR a `.craftflow/state/workspace/`
+    directory. Stop at the first match, or after 3 levels, or at the filesystem root,
+    whichever comes first. Never select `$HOME` or `/` itself as a matched workspace
+    root even if a marker is somehow present there (defense in depth alongside Phase 1's
+    own refusal list).
+    - No marker found: skip silently -- zero behavior change (existing production
+      reality for every non-workspace session today).
+    - Marker found at {workspace_root}:
+      Read("{workspace_root}/.craftflow/state/workspace/activeContext.md")
+      Read("{workspace_root}/.craftflow/state/workspace/patterns.md")
+      Read("{workspace_root}/.craftflow/state/workspace/progress.md")
+      Missing/malformed file: auto-heal via craftflow:session-memory template (same rule
+      as project/'s own auto-heal), never a hard stop.
+      Unreadable (permission error): skip with a logged note, never a hard stop.
+    - workspace_root == PROJECT_ROOT (the current project IS itself the configured
+      workspace root): do not double-load; treat workspace tier as absent for this
+      session to avoid merging a tier with itself.
+    Merge precedence (lowest to highest): workspace/ < project/ < workflows/{wf-id}/ --
+    for ## Current Focus / ## Next Steps / ## Tasks, the highest-precedence tier present
+    wins; ## Decisions / ## User Standards / ## Architecture Patterns always come from
+    project/ (unchanged rule) with workspace/'s own such sections available as
+    additional read-only context, never overriding project/'s.
 6. If workflow_uuid is known (resume path):
    a. Bash("mkdir -p \"$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}\"")
    b. Read("$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md")
