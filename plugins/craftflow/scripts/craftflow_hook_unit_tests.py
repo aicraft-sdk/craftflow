@@ -17646,6 +17646,59 @@ def test_planner_md_has_adr_prior_art_check() -> None:
     ok(name)
 
 
+def test_hooklib_read_workspace_config_returns_none_on_missing_or_malformed(tmp_dir: Path) -> None:
+    name = "hooklib/read-workspace-config-returns-none-on-missing-or-malformed"
+    missing_root = tmp_dir / "missing"
+    missing_root.mkdir(parents=True, exist_ok=True)
+    if hooklib._read_workspace_config(missing_root) is not None:
+        fail(name, "expected None when .craftflow-workspace.json is absent")
+        return
+    malformed_root = tmp_dir / "malformed"
+    malformed_root.mkdir(parents=True, exist_ok=True)
+    (malformed_root / ".craftflow-workspace.json").write_text("{not valid", encoding="utf-8")
+    if hooklib._read_workspace_config(malformed_root) is not None:
+        fail(name, "expected None on malformed JSON")
+        return
+    nondict_root = tmp_dir / "nondict"
+    nondict_root.mkdir(parents=True, exist_ok=True)
+    (nondict_root / ".craftflow-workspace.json").write_text("[1, 2]", encoding="utf-8")
+    if hooklib._read_workspace_config(nondict_root) is not None:
+        fail(name, "expected None on non-dict top level")
+        return
+    valid_root = tmp_dir / "valid"
+    valid_root.mkdir(parents=True, exist_ok=True)
+    (valid_root / ".craftflow-workspace.json").write_text(
+        json.dumps({"members": ["x"]}), encoding="utf-8"
+    )
+    got = hooklib._read_workspace_config(valid_root)
+    if got != {"members": ["x"]}:
+        fail(name, f"expected the parsed dict, got {got!r}")
+        return
+    ok(name)
+
+
+def test_hooklib_is_safe_relative_member_path(tmp_dir: Path) -> None:
+    name = "hooklib/is-safe-relative-member-path"
+    cases: list[tuple[str, bool]] = [
+        ("nested-repo", True),
+        ("team/nested-repo", True),   # multi-segment MUST be accepted -- design's own schema example
+        ("", False),
+        ("/etc/passwd", False),
+        ("~/escape", False),
+        ("../../etc", False),
+        ("team/../etc", False),
+        ("team/./x", False),
+        ("a\\b", False),
+        ("x" * 300, False),
+    ]
+    for entry, expected in cases:
+        got = hooklib._is_safe_relative_member_path(entry)
+        if got != expected:
+            fail(name, f"entry {entry!r}: expected {expected}, got {got!r}")
+            return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -18593,6 +18646,11 @@ def main() -> int:
     test_router_task_tool_fallback_wired_through_resume_and_chain_loop()
     test_workflow_artifact_schema_documents_task_tools_available()
     test_self_dispatch_guard_present_in_task_update_agents()
+
+    print()
+    print("[ hooklib: workspace-config reader + member-path validator (membership predicate Phase 1.1) ]")
+    test_hooklib_read_workspace_config_returns_none_on_missing_or_malformed(tmp / "wsm1")
+    test_hooklib_is_safe_relative_member_path(tmp / "wsm2")
 
     print()
     if _errors:

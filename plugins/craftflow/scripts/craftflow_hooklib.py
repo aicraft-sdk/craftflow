@@ -1210,6 +1210,44 @@ def resolve_workspace_writable_paths(workflow: Dict[str, Any]) -> "frozenset[Pat
     return frozenset(resolved)
 
 
+def _read_workspace_config(workspace_root: Path) -> "dict | None":
+    """Read and parse {workspace_root}/.craftflow-workspace.json. Returns the
+    parsed dict, or None on any failure (missing file, unreadable, malformed
+    JSON, or a non-dict top level) -- never raises. Shared by
+    workspace_memory_writable() and is_workspace_member(), which read this
+    same file for different fields ('memory_writable' and 'members'
+    respectively)."""
+    try:
+        raw = json.loads((workspace_root / ".craftflow-workspace.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    return raw
+
+
+_MAX_MEMBER_ENTRY_LEN = 255  # defensive sanity bound, mirrors craftflow_resolve_workspace_root.py
+
+
+def _is_safe_relative_member_path(entry: str) -> bool:
+    """True iff `entry` is a syntactically safe relative path for a
+    `members` allowlist entry: non-empty, not absolute, no `~` expansion,
+    no backslash, and no empty/'.'/'..' path segment ANYWHERE in the
+    string. Unlike `writable_paths`' single-filename-only entries, a
+    `members` entry MAY be multi-segment (e.g. "team/nested-repo") -- per
+    the approved design's own Architecture section ("basenames OR PATHS
+    relative to the workspace root") -- so traversal is checked per
+    segment, not by rejecting any '/' outright."""
+    if not entry or len(entry) > _MAX_MEMBER_ENTRY_LEN:
+        return False
+    if entry.startswith("/") or entry.startswith("~") or "\\" in entry:
+        return False
+    segments = entry.split("/")
+    if any(seg in ("", ".", "..") for seg in segments):
+        return False
+    return True
+
+
 def split_subcommands(command: str) -> list:
     """Split a shell command string on control operators (;, &&, ||, |, &, a
     bare newline).
