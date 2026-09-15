@@ -23,6 +23,15 @@ conventions layer that spans every repo under a workspace root.
 If the user's request is about widening write access to a shared root-level file (the
 allowlist), route to `craftflow:ai-first-setup` Step 4 item 10 instead of this skill.
 
+**Provisioning the memory tier alone does not make it writable.** This skill never writes
+`.craftflow-workspace.json`, so a workspace provisioned by this skill alone has no `members`
+and no `memory_writable` key — the workspace-tier memory stays read-only for every nested
+project (fail-closed by design, not a bug; live-verified as finding E1 in
+`docs/plans/2026-09-15-design-membership-ownership-chec-plan.md`). To make the memory tier
+shared-writable, the workspace owner must also run `craftflow:ai-first-setup` Step 4 item 10
+and explicitly confirm a `members` list plus `memory_writable: true` in
+`{workspace_root}/.craftflow-workspace.json`.
+
 ---
 
 ## Step 0 — Resolve `workspace_root`

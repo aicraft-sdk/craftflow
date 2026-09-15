@@ -111,6 +111,10 @@ Always run this before routing or resuming. Memory is organized in three tiers:
     wins; ## Decisions / ## User Standards / ## Architecture Patterns always come from
     project/ (unchanged rule) with workspace/'s own such sections available as
     additional read-only context, never overriding project/'s.
+    Note: this **load** walk is deliberately NOT membership-gated, unlike
+    `discover_workspace_root()`'s write-grant walk in `craftflow_hooklib.py`. The
+    divergence is intentional (back-compat with existing workspace-memory users) and
+    ADR-recorded -- do not "re-sync" the two without reading that ADR first.
 6. If workflow_uuid is known (resume path):
    a. Bash("mkdir -p \"$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}\"")
    b. Read("$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md")

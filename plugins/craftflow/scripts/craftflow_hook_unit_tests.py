@@ -18221,8 +18221,8 @@ def test_workspace_setup_and_routers_cross_reference_membership() -> None:
         return
     for skill_dir in ("craftflow-router", "cursor-router"):
         router_text = (PLUGIN_ROOT / "skills" / skill_dir / "SKILL.md").read_text(encoding="utf-8")
-        if "not membership-gated" not in router_text:
-            fail(name, f"{skill_dir} SKILL.md missing 'not membership-gated' read-side note")
+        if "NOT membership-gated" not in router_text:
+            fail(name, f"{skill_dir} SKILL.md missing 'NOT membership-gated' read-side note")
             return
     ok(name)
 
@@ -19219,6 +19219,7 @@ def main() -> int:
     print("[ Phase 3: provisioning interview + doc cross-references (structural assertions, no .py behavior change) ]")
     test_ai_first_setup_item10_collects_workspace_members()
     test_hooks_readme_documents_membership_boundary()
+    test_workspace_setup_and_routers_cross_reference_membership()
 
     print()
     if _errors:

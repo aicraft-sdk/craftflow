@@ -181,6 +181,10 @@ Run this before routing. Memory lives at `.craftflow/state/`.
     wins; ## Decisions / ## User Standards / ## Architecture Patterns always come from
     project/ (unchanged rule) with workspace/'s own such sections available as
     additional read-only context, never overriding project/'s.
+    Note: this **load** walk is deliberately NOT membership-gated, unlike
+    `discover_workspace_root()`'s write-grant walk in `craftflow_hooklib.py`. The
+    divergence is intentional (back-compat with existing workspace-memory users) and
+    ADR-recorded -- do not "re-sync" the two without reading that ADR first.
 5. If resuming a known workflow, also read:
    Read(".craftflow/state/cursor-wf.json")
 6. Fallback: if project/ files are missing, read root-flat files:
