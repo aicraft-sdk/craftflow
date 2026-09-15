@@ -1442,6 +1442,57 @@ def workspace_memory_writable(workspace_root: Path) -> bool:
     return config.get("memory_writable") is True
 
 
+WORKSPACE_MEMORY_FILES = ("activeContext.md", "patterns.md", "progress.md")
+
+
+def resolve_workspace_memory_paths(cwd: Path) -> "frozenset[Path]":
+    """The at-most-3 exact, resolved workspace-tier memory paths this cwd
+    may be granted, for resolve_confinement()'s extra_exact_paths
+    parameter (P7). Cardinality is provably <= 3 (fixed literal tuple).
+    Computed ONLY from `cwd` + on-disk state -- the candidate path being
+    checked is never an input, so no tool-call input can enlarge this set
+    (P8). Empty whenever discover_workspace_root() denies, INCLUDING
+    denial via failed membership at every candidate level (P1) -- this
+    function's own exact-match-only behavior is otherwise byte-identical
+    to before the membership check existed."""
+    root = discover_workspace_root(cwd)
+    if root is None or not workspace_memory_writable(root):
+        return frozenset()
+    base = root / ".craftflow" / "state" / "workspace"
+    resolved: set = set()
+    for name in WORKSPACE_MEMORY_FILES:
+        try:
+            base_resolved = base.resolve()
+            candidate = (base / name).resolve()
+        except (OSError, RuntimeError, ValueError) as exc:
+            log_event(
+                "plugin_pretooluse_guard",
+                {
+                    "event": "pretool_guard_parse_error",
+                    "command_name": "resolve_workspace_memory_paths",
+                    "error": repr(exc),
+                    "reason": "skipped_workspace_memory_filename",
+                    "filename": name,
+                },
+            )
+            continue
+        if candidate.parent != base_resolved:
+            log_event(
+                "plugin_pretooluse_guard",
+                {
+                    "event": "pretool_guard_symlink_rejected",
+                    "command_name": "resolve_workspace_memory_paths",
+                    "reason": "workspace_memory_symlink_escape",
+                    "filename": name,
+                    "resolved_parent": str(candidate.parent),
+                    "expected_parent": str(base_resolved),
+                },
+            )
+            continue
+        resolved.add(candidate)
+    return frozenset(resolved)
+
+
 def split_subcommands(command: str) -> list:
     """Split a shell command string on control operators (;, &&, ||, |, &, a
     bare newline).

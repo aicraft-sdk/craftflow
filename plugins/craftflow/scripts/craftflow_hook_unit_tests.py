@@ -17999,6 +17999,68 @@ def test_hooklib_discover_workspace_root_returns_none_beyond_three_levels(tmp_di
     ok(name)
 
 
+def test_hooklib_resolve_workspace_memory_paths_returns_exactly_three_for_member(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-workspace-memory-paths-returns-exactly-three-for-member"
+    ws = tmp_dir / "ws"
+    proj = ws / "proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    (ws / ".craftflow-workspace.json").write_text(
+        json.dumps({"members": ["proj"], "memory_writable": True}), encoding="utf-8"
+    )
+    workspace_dir = ws / ".craftflow" / "state" / "workspace"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    for fname in ("activeContext.md", "patterns.md", "progress.md"):
+        (workspace_dir / fname).write_text(f"# {fname}\n", encoding="utf-8")
+    result = hooklib.resolve_workspace_memory_paths(proj.resolve())
+    expected = frozenset((workspace_dir / n).resolve() for n in ("activeContext.md", "patterns.md", "progress.md"))
+    if result != expected:
+        fail(name, f"expected exactly the 3 resolved workspace files, got {result!r}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_workspace_memory_paths_empty_for_nonmember(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-workspace-memory-paths-empty-for-nonmember"
+    ws = tmp_dir / "ws"
+    proj = ws / "proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    (ws / ".craftflow-workspace.json").write_text(
+        json.dumps({"members": ["some-other-project"], "memory_writable": True}), encoding="utf-8"
+    )
+    workspace_dir = ws / ".craftflow" / "state" / "workspace"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    result = hooklib.resolve_workspace_memory_paths(proj.resolve())
+    if result != frozenset():
+        fail(name, f"expected empty frozenset for a non-member project even with memory_writable=true, got {result!r}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_workspace_memory_paths_rejects_symlinked_filename(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-workspace-memory-paths-rejects-symlinked-filename"
+    ws = tmp_dir / "ws"
+    proj = ws / "proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    (ws / ".craftflow-workspace.json").write_text(
+        json.dumps({"members": ["proj"], "memory_writable": True}), encoding="utf-8"
+    )
+    workspace_dir = ws / ".craftflow" / "state" / "workspace"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    outside = tmp_dir / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    (workspace_dir / "activeContext.md").symlink_to(outside / "escaped.md")
+    (workspace_dir / "patterns.md").write_text("# patterns\n", encoding="utf-8")
+    (workspace_dir / "progress.md").write_text("# progress\n", encoding="utf-8")
+    result = hooklib.resolve_workspace_memory_paths(proj.resolve())
+    if any(p.name == "activeContext.md" for p in result):
+        fail(name, "expected the symlinked-outside activeContext.md to be rejected, siblings kept")
+        return
+    if len(result) != 2:
+        fail(name, f"expected exactly 2 valid siblings kept, got {result!r}")
+        return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -18972,6 +19034,12 @@ def main() -> int:
     test_hooklib_discover_workspace_root_continues_past_nonmember_ancestor(tmp / "wsm12")
     test_hooklib_discover_workspace_root_returns_none_for_dir_marker_only(tmp / "wsm13")
     test_hooklib_discover_workspace_root_returns_none_beyond_three_levels(tmp / "wsm14")
+
+    print()
+    print("[ hooklib: resolve_workspace_memory_paths() (membership grant Phase 2.2) ]")
+    test_hooklib_resolve_workspace_memory_paths_returns_exactly_three_for_member(tmp / "wsm15")
+    test_hooklib_resolve_workspace_memory_paths_empty_for_nonmember(tmp / "wsm16")
+    test_hooklib_resolve_workspace_memory_paths_rejects_symlinked_filename(tmp / "wsm17")
 
     print()
     if _errors:
