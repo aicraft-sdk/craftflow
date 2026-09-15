@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.5.0] - 2026-09-15
+
+### Features
+
+- sync code-generation ladder with upstream ponytail
+
+### Documentation
+
+- add next-steps tracker and craftflow-plugin guardrails summary
+- fix stale agent count and script-name references
+
 ## [1.4.0] - 2026-08-28
 
 ### Features
