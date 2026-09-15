@@ -4,6 +4,8 @@ Router-first AI development orchestration for Claude Code. Every build, debug, r
 
 **Current version:** 1.5.0
 
+**Hard rules, scannable:** see [`AGENT_CRITICAL_GUARDRAILS.md`](AGENT_CRITICAL_GUARDRAILS.md) before touching this plugin.
+
 ---
 
 ## What it does
