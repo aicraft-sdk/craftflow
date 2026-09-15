@@ -17819,7 +17819,19 @@ def test_hooklib_is_workspace_member_logs_only_on_malformed_or_dropped_not_ordin
         if logged:
             fail(name, f"expected no log_event when members key is entirely absent, got {logged!r}")
             return
+        # `members` key PRESENT but null -- distinct from entirely absent (above): this
+        # IS an anomaly (the key exists but holds no usable value) and MUST log, unlike
+        # true key-absence. Locks in the dict.__contains__-based distinction so a future
+        # regression can't silently merge the two branches.
+        (ws / ".craftflow-workspace.json").write_text(
+            json.dumps({"members": None}), encoding="utf-8"
+        )
+        hooklib.is_workspace_member(ws, proj)
+        if not logged:
+            fail(name, "expected a log_event for members:null (present but wrong type)")
+            return
         # Malformed members shape: MUST log.
+        logged.clear()
         (ws / ".craftflow-workspace.json").write_text(
             json.dumps({"members": "not-a-list"}), encoding="utf-8"
         )

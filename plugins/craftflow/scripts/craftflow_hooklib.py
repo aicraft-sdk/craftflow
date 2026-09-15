@@ -1254,10 +1254,14 @@ def _log_membership_drop(config_path: Path, entry, reason: str) -> None:
     field that is present-but-not-a-list, or for an individually dropped/
     invalid entry (wrong type, unsafe path, resolve failure, escapes the
     root) -- NEVER for a wholly missing/unreadable/malformed config file
-    (the ordinary case for the vast majority of non-workspace sessions)
-    and NEVER for the ordinary "valid config, but this entry isn't the
-    caller" outcome, which would otherwise fire on every non-member
-    session and flood the hook event log."""
+    (the ordinary case for the vast majority of non-workspace sessions),
+    NEVER for a valid config whose `members` key is entirely absent (the
+    ordinary shape for any workspace that simply hasn't opted into
+    membership yet -- e.g. every config `ai-first-setup` currently
+    generates, which proposes only `writable_paths`), and NEVER for the
+    ordinary "valid config, but this entry isn't the caller" outcome,
+    which would otherwise fire on every non-member session and flood the
+    hook event log."""
     try:
         log_event(
             "plugin_pretooluse_guard",
