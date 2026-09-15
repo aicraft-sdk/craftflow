@@ -122,13 +122,14 @@ Read(file_path="src/path/to/similar/file.ts")
 **Before writing code, stop at the first rung that holds:**
 
 1. **Does this need to exist at all?** Speculative need = skip it, say so in one line. (YAGNI)
-2. **Stdlib / built-in does it?** Use it. No custom implementation needed.
-3. **Native platform feature covers it?** (`<input type="date">` over a picker lib, CSS over JS, DB constraint over app code)
-4. **Already-installed dependency solves it?** Use it. Never add a new dep for what a few lines can do.
-5. **Can it be one line?** One line.
-6. **Only then:** the minimum code that actually works.
+2. **Already in this codebase?** A helper, util, type, or pattern that already lives here → reuse it. Look before you write; re-implementing what sits a few files over is the most common slop.
+3. **Stdlib / built-in does it?** Use it. No custom implementation needed.
+4. **Native platform feature covers it?** (`<input type="date">` over a picker lib, CSS over JS, DB constraint over app code)
+5. **Already-installed dependency solves it?** Use it. Never add a new dep for what a few lines can do.
+6. **Can it be one line?** One line.
+7. **Only then:** the minimum code that actually works.
 
-Stop at the first rung that holds. The first simple solution that works is the right one. Prefer editing existing files over creating new ones.
+Stop at the first rung that holds. The first simple solution that works is the right one — once you actually know what the change has to touch. The ladder runs *after* you understand the problem, not instead of it: read the task and the code it touches, trace the real flow end to end, then climb. Prefer editing existing files over creating new ones.
 
 **Good:**
 ```typescript
@@ -177,6 +178,8 @@ Format: `cf:shortcut: <what was simplified>; <ceiling or upgrade trigger>`. A sh
 ### Minimal Diffs Principle
 
 **Only change what's necessary.** When fixing a bug, fix the bug - don't refactor surrounding code. When adding a feature, add the feature - don't "improve" unrelated code. Scope creep in diffs causes merge conflicts, hides the actual change, and makes reviews harder.
+
+**Shortest working diff wins, but only once you understand the problem.** The smallest change in the wrong place isn't minimal, it's a second bug. A bug report names a symptom: before editing, grep every caller of the function you're about to touch and fix the shared function once. One guard there is a smaller diff than one per caller, and patching only the path the ticket names leaves every sibling caller still broken.
 
 ### 3. Handle Edge Cases
 
