@@ -19218,6 +19218,7 @@ def main() -> int:
     print()
     print("[ Phase 3: provisioning interview + doc cross-references (structural assertions, no .py behavior change) ]")
     test_ai_first_setup_item10_collects_workspace_members()
+    test_hooks_readme_documents_membership_boundary()
 
     print()
     if _errors:

@@ -239,6 +239,68 @@ contents — only the pre-existing single confined repo/worktree ever gains full
 Missing or malformed config, or an unvalidated entry, degrades to `[]` (no grant), never a crash
 and never a wildcard. See `docs/2026-08-13-craftflow-workspace-root-allowlist-decision.md`.
 
+### Workspace Membership (`members`)
+
+`writable_paths` (above) grants access to individual **files** at the workspace root.
+`members` is a separate allowlist that grants a nested **project** write access to the shared
+workspace-tier memory at `{workspace_root}/.craftflow/state/workspace/*.md`
+(`discover_workspace_root()` / `is_workspace_member()` / `resolve_workspace_memory_paths()` in
+`craftflow_hooklib.py`). Directory proximity alone (sitting `<=3` levels under a workspace root)
+is never sufficient — an unrelated nested project must never be able to write another project's
+shared memory purely because of where it happens to sit on disk.
+
+```json
+{ "writable_paths": ["CONTRACTS.md"], "members": ["ai-craft", "team/nested-repo"], "memory_writable": true }
+```
+
+- **Owner-authored, never inferred.** `members` is populated only via `craftflow:ai-first-setup`
+  Step 4 item 10's propose-and-confirm interview — the same human-authored-only, propose-never-
+  write doctrine as `writable_paths`. No project may add itself to another workspace's `members`,
+  and Craftflow never infers membership from directory structure.
+- **Entry contract (multi-segment-capable).** Unlike a `writable_paths` entry (bare direct-child
+  filename only), a `members` entry may be a bare direct-child basename (`"ai-craft"`) **or** a
+  multi-segment path relative to `workspace_root` (`"team/nested-repo"`) — no `.`/`..` segment
+  anywhere, no leading `/` or `~`, no backslash. It is resolved and compared to the requesting
+  project's own resolved path by **exact path equality or ancestor-containment only — never a
+  prefix or glob match**.
+- **Fail-closed list.** Every one of the following denies the grant: the config file is missing,
+  unreadable, or malformed JSON; the top level isn't a dict; `members` is absent (the ordinary
+  shape for a workspace that hasn't opted into membership yet — e.g. every config
+  `craftflow:workspace-setup` alone produces); `members` is present but not a list; the list is
+  empty; an individual entry is the wrong type, syntactically unsafe, fails to resolve, resolves
+  to `workspace_root` itself, or resolves outside `workspace_root`; a NUL-bearing entry is dropped
+  on its own without discarding its valid siblings. An empty or absent `members` list means **no**
+  nested project can write the workspace-tier memory — fail-closed by design, not a bug.
+- **Per-candidate monotone restriction (not a whole-walk guarantee).** At any single candidate
+  ancestor, the membership check is strictly subtractive relative to *that candidate*: failing it
+  can only remove the grant that candidate alone would have issued, never add one. This is **not**
+  a whole-walk subtractive guarantee — because the walk continues past a failed candidate to a
+  farther one (see M-5 below), `discover_workspace_root()` can resolve a different, farther
+  ancestor than an ungated walk would have reached for the same requester. That farther ancestor's
+  own grant is always one its own owner explicitly authorized via its own `members` list — never
+  an unauthorized grant.
+- **E1 finding — `workspace-setup`-only workspaces are write-inert.** `craftflow:workspace-setup`
+  deliberately never writes `.craftflow-workspace.json` (it provisions the memory-tier files
+  only), so a workspace provisioned that way has no `members` and no `memory_writable` key —
+  `workspace_memory_writable()` already denies it. Until `craftflow:ai-first-setup` Step 4 item 10
+  runs and the workspace owner explicitly confirms `members`/`memory_writable`, the workspace-tier
+  memory stays read-only for every nested project, regardless of `workspace-setup` having run.
+- **Continue-past-non-member walk semantics (M-5).** A candidate ancestor that carries a marker
+  but fails the membership check is treated identically to "no marker found at this level" — the
+  walk continues to farther ancestors within the existing 3-level cap, it does not abort. Example:
+  given nested `Z ⊃ Y ⊃ X` where `Y` carries an unrelated, stray marker that does not list `X` as
+  a member but `Z` does, `discover_workspace_root()` starting from `X` resolves `Z`, not `Y` —
+  the stray marker at `Y` is skipped exactly as if it weren't there, so a legitimate, farther
+  membership grant is still reachable.
+- **M-8 — the read side is deliberately not membership-gated.** Both routers'
+  memory-*load* walk (`craftflow-router/SKILL.md` step 5a, `cursor-router/SKILL.md` step 4a)
+  reads an ancestor's workspace-tier memory files with no membership check at all — this is the
+  write-side mechanism documented above, not the read side. This is a deliberate, disclosed
+  choice, not drift: fixing it fail-closed would break every existing workspace-memory user who
+  adopted the read-side walk before `members` existed (shipped 2026-08-28). The residual risk
+  (a non-member nested project can still *read* an ancestor's shared workspace memory) is tracked
+  as a follow-up, not silently accepted as settled — see the membership-allowlist ADR.
+
 ## Optional Git Pre-Commit Hook
 
 This is separate from Claude Code plugin hooks. Install it only if you want
