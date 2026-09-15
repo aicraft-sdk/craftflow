@@ -17827,6 +17827,40 @@ def test_hooklib_is_workspace_member_logs_only_on_malformed_or_dropped_not_ordin
         hooklib.log_event = original_log_event
 
 
+def test_hooklib_is_workspace_member_nul_byte_entry_dropped_individually(tmp_dir: Path) -> None:
+    name = "hooklib/is-workspace-member-nul-byte-entry-dropped-individually"
+    ws = tmp_dir / "ws"
+    proj = ws / "proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    (ws / ".craftflow-workspace.json").write_text(
+        json.dumps({"members": ["proj\x00stray", "proj"]}), encoding="utf-8"
+    )
+    if hooklib.is_workspace_member(ws, proj) is not True:
+        fail(name, "expected True -- NUL-byte entry dropped, valid sibling honored")
+        return
+    (ws / ".craftflow-workspace.json").write_text(
+        json.dumps({"members": ["proj\x00stray"]}), encoding="utf-8"
+    )
+    if hooklib.is_workspace_member(ws, proj) is not False:
+        fail(name, "expected False -- only entry is NUL-poisoned")
+        return
+    ok(name)
+
+
+def test_hooklib_is_workspace_member_tolerates_duplicate_and_self_entries(tmp_dir: Path) -> None:
+    name = "hooklib/is-workspace-member-tolerates-duplicate-and-self-entries"
+    ws = tmp_dir / "ws"
+    proj = ws / "proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    (ws / ".craftflow-workspace.json").write_text(
+        json.dumps({"members": ["proj", "proj", ws.name]}), encoding="utf-8"
+    )
+    if hooklib.is_workspace_member(ws, proj) is not True:
+        fail(name, "expected True -- duplicates and an unrelated self-name entry must not crash or deny")
+        return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -18787,6 +18821,11 @@ def main() -> int:
     test_hooklib_is_workspace_member_fails_closed_on_missing_or_malformed_config(tmp / "wsm5")
     test_hooklib_is_workspace_member_rejects_invalid_entries_but_keeps_checking(tmp / "wsm6")
     test_hooklib_is_workspace_member_logs_only_on_malformed_or_dropped_not_ordinary(tmp / "wsm7")
+
+    print()
+    print("[ hooklib: is_workspace_member() remaining fail-closed catalog rows (membership predicate Phase 1.3) ]")
+    test_hooklib_is_workspace_member_nul_byte_entry_dropped_individually(tmp / "wsm8")
+    test_hooklib_is_workspace_member_tolerates_duplicate_and_self_entries(tmp / "wsm9")
 
     print()
     if _errors:
