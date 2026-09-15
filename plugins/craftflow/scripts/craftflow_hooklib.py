@@ -1363,6 +1363,85 @@ def is_workspace_member(workspace_root: Path, requesting_path: Path) -> bool:
     return False
 
 
+_WORKSPACE_ROOT_MAX_ASCENT = 3  # mirrors craftflow-router/SKILL.md step 5a's capped walk
+
+
+def discover_workspace_root(cwd: Path) -> "Path | None":
+    """Return the nearest ancestor of `cwd` that BOTH carries a workspace
+    marker AND lists `cwd`'s own project as a member of that marker's
+    `.craftflow-workspace.json` `members` field -- or None.
+
+    Marker = EITHER a `.craftflow-workspace.json` file OR a
+    `.craftflow/state/workspace/` directory. Walk is capped at
+    _WORKSPACE_ROOT_MAX_ASCENT levels above `cwd`, exactly as the
+    read-side walk in craftflow-router/SKILL.md step 5a (which this
+    function deliberately does NOT mirror the membership gate of -- M-8,
+    disclosed and ADR-recorded, not an oversight).
+
+    OWNERSHIP GATE (M-1). Directory proximity is NOT authorization: without
+    this check an unrelated nested project X, sitting <=3 levels under an
+    unrelated ancestor Y, could use its OWN legitimately-issued
+    memory-finalize permit to write into Y's shared workspace-tier memory
+    purely because of where it happens to sit on disk -- the same risk
+    class as D1's originally-rejected Option A. Live-reproduced against
+    the real guard before this function existed on `main`
+    (docs/plans/2026-09-15-design-membership-ownership-chec-plan.md
+    Codebase Reality Check, probe A1).
+
+    CONTINUE-PAST SEMANTICS (M-5, corrected). A candidate ancestor that
+    carries a marker but for which is_workspace_member() returns False is
+    treated IDENTICALLY to "no marker at this level" -- the walk CONTINUES
+    to farther ancestors within the same cap, it does NOT abort. This
+    directly satisfies the approved design's own wording ("treat
+    identically to no marker found at all"): under the pre-existing "no
+    marker found at this level" case, the walk does not stop, so neither
+    does a failed-membership level (P1, B14/EC-15/EC-22).
+
+    $HOME and `/` are SKIPPED, never SELECTED -- the walk continues past
+    them within the same cap (P5, unchanged from before this membership
+    check was added).
+
+    Never raises (P2): any OSError/RuntimeError/ValueError yields None."""
+    try:
+        start = cwd.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    refused: set = {Path("/")}
+    try:
+        refused.add(Path.home().resolve())
+    except (OSError, RuntimeError):
+        pass
+    ancestor = start
+    for _ in range(_WORKSPACE_ROOT_MAX_ASCENT):
+        parent = ancestor.parent
+        if parent == ancestor:  # reached the filesystem root
+            return None
+        ancestor = parent
+        if ancestor in refused:
+            continue  # skip, never select -- but keep walking within the cap
+        try:
+            has_config = (ancestor / ".craftflow-workspace.json").is_file()
+            has_dir = (ancestor / ".craftflow" / "state" / "workspace").is_dir()
+        except OSError:
+            return None
+        if (has_config or has_dir) and is_workspace_member(ancestor, start):
+            return ancestor
+        # else: treat this level identically to "no marker here" -- keep walking (M-5)
+    return None
+
+
+def workspace_memory_writable(workspace_root: Path) -> bool:
+    """True iff {workspace_root}/.craftflow-workspace.json parses to a dict
+    whose `memory_writable` value IS the Python boolean True.
+
+    Identity (`is True`), not truthiness: `1`, `"true"`, `"yes"`, and a
+    non-empty list all fail closed. Never raises."""
+    config = _read_workspace_config(workspace_root)
+    if config is None:
+        return False
+    return config.get("memory_writable") is True
+
+
 def split_subcommands(command: str) -> list:
     """Split a shell command string on control operators (;, &&, ||, |, &, a
     bare newline).

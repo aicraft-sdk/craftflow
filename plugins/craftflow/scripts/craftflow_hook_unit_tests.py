@@ -17917,6 +17917,88 @@ def test_hooklib_is_workspace_member_true_for_symlinked_requesting_path(tmp_dir:
     ok(name)
 
 
+def test_hooklib_discover_workspace_root_requires_membership(tmp_dir: Path) -> None:
+    name = "hooklib/discover-workspace-root-requires-membership"
+    # Member -> resolves
+    ws = tmp_dir / "member-ws"
+    proj = ws / "proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    (ws / ".craftflow-workspace.json").write_text(json.dumps({"members": ["proj"]}), encoding="utf-8")
+    if hooklib.discover_workspace_root(proj.resolve()) != ws.resolve():
+        fail(name, f"expected member project to resolve to {ws.resolve()}")
+        return
+    # Non-member (EC-2, the doubt-verify shape) -> None (no farther ancestor exists here)
+    ws2 = tmp_dir / "nonmember-ws"
+    proj2 = ws2 / "proj"
+    proj2.mkdir(parents=True, exist_ok=True)
+    (ws2 / ".craftflow-workspace.json").write_text(json.dumps({"members": ["some-other-project"]}), encoding="utf-8")
+    if hooklib.discover_workspace_root(proj2.resolve()) is not None:
+        fail(name, "expected non-member project to get None, not the ancestor")
+        return
+    # No members field at all -> None (same as no marker)
+    ws3 = tmp_dir / "nofield-ws"
+    proj3 = ws3 / "proj"
+    proj3.mkdir(parents=True, exist_ok=True)
+    (ws3 / ".craftflow-workspace.json").write_text(json.dumps({"memory_writable": True}), encoding="utf-8")
+    if hooklib.discover_workspace_root(proj3.resolve()) is not None:
+        fail(name, "expected missing members field to deny (fail closed)")
+        return
+    ok(name)
+
+
+def test_hooklib_discover_workspace_root_continues_past_nonmember_ancestor(tmp_dir: Path) -> None:
+    # EC-15/EC-22/B14 (corrected, M-5): a NEARER ancestor has a marker the
+    # requester is NOT a member of; a FARTHER ancestor (within the 3-level
+    # cap) IS a genuine member workspace. The walk must NOT abort at the
+    # nearer non-member -- it must continue and resolve the farther one.
+    # This is the single test that most sharply distinguishes this plan's
+    # corrected semantics from a naive "return None on first failure" port.
+    name = "hooklib/discover-workspace-root-continues-past-nonmember-ancestor"
+    root = tmp_dir / "root"
+    near = root / "near"          # marker present, NOT a member
+    proj = near / "proj"          # the requester
+    proj.mkdir(parents=True, exist_ok=True)
+    (near / ".craftflow-workspace.json").write_text(
+        json.dumps({"members": ["someone-else"]}), encoding="utf-8"
+    )
+    (root / ".craftflow-workspace.json").write_text(
+        json.dumps({"members": ["near/proj"]}), encoding="utf-8"
+    )
+    found = hooklib.discover_workspace_root(proj.resolve())
+    if found != root.resolve():
+        fail(name, f"expected the walk to continue past 'near' and resolve to {root.resolve()}, got {found!r}")
+        return
+    ok(name)
+
+
+def test_hooklib_discover_workspace_root_returns_none_for_dir_marker_only(tmp_dir: Path) -> None:
+    name = "hooklib/discover-workspace-root-returns-none-for-dir-marker-only"
+    ws = tmp_dir / "ws"
+    proj = ws / "proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    (ws / ".craftflow" / "state" / "workspace").mkdir(parents=True, exist_ok=True)
+    # A directory marker with NO .craftflow-workspace.json can never satisfy
+    # membership -- there is no members field to read (EC-13/B1).
+    if hooklib.discover_workspace_root(proj.resolve()) is not None:
+        fail(name, "expected None -- dir-marker-only workspace has no members data to grant against")
+        return
+    ok(name)
+
+
+def test_hooklib_discover_workspace_root_returns_none_beyond_three_levels(tmp_dir: Path) -> None:
+    name = "hooklib/discover-workspace-root-returns-none-beyond-three-levels"
+    root = tmp_dir / "toofar"
+    proj = root / "a" / "b" / "c" / "proj"  # 4 levels up to `root`, beyond the cap
+    proj.mkdir(parents=True, exist_ok=True)
+    (root / ".craftflow-workspace.json").write_text(
+        json.dumps({"members": ["a/b/c/proj"]}), encoding="utf-8"
+    )
+    if hooklib.discover_workspace_root(proj.resolve()) is not None:
+        fail(name, "expected None -- root is beyond the existing 3-level ascent cap")
+        return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -18883,6 +18965,13 @@ def main() -> int:
     test_hooklib_is_workspace_member_nul_byte_entry_dropped_individually(tmp / "wsm8")
     test_hooklib_is_workspace_member_tolerates_duplicate_and_self_entries(tmp / "wsm9")
     test_hooklib_is_workspace_member_true_for_symlinked_requesting_path(tmp / "wsm10")
+
+    print()
+    print("[ hooklib: discover_workspace_root() gated from its first commit (membership grant Phase 2.1) ]")
+    test_hooklib_discover_workspace_root_requires_membership(tmp / "wsm11")
+    test_hooklib_discover_workspace_root_continues_past_nonmember_ancestor(tmp / "wsm12")
+    test_hooklib_discover_workspace_root_returns_none_for_dir_marker_only(tmp / "wsm13")
+    test_hooklib_discover_workspace_root_returns_none_beyond_three_levels(tmp / "wsm14")
 
     print()
     if _errors:
