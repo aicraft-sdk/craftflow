@@ -17699,6 +17699,134 @@ def test_hooklib_is_safe_relative_member_path(tmp_dir: Path) -> None:
     ok(name)
 
 
+def test_hooklib_is_workspace_member_true_for_listed_direct_child(tmp_dir: Path) -> None:
+    name = "hooklib/is-workspace-member-true-for-listed-direct-child"
+    ws = tmp_dir / "ws"
+    proj = ws / "proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    (ws / ".craftflow-workspace.json").write_text(json.dumps({"members": ["proj"]}), encoding="utf-8")
+    result = hooklib.is_workspace_member(ws, proj)
+    if result is not True:
+        fail(name, f"expected True for listed member proj, got {result!r}")
+        return
+    ok(name)
+
+
+def test_hooklib_is_workspace_member_true_for_multisegment_and_deep_cwd(tmp_dir: Path) -> None:
+    name = "hooklib/is-workspace-member-true-for-multisegment-and-deep-cwd"
+    ws = tmp_dir / "ws"
+    nested = ws / "team" / "nested-repo"
+    nested.mkdir(parents=True, exist_ok=True)
+    (ws / ".craftflow-workspace.json").write_text(
+        json.dumps({"members": ["team/nested-repo"]}), encoding="utf-8"
+    )
+    # B11: exact resolved match on a multi-segment entry
+    if hooklib.is_workspace_member(ws, nested) is not True:
+        fail(name, "expected True for exact resolved match on a multi-segment entry")
+        return
+    # B12: requester is a SUBDIRECTORY of the member -- still True
+    subdir = nested / "src"
+    subdir.mkdir(parents=True, exist_ok=True)
+    if hooklib.is_workspace_member(ws, subdir) is not True:
+        fail(name, "expected True when requesting_path is a descendant of the member directory")
+        return
+    # B13: requester is an ANCESTOR of the member (wrong direction) -- False
+    if hooklib.is_workspace_member(ws, ws / "team") is not False:
+        fail(name, "expected False when requesting_path is an ancestor of (not equal to or a descendant of) the member")
+        return
+    ok(name)
+
+
+def test_hooklib_is_workspace_member_fails_closed_on_missing_or_malformed_config(tmp_dir: Path) -> None:
+    name = "hooklib/is-workspace-member-fails-closed-on-missing-or-malformed-config"
+    ws = tmp_dir / "ws"
+    ws.mkdir(parents=True, exist_ok=True)
+    proj = ws / "proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    for content, label in (
+        (None, "no config file at all"),
+        ("{broken", "malformed JSON"),
+        (json.dumps([1, 2, 3]), "non-dict top level"),
+        (json.dumps({}), "members key absent"),
+        (json.dumps({"members": "proj"}), "members as a string, not a list"),
+        (json.dumps({"members": []}), "members as an empty list"),
+    ):
+        if content is not None:
+            (ws / ".craftflow-workspace.json").write_text(content, encoding="utf-8")
+        elif (ws / ".craftflow-workspace.json").exists():
+            (ws / ".craftflow-workspace.json").unlink()
+        if hooklib.is_workspace_member(ws, proj) is not False:
+            fail(name, f"expected False with {label}")
+            return
+    ok(name)
+
+
+def test_hooklib_is_workspace_member_rejects_invalid_entries_but_keeps_checking(tmp_dir: Path) -> None:
+    name = "hooklib/is-workspace-member-rejects-invalid-entries-but-keeps-checking"
+    ws = tmp_dir / "ws"
+    proj = ws / "proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    outside = tmp_dir / "outside-secret"
+    (outside / "escape-target").mkdir(parents=True, exist_ok=True)
+    symlink_entry = ws / "escape-link"
+    ws.mkdir(parents=True, exist_ok=True)
+    symlink_entry.symlink_to(outside / "escape-target")
+    (ws / ".craftflow-workspace.json").write_text(
+        json.dumps({
+            "members": [
+                123, "", "/etc/passwd", "~/escape", "../../etc",
+                "escape-link",  # resolves outside workspace_root via symlink
+                ".",            # resolves to workspace_root itself
+                "proj",         # valid, real match -- must still be found
+            ]
+        }),
+        encoding="utf-8",
+    )
+    if hooklib.is_workspace_member(ws, proj) is not True:
+        fail(name, "expected True -- the final valid 'proj' entry should still match despite earlier invalid entries")
+        return
+    ok(name)
+
+
+def test_hooklib_is_workspace_member_logs_only_on_malformed_or_dropped_not_ordinary(tmp_dir: Path) -> None:
+    name = "hooklib/is-workspace-member-logs-only-on-malformed-or-dropped-not-ordinary"
+    ws = tmp_dir / "ws"
+    proj = ws / "proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    logged: list[dict] = []
+    original_log_event = hooklib.log_event
+    hooklib.log_event = lambda channel, payload: logged.append(payload)
+    try:
+        # Ordinary non-membership: valid config, proj just isn't listed -- must NOT log.
+        (ws / ".craftflow-workspace.json").write_text(
+            json.dumps({"members": ["someone-else"]}), encoding="utf-8"
+        )
+        hooklib.is_workspace_member(ws, proj)
+        if logged:
+            fail(name, f"expected no log_event for ordinary non-membership, got {logged!r}")
+            return
+        # Malformed members shape: MUST log.
+        (ws / ".craftflow-workspace.json").write_text(
+            json.dumps({"members": "not-a-list"}), encoding="utf-8"
+        )
+        hooklib.is_workspace_member(ws, proj)
+        if not logged:
+            fail(name, "expected a log_event for members-not-a-list")
+            return
+        # Dropped entry (traversal attempt): MUST log.
+        logged.clear()
+        (ws / ".craftflow-workspace.json").write_text(
+            json.dumps({"members": ["../escape"]}), encoding="utf-8"
+        )
+        hooklib.is_workspace_member(ws, proj)
+        if not logged:
+            fail(name, "expected a log_event for a dropped invalid entry")
+            return
+        ok(name)
+    finally:
+        hooklib.log_event = original_log_event
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -18651,6 +18779,14 @@ def main() -> int:
     print("[ hooklib: workspace-config reader + member-path validator (membership predicate Phase 1.1) ]")
     test_hooklib_read_workspace_config_returns_none_on_missing_or_malformed(tmp / "wsm1")
     test_hooklib_is_safe_relative_member_path(tmp / "wsm2")
+
+    print()
+    print("[ hooklib: is_workspace_member() happy path + diagnostic logging (membership predicate Phase 1.2) ]")
+    test_hooklib_is_workspace_member_true_for_listed_direct_child(tmp / "wsm3")
+    test_hooklib_is_workspace_member_true_for_multisegment_and_deep_cwd(tmp / "wsm4")
+    test_hooklib_is_workspace_member_fails_closed_on_missing_or_malformed_config(tmp / "wsm5")
+    test_hooklib_is_workspace_member_rejects_invalid_entries_but_keeps_checking(tmp / "wsm6")
+    test_hooklib_is_workspace_member_logs_only_on_malformed_or_dropped_not_ordinary(tmp / "wsm7")
 
     print()
     if _errors:

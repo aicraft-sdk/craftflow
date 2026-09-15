@@ -1248,6 +1248,106 @@ def _is_safe_relative_member_path(entry: str) -> bool:
     return True
 
 
+def _log_membership_drop(config_path: Path, entry, reason: str) -> None:
+    """Diagnostic-only (M-6). Never raises -- a logging failure must not
+    turn a fail-closed deny into a crash. Emitted ONLY for a `members`
+    field that is present-but-not-a-list, or for an individually dropped/
+    invalid entry (wrong type, unsafe path, resolve failure, escapes the
+    root) -- NEVER for a wholly missing/unreadable/malformed config file
+    (the ordinary case for the vast majority of non-workspace sessions)
+    and NEVER for the ordinary "valid config, but this entry isn't the
+    caller" outcome, which would otherwise fire on every non-member
+    session and flood the hook event log."""
+    try:
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "is_workspace_member",
+                "config": str(config_path),
+                "entry": entry,
+                "reason": reason,
+            },
+        )
+    except Exception:
+        pass
+
+
+def is_workspace_member(workspace_root: Path, requesting_path: Path) -> bool:
+    """True iff {workspace_root}/.craftflow-workspace.json parses to a dict
+    whose `members` list contains at least one syntactically-safe entry
+    that, resolved against workspace_root, is a genuine descendant of
+    workspace_root (never workspace_root itself, never escaping it via
+    traversal or symlink) AND is equal to, or a strict ancestor of,
+    `requesting_path`, once resolved.
+
+    Entries MAY be either a bare direct-child basename ("proj") or a
+    multi-segment relative path ("team/nested-repo") -- per the approved
+    design's own Architecture section (M-2). NOT restricted to a single
+    path segment.
+
+    Fail-closed on every branch -- never raises (P2, P6). A missing file,
+    malformed JSON, non-dict top level, missing/non-list `members`, or a
+    `members` list containing only invalid/non-matching entries all
+    return False identically -- absence of valid membership data is
+    treated exactly like explicit non-membership, never like implicit
+    membership.
+
+    is_workspace_member() is called at EVERY ancestor candidate
+    discover_workspace_root() visits during its walk, not just the
+    nearest one that carries a marker (P1) -- see discover_workspace_root()'s
+    own docstring for why a failure here does not abort that walk (M-5).
+
+    Matching is resolved-Path equality/containment ONLY -- never a
+    prefix, glob, or fuzzy match (P3, M-3).
+
+    `requesting_path` should be the SAME already-resolved `cwd`
+    discover_workspace_root() is evaluating -- never re-derived from
+    tool-call input (P8), for the same non-spoofability reason `cwd` is
+    used throughout this file.
+
+    Diagnostic logging: see _log_membership_drop()'s own docstring (M-6)."""
+    config_path = workspace_root / ".craftflow-workspace.json"
+    config = _read_workspace_config(workspace_root)
+    if config is None:
+        return False  # missing/unreadable/malformed/non-dict -- the ordinary case; not logged
+    members = config.get("members")
+    if not isinstance(members, list):
+        _log_membership_drop(config_path, None, "members_missing_or_not_a_list")
+        return False
+    try:
+        resolved_workspace_root = workspace_root.resolve()
+        resolved_requesting = requesting_path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    for entry in members:
+        if not isinstance(entry, str):
+            _log_membership_drop(config_path, repr(entry), "not_a_string")
+            continue
+        if not _is_safe_relative_member_path(entry):
+            _log_membership_drop(config_path, entry, "not_a_safe_relative_path")
+            continue
+        try:
+            # ValueError ("embedded null byte") is raised by the OS-boundary
+            # calls resolve() makes for a NUL-bearing entry -- caught here
+            # as an individually-invalid entry, mirroring
+            # read_workspace_writable_paths()'s own precedent, so one
+            # poisoned entry never discards its valid siblings.
+            resolved_entry = (workspace_root / entry).resolve()
+        except (OSError, RuntimeError, ValueError) as exc:
+            _log_membership_drop(config_path, entry, f"resolve_failed:{exc.__class__.__name__}")
+            continue
+        if resolved_entry == resolved_workspace_root:
+            _log_membership_drop(config_path, entry, "resolves_to_workspace_root_itself")
+            continue
+        if resolved_workspace_root not in resolved_entry.parents:
+            _log_membership_drop(config_path, entry, "resolves_outside_workspace_root")
+            continue
+        if resolved_requesting == resolved_entry or resolved_entry in resolved_requesting.parents:
+            return True
+    return False
+
+
 def split_subcommands(command: str) -> list:
     """Split a shell command string on control operators (;, &&, ||, |, &, a
     bare newline).
