@@ -18190,6 +18190,92 @@ def test_pretooluse_guard_workspace_memory_diverges_cwd_and_claude_project_dir(t
     ok(name)
 
 
+def _identity_divergence_fixture(tmp_dir: Path) -> tuple[Path, Path]:
+    """Two sibling project roots for cwd-vs-CLAUDE_PROJECT_DIR divergence tests.
+
+    Returns (env_proj, cwd_proj): `env_proj` is what CLAUDE_PROJECT_DIR points
+    at (the WRONG identity), `cwd_proj` is the PreToolUse payload's own trusted
+    `cwd` (the RIGHT identity). Both carry the same protected-path shapes so a
+    bypass can only come from the guard resolving the wrong root, never from a
+    missing file. Mirrors the fixture shape of
+    test_pretooluse_guard_workspace_memory_diverges_cwd_and_claude_project_dir.
+    """
+    env_proj = tmp_dir / "env-proj"
+    cwd_proj = tmp_dir / "cwd-proj"
+    for proj in (env_proj, cwd_proj):
+        (proj / ".craftflow" / "state" / "project").mkdir(parents=True, exist_ok=True)
+        (proj / ".craftflow" / "state" / "workflows").mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q"], cwd=str(proj), check=True, capture_output=True)
+        state_project = proj / ".craftflow" / "state" / "project"
+        (state_project / "reliability-gates.json").write_text('{"gates": []}', encoding="utf-8")
+        (state_project / "skill-candidates.json").write_text('{"candidates": []}', encoding="utf-8")
+    return env_proj, cwd_proj
+
+
+def _deny_out(out: str) -> bool:
+    return '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out
+
+
+def test_pretooluse_guard_reliability_gates_diverges_cwd_and_claude_project_dir(tmp_dir: Path) -> None:
+    # Follow-up to ADR 0033's deferred CRITICAL siblings (live-reproduced):
+    # `_is_protected_reliability_gates_path()` resolved its protected-path root
+    # via `project_dir()` (CLAUDE_PROJECT_DIR / Path.cwd()), NOT the trusted
+    # PreToolUse payload `cwd`. With the two diverged, a write to the CALLER's
+    # OWN reliability-gates ledger was compared against an UNRELATED project's
+    # ledger path, did not match, and was silently ALLOWED.
+    name = "pretooluse-guard/reliability-gates-diverges-cwd-and-claude-project-dir"
+    env_proj, cwd_proj = _identity_divergence_fixture(tmp_dir)
+    target = cwd_proj / ".craftflow" / "state" / "project" / "reliability-gates.json"
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    # Part 1 (Edit/Write lane, the diverged case) -> DENY.
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-identity-diverge",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(name, f"Edit/Write diverged case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"Edit/Write diverged case: expected a 'reliability-gates-write' reason, got: {out!r}")
+        return
+
+    # Part 2 (Bash lane, the diverged case) -> DENY.
+    bash_payload = {
+        "tool_name": "Bash",
+        "session_id": "wf-identity-diverge",
+        "cwd": str(cwd_proj),
+        "tool_input": {"command": f"echo x > {target}"},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", bash_payload, env)
+    if not _deny_out(out):
+        fail(name, f"Bash diverged case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+
+    # Part 3 (negative control): an UNRELATED project's ledger must NOT become
+    # protected just because CLAUDE_PROJECT_DIR names it -- protection follows
+    # the trusted cwd, and a write there is denied for worktree-confinement
+    # (escaping cwd), never for reliability-gates-write.
+    foreign = env_proj / ".craftflow" / "state" / "project" / "reliability-gates.json"
+    payload_foreign = {
+        "tool_name": "Write",
+        "session_id": "wf-identity-diverge",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(foreign)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_foreign, env)
+    if not _deny_out(out):
+        fail(name, f"foreign-target control: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"foreign-target control: expected 'worktree-confinement' reason, got: {out!r}")
+        return
+    ok(name)
+
+
 def test_ai_first_setup_item10_collects_workspace_members() -> None:
     name = "ai-first-setup/item10-collects-workspace-members"
     text = (PLUGIN_ROOT / "skills" / "ai-first-setup" / "SKILL.md").read_text(encoding="utf-8")
@@ -19368,6 +19454,10 @@ def main() -> int:
     print()
     print("[ pretooluse-guard: REM-FIX (doubt-verifier live-reproduced -- permit identity must anchor to cwd, not CLAUDE_PROJECT_DIR) ]")
     test_pretooluse_guard_workspace_memory_diverges_cwd_and_claude_project_dir(tmp / "wsm19")
+
+    print()
+    print("[ pretooluse-guard: cwd-vs-project_dir() identity confinement (ADR 0033 deferred siblings) ]")
+    test_pretooluse_guard_reliability_gates_diverges_cwd_and_claude_project_dir(tmp / "idm1")
 
     print()
     print("[ Phase 3: provisioning interview + doc cross-references (structural assertions, no .py behavior change) ]")

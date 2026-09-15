@@ -727,9 +727,23 @@ def _protected_reliability_gates_path(root: Path) -> Path:
     return (root / RELIABILITY_GATES_LEDGER_REL_PATH).resolve()
 
 
-def _is_protected_reliability_gates_path(path: Path) -> bool:
+def _is_protected_reliability_gates_path(path: Path, project_root: "Path | None" = None) -> bool:
+    """True if `path` is exactly the reliability-gates ledger for the project
+    identified by `project_root`.
+
+    `project_root`, when given, anchors the protected-path root to that
+    SPECIFIC project identity instead of this process's own
+    environment-derived identity (`project_dir()`'s `CLAUDE_PROJECT_DIR` /
+    `Path.cwd()`). Every confinement-sensitive caller MUST pass the trusted
+    `PreToolUse` payload `cwd` here -- otherwise this check computes the
+    protected path for a DIFFERENT, unrelated project and silently fails to
+    protect the caller's OWN ledger, a real, live-reproduced bypass this
+    parameter closes (ADR 0033 deferred sibling; same pattern as
+    `has_memory_finalize_permit(project_root=...)`). Omitting it reproduces
+    the pre-existing single-parameter behavior exactly.
+    """
     try:
-        root = project_dir().resolve()
+        root = (project_root or project_dir()).resolve()
         return path == _protected_reliability_gates_path(root)
     except Exception:
         return False
@@ -1145,6 +1159,18 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
         return 0
 
     path = Path(file_path).resolve()
+
+    # ADR 0033 deferred-sibling fix: every protected-path predicate below must
+    # anchor its root to the TRUSTED PreToolUse payload `cwd`, not to
+    # `project_dir()` (CLAUDE_PROJECT_DIR / Path.cwd()) -- two decoupled
+    # identity sources that nothing enforces stay in sync. Degrades to None
+    # (and therefore to today's `project_dir()` fallback) when the payload
+    # carries no usable `cwd`, matching `_edit_write_escapes_confinement()`'s
+    # own documented degradation (Behavior Contract rule 8) -- hardening
+    # against a MISSING `cwd` is a separate, disclosed non-goal.
+    cwd_raw = data.get("cwd")
+    trusted_root = Path(cwd_raw).resolve() if isinstance(cwd_raw, str) and cwd_raw else None
+
     violations = []
 
     protected_memory = _protected_memory_paths()
@@ -1171,7 +1197,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     # ledger is a single script-owned JSON file, not a markdown memory file
     # eligible for the memory-finalize permit -- protected unconditionally,
     # mirroring the skill-candidate ledger's own treatment above.
-    if _is_protected_reliability_gates_path(path):
+    if _is_protected_reliability_gates_path(path, project_root=trusted_root):
         violations.append("reliability-gates-write")
 
     # Worktree confinement (Task 4.2 step 3): an independent violation type
@@ -1655,16 +1681,19 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     try:
         for target in extract_redirect_targets(command):
             _confined, resolved = resolve_confinement(target, cwd, worktree_path)
-            if _is_protected_reliability_gates_path(resolved):
+            if _is_protected_reliability_gates_path(resolved, project_root=cwd):
                 reliability_gates_violations.append(str(resolved))
 
         for target in _python_script_write_targets(command):
             _confined, resolved = resolve_confinement(target, cwd, worktree_path)
-            if _is_protected_reliability_gates_path(resolved):
+            if _is_protected_reliability_gates_path(resolved, project_root=cwd):
                 reliability_gates_violations.append(str(resolved))
 
-        gates_root = project_dir().resolve()
-        gates_path = _protected_reliability_gates_path(gates_root)
+        # ADR 0033 deferred-sibling fix (D11): this root derivation fed the
+        # python-suspicious-mechanism lane from `project_dir()`, so the literal
+        # path it matched against belonged to an UNRELATED project whenever
+        # CLAUDE_PROJECT_DIR and the payload `cwd` diverged.
+        gates_path = _protected_reliability_gates_path(cwd)
         reliability_gates_violations.extend(
             _python_suspicious_mechanism_targets(command, {gates_path}, cwd)
         )
@@ -1702,7 +1731,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                     skill_promotion_violations.append(str(resolved))
                 if _is_protected_skill_ledger_or_proposal_path(resolved):
                     skill_ledger_violations.append(str(resolved))
-                if _is_protected_reliability_gates_path(resolved):
+                if _is_protected_reliability_gates_path(resolved, project_root=cwd):
                     reliability_gates_violations.append(str(resolved))
     except Exception as exc:
         log_event(
