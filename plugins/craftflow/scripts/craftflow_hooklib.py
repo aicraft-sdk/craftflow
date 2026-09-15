@@ -1307,6 +1307,9 @@ def is_workspace_member(workspace_root: Path, requesting_path: Path) -> bool:
     used throughout this file.
 
     Diagnostic logging: see _log_membership_drop()'s own docstring (M-6)."""
+    # No outer try/except here by design (M-6) -- every raise-capable operation below has its
+    # own narrow, explicitly-typed guard; a future edit adding a new dict-lookup or attribute
+    # access must add a matching guard, not rely on an implicit catch-all.
     config_path = workspace_root / ".craftflow-workspace.json"
     config = _read_workspace_config(workspace_root)
     if config is None:

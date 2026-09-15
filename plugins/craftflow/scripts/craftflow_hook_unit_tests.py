@@ -17861,6 +17861,36 @@ def test_hooklib_is_workspace_member_tolerates_duplicate_and_self_entries(tmp_di
     ok(name)
 
 
+def test_hooklib_is_workspace_member_true_for_symlinked_requesting_path(tmp_dir: Path) -> None:
+    name = "hooklib/is-workspace-member-true-for-symlinked-requesting-path"
+    ws = tmp_dir / "ws"
+    proj = ws / "proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    (ws / ".craftflow-workspace.json").write_text(
+        json.dumps({"members": ["proj"]}), encoding="utf-8"
+    )
+    # B24 positive: requesting_path itself is reached via a symlink that
+    # points AT the real member directory -- distinct from the
+    # rejects-invalid-entries test above, which symlinks a `members`
+    # ENTRY. Here the symlink is the caller's own (already-resolved-by-
+    # caller-in-production, but deliberately unresolved here) cwd.
+    link_to_member = tmp_dir / "link-to-proj"
+    link_to_member.symlink_to(proj)
+    if hooklib.is_workspace_member(ws, link_to_member) is not True:
+        fail(name, "expected True -- symlinked requesting_path resolves to the physical member directory")
+        return
+    # B24 negative: requesting_path is a symlink pointing OUTSIDE the
+    # workspace entirely -- must still deny on the physical, resolved path.
+    outside = tmp_dir / "outside-unrelated"
+    outside.mkdir(parents=True, exist_ok=True)
+    link_to_outside = tmp_dir / "link-to-outside"
+    link_to_outside.symlink_to(outside)
+    if hooklib.is_workspace_member(ws, link_to_outside) is not False:
+        fail(name, "expected False -- symlinked requesting_path resolves outside the workspace")
+        return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -18826,6 +18856,7 @@ def main() -> int:
     print("[ hooklib: is_workspace_member() remaining fail-closed catalog rows (membership predicate Phase 1.3) ]")
     test_hooklib_is_workspace_member_nul_byte_entry_dropped_individually(tmp / "wsm8")
     test_hooklib_is_workspace_member_tolerates_duplicate_and_self_entries(tmp / "wsm9")
+    test_hooklib_is_workspace_member_true_for_symlinked_requesting_path(tmp / "wsm10")
 
     print()
     if _errors:
