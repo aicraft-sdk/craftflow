@@ -269,19 +269,37 @@ Write eligible files in this exact order so that cross-references resolve correc
    - `feature_list.json` from `assets/scope/feature_list.json.tpl`
 9. **`.gitignore` audit** — confirm `CLAUDE.md` and `.claude/` remain ignored; do not add new ignores for `AGENTS.md`, `AI.md`, `TESTS.md`, `docs/ai/**`, or `tools/scripts/**`. Ensure `/docs/plans/**/*.md` IS ignored — append it (with a short comment: plans are working documents, not deliverables; their durable content belongs in Craftflow's memory system, not git history) if the repo's `.gitignore` doesn't already cover it. `docs/plans/.gitkeep` (written in Step 4.1) stays tracked so the directory exists; only its `.md` plan content is ignored. No agent may `git add`/`git commit` a file under `docs/plans/` — see `craftflow-router` `## 14. Hard Rules`.
 10. **Workspace-root allowlist — `{workspace_root}/.craftflow-workspace.json`** — This file is a security-relevant, **human-authored-only** artifact: its `writable_paths` widens BUILD-phase agent write access outside worktree confinement, and `docs/2026-08-13-craftflow-workspace-root-allowlist-decision.md` ("Alternatives Considered") explicitly rejects auto-generating or scaffolding it — Craftflow only ever *reads* this file, never writes or infers its contents unprompted. This skill must never call `Write()` on it without explicit, in-the-moment human confirmation for this specific file. Always **propose**, never silently write, regardless of repo shape (this is independent of Steps 1–9; `workspace_root` may differ from the project root written into in Steps 1–9, per Step 0):
-    - Construct the proposed content (same rules as before — only the delivery mechanism changes):
-      - If `{workspace_root}/.craftflow-workspace.json` does not exist: propose `{"writable_paths": [<shared_root_files from Step 0, or [] if none were named>]}`.
-      - If it already exists: read it (read-only), then propose an updated `writable_paths` list that appends any newly-identified `shared_root_files` entries not already present (dedup by exact string match; validated per the entry contract below); never propose removing existing entries; never propose overwriting the whole file wholesale.
+    - **Ask the human directly (membership interview):** "Which projects under `{workspace_root}` are legitimate members of this workspace — i.e. which nested projects should be allowed to write the workspace's shared memory? Name each as a basename or, for a more deeply nested project, a path relative to `{workspace_root}` (e.g. `team/nested-repo`)." Record the confirmed list as `workspace_members` (may be empty). Re-derive the full nested-repo candidate list live (do not rely on `craftflow_resolve_workspace_root.py`'s own JSON, which only surfaces the full candidate list for the `AMBIGUOUS` outcome) via:
+      ```bash
+      python3 -c "
+      import sys
+      sys.path.insert(0, '$CRAFTFLOW_INSTALL/scripts')
+      from pathlib import Path
+      from craftflow_resolve_workspace_root import find_repo_candidates
+      for c in find_repo_candidates(Path('$workspace_root')):
+          print(c.name)
+      "
+      ```
+    - Construct the proposed content (same rules as before for `writable_paths` — only the delivery mechanism changes):
+      - If `{workspace_root}/.craftflow-workspace.json` does not exist: propose `{"writable_paths": [<shared_root_files from Step 0, or [] if none were named>], "members": [<workspace_members from the membership interview, or [] if none were named>], "memory_writable": <true iff the human confirms workspace-tier memory should be shared-writable>}`.
+      - If it already exists: read it (read-only), then propose an updated `writable_paths` list that appends any newly-identified `shared_root_files` entries not already present (dedup by exact string match; validated per the entry contract below), an updated `members` list appending any newly-confirmed `workspace_members` entries not already present, and `memory_writable` as confirmed above; never propose removing existing `writable_paths`/`members` entries; never propose overwriting the whole file wholesale.
     - **Print the proposed content** to the user in a copy-pasteable fenced code block, labeled with the exact target path, e.g.:
       ```
       Proposed content for {workspace_root}/.craftflow-workspace.json:
-      { "writable_paths": ["CONTRACTS.md"] }
+      { "writable_paths": ["CONTRACTS.md"], "members": ["ai-craft"], "memory_writable": true }
       ```
-    - **Ask the human directly:** "Should I create/update this file for you, or would you rather save it yourself?" The Step 3 approval-gate signal for the rest of the file list does NOT cover this file — it requires its own explicit, in-the-moment confirmation because it is a security-relevant, human-authored artifact. Only call `Write()` on `{workspace_root}/.craftflow-workspace.json` after the human gives that confirmation. If the human declines, defers, or does not respond with explicit confirmation, do NOT write the file — record it as a pending item in Step 6's Manual follow-ups instead.
-    - **Entry contract** (unchanged — must match `read_workspace_writable_paths()` in `craftflow_resolve_workspace_root.py` exactly, or the entry is silently dropped by that validator — two separate checks apply, both must pass):
+    - **Ask the human directly:** "Should I create/update this file for you, or would you rather save it yourself?" The Step 3 approval-gate signal for the rest of the file list does NOT cover this file — it requires its own explicit, in-the-moment confirmation because it is a security-relevant, human-authored artifact. This human-authored-only doctrine is unchanged by the `members`/`memory_writable` addition: still propose-never-write, still requiring its own explicit in-the-moment confirmation, still not covered by Step 3's blanket approval. Only call `Write()` on `{workspace_root}/.craftflow-workspace.json` after the human gives that confirmation. If the human declines, defers, or does not respond with explicit confirmation, do NOT write the file — record it as a pending item in Step 6's Manual follow-ups instead.
+    - **`writable_paths` entry contract** (unchanged — must match `read_workspace_writable_paths()` in `craftflow_resolve_workspace_root.py` exactly, or the entry is silently dropped by that validator — two separate checks apply, both must pass):
       1. The entry, resolved against `workspace_root` (following any symlink), must land as a **literal direct child of `workspace_root`** — i.e. its resolved parent directory must be `workspace_root` itself. An entry whose resolved path escapes `workspace_root` entirely (e.g. a symlink pointing anywhere outside it) is dropped with reason `resolves_outside_workspace_root`, regardless of whether the escape target happens to be a nested repo.
       2. Additionally, the resolved entry must not equal, or be nested inside, any nested git repo's directory under `workspace_root` — dropped with reason `resolves_inside_nested_repo` if it does.
       Syntactically, each entry is also the bare filename of a direct child only — no path separators (`/` or `\`), no `.` or `..`, no leading `/` or `~` (no absolute paths, no home-dir expansion). When unsure, use the shortest exact filename rather than a path.
+    - **`members` entry contract** (mirrors the `writable_paths` contract's structure above, but the shape differs deliberately — must match `_is_safe_relative_member_path()`/`is_workspace_member()` in `craftflow_hooklib.py` exactly, or the entry is silently dropped by `is_workspace_member()`):
+      1. Unlike a `writable_paths` entry (bare direct-child filename only), a `members` entry is either a bare direct-child basename (`"ai-craft"`) **or** a multi-segment path relative to `{workspace_root}` (`"team/nested-repo"`) — no `.`/`..` segment anywhere, no leading `/` or `~`, no backslash.
+      2. It is resolved against `{workspace_root}` (following any symlink) and compared to the requesting project's own resolved path by **exact path equality or ancestor-containment only — never a prefix or glob match**.
+      3. A symlinked entry is followed, but dropped if it resolves outside `{workspace_root}` (`resolves_outside_workspace_root`) or resolves to `{workspace_root}` itself (`resolves_to_workspace_root_itself`).
+      4. A NUL-bearing entry is dropped on its own, without discarding its valid siblings.
+      5. Anything else invalid (wrong type, unsafe path, resolve failure) is silently dropped by `is_workspace_member()` — one bad entry never invalidates the whole `members` list.
+      **Consequence:** an empty or absent `members` list means **no** nested project can write the workspace-tier memory — this is fail-closed by design, not a bug. Without `members`, the workspace-tier memory stays read-only for every nested project no matter how `writable_paths` or `memory_writable` are set.
 
 ### Built-in rules enforced during Apply
 
@@ -364,10 +382,14 @@ paths = data.get('writable_paths', [])
 if not isinstance(paths, list):
     sys.exit('ERROR: writable_paths is not a list in ' + path)
 print('workspace allowlist: OK (' + str(len(paths)) + ' entries)')
+members = data.get('members', [])
+if not isinstance(members, list):
+    sys.exit('ERROR: members is not a list in ' + path)
+print('workspace members: OK (' + str(len(members)) + ')')
 "
 ```
 
-A passing run shows: `AGENTS.md lint passed`, `AI contract pack lint passed`, build exit 0, test exit 0, `CLAUDE.md` reported ignored, the new files appearing as untracked (not ignored), `init.sh is executable`, `feature_list.json is valid JSON`, and either `workspace allowlist: OK` (the human confirmed the Step 4 item 10 proposal and the file was written) or `workspace allowlist: SKIPPED` (the human deferred — expected, not a failure; carry it into Step 6 Manual follow-ups). If the resolver script from Step 0 reported any `workspace_writable_paths_dropped` entries (or if re-running the resolver script here surfaces any), surface them verbatim in the Step 6 report under Manual follow-ups — a dropped entry means a `shared_root_files` answer was silently rejected and the user must re-supply it as a bare filename.
+A passing run shows: `AGENTS.md lint passed`, `AI contract pack lint passed`, build exit 0, test exit 0, `CLAUDE.md` reported ignored, the new files appearing as untracked (not ignored), `init.sh is executable`, `feature_list.json is valid JSON`, and either `workspace allowlist: OK` plus `workspace members: OK (N)` (the human confirmed the Step 4 item 10 proposal and the file was written) or `workspace allowlist: SKIPPED` (the human deferred — expected, not a failure; carry it into Step 6 Manual follow-ups). If the resolver script from Step 0 reported any `workspace_writable_paths_dropped` entries (or if re-running the resolver script here surfaces any), surface them verbatim in the Step 6 report under Manual follow-ups — a dropped entry means a `shared_root_files` answer was silently rejected and the user must re-supply it as a bare filename.
 
 ---
 
@@ -385,7 +407,7 @@ Emit a summary with the following four sections: **Files created**, **Files skip
 2. Severity ramp: after merging the first real feature spec (`docs/ai/specs/`) and the first ADR (`docs/ai/decisions/`), flip `aiContractPack.severity` from `"warn"` to `"error"` in `.agents-md-validator.json`
 3. Husky initialization (JS repos only): if Husky was newly added, run the package manager install command so the pre-commit hook activates before the next commit
 4. Non-JS pre-commit hook: `.git/hooks/pre-commit` is not committed to the repo; new contributors must re-run the skill or manually copy it from `assets/hooks/pre-commit-nonjs` after cloning
-5. **Workspace-root allowlist (if deferred in Step 4 item 10):** `{workspace_root}/.craftflow-workspace.json` was proposed but not written because the human had not yet confirmed it. Create or update the file yourself using the exact content printed during Apply (Step 4 item 10), or re-run this skill and confirm the write when prompted. Until this file exists with the intended `writable_paths` entries, BUILD-phase Craftflow agents cannot write to those shared workspace-root files.
+5. **Workspace-root allowlist (if deferred in Step 4 item 10):** `{workspace_root}/.craftflow-workspace.json` was proposed but not written because the human had not yet confirmed it. Create or update the file yourself using the exact content printed during Apply (Step 4 item 10), or re-run this skill and confirm the write when prompted. Until this file exists with the intended `writable_paths` entries, BUILD-phase Craftflow agents cannot write to those shared workspace-root files. Without a `members` list, the workspace-tier memory is read-only for every nested project no matter how `writable_paths` or `memory_writable` are set — this is fail-closed by design, not a bug.
 
 **Craftflow workspace guards (read before your next session)** — if this repo is operated under Craftflow orchestration (`.craftflow/` present, or this setup was invoked via `craftflow:craftflow-router`):
 - `.craftflow/state/{activeContext,patterns,progress}.md` are router-protected memory files — permit-gated, router-owned finalization only. Never hand-edit them directly.

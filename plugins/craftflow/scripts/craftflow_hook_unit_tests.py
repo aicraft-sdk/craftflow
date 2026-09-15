@@ -18189,6 +18189,44 @@ def test_pretooluse_guard_workspace_memory_diverges_cwd_and_claude_project_dir(t
     ok(name)
 
 
+def test_ai_first_setup_item10_collects_workspace_members() -> None:
+    name = "ai-first-setup/item10-collects-workspace-members"
+    text = (PLUGIN_ROOT / "skills" / "ai-first-setup" / "SKILL.md").read_text(encoding="utf-8")
+    missing = [n for n in ('"members"', '"memory_writable"', "membership", "never a prefix")
+               if n not in text]
+    if not missing:
+        ok(name)
+    else:
+        fail(name, f"ai-first-setup SKILL.md missing required prose: {missing!r}")
+
+
+def test_hooks_readme_documents_membership_boundary() -> None:
+    name = "hooks-readme/documents-membership-boundary-and-read-side-exemption"
+    text = (PLUGIN_ROOT / "hooks" / "README.md").read_text(encoding="utf-8")
+    missing = [n for n in ('"members"', "membership", "read side", "not membership-gated")
+               if n not in text]
+    if not missing:
+        ok(name)
+    else:
+        fail(name, f"hooks/README.md missing required prose: {missing!r}")
+
+
+def test_workspace_setup_and_routers_cross_reference_membership() -> None:
+    name = "workspace-setup/cross-references-ai-first-setup-members-and-routers-lock-read-side"
+    workspace_setup_text = (PLUGIN_ROOT / "skills" / "workspace-setup" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    if "ai-first-setup" not in workspace_setup_text or "members" not in workspace_setup_text:
+        fail(name, "workspace-setup SKILL.md missing 'ai-first-setup' and/or 'members' reference")
+        return
+    for skill_dir in ("craftflow-router", "cursor-router"):
+        router_text = (PLUGIN_ROOT / "skills" / skill_dir / "SKILL.md").read_text(encoding="utf-8")
+        if "not membership-gated" not in router_text:
+            fail(name, f"{skill_dir} SKILL.md missing 'not membership-gated' read-side note")
+            return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -19176,6 +19214,10 @@ def main() -> int:
     print()
     print("[ pretooluse-guard: REM-FIX (doubt-verifier live-reproduced -- permit identity must anchor to cwd, not CLAUDE_PROJECT_DIR) ]")
     test_pretooluse_guard_workspace_memory_diverges_cwd_and_claude_project_dir(tmp / "wsm19")
+
+    print()
+    print("[ Phase 3: provisioning interview + doc cross-references (structural assertions, no .py behavior change) ]")
+    test_ai_first_setup_item10_collects_workspace_members()
 
     print()
     if _errors:
