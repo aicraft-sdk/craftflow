@@ -271,15 +271,18 @@ Write eligible files in this exact order so that cross-references resolve correc
 10. **Workspace-root allowlist — `{workspace_root}/.craftflow-workspace.json`** — This file is a security-relevant, **human-authored-only** artifact: its `writable_paths` widens BUILD-phase agent write access outside worktree confinement, and `docs/2026-08-13-craftflow-workspace-root-allowlist-decision.md` ("Alternatives Considered") explicitly rejects auto-generating or scaffolding it — Craftflow only ever *reads* this file, never writes or infers its contents unprompted. This skill must never call `Write()` on it without explicit, in-the-moment human confirmation for this specific file. Always **propose**, never silently write, regardless of repo shape (this is independent of Steps 1–9; `workspace_root` may differ from the project root written into in Steps 1–9, per Step 0):
     - **Ask the human directly (membership interview):** "Which projects under `{workspace_root}` are legitimate members of this workspace — i.e. which nested projects should be allowed to write the workspace's shared memory? Name each as a basename or, for a more deeply nested project, a path relative to `{workspace_root}` (e.g. `team/nested-repo`)." Record the confirmed list as `workspace_members` (may be empty). Re-derive the full nested-repo candidate list live (do not rely on `craftflow_resolve_workspace_root.py`'s own JSON, which only surfaces the full candidate list for the `AMBIGUOUS` outcome) via:
       ```bash
-      python3 -c "
+      python3 - "$CRAFTFLOW_INSTALL/scripts" "$workspace_root" <<'PY'
       import sys
-      sys.path.insert(0, '$CRAFTFLOW_INSTALL/scripts')
       from pathlib import Path
+      sys.path.insert(0, sys.argv[1])
       from craftflow_resolve_workspace_root import find_repo_candidates
-      for c in find_repo_candidates(Path('$workspace_root')):
+      for c in find_repo_candidates(Path(sys.argv[2])):
           print(c.name)
-      "
+      PY
       ```
+      (Both values are passed as real `argv` arguments, not interpolated into the Python source —
+      a `workspace_root` containing a single quote, e.g. `/Users/o'brien/projects`, would otherwise
+      break out of a Python string literal embedded in `python3 -c "..."` and raise a `SyntaxError`.)
     - Construct the proposed content (same rules as before for `writable_paths` — only the delivery mechanism changes):
       - If `{workspace_root}/.craftflow-workspace.json` does not exist: propose `{"writable_paths": [<shared_root_files from Step 0, or [] if none were named>], "members": [<workspace_members from the membership interview, or [] if none were named>], "memory_writable": <true iff the human confirms workspace-tier memory should be shared-writable>}`.
       - If it already exists: read it (read-only), then propose an updated `writable_paths` list that appends any newly-identified `shared_root_files` entries not already present (dedup by exact string match; validated per the entry contract below), an updated `members` list appending any newly-confirmed `workspace_members` entries not already present, and `memory_writable` as confirmed above; never propose removing existing `writable_paths`/`members` entries; never propose overwriting the whole file wholesale.

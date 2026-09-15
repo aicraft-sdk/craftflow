@@ -19,6 +19,7 @@ import io
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 from pathlib import Path
 
@@ -18200,6 +18201,70 @@ def test_ai_first_setup_item10_collects_workspace_members() -> None:
         fail(name, f"ai-first-setup SKILL.md missing required prose: {missing!r}")
 
 
+def test_ai_first_setup_membership_snippet_survives_quote_in_workspace_root() -> None:
+    """REM-FIX regression guard (silent-failure-hunter): the item 10 membership
+    interview's find_repo_candidates snippet used to bash-expand $workspace_root
+    and $CRAFTFLOW_INSTALL INSIDE a single-quoted Python string literal embedded
+    in `python3 -c "..."`. Bash double-quotes stop word-splitting but do nothing
+    about the Python string boundary, so a workspace_root containing a single
+    quote (e.g. /Users/o'brien/projects) breaks out of the string and raises a
+    SyntaxError for anyone who copy-pastes and runs the exact snippet. This test
+    extracts the live snippet from the skill doc and (a) statically rejects the
+    vulnerable single-quoted-interpolation pattern, then (b) actually executes
+    the snippet via bash against a workspace_root containing a single quote to
+    prove it runs cleanly end-to-end."""
+    name = "ai-first-setup/item10-membership-snippet-survives-quote-in-workspace-root"
+    text = (PLUGIN_ROOT / "skills" / "ai-first-setup" / "SKILL.md").read_text(encoding="utf-8")
+    marker = "find_repo_candidates"
+    idx = text.find(marker)
+    if idx == -1:
+        fail(name, "could not locate find_repo_candidates snippet in ai-first-setup SKILL.md")
+        return
+    block_start = text.rfind("```bash", 0, idx)
+    block_end = text.find("```", idx)
+    if block_start == -1 or block_end == -1:
+        fail(name, "could not extract fenced bash block around find_repo_candidates snippet")
+        return
+    # The fenced block is nested under a markdown list item, so every line in
+    # the raw doc source carries the list's leading indentation. A human
+    # reading the rendered doc (or copy-pasting from it) sees that stripped;
+    # dedent here to reproduce what actually gets executed, not the raw
+    # markdown-source whitespace.
+    snippet = textwrap.dedent(text[block_start + len("```bash"): block_end])
+    vulnerable = re.search(r"'\$(workspace_root|CRAFTFLOW_INSTALL)\b", snippet)
+    if vulnerable:
+        fail(
+            name,
+            f"snippet bash-expands {vulnerable.group(0)!r} inside a single-quoted "
+            "context -- a workspace_root/CRAFTFLOW_INSTALL value containing a single "
+            "quote would break out of the Python string literal; pass it as a real "
+            "argv argument (python3 - <args> <<'PY' ... sys.argv[N] ... PY) instead",
+        )
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace_root = Path(tmp) / "o'brien"
+        workspace_root.mkdir()
+        env = dict(os.environ)
+        env["CRAFTFLOW_INSTALL"] = str(PLUGIN_ROOT)
+        env["workspace_root"] = str(workspace_root)
+        proc = subprocess.run(
+            ["bash", "-c", snippet],
+            cwd=str(PLUGIN_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if proc.returncode != 0:
+            fail(
+                name,
+                "snippet failed when workspace_root contains a single quote: "
+                f"exit={proc.returncode}, stderr={proc.stderr!r}",
+            )
+            return
+    ok(name)
+
+
 def test_hooks_readme_documents_membership_boundary() -> None:
     name = "hooks-readme/documents-membership-boundary-and-read-side-exemption"
     text = (PLUGIN_ROOT / "hooks" / "README.md").read_text(encoding="utf-8")
@@ -19218,6 +19283,7 @@ def main() -> int:
     print()
     print("[ Phase 3: provisioning interview + doc cross-references (structural assertions, no .py behavior change) ]")
     test_ai_first_setup_item10_collects_workspace_members()
+    test_ai_first_setup_membership_snippet_survives_quote_in_workspace_root()
     test_hooks_readme_documents_membership_boundary()
     test_workspace_setup_and_routers_cross_reference_membership()
 
