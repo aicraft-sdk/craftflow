@@ -374,9 +374,13 @@ print('evidence gate: OK')
 # already confirmed the Step 4 item 10 proposal and the file was written. If the human
 # deferred (declined or did not confirm), this file will not exist yet — that is expected,
 # not an error; skip the check and note it as a manual follow-up in Step 6 instead.
-python3 -c "
+# (workspace_root is passed as a real argv argument, not interpolated into the Python
+# source — a workspace_root containing a single quote, e.g. /Users/o'brien/projects,
+# would otherwise break out of a Python string literal embedded in the `-c` form
+# and raise a SyntaxError.)
+python3 - "$workspace_root" <<'PY'
 import json, os, sys
-path = '{workspace_root}/.craftflow-workspace.json'
+path = os.path.join(sys.argv[1], '.craftflow-workspace.json')
 if not os.path.exists(path):
     print('workspace allowlist: SKIPPED (not yet created — human deferred the Step 4 item 10 proposal; see Step 6 Manual follow-ups)')
     sys.exit(0)
@@ -389,7 +393,7 @@ members = data.get('members', [])
 if not isinstance(members, list):
     sys.exit('ERROR: members is not a list in ' + path)
 print('workspace members: OK (' + str(len(members)) + ')')
-"
+PY
 ```
 
 A passing run shows: `AGENTS.md lint passed`, `AI contract pack lint passed`, build exit 0, test exit 0, `CLAUDE.md` reported ignored, the new files appearing as untracked (not ignored), `init.sh is executable`, `feature_list.json is valid JSON`, and either `workspace allowlist: OK` plus `workspace members: OK (N)` (the human confirmed the Step 4 item 10 proposal and the file was written) or `workspace allowlist: SKIPPED` (the human deferred — expected, not a failure; carry it into Step 6 Manual follow-ups). If the resolver script from Step 0 reported any `workspace_writable_paths_dropped` entries (or if re-running the resolver script here surfaces any), surface them verbatim in the Step 6 report under Manual follow-ups — a dropped entry means a `shared_root_files` answer was silently rejected and the user must re-supply it as a bare filename.

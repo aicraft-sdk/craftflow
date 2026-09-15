@@ -18265,6 +18265,76 @@ def test_ai_first_setup_membership_snippet_survives_quote_in_workspace_root() ->
     ok(name)
 
 
+def test_ai_first_setup_step5_workspace_allowlist_snippet_survives_quote_in_workspace_root() -> None:
+    """REM-FIX regression guard (doubt-verifier live-reproduced -- same vulnerability
+    class as test_ai_first_setup_membership_snippet_survives_quote_in_workspace_root,
+    a sibling instance missed by that fix's sweep): the Step 5 item 9 workspace-
+    allowlist verification snippet used to interpolate the `{workspace_root}`
+    markdown placeholder directly into a single-quoted Python string literal
+    embedded in `python3 -c "..."`. A workspace_root containing a single quote
+    (e.g. /Users/o'brien/projects) breaks out of the Python string boundary and
+    raises a SyntaxError for anyone who fills in the placeholder and runs the
+    exact snippet. This test extracts the live snippet from the skill doc's
+    Step 5 item 9 and (a) statically rejects the vulnerable single-quoted
+    interpolation pattern, then (b) actually executes the snippet via bash
+    against a workspace_root containing a single quote to prove it runs cleanly
+    end-to-end."""
+    name = "ai-first-setup/step5-workspace-allowlist-snippet-survives-quote-in-workspace-root"
+    text = (PLUGIN_ROOT / "skills" / "ai-first-setup" / "SKILL.md").read_text(encoding="utf-8")
+    marker = "# 9. Verify"
+    idx = text.find(marker)
+    if idx == -1:
+        fail(name, "could not locate '# 9. Verify' workspace allowlist snippet in ai-first-setup SKILL.md Step 5")
+        return
+    cmd_start = text.find("python3", idx)
+    if cmd_start == -1:
+        fail(name, "could not locate python3 invocation after '# 9. Verify' marker")
+        return
+    block_end = text.find("\n```", cmd_start)
+    if block_end == -1:
+        fail(name, "could not find end of item 9 snippet")
+        return
+    snippet = textwrap.dedent(text[cmd_start:block_end])
+    vulnerable = re.search(r"'\{workspace_root\}", snippet)
+    if vulnerable:
+        fail(
+            name,
+            f"snippet interpolates {vulnerable.group(0)!r} inside a single-quoted "
+            "Python string literal -- a workspace_root value containing a single "
+            "quote would break out of the string; pass it as a real argv argument "
+            "(python3 - \"$workspace_root\" <<'PY' ... sys.argv[1] ... PY) instead",
+        )
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace_root = Path(tmp) / "o'brien"
+        workspace_root.mkdir()
+        env = dict(os.environ)
+        env["workspace_root"] = str(workspace_root)
+        proc = subprocess.run(
+            ["bash", "-c", snippet],
+            cwd=str(PLUGIN_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if proc.returncode != 0:
+            fail(
+                name,
+                "snippet failed when workspace_root contains a single quote: "
+                f"exit={proc.returncode}, stderr={proc.stderr!r}",
+            )
+            return
+        if "SKIPPED" not in proc.stdout:
+            fail(
+                name,
+                "expected snippet to print the SKIPPED message when "
+                f".craftflow-workspace.json does not exist yet, got stdout={proc.stdout!r}",
+            )
+            return
+    ok(name)
+
+
 def test_hooks_readme_documents_membership_boundary() -> None:
     name = "hooks-readme/documents-membership-boundary-and-read-side-exemption"
     text = (PLUGIN_ROOT / "hooks" / "README.md").read_text(encoding="utf-8")
@@ -19284,6 +19354,7 @@ def main() -> int:
     print("[ Phase 3: provisioning interview + doc cross-references (structural assertions, no .py behavior change) ]")
     test_ai_first_setup_item10_collects_workspace_members()
     test_ai_first_setup_membership_snippet_survives_quote_in_workspace_root()
+    test_ai_first_setup_step5_workspace_allowlist_snippet_survives_quote_in_workspace_root()
     test_hooks_readme_documents_membership_boundary()
     test_workspace_setup_and_routers_cross_reference_membership()
 
