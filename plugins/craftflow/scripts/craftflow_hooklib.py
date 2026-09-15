@@ -1287,11 +1287,15 @@ def is_workspace_member(workspace_root: Path, requesting_path: Path) -> bool:
     path segment.
 
     Fail-closed on every branch -- never raises (P2, P6). A missing file,
-    malformed JSON, non-dict top level, missing/non-list `members`, or a
-    `members` list containing only invalid/non-matching entries all
-    return False identically -- absence of valid membership data is
-    treated exactly like explicit non-membership, never like implicit
-    membership.
+    malformed JSON, non-dict top level, an entirely absent `members` key, a
+    `members` key present but not a list, or a `members` list containing
+    only invalid/non-matching entries all return False identically --
+    absence of valid membership data is treated exactly like explicit
+    non-membership, never like implicit membership. (Only the
+    present-but-not-a-list and individually-dropped-entry branches log a
+    diagnostic -- see _log_membership_drop()'s own docstring for why the
+    entirely-absent-key case, the ordinary shape for a config that hasn't
+    opted into membership yet, is silent.)
 
     is_workspace_member() is called at EVERY ancestor candidate
     discover_workspace_root() visits during its walk, not just the
@@ -1314,6 +1318,10 @@ def is_workspace_member(workspace_root: Path, requesting_path: Path) -> bool:
     config = _read_workspace_config(workspace_root)
     if config is None:
         return False  # missing/unreadable/malformed/non-dict -- the ordinary case; not logged
+    if "members" not in config:
+        return False  # key entirely absent -- the ordinary case for a valid config that
+        # simply hasn't opted into membership yet (e.g. ai-first-setup's writable_paths-only
+        # shape); not logged, same as the missing/unreadable/malformed-config case above
     members = config.get("members")
     if not isinstance(members, list):
         _log_membership_drop(config_path, None, "members_missing_or_not_a_list")

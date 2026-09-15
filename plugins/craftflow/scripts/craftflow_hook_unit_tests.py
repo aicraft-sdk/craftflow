@@ -17805,6 +17805,20 @@ def test_hooklib_is_workspace_member_logs_only_on_malformed_or_dropped_not_ordin
         if logged:
             fail(name, f"expected no log_event for ordinary non-membership, got {logged!r}")
             return
+        # `members` key entirely absent from an otherwise-valid config (the ordinary,
+        # default shape for the only shipped provisioning path, ai-first-setup, which
+        # proposes only `writable_paths`) -- must NOT log. This is distinct from
+        # "members present but wrong type" below, which IS an anomaly worth logging.
+        (ws / ".craftflow-workspace.json").write_text(
+            json.dumps({"writable_paths": ["some/path"]}), encoding="utf-8"
+        )
+        result = hooklib.is_workspace_member(ws, proj)
+        if result is not False:
+            fail(name, f"expected False when members key is entirely absent, got {result!r}")
+            return
+        if logged:
+            fail(name, f"expected no log_event when members key is entirely absent, got {logged!r}")
+            return
         # Malformed members shape: MUST log.
         (ws / ".craftflow-workspace.json").write_text(
             json.dumps({"members": "not-a-list"}), encoding="utf-8"
