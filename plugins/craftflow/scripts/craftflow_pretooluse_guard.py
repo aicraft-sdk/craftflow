@@ -826,13 +826,21 @@ def _edit_write_escapes_confinement(data: dict, path: Path) -> bool:
     # at most 3 workspace-tier memory files at the cwd-derived,
     # membership-gated workspace root
     # (docs/plans/2026-09-15-workspace-membership-allowlist-design.md).
-    # Permit check is presence-only (has_memory_finalize_permit(None)) --
-    # membership gates root DISCOVERY, not the permit check (D-4 stays
-    # out of scope, DD-5/M-1).
+    # Permit check is presence-only (has_memory_finalize_permit(None, ...))
+    # -- membership gates root DISCOVERY, not the permit check (D-4 stays
+    # out of scope, DD-5/M-1). The permit lookup itself is anchored to
+    # THIS SAME `cwd` (project_root=cwd) -- not to CLAUDE_PROJECT_DIR/
+    # project_dir(), a completely different, decoupled identity source
+    # that nothing enforces stays in sync with `cwd`. Without this, an
+    # unrelated project's own stale/leftover permit (present at whatever
+    # CLAUDE_PROJECT_DIR happens to be for this process) could authorize a
+    # write into a COMPLETELY DIFFERENT cwd's workspace memory purely
+    # because that unrelated project once ran a memory-finalize of its
+    # own -- doubt-verifier live-reproduced, REM-FIX.
     # extra_exact_paths remains EXACT-EQUALITY ONLY -- see
     # docs/2026-08-13-craftflow-workspace-root-allowlist-decision.md.
     try:
-        if has_memory_finalize_permit(None):
+        if has_memory_finalize_permit(None, project_root=cwd):
             workspace_writable_paths = workspace_writable_paths | resolve_workspace_memory_paths(cwd)
     except Exception as exc:
         log_event(

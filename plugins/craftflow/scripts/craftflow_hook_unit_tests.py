@@ -18114,6 +18114,81 @@ def test_pretooluse_guard_workspace_memory_two_sided_membership(tmp_dir: Path) -
     ok(name)
 
 
+def test_pretooluse_guard_workspace_memory_diverges_cwd_and_claude_project_dir(tmp_dir: Path) -> None:
+    # doubt-verifier live-reproduced counter-example: `cwd` (the trusted,
+    # non-spoofable identity `resolve_workspace_memory_paths(cwd)` uses) and
+    # `CLAUDE_PROJECT_DIR` (the identity `has_memory_finalize_permit(None)`
+    # used to check, via `project_dir()`/`state_root()`) are two completely
+    # different, decoupled identity sources -- nothing enforces they match.
+    #
+    # Z = member-proj: a genuine workspace member of `ws`, holding NO
+    #     memory-finalize permit of its own.
+    # X = other-proj: an UNRELATED project (not a workspace member, not
+    #     even under `ws`) holding its OWN stale/leftover `.memory-finalize`
+    #     permit from an earlier, unrelated purpose.
+    #
+    # cwd=Z + CLAUDE_PROJECT_DIR=X must DENY: Z's own project has no permit,
+    # and X's permit belongs to a different, unrelated project -- it must
+    # never authorize a write into Z's workspace-tier memory.
+    name = "pretooluse-guard/workspace-memory-diverges-cwd-and-claude-project-dir"
+    ws = tmp_dir / "ws"
+    member_proj = ws / "member-proj"
+    member_proj.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(member_proj), check=True, capture_output=True)
+    (ws / ".craftflow-workspace.json").write_text(
+        json.dumps({"members": ["member-proj"], "memory_writable": True}), encoding="utf-8"
+    )
+    workspace_dir = ws / ".craftflow" / "state" / "workspace"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    for fname in ("activeContext.md", "patterns.md", "progress.md"):
+        (workspace_dir / fname).write_text(f"# {fname}\n", encoding="utf-8")
+    target = workspace_dir / "activeContext.md"
+
+    other_proj = tmp_dir / "other-proj"
+    other_proj.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(other_proj), check=True, capture_output=True)
+    other_state = other_proj / ".craftflow" / "state"
+    other_state.mkdir(parents=True, exist_ok=True)
+    (other_state / ".memory-finalize").write_text("wf-other-stale", encoding="utf-8")
+
+    # Part 1 (the diverged, buggy case): cwd=Z (no permit of its own),
+    # CLAUDE_PROJECT_DIR=X (unrelated, has its own stale permit) -> DENY.
+    env = {"CLAUDE_PROJECT_DIR": str(other_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Edit",
+        "session_id": "wf-diverge",
+        "cwd": str(member_proj),
+        "tool_input": {"file_path": str(target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            f"diverged identity case: expected DENY (X's stale permit must not authorize Z's write), "
+            f"got exit={code}, stdout={out!r}",
+        )
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"diverged identity case: expected a 'worktree-confinement' deny reason, got: {out!r}")
+        return
+
+    # Part 2 (positive case): cwd=Z WITH Z's own genuine permit present at
+    # Z's own identity, CLAUDE_PROJECT_DIR still=X (proving the grant is
+    # anchored to cwd, not to CLAUDE_PROJECT_DIR) -> ALLOW.
+    member_state = member_proj / ".craftflow" / "state"
+    member_state.mkdir(parents=True, exist_ok=True)
+    (member_state / ".memory-finalize").write_text("wf-member-own", encoding="utf-8")
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0 or out:
+        fail(
+            name,
+            f"matching cwd-identity case: expected ALLOW (exit 0, empty stdout) once Z has its own permit, "
+            f"got exit={code}, stdout={out!r}",
+        )
+        return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -19097,6 +19172,10 @@ def main() -> int:
     print()
     print("[ pretooluse-guard: workspace-tier memory grant wiring (membership grant Phase 2.3) ]")
     test_pretooluse_guard_workspace_memory_two_sided_membership(tmp / "wsm18")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX (doubt-verifier live-reproduced -- permit identity must anchor to cwd, not CLAUDE_PROJECT_DIR) ]")
+    test_pretooluse_guard_workspace_memory_diverges_cwd_and_claude_project_dir(tmp / "wsm19")
 
     print()
     if _errors:

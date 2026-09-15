@@ -1024,8 +1024,21 @@ def normalize_bullet(line: str) -> str:
 # During router-owned memory finalization the router creates this permit so
 # the guard can distinguish its own legitimate writes from unauthorized ones.
 
-def memory_finalize_permit_path() -> Path:
-    """Non-protected sentinel: .craftflow/state/.memory-finalize"""
+def memory_finalize_permit_path(root: "Path | None" = None) -> Path:
+    """Non-protected sentinel: .craftflow/state/.memory-finalize
+
+    When `root` is given, the permit path is computed directly as
+    `root / ".craftflow" / "state" / ".memory-finalize"` instead of via
+    this process's own `state_root()` (which derives its project identity
+    from `CLAUDE_PROJECT_DIR`/`Path.cwd()` -- a different identity source
+    than an explicit, caller-supplied project root). This lets a caller
+    check the permit belonging to a SPECIFIC project identity (e.g. a
+    PreToolUse payload's own trusted `cwd`) without depending on this
+    process's environment. Unlike `state_root()`, this branch never calls
+    `.mkdir()` -- checking presence for an arbitrary caller-supplied root
+    must never have a directory-creation side effect."""
+    if root is not None:
+        return root / ".craftflow" / "state" / ".memory-finalize"
     return state_root() / ".memory-finalize"
 
 
@@ -1045,12 +1058,23 @@ def clear_memory_finalize_permit() -> None:
         pass
 
 
-def has_memory_finalize_permit(workflow_uuid: str | None = None) -> bool:
+def has_memory_finalize_permit(
+    workflow_uuid: str | None = None, project_root: "Path | None" = None
+) -> bool:
     """Return True if a valid permit exists for the given workflow UUID.
 
     When workflow_uuid is None, presence of the file alone is accepted.
-    """
-    permit = memory_finalize_permit_path()
+
+    `project_root`, when given, anchors the permit lookup to that SPECIFIC
+    project identity instead of this process's own environment-derived
+    identity (`state_root()`'s `CLAUDE_PROJECT_DIR`/`Path.cwd()`). Any
+    caller that derives a grant from an explicit, non-spoofable `cwd`
+    (e.g. `resolve_workspace_memory_paths(cwd)`) MUST pass that SAME
+    `cwd` here too -- otherwise this check silently authorizes on behalf
+    of a DIFFERENT, unrelated project's permit (whatever
+    `CLAUDE_PROJECT_DIR` happens to be set to for this process), a real,
+    live-reproduced correctness gap this parameter closes."""
+    permit = memory_finalize_permit_path(project_root)
     if not permit.exists():
         return False
     if workflow_uuid is None:
