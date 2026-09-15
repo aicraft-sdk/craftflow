@@ -54,6 +54,7 @@ from craftflow_hooklib import (
     project_state_dir,
     record_denial,
     resolve_confinement,
+    resolve_workspace_memory_paths,
     resolve_workspace_writable_paths,
     resolve_toggle_decision,
     split_subcommands,
@@ -798,11 +799,11 @@ def _protected_bash_write_paths() -> set:
 
 def _edit_write_escapes_confinement(data: dict, path: Path) -> bool:
     """True if the resolved Edit/Write target escapes
-    {cwd} u {worktree_path} u {workspace_writable_paths}. Absence of "cwd"
-    in the payload, or no active workflow JSON / a null worktree_path / an
-    empty workspace_writable_paths, degrades to allow (Behavior Contract
-    rule 8) -- this only returns True when cwd IS known and the target
-    genuinely escapes all three."""
+    {cwd} u {worktree_path} u {workspace_writable_paths} u
+    {workspace_memory_paths}. Absence of "cwd" in the payload, or no active
+    workflow JSON / a null worktree_path / an empty workspace_writable_paths,
+    degrades to allow (Behavior Contract rule 8) -- this only returns True
+    when cwd IS known and the target genuinely escapes all four."""
     cwd_raw = data.get("cwd")
     if not cwd_raw:
         return False
@@ -819,6 +820,31 @@ def _edit_write_escapes_confinement(data: dict, path: Path) -> bool:
     if worktree_path is not None and not isinstance(worktree_path, str):
         worktree_path = None
     workspace_writable_paths = resolve_workspace_writable_paths(workflow)
+
+    # Workspace-tier memory write grant: while the router holds a
+    # memory-finalize permit, additionally grant EXACT-MATCH writes to the
+    # at most 3 workspace-tier memory files at the cwd-derived,
+    # membership-gated workspace root
+    # (docs/plans/2026-09-15-workspace-membership-allowlist-design.md).
+    # Permit check is presence-only (has_memory_finalize_permit(None)) --
+    # membership gates root DISCOVERY, not the permit check (D-4 stays
+    # out of scope, DD-5/M-1).
+    # extra_exact_paths remains EXACT-EQUALITY ONLY -- see
+    # docs/2026-08-13-craftflow-workspace-root-allowlist-decision.md.
+    try:
+        if has_memory_finalize_permit(None):
+            workspace_writable_paths = workspace_writable_paths | resolve_workspace_memory_paths(cwd)
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "resolve_workspace_memory_paths",
+                "error": repr(exc),
+                "reason": "skipped_workspace_memory_grant",
+            },
+        )
+
     confined, _resolved = resolve_confinement(path, cwd, worktree_path, workspace_writable_paths)
     return not confined
 

@@ -18061,6 +18061,59 @@ def test_hooklib_resolve_workspace_memory_paths_rejects_symlinked_filename(tmp_d
     ok(name)
 
 
+def test_pretooluse_guard_workspace_memory_two_sided_membership(tmp_dir: Path) -> None:
+    # THE decisive tracer proof: two real sibling nested repos under the
+    # same real workspace root, ONE listed in `members`, ONE not -- the
+    # exact shape doubt-verify live-reproduced against the paused D1
+    # branch's un-gated discover_workspace_root(). Member ALLOWS; the
+    # unrelated sibling, despite its own legitimately-issued permit for
+    # its own unrelated purpose, DENIES.
+    name = "pretooluse-guard/workspace-memory-two-sided-membership"
+    ws = tmp_dir / "ws"
+    member_proj = ws / "member-proj"
+    other_proj = ws / "other-proj"
+    for p in (member_proj, other_proj):
+        p.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q"], cwd=str(p), check=True, capture_output=True)
+    (ws / ".craftflow-workspace.json").write_text(
+        json.dumps({"members": ["member-proj"], "memory_writable": True}), encoding="utf-8"
+    )
+    workspace_dir = ws / ".craftflow" / "state" / "workspace"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    for fname in ("activeContext.md", "patterns.md", "progress.md"):
+        (workspace_dir / fname).write_text(f"# {fname}\n", encoding="utf-8")
+    target = workspace_dir / "activeContext.md"
+
+    for proj_dir, wf_uuid, expect_allow in (
+        (member_proj, "wf-member", True),
+        (other_proj, "wf-other", False),
+    ):
+        _write_workflow_json_fixture(proj_dir, None, wf_uuid=wf_uuid)
+        proj_state = proj_dir / ".craftflow" / "state"
+        proj_state.mkdir(parents=True, exist_ok=True)
+        (proj_state / ".memory-finalize").write_text(wf_uuid, encoding="utf-8")
+        env = {"CLAUDE_PROJECT_DIR": str(proj_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+        payload = {
+            "tool_name": "Edit",
+            "session_id": wf_uuid,
+            "cwd": str(proj_dir),
+            "tool_input": {"file_path": str(target)},
+        }
+        code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+        if expect_allow:
+            if code != 0 or out:
+                fail(name, f"member project {proj_dir.name}: expected ALLOW (exit 0, empty stdout), got exit={code}, stdout={out!r}")
+                return
+        else:
+            if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+                fail(name, f"non-member project {proj_dir.name}: expected DENY, got exit={code}, stdout={out!r}")
+                return
+            if "worktree-confinement" not in out:
+                fail(name, f"non-member project {proj_dir.name}: expected a 'worktree-confinement' deny reason, got: {out!r}")
+                return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -19040,6 +19093,10 @@ def main() -> int:
     test_hooklib_resolve_workspace_memory_paths_returns_exactly_three_for_member(tmp / "wsm15")
     test_hooklib_resolve_workspace_memory_paths_empty_for_nonmember(tmp / "wsm16")
     test_hooklib_resolve_workspace_memory_paths_rejects_symlinked_filename(tmp / "wsm17")
+
+    print()
+    print("[ pretooluse-guard: workspace-tier memory grant wiring (membership grant Phase 2.3) ]")
+    test_pretooluse_guard_workspace_memory_two_sided_membership(tmp / "wsm18")
 
     print()
     if _errors:
