@@ -136,7 +136,7 @@ run the provisioning script before this explicit confirmation is given.
 
 ## Step 3 — Apply
 
-After confirmation, invoke the Phase 1 script. **Never interpolate the Step 1 north-star
+After confirmation, invoke `craftflow_workspace_init.py`. **Never interpolate the Step 1 north-star
 text directly into a Bash command as a double-quoted argument** — it is free-text the user
 typed, and a north-star answer containing `"`, a backtick, `$(...)`, or a newline could
 break out of the quoted argument or inject a command. Instead:

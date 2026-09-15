@@ -92,8 +92,8 @@ Always run this before routing or resuming. Memory is organized in three tiers:
     EITHER a `.craftflow-workspace.json` file OR a `.craftflow/state/workspace/`
     directory. Stop at the first match, or after 3 levels, or at the filesystem root,
     whichever comes first. Never select `$HOME` or `/` itself as a matched workspace
-    root even if a marker is somehow present there (defense in depth alongside Phase 1's
-    own refusal list).
+    root even if a marker is somehow present there (defense in depth alongside
+    `craftflow_workspace_init.py`'s own refusal list).
     - No marker found: skip silently -- zero behavior change (existing production
       reality for every non-workspace session today).
     - Marker found at {workspace_root}:
