@@ -18362,6 +18362,25 @@ def test_workspace_setup_and_routers_cross_reference_membership() -> None:
     ok(name)
 
 
+def test_decision_record_exists_for_workspace_membership() -> None:
+    # Phase 5 Task 5.1: the membership-allowlist decision must be recorded as a durable ADR,
+    # not just live in the plan/design files -- a future agent searching docs/ai/decisions/
+    # for prior art on workspace membership must find it.
+    name = "decisions/workspace-membership-allowlist-adr-exists"
+    repo_root = PLUGIN_ROOT.parents[3]
+    decisions_dir = repo_root / "docs" / "ai" / "decisions"
+    matches = sorted(decisions_dir.glob("*-craftflow-workspace-membership-allowlist.md"))
+    if not matches:
+        fail(name, f"no ADR file matching '*-craftflow-workspace-membership-allowlist.md' "
+                    f"found in {decisions_dir}")
+        return
+    content = matches[0].read_text(encoding="utf-8")
+    if "members" not in content:
+        fail(name, f"{matches[0]} exists but does not mention 'members'")
+        return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -19357,6 +19376,10 @@ def main() -> int:
     test_ai_first_setup_step5_workspace_allowlist_snippet_survives_quote_in_workspace_root()
     test_hooks_readme_documents_membership_boundary()
     test_workspace_setup_and_routers_cross_reference_membership()
+
+    print()
+    print("[ Phase 5: decision is durable (ADR recorded) ]")
+    test_decision_record_exists_for_workspace_membership()
 
     print()
     if _errors:
