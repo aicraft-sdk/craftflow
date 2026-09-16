@@ -1330,7 +1330,18 @@ def _protected_redirect_paths(project_root: "Path | None" = None) -> set:
     except Exception:
         pass
     try:
-        project_tier = (root_state / "project") if root_state is not None else project_state_dir()
+        # REM-FIX (Phase 5 review, MEDIUM): compute project_tier independently
+        # from project_root, not from root_state -- root_state is set inside a
+        # SEPARATE try/except (BC-5), so if state_root(project_root) ever
+        # raised there, root_state would still be None here even though a
+        # real project_root WAS supplied, silently falling back to
+        # project_state_dir()'s env-derived root instead of failing on this
+        # block's own identity input.
+        project_tier = (
+            (project_root / ".craftflow" / "state" / "project")
+            if project_root is not None
+            else project_state_dir()
+        )
         paths |= {(project_tier / name).resolve() for name in PROTECTED_MEMORY_FILES}
     except Exception:
         pass
