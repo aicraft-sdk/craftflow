@@ -483,6 +483,353 @@ def test_memory_protect_restore_non_utf8_state_file_skips_pass2_sweep_instead_of
     ok(name)
 
 
+def test_memory_protect_restore_non_utf8_orig_backup_skips_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX cycle 3: `restore_file()`'s `.orig`-backup fallback branch
+    (used when no `.blocks.json` index exists) does
+    `orig_path.read_text(encoding="utf-8")` with no try/except -- the same
+    UnicodeDecodeError crash class as the already-fixed `target.read_text()`
+    site, but on the CACHE's backup copy instead of the live target."""
+    name = "memory-protect-restore/non-utf8-orig-backup-skips-instead-of-crashing"
+    import hashlib
+
+    # .resolve() up front: main()'s PostToolUse branch resolves file_path_str
+    # before calling restore_file(), so the cache key must be derived from
+    # the SAME resolved spelling (macOS /tmp -> /private/tmp, /var/folders ->
+    # /private/var/folders symlinks would otherwise mismatch the key).
+    project = (tmp_dir / "non-utf8-orig-backup-proj").resolve()
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    target = state_dir / "patterns.md"
+    target.write_text("<!-- CRAFTFLOW_BLOCK_aabbccddeeff -->\n", encoding="utf-8")
+
+    key = hashlib.sha1(str(target).encode("utf-8")).hexdigest()[:12]
+    cache_dir = project / ".craftflow" / ".memory-protect-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    # No .blocks.json -> _load_blocks() returns {} -> falls into the .orig
+    # fallback branch. The .orig backup itself is non-UTF-8.
+    (cache_dir / f"{key}.orig").write_bytes(b"\xff\xfe\x00\x01not-utf8")
+
+    env = {"CLAUDE_PROJECT_DIR": str(project)}
+    payload = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target)},
+    }
+    code, _ = run_hook("craftflow_memory_protect_restore.py", payload, env)
+    if code != 0:
+        fail(name, f"hook crashed (exit {code}) on a non-UTF-8 .orig backup instead of degrading safely")
+        return
+
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, "expected craftflow-hook-events.log to record the degraded restore, but no log file was written")
+        return
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-protect-restore-backup" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-backup' reason, got: {log_text!r}")
+        return
+    ok(name)
+
+
+def test_memory_protect_restore_readonly_orig_fallback_writeback_skips_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX cycle 3: `restore_file()`'s `.orig`-fallback write-back
+    (`tmp.write_text(...)` / `tmp.replace(target)`) is unguarded. Live
+    reproduction: a read-only state directory (e.g. permission drift, a
+    locked-down CI sandbox) raises PermissionError when the restore tries to
+    write its `.tmp` file, crashing the hook instead of degrading."""
+    name = "memory-protect-restore/readonly-orig-fallback-writeback-skips-instead-of-crashing"
+    import hashlib
+
+    project = (tmp_dir / "readonly-fallback-proj").resolve()
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    target = state_dir / "patterns.md"
+    target.write_text("<!-- CRAFTFLOW_BLOCK_aabbccddeeff -->\n", encoding="utf-8")
+
+    key = hashlib.sha1(str(target).encode("utf-8")).hexdigest()[:12]
+    cache_dir = project / ".craftflow" / ".memory-protect-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / f"{key}.orig").write_text("## Patterns\noriginal content\n", encoding="utf-8")
+
+    # Pre-create the log file so log_event()'s append-only open still
+    # succeeds after the directory is made read-only (append to an existing
+    # file needs file write permission, not directory write permission --
+    # only *creating* the .tmp restore file needs the directory bit).
+    log_path = state_dir / "craftflow-hook-events.log"
+    log_path.write_text("", encoding="utf-8")
+    os.chmod(state_dir, 0o500)
+    try:
+        env = {"CLAUDE_PROJECT_DIR": str(project)}
+        payload = {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(target)},
+        }
+        code, _ = run_hook("craftflow_memory_protect_restore.py", payload, env)
+    finally:
+        os.chmod(state_dir, 0o700)
+
+    if code != 0:
+        fail(name, f"hook crashed (exit {code}) on a read-only write-back target instead of degrading safely")
+        return
+
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-protect-restore-write" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-write' reason, got: {log_text!r}")
+        return
+    ok(name)
+
+
+def test_memory_protect_restore_readonly_block_writeback_skips_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX cycle 3: `restore_file()`'s PRIMARY write-back (used when a
+    `.blocks.json` index DOES exist and a CRAFTFLOW_BLOCK_ placeholder is
+    substituted) is a second, separate unguarded `tmp.write_text()` /
+    `tmp.replace()` pair from the `.orig`-fallback one above. Same
+    read-only-directory PermissionError vector, different code path."""
+    name = "memory-protect-restore/readonly-block-writeback-skips-instead-of-crashing"
+    import hashlib
+
+    project = (tmp_dir / "readonly-block-proj").resolve()
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    target = state_dir / "patterns.md"
+    target.write_text("<!-- CRAFTFLOW_BLOCK_112233445566 -->\n", encoding="utf-8")
+
+    key = hashlib.sha1(str(target).encode("utf-8")).hexdigest()[:12]
+    cache_dir = project / ".craftflow" / ".memory-protect-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / f"{key}.blocks.json").write_text(
+        json.dumps({"112233445566": "restored content\n"}), encoding="utf-8"
+    )
+
+    log_path = state_dir / "craftflow-hook-events.log"
+    log_path.write_text("", encoding="utf-8")
+    os.chmod(state_dir, 0o500)
+    try:
+        env = {"CLAUDE_PROJECT_DIR": str(project)}
+        payload = {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(target)},
+        }
+        code, _ = run_hook("craftflow_memory_protect_restore.py", payload, env)
+    finally:
+        os.chmod(state_dir, 0o700)
+
+    if code != 0:
+        fail(name, f"hook crashed (exit {code}) on a read-only write-back target instead of degrading safely")
+        return
+
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-protect-restore-write" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-write' reason, got: {log_text!r}")
+        return
+    ok(name)
+
+
+def test_memory_protect_restore_corrupt_blocks_index_is_logged(tmp_dir: Path) -> None:
+    """REM-FIX cycle 3 (HIGH): `_load_blocks()` swallows a corrupt/unreadable
+    `.blocks.json` via `except Exception: return {}` with ZERO logging --
+    every other except branch in this file logs. This does not crash (the
+    caller safely falls through to the .orig fallback / returns False), but
+    the failure is invisible without this fix."""
+    name = "memory-protect-restore/corrupt-blocks-index-is-logged"
+    import hashlib
+
+    project = (tmp_dir / "corrupt-blocks-index-proj").resolve()
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    target = state_dir / "patterns.md"
+    target.write_text("<!-- CRAFTFLOW_BLOCK_aabbccddeeff -->\n", encoding="utf-8")
+
+    key = hashlib.sha1(str(target).encode("utf-8")).hexdigest()[:12]
+    cache_dir = project / ".craftflow" / ".memory-protect-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / f"{key}.blocks.json").write_text("{not-valid-json", encoding="utf-8")
+
+    env = {"CLAUDE_PROJECT_DIR": str(project)}
+    payload = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target)},
+    }
+    code, _ = run_hook("craftflow_memory_protect_restore.py", payload, env)
+    if code != 0:
+        fail(name, f"hook crashed (exit {code}) on a corrupt blocks.json instead of degrading safely")
+        return
+
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, "expected craftflow-hook-events.log to record the corrupt blocks index, but no log file was written")
+        return
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-protect-restore-blocks-index" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-blocks-index' reason, got: {log_text!r}")
+        return
+    ok(name)
+
+
+def test_memory_protect_restore_all_pass1_write_failure_is_logged(tmp_dir: Path) -> None:
+    """REM-FIX cycle 3 (HIGH): `restore_all()`'s Pass 1 reports write failure
+    via `print(..., file=sys.stderr)` only -- inconsistent with every other
+    failure path in this file, which uses `log_event()`. Because stderr from
+    a Stop hook is not durably captured anywhere, the SAME failure silently
+    repeats on every subsequent Stop hook invocation with no structured log
+    record. This test proves the fix by checking the structured log, not
+    stderr."""
+    name = "memory-protect-restore/restore-all-pass1-write-failure-is-logged"
+    import hashlib
+
+    project = tmp_dir / "pass1-write-failure-proj"
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    target = state_dir / "patterns.md"
+    target.write_text("placeholder original content\n", encoding="utf-8")
+
+    key = hashlib.sha1(str(target).encode("utf-8")).hexdigest()[:12]
+    cache_dir = project / ".craftflow" / ".memory-protect-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / f"{key}.orig").write_text("## Patterns\nrestored content\n", encoding="utf-8")
+
+    log_path = state_dir / "craftflow-hook-events.log"
+    log_path.write_text("", encoding="utf-8")
+    os.chmod(state_dir, 0o500)
+    try:
+        env = {"CLAUDE_PROJECT_DIR": str(project)}
+        payload = {"hook_event_name": "SubagentStop"}
+        code, _ = run_hook("craftflow_memory_protect_restore.py", payload, env)
+    finally:
+        os.chmod(state_dir, 0o700)
+
+    if code != 0:
+        fail(name, f"restore_all() crashed (exit {code}) on a read-only Pass 1 write instead of degrading safely")
+        return
+
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-protect-restore-all-pass1-write" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-all-pass1-write' reason, got: {log_text!r}")
+        return
+    ok(name)
+
+
+def test_memory_protect_restore_malformed_stdin_json_is_logged(tmp_dir: Path) -> None:
+    """REM-FIX cycle 3 (MEDIUM): `main()` silently swallows malformed JSON on
+    stdin (`except Exception: pass`), leaving `data` as `{}` and defaulting
+    `hook_event` to `""`, which falls into the full-restore branch. Not a
+    masked security error (the safe default already applies), but unlogged
+    -- unlike every other except branch in this file."""
+    name = "memory-protect-restore/malformed-stdin-json-is-logged"
+    project = tmp_dir / "malformed-stdin-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project)}
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_protect_restore.py")],
+        input="{not-valid-json",
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if result.returncode != 0:
+        fail(name, f"hook crashed (exit {result.returncode}) on malformed stdin JSON instead of degrading safely")
+        return
+
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, "expected craftflow-hook-events.log to record the malformed stdin JSON, but no log file was written")
+        return
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-protect-restore-stdin" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-stdin' reason, got: {log_text!r}")
+        return
+    ok(name)
+
+
+def test_memory_protect_restore_non_dict_stdin_json_skips_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """NEW sibling gap found during REM-FIX cycle 3's mandated exhaustive
+    final sweep (not one of the originally-enumerated findings): stdin JSON
+    that is syntactically VALID but not a JSON object (e.g. a top-level
+    array) sails past the `json.loads()` try/except untouched, then crashes
+    on `data.get("hook_event_name", "")` -- `AttributeError: 'list' object
+    has no attribute 'get'`. Live-reproduced: exit 1. Fixed in the same pass
+    as the sibling malformed-JSON fix since it is the same stdin-parsing code
+    region within this REM-FIX's approved ALL_ISSUES scope for this file."""
+    name = "memory-protect-restore/non-dict-stdin-json-skips-instead-of-crashing"
+    project = tmp_dir / "non-dict-stdin-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project)}
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "craftflow_memory_protect_restore.py")],
+        input="[1, 2, 3]",
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if result.returncode != 0:
+        fail(name, f"hook crashed (exit {result.returncode}) on non-dict stdin JSON instead of degrading safely")
+        return
+
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, "expected craftflow-hook-events.log to record the non-dict stdin JSON, but no log file was written")
+        return
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-protect-restore-stdin-type" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-stdin-type' reason, got: {log_text!r}")
+        return
+    ok(name)
+
+
+def test_memory_protect_restore_non_dict_tool_input_skips_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """SECOND sibling gap found during REM-FIX cycle 3's mandated exhaustive
+    final sweep: `data` itself may be a valid dict (passes the type guard
+    above), but its `tool_input` field can independently be any JSON value.
+    `tool_input = data.get("tool_input") or {}` only guards `None`/falsy --
+    a non-dict truthy value (e.g. a JSON string) sails through and crashes
+    on `tool_input.get("file_path")` with AttributeError. Live-reproduced:
+    exit 1."""
+    name = "memory-protect-restore/non-dict-tool-input-skips-instead-of-crashing"
+    project = tmp_dir / "non-dict-tool-input-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+
+    env = {"CLAUDE_PROJECT_DIR": str(project)}
+    payload = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Write",
+        "tool_input": "not-a-dict",
+    }
+    code, _ = run_hook("craftflow_memory_protect_restore.py", payload, env)
+    if code != 0:
+        fail(name, f"hook crashed (exit {code}) on a non-dict tool_input instead of degrading safely")
+        return
+
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, "expected craftflow-hook-events.log to record the non-dict tool_input, but no log file was written")
+        return
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-protect-restore-tool-input-type" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-tool-input-type' reason, got: {log_text!r}")
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # Anti-rationalization structural tests (verify tables are in all agents)
 # ---------------------------------------------------------------------------
@@ -20848,6 +21195,17 @@ def main() -> int:
         test_memory_protect_restore_nul_byte_file_path_skips_instead_of_crashing(tmp / "r3")
         test_memory_protect_restore_non_utf8_posttooluse_target_skips_instead_of_crashing(tmp / "r4")
         test_memory_protect_restore_non_utf8_state_file_skips_pass2_sweep_instead_of_crashing(tmp / "r5")
+
+        print()
+        print("[ memory-protect-restore: REM-FIX cycle 3 (silent-failure-hunter re-hunt -- comprehensive close-out) ]")
+        test_memory_protect_restore_non_utf8_orig_backup_skips_instead_of_crashing(tmp / "r6")
+        test_memory_protect_restore_readonly_orig_fallback_writeback_skips_instead_of_crashing(tmp / "r7")
+        test_memory_protect_restore_readonly_block_writeback_skips_instead_of_crashing(tmp / "r8")
+        test_memory_protect_restore_corrupt_blocks_index_is_logged(tmp / "r9")
+        test_memory_protect_restore_all_pass1_write_failure_is_logged(tmp / "r10")
+        test_memory_protect_restore_malformed_stdin_json_is_logged(tmp / "r11")
+        test_memory_protect_restore_non_dict_stdin_json_skips_instead_of_crashing(tmp / "r12")
+        test_memory_protect_restore_non_dict_tool_input_skips_instead_of_crashing(tmp / "r13")
 
         print()
         print("[ pretooluse-guard ]")

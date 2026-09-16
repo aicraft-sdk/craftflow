@@ -34,7 +34,22 @@ def _load_blocks(orig_key: str) -> dict[str, str]:
         return {}
     try:
         return json.loads(index_path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        # REM-FIX (silent-failure-hunter re-hunt, cycle 3, HIGH): every other
+        # except branch in this file logs the degradation; this one was
+        # silent. A corrupt/unreadable blocks.json is not fatal (the caller
+        # falls through to the .orig fallback / returns False), but the
+        # failure must be visible.
+        log_event(
+            "plugin_memory_protect_restore",
+            {
+                "event": "memory_protect_restore",
+                "path": repr(str(index_path))[:512],
+                "decision": "skip",
+                "reason": "unresolvable-protect-restore-blocks-index",
+                "error": repr(exc),
+            },
+        )
         return {}
 
 
@@ -80,10 +95,45 @@ def restore_file(target: Path) -> bool:
         # Try restoring from .orig backup directly
         orig_path = _cache_dir() / f"{key}.orig"
         if orig_path.exists():
-            backup = orig_path.read_text(encoding="utf-8")
-            tmp = target.with_suffix(".tmp")
-            tmp.write_text(backup, encoding="utf-8")
-            tmp.replace(target)
+            # REM-FIX (silent-failure-hunter re-hunt, cycle 3, CRITICAL #1):
+            # this read was unguarded -- same UnicodeDecodeError crash class
+            # as the target.read_text() site above, but on the cache's
+            # backup copy. Degrade to "not restored" instead of crashing.
+            try:
+                backup = orig_path.read_text(encoding="utf-8")
+            except Exception as exc:
+                log_event(
+                    "plugin_memory_protect_restore",
+                    {
+                        "event": "memory_protect_restore",
+                        "path": repr(str(orig_path))[:512],
+                        "decision": "skip",
+                        "reason": "unresolvable-protect-restore-backup",
+                        "error": repr(exc),
+                    },
+                )
+                return False
+            # REM-FIX (silent-failure-hunter re-hunt, cycle 3, CRITICAL #2):
+            # the write-back was unguarded -- a read-only state directory (or
+            # any other PermissionError/OSError) crashed the hook instead of
+            # degrading. Restore_all()'s Pass 1 already wraps its own,
+            # equivalent write-back this way; mirror that shape here.
+            try:
+                tmp = target.with_suffix(".tmp")
+                tmp.write_text(backup, encoding="utf-8")
+                tmp.replace(target)
+            except Exception as exc:
+                log_event(
+                    "plugin_memory_protect_restore",
+                    {
+                        "event": "memory_protect_restore",
+                        "path": repr(str(target))[:512],
+                        "decision": "skip",
+                        "reason": "unresolvable-protect-restore-write",
+                        "error": repr(exc),
+                    },
+                )
+                return False
             return True
         return False
 
@@ -95,9 +145,25 @@ def restore_file(target: Path) -> bool:
     if restored == text:
         return False
 
-    tmp = target.with_suffix(".tmp")
-    tmp.write_text(restored, encoding="utf-8")
-    tmp.replace(target)
+    # REM-FIX (silent-failure-hunter re-hunt, cycle 3, CRITICAL #2): second,
+    # separate unguarded write-back site (block-substitution path instead of
+    # the .orig-fallback path above). Same PermissionError/OSError vector.
+    try:
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(restored, encoding="utf-8")
+        tmp.replace(target)
+    except Exception as exc:
+        log_event(
+            "plugin_memory_protect_restore",
+            {
+                "event": "memory_protect_restore",
+                "path": repr(str(target))[:512],
+                "decision": "skip",
+                "reason": "unresolvable-protect-restore-write",
+                "error": repr(exc),
+            },
+        )
+        return False
     return True
 
 
@@ -126,7 +192,26 @@ def restore_all() -> int:
                         (cache / f"{key}.lock").unlink(missing_ok=True)
                         count += 1
                     except Exception as e:
+                        # REM-FIX (silent-failure-hunter re-hunt, cycle 3,
+                        # HIGH): this failure was reported via stderr only,
+                        # inconsistent with every other failure path in this
+                        # file (log_event). Stderr from a Stop hook is not
+                        # durably captured anywhere, so the same failure
+                        # silently repeats on every subsequent Stop hook
+                        # invocation with no structured log record. Keep the
+                        # stderr print (existing behavior) and add the
+                        # structured log alongside it.
                         print(f"CRAFTFLOW restore_all: failed to restore {md_file}: {e}", file=sys.stderr)
+                        log_event(
+                            "plugin_memory_protect_restore",
+                            {
+                                "event": "memory_protect_restore",
+                                "path": repr(str(md_file))[:512],
+                                "decision": "skip",
+                                "reason": "unresolvable-protect-restore-all-pass1-write",
+                                "error": repr(e),
+                            },
+                        )
                     break
 
     # Pass 2: belt-and-suspenders scan for any remaining placeholder text
@@ -145,9 +230,41 @@ def main() -> int:
     data: dict = {}
     if raw.strip():
         try:
-            data = json.loads(raw)
-        except Exception:
-            pass
+            parsed = json.loads(raw)
+        except Exception as exc:
+            # REM-FIX (silent-failure-hunter re-hunt, cycle 3, MEDIUM):
+            # malformed stdin JSON was silently swallowed -- `data` stays
+            # `{}`, which is a safe default (falls into the full-restore
+            # branch, not a masked security error), but unlike every other
+            # except branch in this file, it went unlogged.
+            log_event(
+                "plugin_memory_protect_restore",
+                {
+                    "event": "memory_protect_restore",
+                    "decision": "default-full-restore",
+                    "reason": "unresolvable-protect-restore-stdin",
+                    "error": repr(exc),
+                },
+            )
+        else:
+            # REM-FIX (silent-failure-hunter re-hunt, cycle 3, sibling gap
+            # found during the mandated exhaustive final sweep, not one of
+            # the originally-enumerated findings): syntactically VALID JSON
+            # that is not a dict (e.g. a top-level array) sailed past the
+            # except above untouched, then crashed on `data.get(...)` below
+            # with AttributeError. Live-reproduced: exit 1.
+            if isinstance(parsed, dict):
+                data = parsed
+            else:
+                log_event(
+                    "plugin_memory_protect_restore",
+                    {
+                        "event": "memory_protect_restore",
+                        "decision": "default-full-restore",
+                        "reason": "unresolvable-protect-restore-stdin-type",
+                        "error": repr(type(parsed).__name__),
+                    },
+                )
 
     hook_event = data.get("hook_event_name", "")
 
@@ -159,6 +276,23 @@ def main() -> int:
     # PostToolUse — check if the written file has leaked placeholders
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input") or {}
+    # REM-FIX (silent-failure-hunter re-hunt, cycle 3, THIRD sibling gap
+    # found during the mandated exhaustive final sweep): `or {}` only guards
+    # a falsy `tool_input` (None, "", etc.) -- a truthy non-dict value (e.g.
+    # a JSON string) sails through and crashes on `.get("file_path")` below
+    # with AttributeError. Live-reproduced: exit 1.
+    if not isinstance(tool_input, dict):
+        log_event(
+            "plugin_memory_protect_restore",
+            {
+                "event": "memory_protect_restore",
+                "tool_name": tool_name,
+                "decision": "skip",
+                "reason": "unresolvable-protect-restore-tool-input-type",
+                "error": repr(type(tool_input).__name__),
+            },
+        )
+        return 0
     file_path_str = tool_input.get("file_path")
     if file_path_str and tool_name in ("Edit", "Write"):
         # REM-FIX sibling finding (doubt-verifier, Phase 1 fix-verify cycle of
