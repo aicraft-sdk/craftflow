@@ -13,6 +13,8 @@ import re
 import sys
 from pathlib import Path
 
+from craftflow_hooklib import log_event
+
 CACHE_DIR_NAME = ".memory-protect-cache"
 BLOCK_RE = re.compile(r"<!-- CRAFTFLOW_BLOCK_([0-9a-f]{12}) -->")
 
@@ -139,7 +141,33 @@ def main() -> int:
     tool_input = data.get("tool_input") or {}
     file_path_str = tool_input.get("file_path")
     if file_path_str and tool_name in ("Edit", "Write"):
-        target = Path(file_path_str).resolve()
+        # REM-FIX sibling finding (doubt-verifier, Phase 1 fix-verify cycle of
+        # the ADR 0035 deferred-crash plan): this `.resolve()` was unguarded.
+        # This script runs on PostToolUse for every Edit/Write -- AFTER the
+        # write already happened -- so `target` here is only used to check
+        # THIS ONE file for a leaked CRAFTFLOW_BLOCK_ placeholder
+        # (belt-and-suspenders; the real masking/restore state lives in
+        # restore_all()'s Stop-hook sweep, unaffected by this branch). It is
+        # not load-bearing for the rest of main(), which returns 0 either
+        # way. A self-referential symlink (or NUL-byte) `file_path` raising
+        # RuntimeError/ValueError uncaught crashed this whole hook -- skip
+        # just this one file's restore-check instead, but log it so the
+        # failure has visibility rather than a silent skip.
+        try:
+            target = Path(file_path_str).resolve()
+        except Exception as exc:
+            log_event(
+                "plugin_memory_protect_restore",
+                {
+                    "event": "memory_protect_restore",
+                    "tool_name": tool_name,
+                    "path": repr(file_path_str)[:512],
+                    "decision": "skip",
+                    "reason": "unresolvable-protect-restore-target",
+                    "error": repr(exc),
+                },
+            )
+            return 0
         restore_file(target)
 
     return 0

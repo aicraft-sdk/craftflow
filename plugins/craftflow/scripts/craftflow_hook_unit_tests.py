@@ -328,6 +328,47 @@ def test_memory_protect_restore_triggers_on_subagent_stop(tmp_dir: Path) -> None
     ok(name)
 
 
+def test_memory_protect_restore_unresolvable_file_path_skips_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX sibling finding (doubt-verifier, Phase 1 fix-verify cycle of the
+    ADR 0035 deferred-crash plan): main()'s PostToolUse branch has an
+    unguarded `target = Path(file_path_str).resolve()`. This script is
+    registered on PostToolUse for `Edit|Write` in hooks.json, so it fires on
+    EVERY Edit/Write -- AFTER the write already happened. A self-referential
+    symlink `file_path` raises RuntimeError uncaught, crashing this
+    defensive-restore hook (exit 1) instead of degrading safely."""
+    name = "memory-protect-restore/unresolvable-file-path-skips-instead-of-crashing"
+    project = tmp_dir / "unresolvable-restore-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+
+    env = {"CLAUDE_PROJECT_DIR": str(project)}
+    loop = tmp_dir / "restore-unresolvable-loop"
+    os.symlink(loop, loop)
+
+    payload = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(loop)},
+    }
+    code, _ = run_hook("craftflow_memory_protect_restore.py", payload, env)
+    if code != 0:
+        fail(name, f"hook crashed (exit {code}) on an unresolvable file_path instead of degrading safely")
+        return
+
+    # The degradation must be VISIBLE, not a silent skip: confirm the
+    # failure was logged with a specific, distinguishing reason string.
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, "expected craftflow-hook-events.log to record the degraded restore-check, but no log file was written")
+        return
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-protect-restore-target" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-target' reason, got: {log_text!r}")
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # Anti-rationalization structural tests (verify tables are in all agents)
 # ---------------------------------------------------------------------------
@@ -20689,6 +20730,7 @@ def main() -> int:
         print()
         print("[ memory-protect-restore ]")
         test_memory_protect_restore_triggers_on_subagent_stop(tmp / "r1")
+        test_memory_protect_restore_unresolvable_file_path_skips_instead_of_crashing(tmp / "r2")
 
         print()
         print("[ pretooluse-guard ]")
