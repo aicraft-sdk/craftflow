@@ -20224,6 +20224,22 @@ def test_decision_record_exists_for_workspace_membership() -> None:
     ok(name)
 
 
+def test_decision_record_exists_for_cwd_identity_confinement() -> None:
+    name = "decisions/cwd-identity-confinement-adr-exists"
+    repo_root = PLUGIN_ROOT.parents[3]
+    decisions_dir = repo_root / "docs" / "ai" / "decisions"
+    matches = sorted(decisions_dir.glob("*-craftflow-cwd-identity-confinement.md"))
+    if not matches:
+        fail(name, f"no ADR matching '*-craftflow-cwd-identity-confinement.md' in {decisions_dir}")
+        return
+    content = matches[0].read_text(encoding="utf-8")
+    missing = [n for n in ("project_root", "0033", "worktree_path") if n not in content]
+    if missing:
+        fail(name, f"{matches[0]} exists but does not mention: {missing!r}")
+        return
+    ok(name)
+
+
 def test_hooklib_workflows_dir_project_root_override_and_no_side_effect(tmp_dir: Path) -> None:
     # ADR 0033 deferred-sibling fix, DD-2: `state_root()`/`workflows_dir()` call
     # .mkdir() on their OWN project's tree, which is correct for a process
@@ -21635,6 +21651,7 @@ def main() -> int:
     print()
     print("[ Phase 5: decision is durable (ADR recorded) ]")
     test_decision_record_exists_for_workspace_membership()
+    test_decision_record_exists_for_cwd_identity_confinement()
 
     print()
     print("[ hooklib: Phase 3 -- side-effect-free project_root on the live-workflow lookup chain ]")
