@@ -9,6 +9,7 @@ Run: python3 scripts/craftflow_hook_unit_tests.py
 from __future__ import annotations
 
 import argparse
+import ast
 import fcntl
 import importlib.util
 import json
@@ -21393,6 +21394,338 @@ def test_pretooluse_guard_protected_workflow_json_diverges_cwd_and_claude_projec
     ok(name)
 
 
+def test_cursor_adapter_non_utf8_stdin_degrades_instead_of_crashing(tmp_dir: Path) -> None:
+    """REM-FIX cycle 6 (silent-failure-hunter + reviewer, both independently
+    live-reproduced this CRITICAL): `craftflow_cursor_adapter.py`'s
+    `read_cursor_stdin()` caught only `(json.JSONDecodeError, OSError)` --
+    NOT `UnicodeDecodeError` (a `ValueError` subclass raised by the implicit
+    UTF-8 decode inside `sys.stdin.read()`). Invalid-UTF-8 bytes on stdin
+    crashed the whole adapter process (exit 1) BEFORE `bridge_env()`'s
+    CLAUDE_PROJECT_DIR mapping and `delegate()`/`subprocess.run()` ever ran
+    -- upstream of, and unprotected by, the REM-FIX cycle 5 `load_input()`
+    fix. This is the SOLE stdin chokepoint for every Cursor-platform hook
+    (sessionStart, 6 PreToolUse hooks including both security gates and
+    safe_shell_guard, afterFileEdit, postToolUse, subagentStop, preCompact,
+    stop). Degrade to the same empty-dict default this function already uses
+    for missing/malformed-JSON stdin, now with a log_event() call."""
+    name = "cursor-adapter/non-utf8-stdin-degrades-instead-of-crashing"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    target = tmp_dir / "noop_target.py"
+    target.write_text(
+        "import sys, json\n"
+        "sys.stdin.read()\n"
+        "print(json.dumps({'hookSpecificOutput': {}}))\n",
+        encoding="utf-8",
+    )
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True)
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_root)}
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "craftflow_cursor_adapter.py"),
+            str(target),
+            "--tool",
+            "Bash",
+            "--event",
+            "PreToolUse",
+        ],
+        input=b"\xff\xfe\x00\x01not-utf8-json-stdin",
+        capture_output=True,
+        env=env,
+    )
+    if result.returncode != 0:
+        fail(
+            name,
+            f"adapter crashed (exit {result.returncode}) on non-UTF-8 stdin "
+            f"instead of degrading -- FAIL-OPEN; stderr={result.stderr!r}",
+        )
+        return
+
+    log_path = project_root / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, "expected craftflow-hook-events.log to record the degraded stdin decode, but no log file was written")
+        return
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-cursor-adapter-stdin-decode" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-cursor-adapter-stdin-decode' reason, got: {log_text!r}")
+        return
+
+    # CONTROL (anti-over-restriction): well-formed JSON stdin against the
+    # same target must still delegate normally and exit 0.
+    payload = {
+        "event": "PreToolUse",
+        "toolName": "Bash",
+        "toolInput": {"command": "echo hi"},
+        "cwd": str(project_root),
+    }
+    result2 = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "craftflow_cursor_adapter.py"),
+            str(target),
+            "--tool",
+            "Bash",
+            "--event",
+            "PreToolUse",
+        ],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if result2.returncode != 0:
+        fail(name, f"control case regressed: expected exit 0 for well-formed stdin, got {result2.returncode}, stderr={result2.stderr!r}")
+        return
+    ok(name)
+
+
+def test_sdd_cache_pre_non_utf8_stdin_degrades_instead_of_crashing(tmp_dir: Path) -> None:
+    """REM-FIX cycle 6 (silent-failure-hunter + reviewer, both independently
+    live-reproduced this CRITICAL): `craftflow_sdd_cache_pre.py`'s `main()`
+    had NO guard at all around `raw = sys.stdin.read()`'s implicit UTF-8
+    decode. Invalid-UTF-8 bytes on stdin raised an uncaught
+    UnicodeDecodeError before the try/except two lines below (which only
+    wraps `json.loads()`) ever ran, crashing this WebFetch PreToolUse
+    cache-check hook (exit 1, non-blocking to Claude Code) -- FAIL-OPEN for
+    the URL freshness cache gate. Degrade to the same `return 0` default
+    this function's own missing-stdin/malformed-JSON branches already use."""
+    name = "sdd-cache-pre/non-utf8-stdin-degrades-instead-of-crashing"
+    project = tmp_dir / "sdd-cache-pre-proj"
+    project.mkdir(parents=True, exist_ok=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project)}
+
+    code, out = run_hook_raw(
+        "craftflow_sdd_cache_pre.py", b"\xff\xfe\x00\x01not-utf8-json-stdin", env
+    )
+    if code != 0:
+        fail(name, f"hook crashed (exit {code}) on non-UTF-8 stdin instead of degrading -- FAIL-OPEN")
+        return
+    if out.strip():
+        fail(name, f"expected silent no-op stdout on degrade, got: {out!r}")
+        return
+
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, "expected craftflow-hook-events.log to record the degraded stdin decode, but no log file was written")
+        return
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-sdd-cache-pre-stdin-decode" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-sdd-cache-pre-stdin-decode' reason, got: {log_text!r}")
+        return
+
+    # CONTROL (anti-over-restriction): a well-formed, non-WebFetch payload
+    # must still no-op cleanly (exit 0, no stdout) -- proving the new guard
+    # did not disturb ordinary JSON stdin handling.
+    code2, out2 = run_hook(
+        "craftflow_sdd_cache_pre.py",
+        {"tool_name": "Bash", "tool_input": {"command": "echo hi"}},
+        env,
+    )
+    if code2 != 0 or out2.strip():
+        fail(name, f"control case regressed: expected silent exit 0, got exit={code2}, stdout={out2!r}")
+        return
+    ok(name)
+
+
+def test_sdd_cache_post_non_utf8_stdin_degrades_instead_of_crashing(tmp_dir: Path) -> None:
+    """REM-FIX cycle 6 (silent-failure-hunter + reviewer, both independently
+    live-reproduced this CRITICAL): `craftflow_sdd_cache_post.py`'s `main()`
+    had NO guard at all around `raw = sys.stdin.read()`'s implicit UTF-8
+    decode -- identical pattern to the sibling `craftflow_sdd_cache_pre.py`
+    bug above. Invalid-UTF-8 bytes on stdin crashed this WebFetch
+    PostToolUse cache-update hook (exit 1, non-blocking to Claude Code).
+    Degrade to the same `return 0` default this function's own
+    missing-stdin/malformed-JSON branches already use."""
+    name = "sdd-cache-post/non-utf8-stdin-degrades-instead-of-crashing"
+    project = tmp_dir / "sdd-cache-post-proj"
+    project.mkdir(parents=True, exist_ok=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project)}
+
+    code, out = run_hook_raw(
+        "craftflow_sdd_cache_post.py", b"\xff\xfe\x00\x01not-utf8-json-stdin", env
+    )
+    if code != 0:
+        fail(name, f"hook crashed (exit {code}) on non-UTF-8 stdin instead of degrading -- FAIL-OPEN")
+        return
+    if out.strip():
+        fail(name, f"expected silent no-op stdout on degrade, got: {out!r}")
+        return
+
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, "expected craftflow-hook-events.log to record the degraded stdin decode, but no log file was written")
+        return
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-sdd-cache-post-stdin-decode" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-sdd-cache-post-stdin-decode' reason, got: {log_text!r}")
+        return
+
+    # CONTROL (anti-over-restriction): a well-formed, non-WebFetch payload
+    # must still no-op cleanly (exit 0, no stdout).
+    code2, out2 = run_hook(
+        "craftflow_sdd_cache_post.py",
+        {"tool_name": "Bash", "tool_input": {"command": "echo hi"}},
+        env,
+    )
+    if code2 != 0 or out2.strip():
+        fail(name, f"control case regressed: expected silent exit 0, got exit={code2}, stdout={out2!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# Prevention test: no unguarded / mis-guarded sys.stdin.read() call sites
+# ---------------------------------------------------------------------------
+# REM-FIX cycle 6's closing test. Statically scans every .py hook script for
+# `sys.stdin.read()` call sites (via `ast`, not regex, so we can actually
+# evaluate whether an `except` clause's exception types are broad enough --
+# the exact bug just found was a narrow `except (json.JSONDecodeError,
+# OSError)` that LOOKS like a guard but does not cover UnicodeDecodeError).
+# If a 7th unguarded/mis-guarded stdin.read() is ever introduced, this test
+# catches it without requiring another manual sweep.
+
+# UnicodeDecodeError's MRO is UnicodeDecodeError -> UnicodeError -> ValueError
+# -> Exception -> BaseException. An `except` clause naming any of these (or a
+# bare `except:`) is broad enough to cover it.
+_STDIN_READ_BROAD_EXCEPTION_NAMES = {
+    "BaseException",
+    "Exception",
+    "ValueError",
+    "UnicodeError",
+    "UnicodeDecodeError",
+}
+
+# Confirmed by the hunter/reviewer to be dead code / CLI-only entry points,
+# unreachable via either hooks.json's registered hook pipeline (verified by
+# import-graph tracing, not just absence-of-reference grep): their own
+# unguarded `sys.stdin.read()` sites are real but out of THIS cycle's
+# approved scope. Allowlisted here (rather than fixed) so this prevention
+# test does not spuriously fail on them, and so a future genuine fix isn't
+# silently skipped by an overly broad scope filter.
+_STDIN_READ_ALLOWLISTED_DEAD_CODE_FILES = {
+    "craftflow_contract_validate.py",  # CLI-only `--kind` validator entry point
+    "craftflow_memory_protect_pre.py",  # not registered in either hooks.json
+    "craftflow_memory_merge.py",  # CLI-only merge utility, not a registered hook
+}
+
+
+def _stdin_read_call_sites(tree: ast.Module) -> list[tuple[int, "ast.Try | None"]]:
+    """Return (lineno, enclosing_try_or_None) for every `sys.stdin.read()`
+    call in `tree`. `enclosing_try` is the nearest ancestor `Try` node whose
+    `body` (not `handlers`/`orelse`/`finalbody`) actually contains the call
+    site's statement chain -- i.e. a `Try` that could plausibly catch an
+    exception the call raises."""
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            child.parent = node  # type: ignore[attr-defined]
+
+    sites: list[tuple[int, "ast.Try | None"]] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "read"
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "stdin"
+            and isinstance(node.func.value.value, ast.Name)
+            and node.func.value.value.id == "sys"
+        ):
+            continue
+
+        enclosing_try = None
+        cur: ast.AST = node
+        while hasattr(cur, "parent"):
+            parent = cur.parent  # type: ignore[attr-defined]
+            if isinstance(parent, ast.Try) and cur in parent.body:
+                enclosing_try = parent
+                break
+            cur = parent
+        sites.append((node.lineno, enclosing_try))
+    return sites
+
+
+def _exception_expr_is_broad(expr: ast.expr) -> bool:
+    if isinstance(expr, ast.Name):
+        return expr.id in _STDIN_READ_BROAD_EXCEPTION_NAMES
+    if isinstance(expr, ast.Attribute):
+        return expr.attr in _STDIN_READ_BROAD_EXCEPTION_NAMES
+    return False
+
+
+def _try_has_broad_except(try_node: ast.Try) -> bool:
+    for handler in try_node.handlers:
+        if handler.type is None:
+            return True  # bare `except:`
+        if isinstance(handler.type, ast.Tuple):
+            if any(_exception_expr_is_broad(elt) for elt in handler.type.elts):
+                return True
+        elif _exception_expr_is_broad(handler.type):
+            return True
+    return False
+
+
+def _enclosing_function_name(tree: ast.Module, lineno: int) -> str | None:
+    name = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            start = node.lineno
+            end = getattr(node, "end_lineno", None) or start
+            if start <= lineno <= end:
+                # Prefer the innermost (most specific) enclosing function.
+                if name is None or start > name[0]:
+                    name = (start, node.name)
+    return name[1] if name else None
+
+
+def test_no_unguarded_or_mis_guarded_stdin_read_call_sites() -> None:
+    """REM-FIX cycle 6 closing prevention test: every real `sys.stdin.read()`
+    call site in a registered hook script must be inside a `try` whose
+    `except` clause is broad enough to cover `UnicodeDecodeError` (bare
+    `except:`, `except Exception`, or a narrower ancestor such as
+    `ValueError`/`UnicodeError`). `craftflow_hooklib.load_input()` is the
+    canonical guarded implementation and is trusted by construction; a
+    disclosed, out-of-scope dead-code allowlist covers 3 unreachable CLI-only
+    entry points. Everything else must be provably guarded."""
+    name = "hook-scripts/no-unguarded-or-mis-guarded-stdin-read-call-sites"
+    violations: list[str] = []
+
+    for path in sorted(SCRIPTS.glob("craftflow_*.py")):
+        if path.name == "craftflow_hook_unit_tests.py":
+            continue  # this file itself: docstrings/comments mention the pattern, not real call sites
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError as exc:
+            violations.append(f"{path.name}: could not parse for static scan ({exc})")
+            continue
+
+        for lineno, enclosing_try in _stdin_read_call_sites(tree):
+            if path.name in _STDIN_READ_ALLOWLISTED_DEAD_CODE_FILES:
+                continue
+
+            if path.name == "craftflow_hooklib.py" and _enclosing_function_name(tree, lineno) == "load_input":
+                continue  # canonical guarded implementation
+
+            if enclosing_try is None:
+                violations.append(f"{path.name}:{lineno}: sys.stdin.read() has NO enclosing try/except")
+                continue
+            if not _try_has_broad_except(enclosing_try):
+                caught = [
+                    ast.dump(h.type) if h.type is not None else "bare"
+                    for h in enclosing_try.handlers
+                ]
+                violations.append(
+                    f"{path.name}:{lineno}: sys.stdin.read() is guarded but the except "
+                    f"clause(s) {caught!r} do not cover UnicodeDecodeError"
+                )
+
+    if violations:
+        fail(name, "unguarded/mis-guarded sys.stdin.read() call site(s):\n  " + "\n  ".join(violations))
+        return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -22518,6 +22851,13 @@ def main() -> int:
     print("[ hooklib / memory-protect-restore: REM-FIX cycle 5 -- unguarded sys.stdin.read() decode crash ]")
     test_hooklib_load_input_non_utf8_stdin_degrades_instead_of_crashing(tmp / "res3")
     test_memory_protect_restore_non_utf8_stdin_degrades_instead_of_crashing(tmp / "res4")
+
+    print()
+    print("[ cursor-adapter / sdd-cache: REM-FIX cycle 6 (final) -- closing the unguarded sys.stdin.read() decode crash bug class ]")
+    test_cursor_adapter_non_utf8_stdin_degrades_instead_of_crashing(tmp / "res5")
+    test_sdd_cache_pre_non_utf8_stdin_degrades_instead_of_crashing(tmp / "res6")
+    test_sdd_cache_post_non_utf8_stdin_degrades_instead_of_crashing(tmp / "res7")
+    test_no_unguarded_or_mis_guarded_stdin_read_call_sites()
 
     print()
     if _errors:

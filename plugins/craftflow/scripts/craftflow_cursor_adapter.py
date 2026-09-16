@@ -49,10 +49,35 @@ def bridge_env():
 
 def read_cursor_stdin():
     """Read and parse Cursor's stdin JSON. Returns empty dict on missing/invalid input."""
+    # REM-FIX cycle 6 (silent-failure-hunter + reviewer, live-reproduced
+    # CRITICAL, cross-confirmed independently by both agents): this
+    # function's `except (json.JSONDecodeError, OSError)` did not cover
+    # `UnicodeDecodeError` -- a `ValueError` subclass raised by the implicit
+    # UTF-8 decode inside `sys.stdin.read()`, not by json.loads(). Invalid-
+    # UTF-8 bytes on stdin crashed the whole adapter process (exit 1) BEFORE
+    # bridge_env()'s CLAUDE_PROJECT_DIR mapping or delegate()/subprocess.run()
+    # ever ran -- upstream of, and unprotected by, the REM-FIX cycle 5
+    # load_input() fix. This is the SOLE stdin chokepoint for every
+    # Cursor-platform hook (sessionStart, 6 PreToolUse hooks including both
+    # security gates and safe_shell_guard, afterFileEdit, postToolUse,
+    # subagentStop, preCompact, stop). Degrade to the same empty-dict default
+    # this function already used for missing/malformed-JSON stdin.
     try:
         raw = sys.stdin.read()
-        if not raw.strip():
-            return {}
+    except Exception as exc:
+        log_event(
+            "plugin_cursor_adapter",
+            {
+                "event": "cursor_adapter_stdin_decode",
+                "decision": "default-empty-input",
+                "reason": "unresolvable-cursor-adapter-stdin-decode",
+                "error": repr(exc),
+            },
+        )
+        return {}
+    if not raw.strip():
+        return {}
+    try:
         return json.loads(raw)
     except (json.JSONDecodeError, OSError):
         return {}

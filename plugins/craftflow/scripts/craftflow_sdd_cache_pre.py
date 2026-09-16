@@ -38,6 +38,8 @@ import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 
+from craftflow_hooklib import log_event
+
 CACHE_DIR_NAME = "sdd-cache"
 MAX_CACHE_AGE_DAYS = 30
 
@@ -130,7 +132,28 @@ def _emit_cached_result(entry: dict) -> None:
 
 
 def main() -> int:
-    raw = sys.stdin.read()
+    # REM-FIX cycle 6 (silent-failure-hunter + reviewer, live-reproduced
+    # CRITICAL, cross-confirmed independently by both agents): this
+    # `sys.stdin.read()` had NO guard at all around its implicit UTF-8
+    # decode. Invalid-UTF-8 bytes on stdin raised an uncaught
+    # UnicodeDecodeError before the try/except below (which only wraps
+    # json.loads()) ever ran, crashing this WebFetch PreToolUse cache-check
+    # hook (exit 1, non-blocking to Claude Code) -- FAIL-OPEN for the URL
+    # freshness cache gate. Degrade to the same `return 0` default this
+    # function already uses for missing-stdin/malformed-JSON input.
+    try:
+        raw = sys.stdin.read()
+    except Exception as exc:
+        log_event(
+            "plugin_sdd_cache_pre",
+            {
+                "event": "sdd_cache_pre_stdin_decode",
+                "decision": "default-allow",
+                "reason": "unresolvable-sdd-cache-pre-stdin-decode",
+                "error": repr(exc),
+            },
+        )
+        return 0
     if not raw.strip():
         return 0
     try:
