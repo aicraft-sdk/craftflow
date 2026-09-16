@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -727,7 +729,66 @@ def _protected_reliability_gates_path(root: Path) -> Path:
     return (root / RELIABILITY_GATES_LEDGER_REL_PATH).resolve()
 
 
-def _is_protected_reliability_gates_path(path: Path, project_root: "Path | None" = None) -> bool:
+def _reliability_gates_path_shape_match(path: Path) -> bool:
+    """Shape-only match against the reliability-gates ledger's fixed relative
+    path suffix (`RELIABILITY_GATES_LEDGER_REL_PATH`), with NO project-root
+    comparison at all -- there is no trustworthy root to relate `path` to.
+    Used ONLY as the fail-CLOSED fallback in
+    `_is_protected_reliability_gates_path()` when the caller's trusted `cwd`
+    could not be resolved to ANY root (REM-FIX cycle 3; mirrors
+    `_skill_promotion_path_shape_match()`'s established fail-closed-on-
+    untrusted-identity precedent in this same module).
+
+    REM-FIX cycle 8 (silent-failure-hunter CRITICAL, live-reproduced): this
+    used to compare `path`'s trailing components against `rel_parts` via a
+    plain tuple `==`, with NONE of `_normalized_leaf()`'s case-fold +
+    Unicode NFC-normalization protection that the main (non-fallback)
+    ancestor-derivation logic in `_is_protected_reliability_gates_path()`
+    already applies to the identical kind of suffix comparison. On a
+    case-insensitive-but-case-preserving filesystem (this repo's default,
+    macOS/APFS), a case-varied spelling of the ledger's path components
+    (e.g. `.craftflow/State/Project/reliability-gates.json`) resolves to the
+    SAME real, pre-existing ledger file yet compared unequal as a plain
+    tuple -- exactly when this fallback is supposed to be MOST protective,
+    since it only activates when the caller's identity itself is uncertain.
+    Fixed by comparing each trailing component through `_normalized_leaf()`,
+    matching the main logic's own comparison exactly."""
+    rel_parts = Path(RELIABILITY_GATES_LEDGER_REL_PATH).parts
+    path_parts = path.parts
+    if len(path_parts) < len(rel_parts):
+        return False
+    return all(
+        _normalized_leaf(a) == _normalized_leaf(b)
+        for a, b in zip(path_parts[-len(rel_parts):], rel_parts)
+    )
+
+
+def _normalized_leaf(name: str) -> str:
+    """Case-fold + Unicode NFC-normalization-insensitive form of a single
+    filename component, used ONLY to compare a leaf that may not exist on
+    disk yet -- `os.path.samefile()` cannot prove real filesystem identity
+    for a path that has never been created (REM-FIX, doubt-verifier cycle
+    5). `os.path.normcase()` is a no-op on POSIX (this repo's target
+    platform) but normalizes separators/case on Windows; `.casefold()`
+    (stronger than `.lower()` -- e.g. correctly folds German sharp s) is
+    what actually neutralizes macOS's default APFS/HFS+ case-insensitive-
+    but-case-preserving behavior; Unicode NFC normalization neutralizes
+    NFC-vs-NFD spelling differences. Combining all three keeps the
+    comparison correct across platforms without depending on filesystem
+    existence. This is intentionally scoped to a SINGLE path component,
+    never a whole path -- callers must independently prove the containing
+    directory is the same real directory (via `os.path.samefile()`) before
+    trusting a match here, or an unrelated file in a different directory
+    could be matched purely by a loose name comparison."""
+    return unicodedata.normalize("NFC", os.path.normcase(name)).casefold()
+
+
+def _is_protected_reliability_gates_path(
+    path: Path,
+    project_root: "Path | None" = None,
+    *,
+    identity_unresolved: bool = False,
+) -> bool:
     """True if `path` is exactly the reliability-gates ledger for the project
     identified by `project_root`.
 
@@ -741,12 +802,218 @@ def _is_protected_reliability_gates_path(path: Path, project_root: "Path | None"
     parameter closes (ADR 0033 deferred sibling; same pattern as
     `has_memory_finalize_permit(project_root=...)`). Omitting it reproduces
     the pre-existing single-parameter behavior exactly.
+
+    `identity_unresolved=True` (REM-FIX, silent-failure-hunter cycle 3)
+    signals that the caller's trusted `cwd` was PRESENT but could not be
+    resolved to ANY path at all (e.g. a cyclic symlink or a NUL-byte `cwd`)
+    -- a strictly different situation from `project_root=None` meaning
+    "no cwd was supplied" (DD-4's disclosed, preserved degradation).
+    Falling back to `project_dir()` in the unresolved case would silently
+    substitute THIS PROCESS's own environment identity (`CLAUDE_PROJECT_DIR`)
+    for the write target's actual project -- exactly the divergent-identity
+    bypass this whole fix family exists to close, and live-reproduced as a
+    real cross-project ALLOW. A resolution failure on the security-critical
+    identity input is itself suspicious, so this fails CLOSED instead:
+    `path` is checked only against the ledger's fixed relative-path SHAPE
+    (`_reliability_gates_path_shape_match()`), with no identity comparison
+    at all, denying every path that looks like a reliability-gates ledger
+    regardless of which project it belongs to.
+
+    REAL FILESYSTEM IDENTITY, not string identity (REM-FIX, doubt-verifier
+    cycle 4): `Path.resolve()` on macOS/APFS neither raises NOR canonicalizes
+    when a path component differs only in letter case or Unicode
+    normalization form (NFC vs. NFD) -- two spellings can both `.resolve()`
+    successfully to the SAME real file (confirmed via `os.path.samefile()`)
+    while comparing unequal as plain strings. A plain `path == protected`
+    check therefore silently ALLOWED a write to the real, on-disk ledger
+    whenever the caller's `file_path` spelled its leaf filename (or any
+    directory component) differently from how `project_root`'s own spelling
+    resolved it -- live-reproduced as a real cross-project-adjacent ALLOW.
+    The string comparison stays as a fast, allocation-free path for the
+    overwhelmingly common aligned-spelling case; when it misses, real
+    filesystem identity is checked via `os.path.samefile()`. `samefile()`
+    itself raises `FileNotFoundError`/`OSError` when EITHER path does not
+    exist yet (e.g. a brand-new project whose reliability-gates ledger has
+    never been written) -- filesystem identity cannot be proven by inode in
+    that case.
+
+    LEDGER-NOT-YET-CREATED FALLBACK (REM-FIX, doubt-verifier cycle 5):
+    degrading straight to the plain string-equality result (`False`) when
+    `samefile()` raises is ITSELF a live-reproduced bypass -- a project
+    whose reliability-gates ledger has never been written (a realistic
+    first-use state, not an edge case) makes `samefile()` raise for EVERY
+    comparison, including a case/Unicode-normalization-variant spelling of
+    the exact protected path, silently ALLOWING an agent to seed the
+    ledger's initial content via a spelling variant that evades this check
+    entirely.
+
+    REM-FIX CYCLE 6 (code-reviewer CRITICAL, confidence 95, live-reproduced
+    -- "Bug A", depth-mismatch bypass): cycles 4/5's logic above only ever
+    ran when `path` and `protected` (`root / RELIABILITY_GATES_LEDGER_REL_PATH`)
+    had the SAME absolute part count. `root` is not always the write
+    target's OWN project directory -- it can be a real ANCESTOR of it (an
+    ordinary monorepo/workspace root, or a worktree's parent), in which
+    case the real, on-disk ledger sits MORE directory levels below `root`
+    than `RELIABILITY_GATES_LEDGER_REL_PATH` alone accounts for, the part
+    counts differ, and this function returned `False` before any ancestor
+    logic ran -- live-reproduced with NO symlinks, case variation, or
+    Unicode involved at all: an everyday "cwd is an ancestor" bypass. The
+    fix below derives the candidate root from `path` ITSELF (its trailing
+    `RELIABILITY_GATES_LEDGER_REL_PATH`-shaped suffix, stripped off)
+    instead of requiring `path` to be exactly as deep as `root`'s own
+    ledger: the match now depends on the RELATIVE offset between `path`
+    and `root`'s own depth, never on `root`'s absolute nesting depth in
+    the filesystem. Any additional real directories between `root` and the
+    ledger's relative path need no further validation once `root` itself
+    is proven -- this can only ADD protection for a ledger genuinely
+    reachable somewhere under the caller's own trusted root; it can never
+    remove an existing match or convert a pre-fix DENY into an ALLOW (BC-4).
+
+    REM-FIX CYCLE 6 (silent-failure-hunter, live-reproduced -- "Bug B",
+    middle-of-path case-variant bypass on a case-sensitive filesystem): the
+    cycle-5 logic above proved only that the TRUSTED side (`protected`'s
+    ancestor) existed before calling `os.path.samefile()` -- it never
+    checked that the UNTRUSTED candidate side (derived from the write
+    target's own `path`) also existed under its EXACT spelling. On a
+    case-SENSITIVE filesystem (not this repo's default, case-insensitive
+    macOS/APFS), a case-varied directory component anywhere in the
+    candidate root makes `os.path.samefile()` raise `FileNotFoundError`,
+    which cycle 5 converted straight to `return False` -- denying
+    protection even though the real ledger already existed, with no
+    logging to make the degradation observable. Below, that failure is
+    treated as "real filesystem identity could not be proven for the
+    candidate root", not "not a match": the fallback logs the event via
+    `log_event()` (REM-FIX: previously silent) and compares `root`'s own
+    components against the candidate root's corresponding components as
+    normalized strings (`_normalized_leaf()`) instead -- the same
+    "not-yet-created" degradation cycle 5 already established for the
+    ledger's own not-yet-existing ancestors, now applied to the untrusted
+    candidate root too.
+
+    LOOP-BOUND / DOCSTRING CORRECTION (REM-FIX cycle 6, code-reviewer HIGH):
+    cycle 5's ancestor-climb ranged all the way down to the filesystem
+    root ("/", which always exists on POSIX), so the "fails closed via
+    shape-only match when `root` itself doesn't exist" fallback described
+    above was unreachable dead code in practice -- the climb always
+    terminated at "/" first. This version never tests any depth SHALLOWER
+    than `root` itself: `root`'s own real identity is either proven
+    directly (or via the normalized-string fallback above), or, in the
+    extreme, effectively-impossible case that `root` itself does not exist
+    (it is the live agent session's own `cwd`), this function falls back
+    directly to `_reliability_gates_path_shape_match()` -- the documented
+    fallback is now genuinely reachable exactly when its own precondition
+    holds, and only then. (Chosen over merely correcting the docstring to
+    describe the old, more-permissive-but-still-fail-safe behavior, since
+    restructuring the climb to stop at `root` was already required to fix
+    Bug A and Bug B coherently, and a single, narrower, reviewable
+    condition beats a broader one that was never actually exercised.)
+
+    UNCONDITIONAL-`samefile()`-RETURN BYPASS (REM-FIX cycle 7, code-reviewer
+    and silent-failure-hunter, independently converged, live-reproduced
+    against this repo's OWN real files): the `os.path.samefile(path,
+    protected)` call below used to `return` its result UNCONDITIONALLY,
+    including a definitive `False` when `samefile()` succeeds (no
+    exception) but `path` and `protected` are genuinely different real
+    files. Whenever `root`'s own naive direct-child ledger
+    (`protected` = `root / RELIABILITY_GATES_LEDGER_REL_PATH`) already
+    exists on disk as a real, DIFFERENT file from the actual write target
+    (e.g. a nested project's own separate ledger, or -- as live-reproduced
+    in this very repo -- a sibling git worktree's own separate ledger,
+    where BOTH the main repo root and the worktree each track their own
+    `reliability-gates.json`), that early definitive `False` short-circuited
+    the function BEFORE the Bug-A/Bug-B ancestor-derivation logic above
+    (which correctly identifies `path` as reachable under the trusted
+    `root`) ever ran -- silently defeating cycle 6's entire fix and
+    ALLOWING the write. Fixed by only ever returning early on a definitive
+    `True`; a `False` (or a raised `OSError`/`ValueError`) now both fall
+    through to the ancestor-derivation logic, which is the only code path
+    equipped to correctly classify a target that is deeper than `root`'s
+    own naive direct child.
+
+    DISCLOSED TRADE-OFF, NOT COST-FREE (REM-FIX cycle 7, MEDIUM, accepted
+    as-is by explicit user decision -- NOT bounded or fixed this cycle):
+    the `root.exists()` fallback above -- and the `identity_unresolved`
+    fallback at the top of this function -- both degrade to
+    `_reliability_gates_path_shape_match()`, which matches `path` against
+    the ledger's fixed relative-path SUFFIX ONLY, with NO project-root
+    comparison at all. This is intentionally UNBOUNDED: it will flag ANY
+    path anywhere on the filesystem that happens to end in
+    `RELIABILITY_GATES_LEDGER_REL_PATH`'s exact component sequence as
+    "protected", even a same-named file belonging to a completely
+    unrelated project the caller was never trying to touch. That is safe
+    in DIRECTION -- it can only ever produce an extra DENY, never an
+    ALLOW that should have been a DENY (BC-4 holds) -- but it is not
+    costless: a legitimate write to an unrelated project's
+    identically-suffixed path is denied as a false positive whenever
+    `root` cannot be established (no `cwd`/unresolved identity) or does
+    not yet exist on disk. This is an accepted, disclosed precision-for-
+    safety trade-off, not a claim that the fallback has no downside.
     """
+    if identity_unresolved:
+        return _reliability_gates_path_shape_match(path)
     try:
         root = (project_root or project_dir()).resolve()
-        return path == _protected_reliability_gates_path(root)
+        protected = _protected_reliability_gates_path(root)
     except Exception:
         return False
+    if path == protected:
+        return True
+    try:
+        if os.path.samefile(path, protected):
+            return True
+    except (OSError, ValueError):
+        pass
+
+    rel_parts = Path(RELIABILITY_GATES_LEDGER_REL_PATH).parts
+    path_parts = path.parts
+    root_parts = root.parts
+
+    # Bug A: gate on the RELATIVE offset (the ledger's own fixed relative
+    # path length, plus `root`'s own depth) instead of `protected`'s
+    # absolute part count -- `path` may legitimately be deeper than
+    # `protected` when `root` is an ancestor of the actual project.
+    if len(path_parts) < len(rel_parts) + len(root_parts):
+        return False
+    if not all(
+        _normalized_leaf(a) == _normalized_leaf(b)
+        for a, b in zip(path_parts[-len(rel_parts):], rel_parts)
+    ):
+        return False
+
+    candidate_root_parts = path_parts[: -len(rel_parts)]
+    root_prefix_parts = candidate_root_parts[: len(root_parts)]
+    if root_prefix_parts == root_parts:
+        # Byte-identical to `root`'s own path -- any additional real
+        # directories beyond this point (the generalized Bug-A case) are
+        # accepted without further validation; every reliability-gates
+        # ledger reachable under `root` is in scope.
+        return True
+
+    if not root.exists():
+        return _reliability_gates_path_shape_match(path)
+
+    root_prefix_path = Path(*root_prefix_parts)
+    try:
+        return os.path.samefile(root_prefix_path, root)
+    except (OSError, ValueError):
+        # Bug B: the untrusted candidate root could not be resolved under
+        # its exact spelling (e.g. a case-varied component on a
+        # case-sensitive filesystem) even though `root` itself exists --
+        # fall back to a normalized-string comparison instead of silently
+        # denying protection, and make the degradation observable.
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard_reliability_gates_ancestor_fallback",
+                "reason": "candidate_root_unresolvable_falling_back_to_normalized_leaf",
+                "candidate_root": str(root_prefix_path),
+                "root": str(root),
+            },
+        )
+        return all(
+            _normalized_leaf(a) == _normalized_leaf(b)
+            for a, b in zip(root_prefix_parts, root_parts)
+        )
 
 
 def _denial_escalation_suffix(count: int) -> str:
@@ -1169,7 +1436,46 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     # own documented degradation (Behavior Contract rule 8) -- hardening
     # against a MISSING `cwd` is a separate, disclosed non-goal.
     cwd_raw = data.get("cwd")
-    trusted_root = Path(cwd_raw).resolve() if isinstance(cwd_raw, str) and cwd_raw else None
+    trusted_root = None
+    trusted_root_unresolved = False
+    if isinstance(cwd_raw, str) and cwd_raw:
+        # REM-FIX (silent-failure-hunter, cycle 2): `.resolve()` can raise
+        # (e.g. RuntimeError on a cyclic symlink `cwd`, ValueError on a
+        # NUL-byte cwd). `main()` has no top-level try/except in this file,
+        # so an uncaught raise here previously crashed the ENTIRE
+        # _handle_edit_write function before `violations = []` and the
+        # try/except-wrapped confinement check below ever ran -- FAIL-OPEN
+        # for every check in this function, not just reliability-gates.
+        #
+        # REM-FIX (silent-failure-hunter, cycle 3): degrading straight to
+        # `trusted_root=None` here is ITSELF exploitable -- `None` is passed
+        # through as `project_root=None` to
+        # `_is_protected_reliability_gates_path()`, which falls back to
+        # `(project_root or project_dir())`, i.e. `CLAUDE_PROJECT_DIR` -- a
+        # DIFFERENT identity than the write target's own project whenever a
+        # session's `CLAUDE_PROJECT_DIR` and payload `cwd` diverge (the exact
+        # bug class this whole plan exists to close). A malformed/unresolvable
+        # `cwd` is a strictly different situation from a MISSING `cwd`
+        # (DD-4's preserved non-goal): the caller supplied identity input
+        # that could not be resolved at all, which is itself suspicious.
+        # `trusted_root_unresolved` distinguishes the two so the
+        # reliability-gates check below can fail CLOSED (shape-match, no
+        # identity fallback) instead of silently substituting this process's
+        # own project identity.
+        try:
+            trusted_root = Path(cwd_raw).resolve()
+        except Exception as exc:
+            log_event(
+                "plugin_pretooluse_guard",
+                {
+                    "event": "pretool_guard_parse_error",
+                    "command_name": "trusted_root_resolve",
+                    "error": repr(exc),
+                    "reason": "trusted_root_unresolved_failing_closed_for_reliability_gates",
+                },
+            )
+            trusted_root = None
+            trusted_root_unresolved = True
 
     violations = []
 
@@ -1197,7 +1503,9 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     # ledger is a single script-owned JSON file, not a markdown memory file
     # eligible for the memory-finalize permit -- protected unconditionally,
     # mirroring the skill-candidate ledger's own treatment above.
-    if _is_protected_reliability_gates_path(path, project_root=trusted_root):
+    if _is_protected_reliability_gates_path(
+        path, project_root=trusted_root, identity_unresolved=trusted_root_unresolved
+    ):
         violations.append("reliability-gates-write")
 
     # Worktree confinement (Task 4.2 step 3): an independent violation type

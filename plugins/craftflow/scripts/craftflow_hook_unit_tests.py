@@ -18276,6 +18276,665 @@ def test_pretooluse_guard_reliability_gates_diverges_cwd_and_claude_project_dir(
     ok(name)
 
 
+def test_pretooluse_guard_edit_write_survives_cyclic_symlink_cwd(tmp_dir: Path) -> None:
+    """REM-FIX (silent-failure-hunter, cycle 2): commit 81f9c18 added an
+    unguarded `Path(cwd_raw).resolve()` at the top of `_handle_edit_write`
+    (BEFORE the pre-existing try/except-wrapped confinement check and BEFORE
+    `violations = []`). `.resolve()` raising on a cyclic-symlink `cwd`
+    (live-reproduced: `os.symlink(link, link)` -> `RuntimeError: Symlink loop
+    from ...`) previously crashed the ENTIRE `_handle_edit_write` function
+    uncaught -- `main()` has no top-level try/except in this file, so the
+    whole guard process exited 1 with no JSON on stdout. The harness treats a
+    crashed hook as no-decision, i.e. FAIL-OPEN for every check in the
+    function (memory-write, skill-promotion-path, skill-ledger-write,
+    reliability-gates-write, worktree-confinement), not just the newly-added
+    reliability-gates check. This proves the guard now degrades
+    `trusted_root` to None (falling back to today's project_dir()-based
+    behavior, DD-4) and still emits a valid DENY decision instead of
+    crashing."""
+    name = "pretooluse-guard/edit-write-survives-cyclic-symlink-cwd"
+    env_proj = tmp_dir / "env-proj"
+    (env_proj / ".craftflow" / "state" / "project").mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(env_proj), check=True, capture_output=True)
+    target = env_proj / ".craftflow" / "state" / "project" / "reliability-gates.json"
+    target.write_text('{"gates": []}', encoding="utf-8")
+
+    cyclic = tmp_dir / "cyclic-cwd-loop"
+    os.symlink(cyclic, cyclic)
+
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-cyclic-symlink-cwd",
+        "cwd": str(cyclic),
+        "tool_input": {"file_path": str(target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(name, f"expected the guard to exit 0 with a real decision, not crash: exit={code}, stdout={out!r}")
+        return
+    if not out:
+        fail(name, f"expected a non-empty JSON DENY decision on stdout, got empty stdout (exit={code})")
+        return
+    try:
+        decision = json.loads(out)
+    except json.JSONDecodeError as exc:
+        fail(name, f"expected valid JSON on stdout, got {out!r}: {exc}")
+        return
+    if decision.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":
+        fail(name, f"expected a deny decision, got: {out!r}")
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"expected 'reliability-gates-write' reason (fallback to project_dir() per DD-4), got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_cyclic_symlink_cwd_fails_closed_for_reliability_gates(tmp_dir: Path) -> None:
+    """REM-FIX (silent-failure-hunter, cycle 3): cycle 2 fixed the CRASH on an
+    unguarded `Path(cwd_raw).resolve()` by degrading `trusted_root` to `None`
+    on any resolution failure -- but `None` is passed straight through as
+    `project_root=None` to `_is_protected_reliability_gates_path()`, which
+    falls back to `(project_root or project_dir())` -- i.e. `CLAUDE_PROJECT_DIR`,
+    a DIFFERENT identity than the write target's own project whenever the
+    session's `CLAUDE_PROJECT_DIR` and payload `cwd` diverge (e.g. a worktree
+    session, exactly the divergence this whole plan exists to close).
+
+    An attacker who can craft a malformed `cwd` (here: a FRESH cyclic
+    symlink, not merely a diverged-but-valid path) for their own session
+    forces this fallback ON DEMAND: `trusted_root` degrades to `None`,
+    `_is_protected_reliability_gates_path()` compares the write target
+    (`cwd_proj`'s OWN ledger) against `CLAUDE_PROJECT_DIR` (`env_proj`, an
+    unrelated project) instead, the paths never match, `reliability-gates-write`
+    is never flagged -- and since `_edit_write_escapes_confinement()` ALSO
+    fails to resolve the same malformed `cwd` (caught by its own separate
+    try/except, degrading to "skip this check only"), NO violation fires at
+    all and the write was previously silently ALLOWED. This test proves
+    neither cycle 1's crash (exit 0 here) nor cycle 2's incomplete fix
+    (ALLOW here) -- the guard must now DENY, unconditionally, by shape-
+    matching the reliability-gates ledger's fixed relative path suffix
+    when the trusted identity itself could not be resolved at all."""
+    name = "pretooluse-guard/edit-write-cyclic-symlink-cwd-fails-closed-reliability-gates"
+    env_proj, cwd_proj = _identity_divergence_fixture(tmp_dir)
+    target = cwd_proj / ".craftflow" / "state" / "project" / "reliability-gates.json"
+
+    cyclic = tmp_dir / "cyclic-cwd-loop-fail-closed"
+    os.symlink(cyclic, cyclic)
+
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-cyclic-symlink-cwd-fail-closed",
+        "cwd": str(cyclic),
+        "tool_input": {"file_path": str(target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(name, f"expected the guard to exit 0 with a real decision, not crash: exit={code}, stdout={out!r}")
+        return
+    if not out:
+        fail(name, f"expected a non-empty JSON DENY decision on stdout, got empty stdout (exit={code})")
+        return
+    try:
+        decision = json.loads(out)
+    except json.JSONDecodeError as exc:
+        fail(name, f"expected valid JSON on stdout, got {out!r}: {exc}")
+        return
+    if decision.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":
+        fail(name, f"expected DENY (fail-closed on unresolvable cwd), got ALLOW: {out!r}")
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"expected 'reliability-gates-write' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_reliability_gates_case_fold_identity_bypass(tmp_dir: Path) -> None:
+    """REM-FIX cycle 4 (doubt-verifier CRITICAL, live-reproduced): `Path.resolve()`
+    on macOS/APFS does not raise, and does NOT canonicalize, when a path
+    component differs only in letter case (or, equivalently, Unicode
+    normalization form -- NFC vs NFD) -- both spellings resolve successfully
+    and refer to the SAME real file (confirmed via `os.path.samefile()`
+    below), yet `_is_protected_reliability_gates_path()`'s plain
+    `path == protected_path` string comparison treated them as different
+    files and silently ALLOWED the write.
+
+    The divergence is deliberately placed on the ledger's own LEAF
+    FILENAME only ("reliability-gates.json" vs. a differently-cased
+    spelling of the exact same file) -- NOT on the project-root directory
+    component. A directory-component case/normalization mismatch would
+    also make `resolve_confinement()`'s own `within_cwd` check spuriously
+    fail (since it string-compares `resolved.parents` against `cwd`),
+    which denies the write for "worktree-confinement" instead and would
+    mask this specific bug behind a DIFFERENT (also-correct, but
+    different-reason) deny -- confirmed empirically in this cycle. Keeping
+    `cwd` and the parent-directory spelling of the target identical isolates
+    the exact bug shape reported live: confinement still recognizes the
+    target as safely inside `cwd` (so no worktree-confinement violation
+    fires), and only the reliability-gates identity predicate's plain
+    string comparison is exercised."""
+    name = "pretooluse-guard/reliability-gates-case-fold-identity-bypass"
+    project = tmp_dir / "case-fold-proj"
+    state_dir = project / ".craftflow" / "state" / "project"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    ledger = state_dir / "reliability-gates.json"
+    ledger.write_text('{"gates": []}', encoding="utf-8")
+
+    # Same real file, same parent directory spelling, differing ONLY in the
+    # leaf filename's case.
+    case_variant_target = state_dir / "RELIABILITY-GATES.JSON"
+    try:
+        same_inode = os.path.samefile(str(ledger), str(case_variant_target))
+    except OSError as exc:
+        fail(
+            name,
+            "fixture precondition failed: could not stat the case-variant "
+            f"spelling ({exc!r}) -- this filesystem is not case-insensitive, "
+            "so this test cannot reproduce the bug here",
+        )
+        return
+    if not same_inode:
+        fail(
+            name,
+            "fixture precondition failed: case-variant spelling does not "
+            "share an inode with the real ledger -- this filesystem is not "
+            "case-insensitive; test cannot reproduce the bug here",
+        )
+        return
+
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-case-fold-identity",
+        "cwd": str(project),
+        "tool_input": {"file_path": str(case_variant_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (real filesystem identity match via "
+            f"os.path.samefile), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"expected a 'reliability-gates-write' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_reliability_gates_case_fold_identity_bypass_ledger_missing(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX cycle 5 (doubt-verifier CRITICAL, live-reproduced): cycle 4's
+    fix falls back to `os.path.samefile(path, protected)` when the plain
+    string comparison misses -- but `samefile()` requires BOTH paths to
+    already exist. When the reliability-gates ledger has NEVER been
+    created yet (a realistic first-use state, not an edge case),
+    `samefile()` raises `FileNotFoundError` for EVERY comparison against a
+    case/Unicode-variant spelling of the ledger path, degrading straight to
+    the already-known-insufficient plain string-equality result (`False`)
+    and silently ALLOWING the write -- letting an agent seed the ledger's
+    initial content via a spelling variant that evades this check entirely.
+
+    Reproduces the doubt-verifier's exact scenario: the ledger's PARENT
+    directory (`.craftflow/state/project/`) exists (mirroring a project
+    that already uses craftflow for other memory files), but the ledger
+    JSON file itself is never written before the case-variant target is
+    probed. The fixture proves this filesystem is case-insensitive via a
+    disposable probe file, never by creating (then relying on) the real
+    ledger -- creating the ledger first would not reproduce this bug at
+    all, since cycle 4's `samefile()` fallback already handles that case."""
+    name = "pretooluse-guard/reliability-gates-case-fold-identity-bypass-ledger-missing"
+    project = tmp_dir / "case-fold-missing-proj"
+    state_dir = project / ".craftflow" / "state" / "project"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+
+    canonical_name = "reliability-gates.json"
+    case_variant_target = state_dir / "RELIABILITY-GATES.JSON"
+
+    # Fixture precondition: this filesystem must be case-insensitive, and
+    # the check must be provable WITHOUT ever creating the real ledger
+    # (that is the entire point of this scenario) -- use a disposable
+    # probe file instead, then remove it.
+    probe = state_dir / "case-fold-probe.tmp"
+    probe.write_text("x", encoding="utf-8")
+    probe_variant = state_dir / "CASE-FOLD-PROBE.TMP"
+    try:
+        same_inode = os.path.samefile(str(probe), str(probe_variant))
+    except OSError as exc:
+        probe.unlink(missing_ok=True)
+        fail(
+            name,
+            "fixture precondition failed: could not stat the case-variant "
+            f"probe ({exc!r}) -- this filesystem is not case-insensitive, "
+            "so this test cannot reproduce the bug here",
+        )
+        return
+    probe.unlink(missing_ok=True)
+    if not same_inode:
+        fail(
+            name,
+            "fixture precondition failed: case-variant probe does not "
+            "share an inode with the real probe -- this filesystem is not "
+            "case-insensitive; test cannot reproduce the bug here",
+        )
+        return
+
+    ledger = state_dir / canonical_name
+    if ledger.exists():
+        fail(name, "fixture precondition failed: ledger unexpectedly exists")
+        return
+
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-case-fold-identity-missing",
+        "cwd": str(project),
+        "tool_input": {"file_path": str(case_variant_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (parent-directory samefile() + normalized-leaf "
+            "comparison must recognize this as the protected ledger even "
+            f"though it does not exist on disk yet), got exit={code}, "
+            f"stdout={out!r}",
+        )
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"expected a 'reliability-gates-write' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_reliability_gates_cwd_is_ancestor_of_project(tmp_dir: Path) -> None:
+    """REM-FIX cycle 6 (Bug A, code-reviewer CRITICAL, confidence 95,
+    live-reproduced): `_is_protected_reliability_gates_path()` compared the
+    ABSOLUTE part-count of the write target against `root /
+    RELIABILITY_GATES_LEDGER_REL_PATH`'s own absolute part-count (cycles
+    4/5's ancestor-climb/samefile/normalized-leaf logic never even ran when
+    they differed). Whenever `root` (the trusted payload `cwd`) is a real
+    ANCESTOR of the actual project holding the ledger -- e.g. an ordinary
+    monorepo/workspace root, or a worktree's parent, NOT the project root
+    itself -- the two part counts differ and the function returned `False`
+    before any of that logic ran. Live-reproduced with NO symlinks, case
+    variation, or Unicode involved at all: an everyday `cwd`-is-ancestor
+    scenario silently ALLOWED a write to a real, already-existing
+    reliability-gates ledger nested one level below `cwd`."""
+    name = "pretooluse-guard/reliability-gates-cwd-is-ancestor-of-project"
+    workspace = tmp_dir / "cwd-ancestor-workspace"
+    proj_real = workspace / "proj-real"
+    ledger_dir = proj_real / ".craftflow" / "state" / "project"
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    ledger = ledger_dir / "reliability-gates.json"
+    ledger.write_text('{"gates": []}', encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=str(proj_real), check=True, capture_output=True)
+
+    env = {"CLAUDE_PROJECT_DIR": str(workspace), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-cwd-is-ancestor",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (cwd-is-ancestor-of-project depth-mismatch bypass "
+            f"closed), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"expected a 'reliability-gates-write' reason, got: {out!r}")
+        return
+
+    # Negative control (unchanged from Part 3 of the diverged-identity test,
+    # re-asserted here at the SAME nesting depth as the positive case above):
+    # a ledger belonging to a genuinely UNRELATED sibling project must still
+    # NOT match, proving the fix widens protection only along the caller's
+    # own trusted-root subtree, never to an arbitrary same-depth path.
+    unrelated = tmp_dir / "cwd-ancestor-unrelated-sibling"
+    unrelated_ledger_dir = unrelated / ".craftflow" / "state" / "project"
+    unrelated_ledger_dir.mkdir(parents=True, exist_ok=True)
+    unrelated_ledger = unrelated_ledger_dir / "reliability-gates.json"
+    unrelated_ledger.write_text('{"gates": []}', encoding="utf-8")
+    payload_unrelated = {
+        "tool_name": "Write",
+        "session_id": "wf-cwd-is-ancestor",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(unrelated_ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_unrelated, env)
+    if "reliability-gates-write" in out:
+        fail(
+            name,
+            "negative control: an unrelated sibling project's ledger must "
+            f"NOT be flagged as 'reliability-gates-write', got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_reliability_gates_case_sensitive_ancestor_fallback() -> None:
+    """REM-FIX cycle 6 (Bug B, silent-failure-hunter, live-reproduced):
+    the cycle-5 ancestor-climb proved the TRUSTED side existed before
+    calling `os.path.samefile()`, but never checked that the UNTRUSTED
+    candidate side (derived from the write target's own `file_path`) also
+    existed under its EXACT spelling. On a case-SENSITIVE filesystem
+    (Linux, or a case-sensitive APFS volume on macOS -- NOT this repo's
+    default), a case-varied directory component anywhere in the caller's
+    own project path makes `os.path.samefile()` raise `FileNotFoundError`
+    for the candidate side, which cycle 5 converted straight to `return
+    False` with NO logging -- even when the real reliability-gates ledger
+    already exists.
+
+    This cannot be reliably reproduced on the default case-INsensitive
+    macOS filesystem without provisioning a real case-sensitive volume. So,
+    matching this harness's own established convention of monkeypatching a
+    module-level function in-process for a single deterministic assertion
+    (see `test_hooklib_record_denial_concurrent_calls_do_not_lose_updates`),
+    `os.path.samefile()` is monkeypatched to simulate that EXACT
+    case-sensitive lookup failure deterministically, and
+    `_is_protected_reliability_gates_path()` is called directly (in-process,
+    not via `run_hook()`'s subprocess) so the monkeypatch is visible to it."""
+    name = "pretooluse-guard/reliability-gates-case-sensitive-ancestor-fallback"
+    # `.resolve()` on macOS can rewrite the temp dir prefix itself (e.g.
+    # `/var/folders/...` -> `/private/var/folders/...`) -- resolve `tmp_dir`
+    # ONCE up front so every path built from it below shares that same
+    # canonical prefix, exactly like a real call site's
+    # `Path(file_path).resolve()` would.
+    tmp_dir = Path(tempfile.mkdtemp(prefix="cf6-bugb-")).resolve()
+    try:
+        root = tmp_dir / "CaseSensitiveProj"
+        (root / ".craftflow" / "state" / "project").mkdir(parents=True)
+        ledger = root / ".craftflow" / "state" / "project" / "reliability-gates.json"
+        ledger.write_text('{"gates": []}', encoding="utf-8")
+
+        # The untrusted write target spells the project's own root directory
+        # with different case (`casesensitiveproj`) -- a spelling variant
+        # that would only fail to resolve on a real case-sensitive filesystem.
+        wrong_case_root = tmp_dir / "casesensitiveproj"
+        target = wrong_case_root / ".craftflow" / "state" / "project" / "reliability-gates.json"
+
+        original_samefile = os.path.samefile
+        logged_events: list = []
+
+        def _fake_samefile(a, b):
+            if "casesensitiveproj" in Path(a).parts or "casesensitiveproj" in Path(b).parts:
+                raise FileNotFoundError(f"simulated case-sensitive miss: {a!r} vs {b!r}")
+            return original_samefile(a, b)
+
+        original_log_event = pretooluse_guard.log_event
+
+        def _capturing_log_event(name_arg, payload_arg):
+            logged_events.append((name_arg, payload_arg))
+
+        os.path.samefile = _fake_samefile
+        pretooluse_guard.log_event = _capturing_log_event
+        try:
+            result = pretooluse_guard._is_protected_reliability_gates_path(
+                target, project_root=root
+            )
+        finally:
+            os.path.samefile = original_samefile
+            pretooluse_guard.log_event = original_log_event
+
+        if result is not True:
+            fail(
+                name,
+                "expected the case-sensitive ancestor fallback to still "
+                f"recognize the real ledger as protected, got: {result!r}",
+            )
+            return
+        if not logged_events:
+            fail(
+                name,
+                "expected the candidate-root-unresolvable fallback to be "
+                "logged via log_event() (REM-FIX: cycle 5 was silent), got "
+                "no events",
+            )
+            return
+        ok(name)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_pretooluse_guard_reliability_gates_ancestor_root_has_own_ledger(tmp_dir: Path) -> None:
+    """REM-FIX cycle 7 (code-reviewer and silent-failure-hunter, independently
+    converged, live-reproduced against this repo's OWN real files -- the
+    main repo root and this very worktree each track their own separate
+    `reliability-gates.json`): `_is_protected_reliability_gates_path()`'s
+    fast path used to `return os.path.samefile(path, protected)`
+    UNCONDITIONALLY, including a definitive `False` when `samefile()`
+    succeeds (no exception) but `path` and `protected` are genuinely
+    different real files.
+
+    This is a DIFFERENT fixture shape than cycle 6's
+    `test_pretooluse_guard_reliability_gates_cwd_is_ancestor_of_project`,
+    which leaves the ancestor (`root`) WITHOUT its own ledger. Here, `root`
+    (the trusted `cwd`) ALSO has its own real, on-disk ledger at the naive
+    direct-child position (`root / RELIABILITY_GATES_LEDGER_REL_PATH`) --
+    so `protected` resolves to a REAL, EXISTING, but DIFFERENT file than
+    the nested project's own ledger (`path`). `os.path.samefile(path,
+    protected)` therefore returns a definitive `False` (no exception),
+    which the pre-cycle-7 code returned immediately -- BEFORE the Bug-A
+    ancestor-derivation logic (which correctly recognizes `path` as
+    reachable under `root`) ever ran. The nested project's own ledger must
+    still be DENIED, not silently ALLOWED just because `root` happens to
+    have its own unrelated ledger at the naive position."""
+    name = "pretooluse-guard/reliability-gates-ancestor-root-has-own-ledger"
+    workspace = tmp_dir / "ancestor-with-own-ledger-workspace"
+    root_ledger_dir = workspace / ".craftflow" / "state" / "project"
+    root_ledger_dir.mkdir(parents=True, exist_ok=True)
+    root_ledger = root_ledger_dir / "reliability-gates.json"
+    root_ledger.write_text('{"gates": ["root-own"]}', encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=str(workspace), check=True, capture_output=True)
+
+    nested = workspace / "nested-proj"
+    nested_ledger_dir = nested / ".craftflow" / "state" / "project"
+    nested_ledger_dir.mkdir(parents=True, exist_ok=True)
+    nested_ledger = nested_ledger_dir / "reliability-gates.json"
+    nested_ledger.write_text('{"gates": ["nested-own"]}', encoding="utf-8")
+
+    # Precondition: the two ledgers must be REAL, DIFFERENT files (not the
+    # same inode) so `os.path.samefile()` returns a definitive `False`
+    # rather than raising -- exercising exactly the bypass path, not the
+    # already-fixed not-yet-created fallback (cycle 5).
+    if os.path.samefile(str(root_ledger), str(nested_ledger)):
+        fail(name, "fixture precondition failed: root and nested ledgers must be distinct files")
+        return
+
+    env = {"CLAUDE_PROJECT_DIR": str(workspace), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-ancestor-root-has-own-ledger",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(nested_ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (nested project's own ledger must be protected "
+            "even though root's naive direct-child ledger already exists "
+            f"as a different real file), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"expected a 'reliability-gates-write' reason, got: {out!r}")
+        return
+
+    # Positive control: writing to root's OWN naive-position ledger must
+    # still be denied too (unchanged, aligned-identity behavior).
+    payload_root = {
+        "tool_name": "Write",
+        "session_id": "wf-ancestor-root-has-own-ledger",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(root_ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_root, env)
+    if not _deny_out(out) or "reliability-gates-write" not in out:
+        fail(
+            name,
+            f"positive control: expected DENY for root's own ledger too, got exit={code}, stdout={out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_reliability_gates_case_fold_bypass_on_cyclic_symlink_cwd_fails_closed(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX cycle 8 (silent-failure-hunter CRITICAL, live-reproduced):
+    `_reliability_gates_path_shape_match()` -- the fail-CLOSED fallback used
+    by `_is_protected_reliability_gates_path()` when `identity_unresolved=True`
+    (the trusted `cwd` itself could not be resolved to ANY path at all, e.g. a
+    cyclic symlink or a NUL-byte cwd) or when `root` does not exist on disk --
+    used to compare its trailing path components via a plain tuple `==`, with
+    NONE of `_normalized_leaf()`'s case-fold + Unicode NFC-normalization
+    protection that the main (non-fallback) ancestor-derivation logic in
+    `_is_protected_reliability_gates_path()` already applies to the identical
+    kind of suffix comparison. On a case-insensitive-but-case-preserving
+    filesystem (this repo's default, macOS/APFS), a case-varied spelling of
+    the ledger's directory components (e.g.
+    `.craftflow/State/Project/reliability-gates.json`) resolves to the SAME
+    real file as the canonical spelling
+    (`.craftflow/state/project/reliability-gates.json`, confirmed via
+    `os.path.samefile()` below) yet compared UNEQUAL as a plain tuple --
+    exactly when this fallback is supposed to be MOST protective, since it
+    only activates when identity itself is uncertain. This directly
+    falsified the function's own documented invariant that this fallback
+    "can only ever produce an extra DENY, never an ALLOW that should have
+    been a DENY (BC-4 holds)". Forcing `identity_unresolved=True` requires a
+    `cwd` that cannot be resolved AT ALL -- a fresh cyclic symlink, mirroring
+    cycle 3's fixture -- so this fallback function specifically is the one
+    exercised, not the main ancestor-derivation logic that already
+    normalizes."""
+    name = "pretooluse-guard/reliability-gates-case-fold-bypass-cyclic-symlink-cwd-fails-closed"
+    project = tmp_dir / "case-fold-cyclic-proj"
+    state_dir = project / ".craftflow" / "state" / "project"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    ledger = state_dir / "reliability-gates.json"
+    ledger.write_text('{"gates": []}', encoding="utf-8")
+
+    # Case-varied spelling of the SAME real file, across multiple path
+    # components -- mirrors the exact live-reproduced report
+    # (`.craftflow/State/Project/reliability-gates.json`).
+    case_variant_target = project / ".craftflow" / "State" / "Project" / "reliability-gates.json"
+    try:
+        same_inode = os.path.samefile(str(ledger), str(case_variant_target))
+    except OSError as exc:
+        fail(
+            name,
+            "fixture precondition failed: could not stat the case-variant "
+            f"spelling ({exc!r}) -- this filesystem is not case-insensitive, "
+            "so this test cannot reproduce the bug here",
+        )
+        return
+    if not same_inode:
+        fail(
+            name,
+            "fixture precondition failed: case-variant spelling does not "
+            "share an inode with the real ledger -- this filesystem is not "
+            "case-insensitive; test cannot reproduce the bug here",
+        )
+        return
+
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    # Control: a normal, resolvable cwd correctly DENIES via the main
+    # (non-fallback) ancestor-derivation logic, which already case-folds.
+    control_payload = {
+        "tool_name": "Write",
+        "session_id": "wf-case-fold-cyclic-control",
+        "cwd": str(project),
+        "tool_input": {"file_path": str(case_variant_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", control_payload, env)
+    if not _deny_out(out) or "reliability-gates-write" not in out:
+        fail(
+            name,
+            "control precondition failed: expected DENY with a normal, "
+            f"resolvable cwd, got exit={code}, stdout={out!r}",
+        )
+        return
+
+    # The actual scenario: cwd is a FRESH cyclic symlink (forces
+    # `identity_unresolved=True`, routing into
+    # `_reliability_gates_path_shape_match()` specifically), same
+    # case-varied target.
+    cyclic = tmp_dir / "cyclic-cwd-loop-case-fold"
+    os.symlink(cyclic, cyclic)
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-case-fold-cyclic-fail-closed",
+        "cwd": str(cyclic),
+        "tool_input": {"file_path": str(case_variant_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (fail-closed shape-match must case-fold/NFC-"
+            f"normalize like the main ancestor-derivation logic does), got "
+            f"exit={code}, stdout={out!r}",
+        )
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"expected a 'reliability-gates-write' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_reliability_gates_shape_match_rejects_unrelated_path(
+    tmp_dir: Path,
+) -> None:
+    """Companion negative test for REM-FIX cycle 8: proves the
+    `_normalized_leaf()` fix to `_reliability_gates_path_shape_match()` did
+    not become OVER-permissive. A path that does not end in
+    `RELIABILITY_GATES_LEDGER_REL_PATH`'s shape at all -- wrong filename,
+    wrong number of trailing components -- must still be denied protection
+    (i.e. NOT flagged as the reliability-gates ledger) even when
+    `identity_unresolved=True` forces the shape-match fallback."""
+    name = "pretooluse-guard/reliability-gates-shape-match-rejects-unrelated-path"
+    project = tmp_dir / "shape-match-negative-proj"
+    other_dir = project / ".craftflow" / "state" / "project"
+    other_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+
+    # Different filename entirely -- same directory shape, wrong leaf.
+    unrelated_file = other_dir / "some-other-file.json"
+    unrelated_file.write_text("{}", encoding="utf-8")
+
+    cyclic = tmp_dir / "cyclic-cwd-loop-shape-negative"
+    os.symlink(cyclic, cyclic)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-shape-match-negative",
+        "cwd": str(cyclic),
+        "tool_input": {"file_path": str(unrelated_file)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(name, f"expected the guard to exit 0 with a real decision, not crash: exit={code}, stdout={out!r}")
+        return
+    if "reliability-gates-write" in out:
+        fail(
+            name,
+            "expected the unrelated file to NOT be flagged as the "
+            f"reliability-gates ledger (over-permissive shape match), got: {out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_ai_first_setup_item10_collects_workspace_members() -> None:
     name = "ai-first-setup/item10-collects-workspace-members"
     text = (PLUGIN_ROOT / "skills" / "ai-first-setup" / "SKILL.md").read_text(encoding="utf-8")
@@ -19458,6 +20117,39 @@ def main() -> int:
     print()
     print("[ pretooluse-guard: cwd-vs-project_dir() identity confinement (ADR 0033 deferred siblings) ]")
     test_pretooluse_guard_reliability_gates_diverges_cwd_and_claude_project_dir(tmp / "idm1")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX (silent-failure-hunter cycle 2 -- unguarded cwd .resolve() must not crash _handle_edit_write) ]")
+    test_pretooluse_guard_edit_write_survives_cyclic_symlink_cwd(tmp / "idm2")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX (silent-failure-hunter cycle 3 -- cwd-resolution failure must fail CLOSED for reliability-gates, not degrade to project_dir()) ]")
+    test_pretooluse_guard_edit_write_cyclic_symlink_cwd_fails_closed_for_reliability_gates(tmp / "idm3")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX (doubt-verifier cycle 4 -- Path.resolve() case-fold/NFC-vs-NFD identity bypass on reliability-gates) ]")
+    test_pretooluse_guard_reliability_gates_case_fold_identity_bypass(tmp / "idm4")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX (doubt-verifier cycle 5 -- samefile() requires both paths to exist; ledger-not-yet-created case-fold bypass) ]")
+    test_pretooluse_guard_reliability_gates_case_fold_identity_bypass_ledger_missing(tmp / "idm5")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 6 (Bug A -- cwd-is-ancestor-of-project depth-mismatch bypass) ]")
+    test_pretooluse_guard_reliability_gates_cwd_is_ancestor_of_project(tmp / "idm6a")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 6 (Bug B -- case-sensitive-filesystem middle-of-path ancestor fallback) ]")
+    test_pretooluse_guard_reliability_gates_case_sensitive_ancestor_fallback()
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 7 (unconditional samefile() return bypasses ancestor-derivation when root has its own ledger) ]")
+    test_pretooluse_guard_reliability_gates_ancestor_root_has_own_ledger(tmp / "idm7")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 8 (silent-failure-hunter -- identity_unresolved shape-match fallback must case-fold/NFC-normalize) ]")
+    test_pretooluse_guard_reliability_gates_case_fold_bypass_on_cyclic_symlink_cwd_fails_closed(tmp / "idm8")
+    test_pretooluse_guard_reliability_gates_shape_match_rejects_unrelated_path(tmp / "idm8b")
 
     print()
     print("[ Phase 3: provisioning interview + doc cross-references (structural assertions, no .py behavior change) ]")
