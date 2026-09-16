@@ -2110,7 +2110,9 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     # workflow the permit was actually issued for -- see that helper's
     # docstring for the live-reproduced bug this replaced).
     memory_write_permit_uuid = _memory_write_permit_workflow_uuid(path, trusted_root)
-    if "memory-write" in violations and has_memory_finalize_permit(memory_write_permit_uuid):
+    if "memory-write" in violations and has_memory_finalize_permit(
+        memory_write_permit_uuid, project_root=trusted_root
+    ):
         # Item B fix: the finalize permit means this write IS proceeding --
         # treat it as an allow for escalation-reset purposes too.
         clear_denial(data.get("session_id"), str(path))

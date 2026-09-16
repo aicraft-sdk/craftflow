@@ -1459,6 +1459,108 @@ def test_pretooluse_guard_allows_project_tier_memory_write_when_newer_unrelated_
     ok(name)
 
 
+def test_pretooluse_guard_project_tier_memory_write_bypassed_by_unrelated_env_project_permit(
+    tmp_dir: Path,
+) -> None:
+    """CRITICAL (REM-FIX cycle 10, silent-failure-hunter Phase 5 live-repro):
+    the permit-lift call `has_memory_finalize_permit(memory_write_permit_uuid)`
+    in `_handle_edit_write()` omits `project_root=trusted_root`, even though
+    `_memory_write_permit_workflow_uuid(path, trusted_root)` (the sibling call
+    two lines above it) IS correctly anchored to `trusted_root`. For
+    project-tier paths `_memory_write_permit_workflow_uuid()` returns None
+    (any currently valid permit is sufficient, by design), which makes the
+    unanchored `has_memory_finalize_permit(None)` presence-only against
+    WHATEVER `CLAUDE_PROJECT_DIR` happens to resolve to for this process --
+    a completely different, decoupled identity source than the trusted
+    payload `cwd`. When `CLAUDE_PROJECT_DIR` diverges from `cwd` and that
+    unrelated env-derived project happens to have ANY valid
+    `.memory-finalize` sentinel of its own lying around, a write to the
+    CALLING project's own protected project-tier memory file is silently
+    ALLOWED even though the calling project holds no permit at all. Must
+    DENY."""
+    name = "pretooluse-guard/project-tier-memory-write-bypassed-by-unrelated-env-project-permit"
+    env_proj = tmp_dir / "env-proj"
+    cwd_proj = tmp_dir / "cwd-proj"
+    (env_proj / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    (cwd_proj / ".craftflow" / "state" / "project").mkdir(parents=True, exist_ok=True)
+    # env_proj holds a stale/unrelated permit -- nothing to do with cwd_proj.
+    (env_proj / ".craftflow" / "state" / ".memory-finalize").write_text(
+        "wf-unrelated-env-project-permit", encoding="utf-8"
+    )
+    # cwd_proj -- the CALLING project -- has NO permit of its own.
+    target = cwd_proj / ".craftflow" / "state" / "project" / "activeContext.md"
+    target.write_text("# Active Context\n", encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Edit",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(target)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            f"cwd_proj (the calling project) holds no permit of its own -- expected "
+            f"DENY regardless of an unrelated env-derived project's stale permit; "
+            f"got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_workflow_scoped_memory_write_false_denied_when_claude_project_dir_diverges(
+    tmp_dir: Path,
+) -> None:
+    """HIGH (REM-FIX cycle 10, silent-failure-hunter Phase 5 live-repro): same
+    missing `project_root=trusted_root` kwarg as the CRITICAL bypass above,
+    opposite direction. For workflow-scoped memory paths,
+    `_memory_write_permit_workflow_uuid()` correctly derives the real
+    workflow uuid from the target path itself (anchored to `trusted_root`),
+    but the unanchored `has_memory_finalize_permit(uuid)` call then reads the
+    permit file via env-derived `CLAUDE_PROJECT_DIR` instead of the trusted
+    `cwd` -- so the router's own correctly-issued permit, written under
+    `cwd_proj/.craftflow/state/.memory-finalize` and matching the real
+    `wf_uuid`, is falsely DENIED whenever `CLAUDE_PROJECT_DIR` diverges from
+    `cwd`. Must ALLOW."""
+    name = (
+        "pretooluse-guard/workflow-scoped-memory-write-false-denied-"
+        "when-claude-project-dir-diverges"
+    )
+    env_proj = tmp_dir / "env-proj"
+    cwd_proj = tmp_dir / "cwd-proj"
+    (env_proj / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    wf_uuid = "wf-cwd-proj-real-workflow-20260916-000000-aaaaaaaa"
+    wf_dir = cwd_proj / ".craftflow" / "state" / "workflows"
+    wf_memory_dir = wf_dir / wf_uuid
+    wf_memory_dir.mkdir(parents=True, exist_ok=True)
+    (wf_dir / f"{wf_uuid}.json").write_text(
+        f'{{"workflow_uuid":"{wf_uuid}"}}', encoding="utf-8"
+    )
+    # cwd_proj's OWN, genuinely valid, correctly-issued permit for the real
+    # workflow uuid -- written under cwd_proj, not env_proj.
+    (cwd_proj / ".craftflow" / "state" / ".memory-finalize").write_text(
+        wf_uuid, encoding="utf-8"
+    )
+    target = wf_memory_dir / "activeContext.md"
+    target.write_text("# Active Context\n", encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(target), "content": "# updated\n"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(
+            name,
+            f"cwd_proj holds its own genuinely valid permit for the real workflow "
+            f"uuid -- expected ALLOW; the permit lookup must anchor to the trusted "
+            f"payload cwd, not env-derived CLAUDE_PROJECT_DIR; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # Phase 4: pretooluse_guard.py protected-path extension, Bash-write
 # inspection, Edit/Write worktree confinement, hooks.json Bash registration.
@@ -20490,6 +20592,11 @@ def main() -> int:
         test_pretooluse_guard_allows_workflow_scoped_memory_write_when_newer_unrelated_workflow_exists(tmp / "g2b")
         test_pretooluse_guard_denies_workflow_scoped_memory_write_with_permit_for_different_workflow(tmp / "g2c")
         test_pretooluse_guard_allows_project_tier_memory_write_when_newer_unrelated_workflow_exists(tmp / "g2d")
+
+        print()
+        print("[ pretooluse-guard: REM-FIX cycle 10 (silent-failure-hunter CRITICAL+HIGH -- missing project_root= on has_memory_finalize_permit() call site) ]")
+        test_pretooluse_guard_project_tier_memory_write_bypassed_by_unrelated_env_project_permit(tmp / "g2e")
+        test_pretooluse_guard_workflow_scoped_memory_write_false_denied_when_claude_project_dir_diverges(tmp / "g2f")
 
         print()
         print("[ pretooluse-guard: Phase 4 protected-path + Bash-write inspection + confinement ]")
