@@ -141,7 +141,30 @@ def logs_dir() -> Path:
 
 
 def load_input() -> Dict[str, Any]:
-    raw = sys.stdin.read()
+    # REM-FIX cycle 5 (silent-failure-hunter, live-reproduced CRITICAL): this
+    # `sys.stdin.read()` had no guard around the implicit UTF-8 decode.
+    # Invalid-UTF-8 bytes on stdin raised an uncaught UnicodeDecodeError
+    # before any JSON parsing or dict-validation logic below ever ran, and
+    # none of this helper's 16+ callers wrap their main() in a top-level
+    # try/except -- so this crashed the whole guard process (exit 1, no
+    # permissionDecision JSON), which Claude Code treats as NON-BLOCKING.
+    # That is FAIL-OPEN for BOTH PreToolUse security gates at once (and
+    # every other load_input() caller), for that one tool call. Degrade to
+    # the same empty-input default this function already uses for
+    # missing/empty stdin.
+    try:
+        raw = sys.stdin.read()
+    except Exception as exc:
+        log_event(
+            "plugin_hooklib",
+            {
+                "event": "load_input",
+                "decision": "default-empty-input",
+                "reason": "unresolvable-hook-stdin-decode",
+                "error": repr(exc),
+            },
+        )
+        return {}
     if not raw.strip():
         return {}
     try:

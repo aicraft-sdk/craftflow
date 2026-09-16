@@ -261,7 +261,28 @@ def restore_all() -> int:
 
 
 def main() -> int:
-    raw = sys.stdin.read()
+    # REM-FIX cycle 5 (silent-failure-hunter, live-reproduced CRITICAL): this
+    # file reimplements the stdin-read/JSON-parse logic inline instead of
+    # calling the shared craftflow_hooklib.load_input() helper (see the
+    # matching fix there for the shared 16-caller site), so it has its OWN
+    # separate `sys.stdin.read()` call site with no guard around the
+    # implicit UTF-8 decode. Invalid-UTF-8 bytes on stdin raised an
+    # uncaught UnicodeDecodeError before the try/except below (which only
+    # wraps json.loads()) ever ran. Degrade to the same raw="" default this
+    # function's own missing/empty-stdin branch already falls through to.
+    try:
+        raw = sys.stdin.read()
+    except Exception as exc:
+        log_event(
+            "plugin_memory_protect_restore",
+            {
+                "event": "memory_protect_restore",
+                "decision": "default-full-restore",
+                "reason": "unresolvable-protect-restore-stdin-decode",
+                "error": repr(exc),
+            },
+        )
+        raw = ""
     data: dict = {}
     if raw.strip():
         try:

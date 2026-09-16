@@ -65,6 +65,24 @@ def run_hook(script: str, payload: dict, env: dict | None = None) -> tuple[int, 
     return result.returncode, result.stdout.strip()
 
 
+def run_hook_raw(script: str, raw_stdin: bytes, env: dict | None = None) -> tuple[int, str]:
+    """Run a hook script with raw BYTES on stdin, bypassing `run_hook()`'s
+    `text=True`/`json.dumps()` encoding path. Used to reproduce
+    invalid-UTF-8-on-stdin decode crashes that a `str` payload cannot
+    construct. Requires the merged environment (not a stripped-down one) so
+    a normal LANG/LC_ALL is inherited -- otherwise Python's C-locale
+    coercion silently swaps in a surrogateescape error handler and the
+    crash this helper exists to reproduce never fires."""
+    merged_env = {**os.environ, **(env or {})}
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / script)],
+        input=raw_stdin,
+        capture_output=True,
+        env=merged_env,
+    )
+    return result.returncode, result.stdout.decode("utf-8", errors="replace").strip()
+
+
 # ---------------------------------------------------------------------------
 # Memory protect pre-hook tests
 # ---------------------------------------------------------------------------
@@ -21139,6 +21157,115 @@ def test_pretooluse_guard_nul_byte_file_path_denies_instead_of_crashing(
     ok(name)
 
 
+def test_hooklib_load_input_non_utf8_stdin_degrades_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX cycle 5 (silent-failure-hunter, live-reproduced CRITICAL):
+    `craftflow_hooklib.load_input()`'s `raw = sys.stdin.read()` had no guard
+    around the implicit UTF-8 decode. Invalid-UTF-8 bytes on stdin raised an
+    uncaught UnicodeDecodeError before any JSON parsing or dict-validation
+    logic in load_input() ran, and none of this helper's 16+ callers wrap
+    their main() in a top-level try/except -- so this crashed the whole
+    guard process (exit 1, no permissionDecision JSON), which Claude Code
+    treats as NON-BLOCKING. That is FAIL-OPEN at a single shared entry point
+    used by BOTH PreToolUse security gates. This test drives one of them
+    (`craftflow_pretooluse_guard.py`); the sibling gate
+    (`craftflow_pretooluse_bash_guard.py`) is covered by construction since
+    the fix lives in the one shared helper, not per-caller code."""
+    name = "hooklib/load-input-non-utf8-stdin-degrades-instead-of-crashing"
+    project = tmp_dir / "non-utf8-stdin-proj"
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    code, out = run_hook_raw(
+        "craftflow_pretooluse_guard.py",
+        b"\xff\xfe\x00\x01not-utf8-json-stdin",
+        env,
+    )
+    if code != 0:
+        fail(name, f"guard process crashed (exit {code}) on non-UTF-8 stdin instead of degrading -- FAIL-OPEN")
+        return
+    if "permissionDecision" in out:
+        fail(name, f"expected a silent no-op (missing tool_name -> return 0, no decision), got: {out!r}")
+        return
+
+    # CONTROL (anti-over-restriction): a well-formed, VALID-JSON payload
+    # against the same project must still produce its pre-existing decision --
+    # proving the new guard did not disturb ordinary JSON stdin handling.
+    (state_dir / "patterns.md").write_text("x\n", encoding="utf-8")
+    code2, out2 = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Write",
+            "session_id": "wf-non-utf8-stdin-control",
+            "cwd": str(project),
+            "tool_input": {"file_path": str(state_dir / "patterns.md")},
+        },
+        env,
+    )
+    if not _deny_out(out2) or "memory" not in out2.lower():
+        fail(name, f"control case regressed: expected the pre-existing memory-write deny, got exit={code2}, stdout={out2!r}")
+        return
+    ok(name)
+
+
+def test_memory_protect_restore_non_utf8_stdin_degrades_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX cycle 5 secondary fix: `craftflow_memory_protect_restore.py`'s
+    own `main()` duplicates the stdin-read/JSON-parse logic inline instead of
+    calling the shared `load_input()` helper, so it has its OWN separate
+    unguarded `raw = sys.stdin.read()` call site that the `load_input()` fix
+    above does not cover. Live-reproduced: UnicodeDecodeError, exit 1,
+    before this fix."""
+    name = "memory-protect-restore/non-utf8-stdin-degrades-instead-of-crashing"
+    project = tmp_dir / "non-utf8-stdin-restore-proj"
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    good_file = state_dir / "patterns.md"
+    good_content = "<!-- CRAFTFLOW_BLOCK_112233445566 -->\n"
+    good_file.write_text(good_content, encoding="utf-8")
+    import hashlib
+
+    key = hashlib.sha1(str(good_file).encode("utf-8")).hexdigest()[:12]
+    cache_dir = project / ".craftflow" / ".memory-protect-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / f"{key}.blocks.json").write_text(
+        json.dumps({"112233445566": "restored content\n"}), encoding="utf-8"
+    )
+
+    env = {"CLAUDE_PROJECT_DIR": str(project)}
+    code, _ = run_hook_raw(
+        "craftflow_memory_protect_restore.py",
+        b"\xff\xfe\x00\x01not-utf8-json-stdin",
+        env,
+    )
+    if code != 0:
+        fail(name, f"hook crashed (exit {code}) on non-UTF-8 stdin instead of degrading safely")
+        return
+
+    log_path = state_dir / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, "expected craftflow-hook-events.log to record the degraded stdin decode, but no log file was written")
+        return
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-protect-restore-stdin-decode" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-stdin-decode' reason, got: {log_text!r}")
+        return
+
+    # CONTROL: malformed stdin degrades to {}, so hook_event_name is "",
+    # which falls into the full-restore branch (same shape as the sibling
+    # non-UTF-8-file r5 test) -- the well-formed sibling state file must
+    # still get restored.
+    restored = good_file.read_text(encoding="utf-8")
+    if "CRAFTFLOW_BLOCK_" in restored:
+        fail(name, "expected default-full-restore to still restore the well-formed sibling .md file")
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_protected_memory_paths_diverge_cwd_and_claude_project_dir(
     tmp_dir: Path,
 ) -> None:
@@ -22386,6 +22513,11 @@ def main() -> int:
     print("[ pretooluse-guard: unguarded Path(...).resolve() crash/fail-open hardening (ADR 0035 deferred bugs) ]")
     test_pretooluse_guard_unresolvable_file_path_denies_instead_of_crashing(tmp / "res1")
     test_pretooluse_guard_nul_byte_file_path_denies_instead_of_crashing(tmp / "res2")
+
+    print()
+    print("[ hooklib / memory-protect-restore: REM-FIX cycle 5 -- unguarded sys.stdin.read() decode crash ]")
+    test_hooklib_load_input_non_utf8_stdin_degrades_instead_of_crashing(tmp / "res3")
+    test_memory_protect_restore_non_utf8_stdin_degrades_instead_of_crashing(tmp / "res4")
 
     print()
     if _errors:
