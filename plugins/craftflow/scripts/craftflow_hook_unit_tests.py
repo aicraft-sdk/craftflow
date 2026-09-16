@@ -3661,7 +3661,18 @@ def test_pretooluse_guard_bash_confinement_lane_no_longer_flags_target_once_it_i
     elsewhere.mkdir(parents=True)
     wf_uuid = "wf-fixture-self-target"
     target = (project_root / ".craftflow" / "state" / "workflows" / f"{wf_uuid}.json").resolve()
-    _write_workflow_json_fixture(project_root, None, wf_uuid=wf_uuid, workspace_writable_paths=[str(target)])
+    # This fixture is reused as the write TARGET itself, discovered via
+    # _protected_bash_write_paths()'s untouched, env-anchored workflows_dir()
+    # glob -- unaffected by Phase 4's cwd-anchored latest_live_workflow_payload().
+    _write_workflow_json_fixture(project_root, None, wf_uuid=wf_uuid)
+    # Phase 4 (ADR 0033 deferred-sibling fix): the confinement lane's own
+    # workflow discovery is now anchored to the trusted payload `cwd`
+    # (`elsewhere`), not CLAUDE_PROJECT_DIR (`project_root`) -- so the live
+    # workflow granting `workspace_writable_paths` for `target` must live
+    # under `elsewhere`'s own workflows dir to be found by that lane.
+    _write_workflow_json_fixture(
+        elsewhere, None, wf_uuid="wf-elsewhere-live", workspace_writable_paths=[str(target)]
+    )
     env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
     payload = {
         "tool_name": "Bash",
@@ -4086,7 +4097,7 @@ def test_pretooluse_guard_handles_workflow_payload_race_in_wf_uuid_lookup(tmp_di
 
     call_count = {"n": 0}
 
-    def _fake_latest_live_workflow_payload(session_id=None):
+    def _fake_latest_live_workflow_payload(session_id=None, project_root=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             return {}
@@ -20152,6 +20163,59 @@ def test_hooklib_latest_live_workflow_payload_project_root_selects_supplied_proj
     ok(name)
 
 
+def test_pretooluse_guard_worktree_path_diverges_cwd_and_claude_project_dir(tmp_dir: Path) -> None:
+    # ADR 0033 deferred-sibling fix (live-reproduced): the active workflow's
+    # `worktree_path` -- a real write GRANT handed to resolve_confinement() --
+    # was selected by globbing `workflows_dir()` = project_dir()/... rather than
+    # the trusted PreToolUse payload `cwd`. An UNRELATED project's live workflow
+    # therefore leaked its worktree grant into a different project's session:
+    # a write into that worktree was ALLOWED even though the calling project has
+    # no such workflow at all.
+    name = "pretooluse-guard/worktree-path-diverges-cwd-and-claude-project-dir"
+    env_proj = tmp_dir / "env-proj"
+    cwd_proj = tmp_dir / "cwd-proj"
+    leaked_worktree = tmp_dir / "leaked-worktree"
+    for d in (env_proj, cwd_proj, leaked_worktree):
+        d.mkdir(parents=True, exist_ok=True)
+    for proj in (env_proj, cwd_proj):
+        (proj / ".craftflow" / "state" / "workflows").mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q"], cwd=str(proj), check=True, capture_output=True)
+    (env_proj / ".craftflow" / "state" / "workflows" / "wf-env-live.json").write_text(
+        json.dumps({"workflow_uuid": "wf-env-live", "worktree_path": str(leaked_worktree)}),
+        encoding="utf-8",
+    )
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    # Part 1 (the leak): cwd=cwd_proj has NO workflow at all -> the write must
+    # be denied for worktree-confinement, not allowed by env_proj's grant.
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-worktree-diverge",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(leaked_worktree / "evil.txt")},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(name, f"leaked-worktree case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"leaked-worktree case: expected 'worktree-confinement' reason, got: {out!r}")
+        return
+
+    # Part 2 (positive control): once cwd_proj has its OWN live workflow naming
+    # the same worktree, the SAME write must be ALLOWED -- proving the grant is
+    # anchored to cwd, not to CLAUDE_PROJECT_DIR (which still names env_proj).
+    (cwd_proj / ".craftflow" / "state" / "workflows" / "wf-cwd-live.json").write_text(
+        json.dumps({"workflow_uuid": "wf-cwd-live", "worktree_path": str(leaked_worktree)}),
+        encoding="utf-8",
+    )
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0 or out:
+        fail(name, f"own-workflow control: expected ALLOW (exit 0, empty stdout), got exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -21231,6 +21295,10 @@ def main() -> int:
     print("[ hooklib: Phase 3 -- side-effect-free project_root on the live-workflow lookup chain ]")
     test_hooklib_workflows_dir_project_root_override_and_no_side_effect(tmp / "idm4")
     test_hooklib_latest_live_workflow_payload_project_root_selects_supplied_project(tmp / "idm5")
+
+    print()
+    print("[ pretooluse-guard: Phase 4 -- worktree_path call sites anchor to trusted payload cwd (ADR 0033 first deferred CRITICAL sibling) ]")
+    test_pretooluse_guard_worktree_path_diverges_cwd_and_claude_project_dir(tmp / "idm6")
 
     print()
     if _errors:

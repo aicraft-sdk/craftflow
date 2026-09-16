@@ -1543,7 +1543,12 @@ def _edit_write_escapes_confinement(data: dict, path: Path) -> bool:
     # artifact. This is a write-confinement-sensitive call site (Finding 1,
     # REM-FIX cycle 1) so it uses the *_live_* variant, not the plain
     # newest-by-mtime latest_workflow_payload().
-    workflow = latest_live_workflow_payload(data.get("session_id"))
+    #
+    # ADR 0033 deferred-sibling fix: anchored to THIS SAME trusted `cwd`
+    # (project_root=cwd), exactly like the has_memory_finalize_permit() call
+    # below -- otherwise the worktree_path grant fed into resolve_confinement()
+    # comes from an UNRELATED project's live workflow.
+    workflow = latest_live_workflow_payload(data.get("session_id"), project_root=cwd)
     worktree_path = workflow.get("worktree_path")
     if worktree_path is not None and not isinstance(worktree_path, str):
         worktree_path = None
@@ -2002,8 +2007,12 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     # (and the whole guard process, since main() has no top-level try/except) before the
     # deny below is ever emitted. Write-confinement-sensitive call site (Finding 1,
     # REM-FIX cycle 1) -- uses the *_live_* variant.
+    #
+    # ADR 0033 deferred-sibling fix: anchored to the same trusted `trusted_root`
+    # already resolved above for the reliability-gates/skill-ledger checks in
+    # this function, not an env-derived project identity.
     try:
-        workflow = latest_live_workflow_payload(data.get("session_id"))
+        workflow = latest_live_workflow_payload(data.get("session_id"), project_root=trusted_root)
         wf_uuid = workflow.get("workflow_uuid") or workflow.get("workflow_id")
         pending_gate = workflow.get("pending_gate")
     except Exception as exc:
@@ -2207,8 +2216,11 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     # the whole guard process, since main() has no top-level try/except) before any
     # protection check below ever runs. Write-confinement-sensitive call site (Finding 1,
     # REM-FIX cycle 1) -- uses the *_live_* variant.
+    #
+    # ADR 0033 deferred-sibling fix: anchored to THIS SAME trusted `cwd` (resolved
+    # just above), never an env-derived project identity.
     try:
-        workflow = latest_live_workflow_payload(data.get("session_id"))
+        workflow = latest_live_workflow_payload(data.get("session_id"), project_root=cwd)
         worktree_path = workflow.get("worktree_path")
         if worktree_path is not None and not isinstance(worktree_path, str):
             worktree_path = None

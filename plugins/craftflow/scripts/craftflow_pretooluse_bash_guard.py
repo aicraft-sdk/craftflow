@@ -1539,7 +1539,13 @@ def main() -> int:
         # Write-confinement-sensitive call site (Finding 1, REM-FIX cycle
         # 1) -- uses the *_live_* variant, not the plain newest-by-mtime
         # latest_workflow_payload().
-        worktree_path = latest_live_workflow_payload(data.get("session_id")).get("worktree_path")
+        #
+        # ADR 0033 deferred-sibling fix: anchor the worktree_path lookup to the
+        # trusted PreToolUse payload `cwd`, mirroring the sibling
+        # craftflow_pretooluse_guard.py call sites.
+        worktree_path = latest_live_workflow_payload(
+            data.get("session_id"), project_root=cwd
+        ).get("worktree_path")
     except Exception as exc:
         # REM-FIX cycle 4 (consistency, MEDIUM): mirrors the equivalent
         # latest_live_workflow_payload() except blocks in the sibling
