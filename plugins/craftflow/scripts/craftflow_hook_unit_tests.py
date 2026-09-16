@@ -18465,6 +18465,763 @@ def test_pretooluse_guard_skill_promotion_diverges_cwd_and_claude_project_dir(tm
     ok(name)
 
 
+def test_pretooluse_guard_skill_promotion_ledger_corrupt_case_fold_bypass(tmp_dir: Path) -> None:
+    """CRITICAL 1 (REM-FIX cycle 9, code-reviewer, live-reproduced):
+    `_skill_promotion_path_shape_match()` -- the fallback
+    `_is_protected_skill_promotion_path()` uses when the skill-candidate
+    ledger EXISTS but cannot be trusted (`ledger_corrupt=True`) -- compared
+    path components with plain string equality
+    (`parts[0] in (".claude", ".cursor")`, `parts[1] == "skills"`,
+    `parts[3] == "SKILL.md"`), unlike its own root-FREE sibling
+    `_skill_promotion_path_shape_match_no_root()`, which already normalizes
+    every component via `_normalized_leaf()`. On a
+    case-insensitive-but-case-preserving filesystem (this repo's default,
+    macOS/APFS), a case-varied write target (`.CLAUDE/Skills/demo/SKILL.MD`)
+    was silently ALLOWED under a corrupt ledger while the canonical-case
+    spelling was correctly DENIED."""
+    name = "pretooluse-guard/skill-promotion-ledger-corrupt-case-fold-bypass"
+    proj = tmp_dir / "ledger-corrupt-case-fold-proj"
+    state_project = proj / ".craftflow" / "state" / "project"
+    state_project.mkdir(parents=True, exist_ok=True)
+    (state_project / "skill-candidates.json").write_text("{not valid json", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=str(proj), check=True, capture_output=True)
+
+    env = {"CLAUDE_PROJECT_DIR": str(proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    # Positive control: canonical-case spelling must be denied (this already
+    # worked pre-fix -- the corrupt-ledger fallback fires at all).
+    canonical_dir = proj / ".claude" / "skills" / "canonical-demo"
+    canonical_dir.mkdir(parents=True, exist_ok=True)
+    canonical_target = canonical_dir / "SKILL.md"
+    payload_canonical = {
+        "tool_name": "Write",
+        "session_id": "wf-ledger-corrupt-case-fold",
+        "cwd": str(proj),
+        "tool_input": {"file_path": str(canonical_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_canonical, env)
+    if not _deny_out(out) or "skill-promotion-path" not in out:
+        fail(
+            name,
+            f"positive control: canonical-case SKILL.md under a corrupt ledger "
+            f"must be DENIED, got exit={code}, stdout={out!r}",
+        )
+        return
+
+    # The live-reproduced bypass: a case-varied spelling of the SAME shape
+    # must ALSO be denied -- not silently allowed via raw string comparison.
+    case_varied_dir = proj / ".CLAUDE" / "Skills" / "demo"
+    case_varied_dir.mkdir(parents=True, exist_ok=True)
+    case_varied_target = case_varied_dir / "SKILL.MD"
+    payload_case_varied = {
+        "tool_name": "Write",
+        "session_id": "wf-ledger-corrupt-case-fold",
+        "cwd": str(proj),
+        "tool_input": {"file_path": str(case_varied_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_case_varied, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (case-varied SKILL.md under a corrupt ledger must "
+            f"fail closed the same as the canonical spelling), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"expected a 'skill-promotion-path' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_ledger_no_root_fallback_survives_none_skill_modules(tmp_dir: Path) -> None:
+    """CRITICAL 2 (REM-FIX cycle 9, silent-failure-hunter, live-reproduced):
+    `_skill_ledger_or_proposal_shape_match_no_root()` -- the fail-CLOSED
+    fallback `_is_protected_skill_ledger_or_proposal_path()` uses when the
+    caller's trusted `cwd` could not be resolved to ANY root at all
+    (`identity_unresolved=True`) -- dereferenced
+    `skill_ledger.DEFAULT_LEDGER_PATH` / `skill_promote.DEFAULT_PROPOSALS_DIR`
+    with NO guard against these sibling modules being `None` (the documented
+    degradation for a partial/interrupted plugin-cache sync, per this file's
+    own top-of-file comment, which claims "every call site already degrades
+    safely" -- false for this call path). Combined with an unresolvable
+    `cwd` (a cyclic symlink, which sets `identity_unresolved=True`), this
+    crashed `_handle_edit_write` with an uncaught `AttributeError:
+    'NoneType' object has no attribute 'DEFAULT_LEDGER_PATH'` -- FAIL-OPEN
+    for every check in the function (memory-write, skill-promotion-path,
+    skill-ledger-write, reliability-gates-write, worktree-confinement), not
+    just this one. Fixed by hardcoding the two fixed relative-path literals
+    in the no-root fallback, mirroring how its sibling
+    `_skill_promotion_path_shape_match_no_root()` already has zero
+    dependency on `skill_ledger`/`skill_promote`."""
+    name = "pretooluse-guard/skill-ledger-no-root-fallback-survives-none-skill-modules"
+    proj = tmp_dir / "none-skill-modules-proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    target = proj / ".craftflow" / "state" / "project" / "skill-candidates.json"
+
+    cyclic = tmp_dir / "cyclic-cwd-loop-none-modules"
+    os.symlink(cyclic, cyclic)
+
+    original_skill_ledger = pretooluse_guard.skill_ledger
+    original_skill_promote = pretooluse_guard.skill_promote
+    pretooluse_guard.skill_ledger = None
+    pretooluse_guard.skill_promote = None
+
+    buf = io.StringIO()
+    old_stdout = sys.stdout
+    crashed_exc = None
+    result = None
+    try:
+        sys.stdout = buf
+        try:
+            data = {"cwd": str(cyclic)}
+            mode = {"memoryWrites": "block"}
+            tool_input = {"file_path": str(target)}
+            result = pretooluse_guard._handle_edit_write(data, mode, tool_input)
+        except Exception as exc:  # the exact crash CRITICAL 2 warns about
+            crashed_exc = exc
+    finally:
+        sys.stdout = old_stdout
+        pretooluse_guard.skill_ledger = original_skill_ledger
+        pretooluse_guard.skill_promote = original_skill_promote
+
+    if crashed_exc is not None:
+        fail(
+            name,
+            f"_handle_edit_write crashed instead of degrading gracefully with "
+            f"skill_ledger/skill_promote == None: {crashed_exc!r}",
+        )
+        return
+    out = buf.getvalue().strip()
+    if result != 0:
+        fail(name, f"expected _handle_edit_write to return 0 (real decision, not crash); got {result!r}")
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected a DENY decision (fail-closed shape match), got: {out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected a 'skill-ledger-write' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_literal_constants_pinned_to_live_modules() -> None:
+    """HIGH (REM-FIX cycle 9, silent-failure-hunter re-hunt, live-reproduced
+    drift scenario): `_SKILL_LEDGER_REL_PATH_LITERAL` /
+    `_SKILL_PROPOSALS_DIR_REL_PATH_LITERAL` back the fail-CLOSED
+    `identity_unresolved` fallback for `_is_protected_skill_ledger_or_proposal_path()`.
+    They are now captured from `skill_ledger.DEFAULT_LEDGER_PATH` /
+    `skill_promote.DEFAULT_PROPOSALS_DIR` at import time when those modules
+    are available, rather than hand-duplicated as separate string literals --
+    but that guarantee only holds for as long as this test keeps passing. A
+    future rename of either module constant with no matching update here
+    would silently reintroduce the exact drift the hunter live-reproduced:
+    the fail-closed fallback keeps defending a now-stale, meaningless shape
+    while missing the real (renamed) resource, with no other test failure to
+    flag it."""
+    name = "pretooluse-guard/skill-literal-constants-pinned-to-live-modules"
+    if pretooluse_guard.skill_ledger is None or pretooluse_guard.skill_promote is None:
+        # Modules genuinely unavailable in this environment -- the ASCII
+        # literal fallback in the source is the only option and there is no
+        # live constant to pin against. Not a failure of this test's own
+        # assertion; the module-availability precondition itself is already
+        # covered by test_pretooluse_guard_skill_ledger_no_root_fallback_survives_none_skill_modules.
+        ok(name)
+        return
+    if pretooluse_guard._SKILL_LEDGER_REL_PATH_LITERAL != pretooluse_guard.skill_ledger.DEFAULT_LEDGER_PATH:
+        fail(
+            name,
+            "drift detected: _SKILL_LEDGER_REL_PATH_LITERAL "
+            f"{pretooluse_guard._SKILL_LEDGER_REL_PATH_LITERAL!r} != "
+            f"skill_ledger.DEFAULT_LEDGER_PATH {pretooluse_guard.skill_ledger.DEFAULT_LEDGER_PATH!r}",
+        )
+        return
+    if pretooluse_guard._SKILL_PROPOSALS_DIR_REL_PATH_LITERAL != pretooluse_guard.skill_promote.DEFAULT_PROPOSALS_DIR:
+        fail(
+            name,
+            "drift detected: _SKILL_PROPOSALS_DIR_REL_PATH_LITERAL "
+            f"{pretooluse_guard._SKILL_PROPOSALS_DIR_REL_PATH_LITERAL!r} != "
+            f"skill_promote.DEFAULT_PROPOSALS_DIR {pretooluse_guard.skill_promote.DEFAULT_PROPOSALS_DIR!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_ledger_no_root_fallback_protects_bare_proposals_dir() -> None:
+    """HIGH 4 (REM-FIX cycle 9, silent-failure-hunter, live-reproduced): the
+    main logic's ledger/proposals scan
+    (`_is_protected_skill_ledger_or_proposal_path()`'s own loop at
+    `range(0, len(path_parts) - n + 1)`) includes the bare proposals
+    directory itself as protected. The `identity_unresolved` fallback's scan
+    (`_skill_ledger_or_proposal_shape_match_no_root()`) used
+    `range(0, len(path_parts) - n)` instead -- excluding that exact case,
+    inverting the design principle that a no-root/shape-only fallback must
+    be AT LEAST as protective as the main path, never less. A `mv`/`rm -rf`
+    targeting the bare `skill-proposals` directory itself (not a file
+    beneath it) was silently un-protected under this fallback while every
+    path one level deeper was correctly denied."""
+    name = "pretooluse-guard/skill-ledger-no-root-fallback-protects-bare-proposals-dir"
+    # identity_unresolved=True short-circuits before any root resolution --
+    # no real filesystem root is consulted, so a fabricated path with the
+    # exact trailing shape is sufficient.
+    target = Path("/unresolved-identity/proj/.craftflow/state/project/skill-proposals")
+    if not pretooluse_guard._is_protected_skill_ledger_or_proposal_path(
+        target, identity_unresolved=True
+    ):
+        fail(
+            name,
+            "expected the bare skill-proposals directory itself to be "
+            "protected under the identity_unresolved fallback, got False",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_root_prefix_matches_trusts_definitive_samefile_false() -> None:
+    """HIGH 2 (REM-FIX cycle 9, silent-failure-hunter, live-reproduced):
+    `_root_prefix_matches()` used to `if os.path.samefile(...): return True`
+    with NO `else` -- silently falling through to the normalized-leaf
+    fallback even on a DEFINITIVE `False` from `samefile()` (no exception).
+    The reference contract this helper claims to mirror
+    (`_is_protected_reliability_gates_path()`'s own ancestor-derivation
+    logic, `return os.path.samefile(root_prefix_path, root)`) trusts BOTH
+    `True` and `False`, falling through ONLY on a raised exception. Fixed to
+    match: a definitive `samefile()` result is now trusted and returned
+    directly; only `(OSError, ValueError)` falls through to the
+    normalized-leaf comparison."""
+    name = "pretooluse-guard/root-prefix-matches-trusts-definitive-samefile-false"
+    tmp = Path(tempfile.mkdtemp(prefix="cf9-hp23a-"))
+    try:
+        root = tmp / "RealRoot"
+        root.mkdir()
+        # `other` deliberately does NOT exist on disk -- `samefile()` is
+        # mocked below to always return a definitive `False` regardless, so
+        # no real filesystem identity is ever consulted. Only `root.exists()`
+        # matters for reaching the branch under test.
+        other = tmp / "realroot"  # case-fold-equal to root's own leaf name
+
+        original_samefile = os.path.samefile
+        os.path.samefile = lambda a, b: False  # definitive: NOT the same file
+        try:
+            result = pretooluse_guard._root_prefix_matches(other.parts, root.parts, root)
+        finally:
+            os.path.samefile = original_samefile
+
+        if result is not False:
+            fail(
+                name,
+                "expected a definitive samefile()==False to be trusted "
+                f"(not degraded to the case-fold fallback), got: {result!r}",
+            )
+            return
+        ok(name)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_pretooluse_guard_relative_parts_under_root_trusts_definitive_samefile_false() -> None:
+    """HIGH 3 (REM-FIX cycle 9, silent-failure-hunter, live-reproduced):
+    `_relative_parts_under_root()` had the identical bug as HIGH 2's
+    `_root_prefix_matches()` -- falling through to the normalized-leaf
+    fallback even on a definitive `samefile()==False`. Fixed the same way:
+    a definitive result is trusted directly; only an exception falls
+    through (now logged via `log_event()`, matching the reference
+    contract's own Bug-B fallback)."""
+    name = "pretooluse-guard/relative-parts-under-root-trusts-definitive-samefile-false"
+    tmp = Path(tempfile.mkdtemp(prefix="cf9-hp23b-"))
+    try:
+        root = tmp / "RealRoot"
+        root.mkdir()
+        # `other_base` deliberately does NOT exist on disk -- `samefile()` is
+        # mocked below to always return a definitive `False` regardless, so
+        # no real filesystem identity is ever consulted. Only `root.exists()`
+        # matters for reaching the branch under test.
+        other_base = tmp / "realroot"  # case-fold-equal to root's own leaf name
+        path = other_base / "leftover.txt"
+
+        original_samefile = os.path.samefile
+        os.path.samefile = lambda a, b: False
+        try:
+            result = pretooluse_guard._relative_parts_under_root(path, root)
+        finally:
+            os.path.samefile = original_samefile
+
+        if result is not None:
+            fail(
+                name,
+                "expected a definitive samefile()==False to be trusted "
+                f"(path must NOT be treated as reachable under root), got: {result!r}",
+            )
+            return
+        ok(name)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_pretooluse_guard_skill_ledger_cwd_is_ancestor_of_project(tmp_dir: Path) -> None:
+    """HIGH 1 (REM-FIX cycle 9, code-reviewer -- missing permanent regression
+    coverage): ports
+    `test_pretooluse_guard_reliability_gates_cwd_is_ancestor_of_project`'s
+    fixture shape to `_is_protected_skill_ledger_or_proposal_path()`. The
+    mechanism itself (`_root_prefix_matches()`) was already live-verified
+    correct for this predicate before this test existed -- this closes the
+    permanent-CI-coverage gap so a future refactor cannot silently
+    reintroduce the depth-mismatch bug reliability-gates' own REM-FIX cycle
+    6 (Bug A) hit."""
+    name = "pretooluse-guard/skill-ledger-cwd-is-ancestor-of-project"
+    workspace = tmp_dir / "skill-ledger-cwd-ancestor-workspace"
+    proj_real = workspace / "proj-real"
+    ledger_dir = proj_real / ".craftflow" / "state" / "project"
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    ledger = ledger_dir / "skill-candidates.json"
+    ledger.write_text('{"candidates": []}', encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=str(proj_real), check=True, capture_output=True)
+
+    env = {"CLAUDE_PROJECT_DIR": str(workspace), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-ledger-cwd-is-ancestor",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (cwd-is-ancestor-of-project depth-mismatch bypass "
+            f"closed for the skill-candidate ledger), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected a 'skill-ledger-write' reason, got: {out!r}")
+        return
+
+    # Negative control: an UNRELATED sibling project's ledger at the same
+    # nesting depth must NOT match.
+    unrelated = tmp_dir / "skill-ledger-cwd-ancestor-unrelated-sibling"
+    unrelated_ledger_dir = unrelated / ".craftflow" / "state" / "project"
+    unrelated_ledger_dir.mkdir(parents=True, exist_ok=True)
+    unrelated_ledger = unrelated_ledger_dir / "skill-candidates.json"
+    unrelated_ledger.write_text('{"candidates": []}', encoding="utf-8")
+    payload_unrelated = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-ledger-cwd-is-ancestor",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(unrelated_ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_unrelated, env)
+    if "skill-ledger-write" in out:
+        fail(
+            name,
+            "negative control: an unrelated sibling project's ledger must "
+            f"NOT be flagged as 'skill-ledger-write', got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_ledger_case_sensitive_ancestor_fallback() -> None:
+    """HIGH 1 (REM-FIX cycle 9, code-reviewer -- missing permanent regression
+    coverage): ports
+    `test_pretooluse_guard_reliability_gates_case_sensitive_ancestor_fallback`'s
+    fixture shape (monkeypatched `os.path.samefile()` simulating a
+    case-sensitive-filesystem miss on the untrusted candidate side) to
+    `_is_protected_skill_ledger_or_proposal_path()`, calling it directly
+    in-process so the monkeypatch is visible to it (this harness's own
+    established convention for a deterministic, filesystem-independent
+    assertion)."""
+    name = "pretooluse-guard/skill-ledger-case-sensitive-ancestor-fallback"
+    tmp_dir = Path(tempfile.mkdtemp(prefix="cf9-skl-bugb-")).resolve()
+    try:
+        root = tmp_dir / "CaseSensitiveProj"
+        (root / ".craftflow" / "state" / "project").mkdir(parents=True)
+        ledger = root / ".craftflow" / "state" / "project" / "skill-candidates.json"
+        ledger.write_text('{"candidates": []}', encoding="utf-8")
+
+        wrong_case_root = tmp_dir / "casesensitiveproj"
+        target = wrong_case_root / ".craftflow" / "state" / "project" / "skill-candidates.json"
+
+        original_samefile = os.path.samefile
+        logged_events: list = []
+
+        def _fake_samefile(a, b):
+            if "casesensitiveproj" in Path(a).parts or "casesensitiveproj" in Path(b).parts:
+                raise FileNotFoundError(f"simulated case-sensitive miss: {a!r} vs {b!r}")
+            return original_samefile(a, b)
+
+        original_log_event = pretooluse_guard.log_event
+
+        def _capturing_log_event(name_arg, payload_arg):
+            logged_events.append((name_arg, payload_arg))
+
+        os.path.samefile = _fake_samefile
+        pretooluse_guard.log_event = _capturing_log_event
+        try:
+            result = pretooluse_guard._is_protected_skill_ledger_or_proposal_path(
+                target, project_root=root
+            )
+        finally:
+            os.path.samefile = original_samefile
+            pretooluse_guard.log_event = original_log_event
+
+        if result is not True:
+            fail(
+                name,
+                "expected the case-sensitive ancestor fallback to still "
+                f"recognize the real skill-candidate ledger as protected, got: {result!r}",
+            )
+            return
+        if not logged_events:
+            fail(
+                name,
+                "expected the candidate-root-unresolvable fallback to be "
+                "logged via log_event(), got no events",
+            )
+            return
+        ok(name)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_pretooluse_guard_skill_ledger_ancestor_root_has_own_ledger(tmp_dir: Path) -> None:
+    """HIGH 1 (REM-FIX cycle 9, code-reviewer -- missing permanent regression
+    coverage): ports
+    `test_pretooluse_guard_reliability_gates_ancestor_root_has_own_ledger`'s
+    fixture shape (the trusted `root` ALSO has its own real, on-disk
+    skill-candidate ledger at the naive direct-child position -- a
+    genuinely DIFFERENT real file than the nested project's own ledger) to
+    `_is_protected_skill_ledger_or_proposal_path()`."""
+    name = "pretooluse-guard/skill-ledger-ancestor-root-has-own-ledger"
+    workspace = tmp_dir / "skill-ledger-ancestor-with-own-ledger-workspace"
+    root_ledger_dir = workspace / ".craftflow" / "state" / "project"
+    root_ledger_dir.mkdir(parents=True, exist_ok=True)
+    root_ledger = root_ledger_dir / "skill-candidates.json"
+    root_ledger.write_text('{"candidates": ["root-own"]}', encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=str(workspace), check=True, capture_output=True)
+
+    nested = workspace / "nested-proj"
+    nested_ledger_dir = nested / ".craftflow" / "state" / "project"
+    nested_ledger_dir.mkdir(parents=True, exist_ok=True)
+    nested_ledger = nested_ledger_dir / "skill-candidates.json"
+    nested_ledger.write_text('{"candidates": ["nested-own"]}', encoding="utf-8")
+
+    if os.path.samefile(str(root_ledger), str(nested_ledger)):
+        fail(name, "fixture precondition failed: root and nested ledgers must be distinct files")
+        return
+
+    env = {"CLAUDE_PROJECT_DIR": str(workspace), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-ledger-ancestor-root-has-own-ledger",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(nested_ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (nested project's own ledger must be protected "
+            "even though root's naive direct-child ledger already exists "
+            f"as a different real file), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected a 'skill-ledger-write' reason, got: {out!r}")
+        return
+
+    payload_root = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-ledger-ancestor-root-has-own-ledger",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(root_ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_root, env)
+    if not _deny_out(out) or "skill-ledger-write" not in out:
+        fail(
+            name,
+            f"positive control: expected DENY for root's own ledger too, got exit={code}, stdout={out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_promotion_cwd_is_ancestor_of_project(tmp_dir: Path) -> None:
+    """HIGH 1 (REM-FIX cycle 9, code-reviewer -- missing permanent regression
+    coverage): ports
+    `test_pretooluse_guard_reliability_gates_cwd_is_ancestor_of_project`'s
+    fixture shape to `_is_protected_skill_promotion_path()`, where `root`
+    (the trusted payload `cwd`) is a real ANCESTOR of the project holding
+    the in-flight ledger entry and its promoted `SKILL.md`."""
+    name = "pretooluse-guard/skill-promotion-cwd-is-ancestor-of-project"
+    workspace = tmp_dir / "skill-promotion-cwd-ancestor-workspace"
+    proj_real = workspace / "proj-real"
+    state_project = proj_real / ".craftflow" / "state" / "project"
+    state_project.mkdir(parents=True, exist_ok=True)
+    state_project.joinpath("skill-candidates.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "candidates": [
+                    {
+                        "id": "cand-ancestor",
+                        "surface": "test/surface",
+                        "signature": "test recurring signature",
+                        "workflows": ["wf-a", "wf-b"],
+                        "distinct_workflows": 2,
+                        "max_severity": "high",
+                        "evidence": [],
+                        "first_seen": "2026-01-01T00:00:00Z",
+                        "last_seen": "2026-01-01T00:00:00Z",
+                        "status": "candidate",
+                        "promoted_skill": None,
+                        "rejected_reason": None,
+                        "rejected_at_distinct_workflows": None,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    proposal_dir = state_project / "skill-proposals" / "cand-ancestor"
+    proposal_dir.mkdir(parents=True, exist_ok=True)
+    (proposal_dir / "SKILL.md").write_text(
+        '---\nname: demo\ndescription: "Use when probing cwd-is-ancestor skill-promotion protection."\n---\n\nBody.\n',
+        encoding="utf-8",
+    )
+    skill_dir = proj_real / ".claude" / "skills" / "demo"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    target = skill_dir / "SKILL.md"
+    subprocess.run(["git", "init", "-q"], cwd=str(proj_real), check=True, capture_output=True)
+
+    env = {"CLAUDE_PROJECT_DIR": str(workspace), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-promotion-cwd-is-ancestor",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (cwd-is-ancestor-of-project depth-mismatch bypass "
+            f"closed for skill-promotion-path), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"expected a 'skill-promotion-path' reason, got: {out!r}")
+        return
+
+    # Negative control: unrelated hand-authored skill in a sibling project,
+    # no in-flight ledger entry -- must not be flagged.
+    unrelated = tmp_dir / "skill-promotion-cwd-ancestor-unrelated-sibling"
+    unrelated_skill_dir = unrelated / ".claude" / "skills" / "unrelated"
+    unrelated_skill_dir.mkdir(parents=True, exist_ok=True)
+    unrelated_target = unrelated_skill_dir / "SKILL.md"
+    payload_unrelated = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-promotion-cwd-is-ancestor",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(unrelated_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_unrelated, env)
+    if "skill-promotion-path" in out:
+        fail(
+            name,
+            "negative control: an unrelated sibling project's hand-authored "
+            f"skill must NOT be flagged as 'skill-promotion-path', got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_promotion_case_sensitive_ancestor_fallback() -> None:
+    """HIGH 1 (REM-FIX cycle 9, code-reviewer -- missing permanent regression
+    coverage): ports
+    `test_pretooluse_guard_reliability_gates_case_sensitive_ancestor_fallback`'s
+    fixture shape to `_is_protected_skill_promotion_path()`, calling it
+    directly in-process (with `os.path.samefile()` monkeypatched to
+    simulate a case-sensitive-filesystem miss on the untrusted candidate
+    root) so the monkeypatch is visible to it."""
+    name = "pretooluse-guard/skill-promotion-case-sensitive-ancestor-fallback"
+    tmp_dir = Path(tempfile.mkdtemp(prefix="cf9-skp-bugb-")).resolve()
+    try:
+        root = tmp_dir / "CaseSensitiveProj"
+        state_project = root / ".craftflow" / "state" / "project"
+        state_project.mkdir(parents=True)
+        state_project.joinpath("skill-candidates.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "candidates": [
+                        {
+                            "id": "cand-case-sensitive",
+                            "surface": "test/surface",
+                            "signature": "test recurring signature",
+                            "workflows": ["wf-a", "wf-b"],
+                            "distinct_workflows": 2,
+                            "max_severity": "high",
+                            "evidence": [],
+                            "first_seen": "2026-01-01T00:00:00Z",
+                            "last_seen": "2026-01-01T00:00:00Z",
+                            "status": "candidate",
+                            "promoted_skill": None,
+                            "rejected_reason": None,
+                            "rejected_at_distinct_workflows": None,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        proposal_dir = state_project / "skill-proposals" / "cand-case-sensitive"
+        proposal_dir.mkdir(parents=True)
+        (proposal_dir / "SKILL.md").write_text(
+            '---\nname: demo\ndescription: "Use when probing case-sensitive skill-promotion protection."\n---\n\nBody.\n',
+            encoding="utf-8",
+        )
+
+        wrong_case_root = tmp_dir / "casesensitiveproj"
+        target = wrong_case_root / ".claude" / "skills" / "demo" / "SKILL.md"
+
+        original_samefile = os.path.samefile
+        logged_events: list = []
+
+        def _fake_samefile(a, b):
+            if "casesensitiveproj" in Path(a).parts or "casesensitiveproj" in Path(b).parts:
+                raise FileNotFoundError(f"simulated case-sensitive miss: {a!r} vs {b!r}")
+            return original_samefile(a, b)
+
+        original_log_event = pretooluse_guard.log_event
+
+        def _capturing_log_event(name_arg, payload_arg):
+            logged_events.append((name_arg, payload_arg))
+
+        os.path.samefile = _fake_samefile
+        pretooluse_guard.log_event = _capturing_log_event
+        try:
+            result = pretooluse_guard._is_protected_skill_promotion_path(
+                target, project_root=root
+            )
+        finally:
+            os.path.samefile = original_samefile
+            pretooluse_guard.log_event = original_log_event
+
+        if result is not True:
+            fail(
+                name,
+                "expected the case-sensitive ancestor fallback to still "
+                f"recognize the in-flight SKILL.md as protected, got: {result!r}",
+            )
+            return
+        if not logged_events:
+            fail(
+                name,
+                "expected the candidate-root-unresolvable fallback to be "
+                "logged via log_event(), got no events",
+            )
+            return
+        ok(name)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_pretooluse_guard_skill_promotion_ancestor_root_has_own_ledger(tmp_dir: Path) -> None:
+    """HIGH 1 (REM-FIX cycle 9, code-reviewer -- missing permanent regression
+    coverage): analogous fixture to
+    `test_pretooluse_guard_reliability_gates_ancestor_root_has_own_ledger`,
+    adapted for `_is_protected_skill_promotion_path()`'s own shape: `root`
+    (the trusted `cwd`) ALSO has its own real, in-flight ledger entry and
+    promoted SKILL.md at the direct-child position, while a NESTED project
+    one level below has its OWN, separate in-flight candidate. Proves
+    `_inflight_skill_promotion_paths()` is read against the ancestor-
+    DERIVED `effective_root` (from the write target's own path), never
+    against `root` itself when `root` happens to have unrelated in-flight
+    activity of its own."""
+    name = "pretooluse-guard/skill-promotion-ancestor-root-has-own-ledger"
+    workspace = tmp_dir / "skill-promotion-ancestor-with-own-ledger-workspace"
+
+    def _seed_ledger(state_project: Path, candidate_id: str, skill_name: str) -> None:
+        state_project.mkdir(parents=True, exist_ok=True)
+        state_project.joinpath("skill-candidates.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "candidates": [
+                        {
+                            "id": candidate_id,
+                            "surface": "test/surface",
+                            "signature": "test recurring signature",
+                            "workflows": ["wf-a", "wf-b"],
+                            "distinct_workflows": 2,
+                            "max_severity": "high",
+                            "evidence": [],
+                            "first_seen": "2026-01-01T00:00:00Z",
+                            "last_seen": "2026-01-01T00:00:00Z",
+                            "status": "candidate",
+                            "promoted_skill": None,
+                            "rejected_reason": None,
+                            "rejected_at_distinct_workflows": None,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        proposal_dir = state_project / "skill-proposals" / candidate_id
+        proposal_dir.mkdir(parents=True, exist_ok=True)
+        (proposal_dir / "SKILL.md").write_text(
+            f'---\nname: {skill_name}\ndescription: "Use when probing ancestor-root-has-own-ledger skill-promotion protection."\n---\n\nBody.\n',
+            encoding="utf-8",
+        )
+
+    _seed_ledger(workspace / ".craftflow" / "state" / "project", "root-own-cand", "root-own")
+    (workspace / ".claude" / "skills" / "root-own").mkdir(parents=True, exist_ok=True)
+    root_own_target = workspace / ".claude" / "skills" / "root-own" / "SKILL.md"
+
+    nested = workspace / "nested-proj"
+    _seed_ledger(nested / ".craftflow" / "state" / "project", "nested-own-cand", "nested-demo")
+    (nested / ".claude" / "skills" / "nested-demo").mkdir(parents=True, exist_ok=True)
+    nested_target = nested / ".claude" / "skills" / "nested-demo" / "SKILL.md"
+
+    subprocess.run(["git", "init", "-q"], cwd=str(workspace), check=True, capture_output=True)
+
+    env = {"CLAUDE_PROJECT_DIR": str(workspace), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    payload_nested = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-promotion-ancestor-root-has-own-ledger",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(nested_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_nested, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (nested project's own in-flight candidate must be "
+            "protected even though root has its own separate in-flight "
+            f"activity too), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"expected a 'skill-promotion-path' reason, got: {out!r}")
+        return
+
+    payload_root = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-promotion-ancestor-root-has-own-ledger",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(root_own_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_root, env)
+    if not _deny_out(out) or "skill-promotion-path" not in out:
+        fail(
+            name,
+            f"positive control: expected DENY for root's own in-flight skill too, got exit={code}, stdout={out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_edit_write_survives_cyclic_symlink_cwd(tmp_dir: Path) -> None:
     """REM-FIX (silent-failure-hunter, cycle 2): commit 81f9c18 added an
     unguarded `Path(cwd_raw).resolve()` at the top of `_handle_edit_write`
@@ -20344,6 +21101,39 @@ def main() -> int:
     print("[ pretooluse-guard: Phase 2 -- skill-ledger and skill-promotion protection anchor to payload cwd (ADR 0033 deferred siblings) ]")
     test_pretooluse_guard_skill_ledger_diverges_cwd_and_claude_project_dir(tmp / "idm9")
     test_pretooluse_guard_skill_promotion_diverges_cwd_and_claude_project_dir(tmp / "idm10")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 (code-reviewer CRITICAL 1 -- case-fold bypass in the ledger-corrupt fail-closed fallback) ]")
+    test_pretooluse_guard_skill_promotion_ledger_corrupt_case_fold_bypass(tmp / "idm11")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 (silent-failure-hunter CRITICAL 2 -- crash when skill_ledger/skill_promote modules are None) ]")
+    test_pretooluse_guard_skill_ledger_no_root_fallback_survives_none_skill_modules(tmp / "idm12")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 re-hunt (silent-failure-hunter HIGH -- hardcoded literal drift, router-direct fix) ]")
+    test_pretooluse_guard_skill_literal_constants_pinned_to_live_modules()
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 (silent-failure-hunter HIGH 4 -- off-by-one in no-root proposals-dir fallback) ]")
+    test_pretooluse_guard_skill_ledger_no_root_fallback_protects_bare_proposals_dir()
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 (silent-failure-hunter HIGH 2+3 -- samefile() definitive-False silently degraded to a weaker fallback) ]")
+    test_pretooluse_guard_root_prefix_matches_trusts_definitive_samefile_false()
+    test_pretooluse_guard_relative_parts_under_root_trusts_definitive_samefile_false()
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 (code-reviewer HIGH 1 -- permanent ancestor/depth-mismatch regression coverage, skill-ledger) ]")
+    test_pretooluse_guard_skill_ledger_cwd_is_ancestor_of_project(tmp / "idm13a")
+    test_pretooluse_guard_skill_ledger_case_sensitive_ancestor_fallback()
+    test_pretooluse_guard_skill_ledger_ancestor_root_has_own_ledger(tmp / "idm13c")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 (code-reviewer HIGH 1 -- permanent ancestor/depth-mismatch regression coverage, skill-promotion) ]")
+    test_pretooluse_guard_skill_promotion_cwd_is_ancestor_of_project(tmp / "idm14a")
+    test_pretooluse_guard_skill_promotion_case_sensitive_ancestor_fallback()
+    test_pretooluse_guard_skill_promotion_ancestor_root_has_own_ledger(tmp / "idm14c")
 
     print()
     print("[ Phase 3: provisioning interview + doc cross-references (structural assertions, no .py behavior change) ]")

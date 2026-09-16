@@ -87,6 +87,32 @@ PROTECTED_MEMORY_FILES = ("activeContext.md", "patterns.md", "progress.md")
 
 RELIABILITY_GATES_LEDGER_REL_PATH = ".craftflow/state/project/reliability-gates.json"
 
+# Captured from `craftflow_skill_ledger.DEFAULT_LEDGER_PATH` /
+# `craftflow_skill_promote.DEFAULT_PROPOSALS_DIR` AT IMPORT TIME, not
+# hand-duplicated as a separate string literal (REM-FIX cycle 9,
+# silent-failure-hunter HIGH, re-review pass): `_skill_ledger_or_proposal_
+# shape_match_no_root()` is a fail-CLOSED fallback that must keep working
+# even when those sibling modules failed to import (`skill_ledger`/
+# `skill_promote` are `None` -- see the defensive-import comment at the top
+# of this file), but a hand-typed literal that silently drifted from a future
+# rename of `DEFAULT_LEDGER_PATH`/`DEFAULT_PROPOSALS_DIR` would silently
+# defeat this exact fail-closed fallback with no test failure to catch it.
+# Capturing from the live module constant when the module import succeeded
+# eliminates that drift vector entirely for the common (modules-present)
+# case; the ASCII literal fallback below is used only in the already-rare
+# case where the modules themselves are unavailable, at which point there is
+# no live constant to read from at all.
+_SKILL_LEDGER_REL_PATH_LITERAL = (
+    skill_ledger.DEFAULT_LEDGER_PATH
+    if skill_ledger is not None
+    else ".craftflow/state/project/skill-candidates.json"
+)
+_SKILL_PROPOSALS_DIR_REL_PATH_LITERAL = (
+    skill_promote.DEFAULT_PROPOSALS_DIR
+    if skill_promote is not None
+    else ".craftflow/state/project/skill-proposals"
+)
+
 # rtk-inspired state-read compaction (PreToolUse deny+redirect on Read, not a
 # rewrite -- Claude Code's own PostToolUse contract cannot retroactively
 # shrink content already in context, and this repo's prior on-disk-masking
@@ -601,8 +627,45 @@ def _relative_parts_under_root(path: Path, root: Path) -> "tuple | None":
     case), then real filesystem identity via `os.path.samefile()` for
     already-existing directories, then a `_normalized_leaf()` (case-fold +
     NFC-normalization) component comparison for a `root` that has not been
-    created on disk yet -- mirroring `_is_protected_reliability_gates_path()`'s
-    own fast-path -> samefile -> normalized-leaf fallback chain exactly."""
+    created on disk yet.
+
+    REM-FIX cycle 9 (silent-failure-hunter HIGH, live-reproduced): the
+    `samefile()` step below used to run `if os.path.samefile(...): return
+    ...` with NO `else` -- silently falling through to the normalized-leaf
+    fallback even on a DEFINITIVE `False` (no exception raised), which
+    could upgrade a genuinely DIFFERENT, merely case/Unicode-similar
+    directory into a false positive match. Fixed to trust a definitive
+    `samefile()` result (`True` or `False`) directly, matching
+    `_is_protected_reliability_gates_path()`'s own contract
+    (`return os.path.samefile(...)`); only `(OSError, ValueError)` falls
+    through now, and that fallback is logged via `log_event()` (previously
+    silent).
+
+    DOCSTRING CORRECTION (REM-FIX cycle 9, code-reviewer MEDIUM, corrected
+    again same cycle after re-review live-reproduced the opposite of the
+    first correction's claimed direction): an earlier revision of this
+    docstring claimed to mirror `_is_protected_reliability_gates_path()`'s
+    fast-path -> samefile -> normalized-leaf fallback chain "exactly." After
+    the fix above, the `samefile()` step now genuinely does. One disclosed
+    difference remains: when `root` itself does not exist on disk at all,
+    the reference predicate degrades to an UNBOUNDED shape-only match (any
+    path anywhere ending in the ledger's fixed relative-path suffix, with no
+    root binding at all -- this file's own established convention treats
+    "produces more DENY decisions" as "more protective," even at the cost of
+    over-denying unrelated paths); this helper instead falls through to the
+    SAME root-BOUND normalized-leaf comparison used for the `samefile()`
+    exception case above. That is narrower than the reference's fallback,
+    and in this one root-does-not-exist branch it is also LESS protective by
+    this file's own convention: a real, unrelated project's file that merely
+    shares the fixed relative-path shape is ALLOWed here where the reference
+    predicate's unbounded fallback would DENY it (live-reproduced). BC-4
+    ("no pre-cycle-9 DENY became a post-cycle-9 ALLOW") still holds, since
+    this exact branch is byte-for-byte unchanged by cycle 9's own diff -- but
+    it is not, and was never, strictly-safer-or-equal to the reference
+    predicate's own fallback. This is an accepted precision-over-safety
+    trade-off specific to this helper, disclosed honestly rather than
+    claimed (incorrectly, in an earlier revision of this same docstring) to
+    be strictly safer."""
     try:
         return path.relative_to(root).parts
     except ValueError:
@@ -615,11 +678,21 @@ def _relative_parts_under_root(path: Path, root: Path) -> "tuple | None":
     if candidate_parts == root_parts:
         return path_parts[len(root_parts) :]
     if root.exists():
+        candidate_root_path = Path(*candidate_parts)
         try:
-            if os.path.samefile(Path(*candidate_parts), root):
-                return path_parts[len(root_parts) :]
+            same = os.path.samefile(candidate_root_path, root)
         except (OSError, ValueError):
-            pass
+            log_event(
+                "plugin_pretooluse_guard",
+                {
+                    "event": "pretool_guard_relative_parts_ancestor_fallback",
+                    "reason": "candidate_root_unresolvable_falling_back_to_normalized_leaf",
+                    "candidate_root": str(candidate_root_path),
+                    "root": str(root),
+                },
+            )
+        else:
+            return path_parts[len(root_parts):] if same else None
     if len(candidate_parts) == len(root_parts) and all(
         _normalized_leaf(a) == _normalized_leaf(b) for a, b in zip(candidate_parts, root_parts)
     ):
@@ -642,18 +715,63 @@ def _root_prefix_matches(candidate_root_parts: tuple, root_parts: tuple, root: P
     derivation fix chain (REM-FIX cycles 6-7 for that predicate, applied
     here proactively): fast string equality first, then real filesystem
     identity via `os.path.samefile()`, then a `_normalized_leaf()`
-    component comparison when `root` does not exist on disk yet."""
+    component comparison when `root` does not exist on disk yet.
+
+    REM-FIX cycle 9 (silent-failure-hunter HIGH, live-reproduced): the
+    `samefile()` step below used to run `if os.path.samefile(...): return
+    True` with NO `else` -- silently falling through to the normalized-leaf
+    fallback even on a DEFINITIVE `False` (no exception raised), which
+    could upgrade a genuinely DIFFERENT, merely case/Unicode-similar
+    directory into a false positive match. Fixed to trust a definitive
+    `samefile()` result directly, matching
+    `_is_protected_reliability_gates_path()`'s own contract
+    (`return os.path.samefile(...)`); only `(OSError, ValueError)` falls
+    through now, and that fallback is logged via `log_event()` (previously
+    silent).
+
+    DOCSTRING CORRECTION (REM-FIX cycle 9, code-reviewer MEDIUM, corrected
+    again same cycle after re-review live-reproduced the opposite of the
+    first correction's claimed direction): after the fix above, the
+    `samefile()` step now genuinely mirrors the reference predicate's
+    contract. One disclosed difference remains: when `root` itself does not
+    exist on disk at all, the reference predicate degrades to an UNBOUNDED
+    shape-only match (any path anywhere ending in the ledger's fixed
+    relative-path suffix, no root binding at all -- this file's own
+    established convention treats "produces more DENY decisions" as "more
+    protective," even at the cost of over-denying unrelated paths); this
+    helper instead falls through to the SAME root-BOUND normalized-leaf
+    comparison used for the `samefile()` exception case above. That is
+    narrower than the reference's fallback, and in this one
+    root-does-not-exist branch it is also LESS protective by this file's own
+    convention: a real, unrelated project's file that merely shares the
+    fixed relative-path shape is ALLOWed here where the reference
+    predicate's unbounded fallback would DENY it (live-reproduced). BC-4
+    ("no pre-cycle-9 DENY became a post-cycle-9 ALLOW") still holds, since
+    this exact branch is byte-for-byte unchanged by cycle 9's own diff -- but
+    it is not, and was never, strictly-safer-or-equal to the reference
+    predicate's own fallback. This is an accepted precision-over-safety
+    trade-off specific to this helper, disclosed honestly rather than
+    claimed (incorrectly, in an earlier revision of this same docstring) to
+    be strictly safer."""
     if len(candidate_root_parts) < len(root_parts):
         return False
     root_prefix_parts = candidate_root_parts[: len(root_parts)]
     if root_prefix_parts == root_parts:
         return True
     if root.exists():
+        root_prefix_path = Path(*root_prefix_parts)
         try:
-            if os.path.samefile(Path(*root_prefix_parts), root):
-                return True
+            return os.path.samefile(root_prefix_path, root)
         except (OSError, ValueError):
-            pass
+            log_event(
+                "plugin_pretooluse_guard",
+                {
+                    "event": "pretool_guard_root_prefix_ancestor_fallback",
+                    "reason": "candidate_root_unresolvable_falling_back_to_normalized_leaf",
+                    "candidate_root": str(root_prefix_path),
+                    "root": str(root),
+                },
+            )
     return all(
         _normalized_leaf(a) == _normalized_leaf(b) for a, b in zip(root_prefix_parts, root_parts)
     )
@@ -669,15 +787,24 @@ def _skill_promotion_path_shape_match(root: Path, path: Path) -> bool:
     protection stays narrowed to actually in-flight candidates (round 2's
     fix, and its own regression test
     `test_pretooluse_guard_allows_unrelated_hand_authored_skill_write_no_ledger`,
-    remain intact for the common case)."""
+    remain intact for the common case).
+
+    REM-FIX cycle 9 (code-reviewer CRITICAL, live-reproduced): component
+    comparison now goes through `_normalized_leaf()` for the same case-fold
+    + Unicode-normalization reason its root-FREE sibling
+    `_skill_promotion_path_shape_match_no_root()` already does -- a plain
+    string comparison here let a case-varied write target
+    (`.CLAUDE/Skills/demo/SKILL.MD`) evade this fail-closed fallback on a
+    case-insensitive-but-case-preserving filesystem (this repo's default,
+    macOS/APFS) while the canonical-case spelling was correctly denied."""
     parts = _relative_parts_under_root(path, root)
     if parts is None:
         return False
     return (
         len(parts) == 4
-        and parts[0] in (".claude", ".cursor")
-        and parts[1] == "skills"
-        and parts[3] == "SKILL.md"
+        and _normalized_leaf(parts[0]) in (".claude", ".cursor")
+        and _normalized_leaf(parts[1]) == "skills"
+        and _normalized_leaf(parts[3]) == "skill.md"
     )
 
 
@@ -848,9 +975,33 @@ def _skill_ledger_or_proposal_shape_match_no_root(path: Path) -> bool:
     role (ADR 0033 deferred-sibling fix, applied here proactively).
     Component comparison goes through `_normalized_leaf()` throughout, for
     the same case-fold/Unicode-normalization reason REM-FIX cycle 8
-    required it for the reliability-gates predicate's own fallback."""
-    ledger_rel_parts = Path(skill_ledger.DEFAULT_LEDGER_PATH).parts
-    proposals_rel_parts = Path(skill_promote.DEFAULT_PROPOSALS_DIR).parts
+    required it for the reliability-gates predicate's own fallback.
+
+    REM-FIX cycle 9 (silent-failure-hunter CRITICAL, live-reproduced): this
+    used to dereference `skill_ledger.DEFAULT_LEDGER_PATH` /
+    `skill_promote.DEFAULT_PROPOSALS_DIR` directly, with no guard against
+    those sibling modules being `None` (a documented, disclosed degradation
+    for a partial/interrupted plugin-cache sync -- see the defensive-import
+    comment at the top of this file). Combined with `identity_unresolved`
+    (this fallback's ONLY caller), that crashed `_handle_edit_write`
+    uncaught -- fail-OPEN for every check in that function, not just this
+    one. Fixed by hardcoding the two fixed relative-path literals as module
+    constants instead, removing this fallback's only dependency on either
+    module (mirroring `_skill_promotion_path_shape_match_no_root()`, which
+    already has none).
+
+    REM-FIX cycle 9 (silent-failure-hunter HIGH, live-reproduced): the
+    proposals-directory scan below used to range over
+    `range(0, len(path_parts) - n)`, which EXCLUDES the window covering
+    `path_parts`' own trailing `n` components -- i.e. it never matched when
+    `path` IS the bare proposals directory itself, only when it has at
+    least one more component beneath it. The main (non-fallback) logic in
+    `_is_protected_skill_ledger_or_proposal_path()` scans
+    `range(0, len(path_parts) - n + 1)`, which DOES include that case. A
+    no-root/shape-only fallback must be AT LEAST as protective as the main
+    path it degrades from, never less -- fixed by aligning the ranges."""
+    ledger_rel_parts = Path(_SKILL_LEDGER_REL_PATH_LITERAL).parts
+    proposals_rel_parts = Path(_SKILL_PROPOSALS_DIR_REL_PATH_LITERAL).parts
     path_parts = path.parts
 
     if len(path_parts) >= len(ledger_rel_parts) and all(
@@ -860,7 +1011,7 @@ def _skill_ledger_or_proposal_shape_match_no_root(path: Path) -> bool:
         return True
 
     n = len(proposals_rel_parts)
-    for start in range(0, len(path_parts) - n):
+    for start in range(0, len(path_parts) - n + 1):
         window = path_parts[start : start + n]
         if all(_normalized_leaf(a) == _normalized_leaf(b) for a, b in zip(window, proposals_rel_parts)):
             return True
