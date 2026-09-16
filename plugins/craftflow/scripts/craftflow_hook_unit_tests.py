@@ -18276,6 +18276,195 @@ def test_pretooluse_guard_reliability_gates_diverges_cwd_and_claude_project_dir(
     ok(name)
 
 
+def test_pretooluse_guard_skill_ledger_diverges_cwd_and_claude_project_dir(tmp_dir: Path) -> None:
+    # Phase 2 sibling of the reliability-gates fix above:
+    # `_is_protected_skill_ledger_or_proposal_path()` resolved its protected-
+    # path root via `project_dir()` (CLAUDE_PROJECT_DIR / Path.cwd()), NOT the
+    # trusted PreToolUse payload `cwd`. With the two diverged, a write to the
+    # CALLER's OWN skill-candidate ledger, or to a file staged under its
+    # skill-proposals tree, was compared against an UNRELATED project's
+    # paths, did not match, and was silently ALLOWED.
+    name = "pretooluse-guard/skill-ledger-diverges-cwd-and-claude-project-dir"
+    env_proj, cwd_proj = _identity_divergence_fixture(tmp_dir)
+    ledger_target = cwd_proj / ".craftflow" / "state" / "project" / "skill-candidates.json"
+    proposal_dir = cwd_proj / ".craftflow" / "state" / "project" / "skill-proposals" / "abc123"
+    proposal_dir.mkdir(parents=True, exist_ok=True)
+    proposal_target = proposal_dir / "SKILL.md"
+    proposal_target.write_text(
+        '---\nname: demo-proposal\ndescription: "Use when probing skill-proposals-tree protection."\n---\n\nBody.\n',
+        encoding="utf-8",
+    )
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    # Part 1 (Edit/Write lane, ledger target, diverged case) -> DENY.
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-identity-diverge-skill-ledger",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(ledger_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(name, f"Edit/Write ledger diverged case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"Edit/Write ledger diverged case: expected a 'skill-ledger-write' reason, got: {out!r}")
+        return
+
+    # Part 2 (Bash lane, ledger target, diverged case) -> DENY.
+    bash_payload = {
+        "tool_name": "Bash",
+        "session_id": "wf-identity-diverge-skill-ledger",
+        "cwd": str(cwd_proj),
+        "tool_input": {"command": f"echo x > {ledger_target}"},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", bash_payload, env)
+    if not _deny_out(out):
+        fail(name, f"Bash ledger diverged case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"Bash ledger diverged case: expected a 'skill-ledger-write' reason, got: {out!r}")
+        return
+
+    # Part 3 (Edit/Write lane, staged-proposal target, diverged case) -> DENY.
+    payload_proposal = {
+        "tool_name": "Write",
+        "session_id": "wf-identity-diverge-skill-ledger",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(proposal_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_proposal, env)
+    if not _deny_out(out):
+        fail(name, f"Edit/Write proposal diverged case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"Edit/Write proposal diverged case: expected a 'skill-ledger-write' reason, got: {out!r}")
+        return
+
+    # Part 4 (negative control): an UNRELATED project's ledger must NOT
+    # become protected just because CLAUDE_PROJECT_DIR names it -- protection
+    # follows the trusted cwd, and a write there is denied for
+    # worktree-confinement (escaping cwd), never for skill-ledger-write.
+    foreign = env_proj / ".craftflow" / "state" / "project" / "skill-candidates.json"
+    payload_foreign = {
+        "tool_name": "Write",
+        "session_id": "wf-identity-diverge-skill-ledger",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(foreign)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_foreign, env)
+    if not _deny_out(out):
+        fail(name, f"foreign-target control: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"foreign-target control: expected 'worktree-confinement' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_promotion_diverges_cwd_and_claude_project_dir(tmp_dir: Path) -> None:
+    # Phase 2 sibling of the reliability-gates fix above:
+    # `_is_protected_skill_promotion_path()` resolved its protected-path root
+    # via `project_dir()` (CLAUDE_PROJECT_DIR / Path.cwd()), NOT the trusted
+    # PreToolUse payload `cwd`. With the two diverged, the CALLER's own
+    # in-flight ledger entry lives in the WRONG project's ledger file, this
+    # predicate never sees it as in-flight, and a write to the promoted
+    # SKILL.md was silently ALLOWED.
+    name = "pretooluse-guard/skill-promotion-diverges-cwd-and-claude-project-dir"
+    env_proj, cwd_proj = _identity_divergence_fixture(tmp_dir)
+    state_project = cwd_proj / ".craftflow" / "state" / "project"
+    ledger_path = state_project / "skill-candidates.json"
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "candidates": [
+                    {
+                        "id": "cand0001",
+                        "surface": "test/surface",
+                        "signature": "test recurring signature",
+                        "workflows": ["wf-a", "wf-b"],
+                        "distinct_workflows": 2,
+                        "max_severity": "high",
+                        "evidence": [],
+                        "first_seen": "2026-01-01T00:00:00Z",
+                        "last_seen": "2026-01-01T00:00:00Z",
+                        "status": "candidate",
+                        "promoted_skill": None,
+                        "rejected_reason": None,
+                        "rejected_at_distinct_workflows": None,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    proposal_dir = state_project / "skill-proposals" / "cand0001"
+    proposal_dir.mkdir(parents=True, exist_ok=True)
+    (proposal_dir / "SKILL.md").write_text(
+        '---\nname: demo\ndescription: "Use when probing narrowed skill-promotion protection end to end."\n---\n\nBody.\n',
+        encoding="utf-8",
+    )
+    skill_dir = cwd_proj / ".claude" / "skills" / "demo"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    target = skill_dir / "SKILL.md"
+
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    # Part 1 (Edit/Write lane, diverged case) -> DENY.
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-identity-diverge-skill-promotion",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(name, f"Edit/Write diverged case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"Edit/Write diverged case: expected a 'skill-promotion-path' reason, got: {out!r}")
+        return
+
+    # Part 2 (Bash lane, diverged case) -> DENY.
+    bash_payload = {
+        "tool_name": "Bash",
+        "session_id": "wf-identity-diverge-skill-promotion",
+        "cwd": str(cwd_proj),
+        "tool_input": {"command": f"echo x > {target}"},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", bash_payload, env)
+    if not _deny_out(out):
+        fail(name, f"Bash diverged case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"Bash diverged case: expected a 'skill-promotion-path' reason, got: {out!r}")
+        return
+
+    # Part 3 (negative control): an unrelated, hand-authored skill with no
+    # in-flight ledger entry in the TRUSTED project must not be treated as a
+    # skill-promotion-path write just because CLAUDE_PROJECT_DIR names a
+    # DIFFERENT project -- denied only for worktree-confinement if it
+    # escapes cwd, never for skill-promotion-path.
+    foreign_skill_dir = env_proj / ".claude" / "skills" / "unrelated"
+    foreign_skill_dir.mkdir(parents=True, exist_ok=True)
+    foreign_target = foreign_skill_dir / "SKILL.md"
+    payload_foreign = {
+        "tool_name": "Write",
+        "session_id": "wf-identity-diverge-skill-promotion",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(foreign_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_foreign, env)
+    if not _deny_out(out):
+        fail(name, f"foreign-target control: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"foreign-target control: expected 'worktree-confinement' reason, got: {out!r}")
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_edit_write_survives_cyclic_symlink_cwd(tmp_dir: Path) -> None:
     """REM-FIX (silent-failure-hunter, cycle 2): commit 81f9c18 added an
     unguarded `Path(cwd_raw).resolve()` at the top of `_handle_edit_write`
@@ -20150,6 +20339,11 @@ def main() -> int:
     print("[ pretooluse-guard: REM-FIX cycle 8 (silent-failure-hunter -- identity_unresolved shape-match fallback must case-fold/NFC-normalize) ]")
     test_pretooluse_guard_reliability_gates_case_fold_bypass_on_cyclic_symlink_cwd_fails_closed(tmp / "idm8")
     test_pretooluse_guard_reliability_gates_shape_match_rejects_unrelated_path(tmp / "idm8b")
+
+    print()
+    print("[ pretooluse-guard: Phase 2 -- skill-ledger and skill-promotion protection anchor to payload cwd (ADR 0033 deferred siblings) ]")
+    test_pretooluse_guard_skill_ledger_diverges_cwd_and_claude_project_dir(tmp / "idm9")
+    test_pretooluse_guard_skill_promotion_diverges_cwd_and_claude_project_dir(tmp / "idm10")
 
     print()
     print("[ Phase 3: provisioning interview + doc cross-references (structural assertions, no .py behavior change) ]")

@@ -585,6 +585,80 @@ def _inflight_skill_promotion_paths(root: Path) -> tuple:
     return paths, False
 
 
+def _relative_parts_under_root(path: Path, root: Path) -> "tuple | None":
+    """Trailing path components of `path` beyond `root`, proven that `path`
+    is really rooted under `root` -- or `None` if it cannot be shown to be.
+
+    ADR 0033 deferred-sibling fix: a plain `path.relative_to(root)` (what
+    both callers below used before) raises `ValueError` -- and this module's
+    established fail-open-on-resolution-error posture then treats that as
+    "not under root" -- for two spellings of the SAME real directory on a
+    case-insensitive-but-case-preserving filesystem (this repo's default,
+    macOS/APFS) or an NFC-vs-NFD Unicode spelling difference, exactly the
+    identity bypass `_is_protected_reliability_gates_path()` was hardened
+    against (REM-FIX cycles 4-8). Reused here rather than duplicated: try
+    the fast string-based `relative_to()` first (the common aligned-spelling
+    case), then real filesystem identity via `os.path.samefile()` for
+    already-existing directories, then a `_normalized_leaf()` (case-fold +
+    NFC-normalization) component comparison for a `root` that has not been
+    created on disk yet -- mirroring `_is_protected_reliability_gates_path()`'s
+    own fast-path -> samefile -> normalized-leaf fallback chain exactly."""
+    try:
+        return path.relative_to(root).parts
+    except ValueError:
+        pass
+    path_parts = path.parts
+    root_parts = root.parts
+    if len(path_parts) < len(root_parts):
+        return None
+    candidate_parts = path_parts[: len(root_parts)]
+    if candidate_parts == root_parts:
+        return path_parts[len(root_parts) :]
+    if root.exists():
+        try:
+            if os.path.samefile(Path(*candidate_parts), root):
+                return path_parts[len(root_parts) :]
+        except (OSError, ValueError):
+            pass
+    if len(candidate_parts) == len(root_parts) and all(
+        _normalized_leaf(a) == _normalized_leaf(b) for a, b in zip(candidate_parts, root_parts)
+    ):
+        return path_parts[len(root_parts) :]
+    return None
+
+
+def _root_prefix_matches(candidate_root_parts: tuple, root_parts: tuple, root: Path) -> bool:
+    """True if the FIRST `len(root_parts)` components of
+    `candidate_root_parts` (a components prefix derived from an untrusted
+    write target) really identify `root` -- regardless of how many
+    ADDITIONAL real directories `candidate_root_parts` has beyond that
+    point. `root` is not always the write target's OWN project directory --
+    it can be a real ANCESTOR of it (an ordinary monorepo/workspace root, or
+    a worktree's parent), in which case the real, on-disk ledger/proposal
+    sits MORE directory levels below `root` than a fixed relative path alone
+    accounts for. Gates on this RELATIVE offset, never on
+    `candidate_root_parts`' own absolute length, mirroring
+    `_is_protected_reliability_gates_path()`'s Bug-A/Bug-B ancestor-
+    derivation fix chain (REM-FIX cycles 6-7 for that predicate, applied
+    here proactively): fast string equality first, then real filesystem
+    identity via `os.path.samefile()`, then a `_normalized_leaf()`
+    component comparison when `root` does not exist on disk yet."""
+    if len(candidate_root_parts) < len(root_parts):
+        return False
+    root_prefix_parts = candidate_root_parts[: len(root_parts)]
+    if root_prefix_parts == root_parts:
+        return True
+    if root.exists():
+        try:
+            if os.path.samefile(Path(*root_prefix_parts), root):
+                return True
+        except (OSError, ValueError):
+            pass
+    return all(
+        _normalized_leaf(a) == _normalized_leaf(b) for a, b in zip(root_prefix_parts, root_parts)
+    )
+
+
 def _skill_promotion_path_shape_match(root: Path, path: Path) -> bool:
     """Shape-only match (no ledger lookup at all) for
     `<root>/.claude/skills/<name>/SKILL.md` or
@@ -596,11 +670,9 @@ def _skill_promotion_path_shape_match(root: Path, path: Path) -> bool:
     fix, and its own regression test
     `test_pretooluse_guard_allows_unrelated_hand_authored_skill_write_no_ledger`,
     remain intact for the common case)."""
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
+    parts = _relative_parts_under_root(path, root)
+    if parts is None:
         return False
-    parts = rel.parts
     return (
         len(parts) == 4
         and parts[0] in (".claude", ".cursor")
@@ -609,7 +681,35 @@ def _skill_promotion_path_shape_match(root: Path, path: Path) -> bool:
     )
 
 
-def _is_protected_skill_promotion_path(path: Path) -> bool:
+def _skill_promotion_path_shape_match_no_root(path: Path) -> bool:
+    """Root-FREE shape match for `.../.claude/skills/<name>/SKILL.md` or
+    `.../.cursor/skills/<name>/SKILL.md`, with NO project-root comparison at
+    all -- there is no trustworthy root to relate `path` to. Used ONLY as
+    the fail-CLOSED fallback in `_is_protected_skill_promotion_path()` when
+    the caller's trusted `cwd` could not be resolved to ANY root at all
+    (`identity_unresolved=True`), mirroring
+    `_reliability_gates_path_shape_match()`'s identical no-root fallback
+    role (ADR 0033 deferred-sibling fix). Component comparison goes through
+    `_normalized_leaf()` for the same case-fold/Unicode-normalization reason
+    `_reliability_gates_path_shape_match()`'s own fallback does (REM-FIX
+    cycle 8's finding for that predicate, applied here proactively)."""
+    parts = path.parts
+    if len(parts) < 4:
+        return False
+    family, skills_lit, _name, skill_md = parts[-4:]
+    return (
+        _normalized_leaf(family) in (".claude", ".cursor")
+        and _normalized_leaf(skills_lit) == "skills"
+        and _normalized_leaf(skill_md) == "skill.md"
+    )
+
+
+def _is_protected_skill_promotion_path(
+    path: Path,
+    project_root: "Path | None" = None,
+    *,
+    identity_unresolved: bool = False,
+) -> bool:
     """True if `path` (already resolved to an absolute path) is exactly
     `<project-root>/.claude/skills/<name>/SKILL.md` or
     `<project-root>/.cursor/skills/<name>/SKILL.md` for a skill `<name>`
@@ -619,6 +719,31 @@ def _is_protected_skill_promotion_path(path: Path) -> bool:
     are on different drives on some platform) degrades to False -- this is
     an ADDITIONAL protection layered on top of the pre-existing
     memory-write/confinement checks, never a reason to skip those.
+
+    `project_root`, when given, anchors the protected-path root to that
+    SPECIFIC project identity instead of this process's own
+    environment-derived identity (`project_dir()`'s `CLAUDE_PROJECT_DIR` /
+    `Path.cwd()`). Every confinement-sensitive caller MUST pass the trusted
+    `PreToolUse` payload `cwd` here -- otherwise this check reads the
+    IN-FLIGHT LEDGER for a DIFFERENT, unrelated project and silently fails
+    to protect the caller's OWN in-flight skill promotion, a real,
+    live-reproduced bypass this parameter closes (ADR 0033 deferred
+    sibling; same pattern as `has_memory_finalize_permit(project_root=...)`
+    and `_is_protected_reliability_gates_path(project_root=...)`). Omitting
+    it reproduces the pre-existing single-parameter behavior exactly.
+
+    `identity_unresolved=True` signals that the caller's trusted `cwd` was
+    PRESENT but could not be resolved to ANY path at all (e.g. a cyclic
+    symlink or a NUL-byte `cwd`) -- a strictly different situation from
+    `project_root=None` meaning "no cwd was supplied" (DD-4's disclosed,
+    preserved degradation). Falling back to `project_dir()` in the
+    unresolved case would silently substitute THIS PROCESS's own
+    environment identity for the write target's actual project -- exactly
+    the divergent-identity bypass this whole fix family exists to close.
+    Fails CLOSED instead, via `_skill_promotion_path_shape_match_no_root()`,
+    mirroring `_is_protected_reliability_gates_path()`'s own
+    `identity_unresolved` handling (REM-FIX cycle 3 for that predicate,
+    applied here proactively).
 
     CRITICAL 2 (REM-FIX round 3): when the ledger EXISTS but cannot be
     trusted (unparseable JSON or invalid shape --
@@ -631,19 +756,72 @@ def _is_protected_skill_promotion_path(path: Path) -> bool:
     operator-actionable scenario (a corrupted ledger file), not the common
     "no ledger"/"unrelated hand-authored skill" case round 2 fixed for, so
     failing closed here does not reintroduce round 2's over-broad-blocking
-    regression."""
+    regression.
+
+    REAL FILESYSTEM IDENTITY, not string identity (ADR 0033 deferred-sibling
+    fix, applying `_is_protected_reliability_gates_path()`'s REM-FIX cycle 4
+    lesson proactively): `path in inflight` is a `Path.__eq__` (string-based)
+    comparison against the resolved in-flight set -- it misses a real,
+    on-disk match whenever the write target spells a directory or filename
+    component differently (case/Unicode-normalization) from how the ledger's
+    own resolved path spells it. When the fast `in` check misses, each
+    in-flight candidate is additionally checked via `os.path.samefile()` for
+    real filesystem identity before concluding no match.
+
+    ANCESTOR / DEPTH-MISMATCH (ADR 0033 deferred-sibling fix, applying
+    `_is_protected_reliability_gates_path()`'s Bug-A fix proactively): `root`
+    can be a real ANCESTOR of the write target's own project -- live-
+    reproducible in THIS repo via a git worktree, whose `.claude/skills/`
+    and `.craftflow/state/project/skill-candidates.json` are its OWN,
+    separate from the main checkout's -- not just an ordinary
+    monorepo/workspace root. A naive `_inflight_skill_promotion_paths(root)`
+    would then read the WRONG (ancestor's own, unrelated) ledger. Instead of
+    reading the ledger at `root` unconditionally, the EFFECTIVE ledger root
+    is derived from `path`'s own trailing
+    `<family>/skills/<name>/SKILL.md` shape (stripping those 4 components),
+    and accepted via `_root_prefix_matches()` only when that derived root's
+    own leading components identify `root` -- i.e. the derived root IS
+    `root`, or a real, provably-rooted descendant of it. This subsumes the
+    plain confinement check the pre-fix code ran separately (a
+    non-SKILL.md-shaped `path` never reaches the ledger lookup at all now)."""
+    if identity_unresolved:
+        return _skill_promotion_path_shape_match_no_root(path)
     try:
-        root = project_dir().resolve()
-        path.relative_to(root)
+        root = (project_root or project_dir()).resolve()
     except (OSError, ValueError):
         return False
+
+    path_parts = path.parts
+    if len(path_parts) < 4:
+        return False
+    family, skills_lit, _name, skill_md = path_parts[-4:]
+    if not (
+        _normalized_leaf(family) in (".claude", ".cursor")
+        and _normalized_leaf(skills_lit) == "skills"
+        and _normalized_leaf(skill_md) == "skill.md"
+    ):
+        return False
+
+    candidate_root_parts = path_parts[:-4]
+    if not _root_prefix_matches(candidate_root_parts, root.parts, root):
+        return False
+    effective_root = Path(*candidate_root_parts)
+
     try:
-        inflight, ledger_corrupt = _inflight_skill_promotion_paths(root)
+        inflight, ledger_corrupt = _inflight_skill_promotion_paths(effective_root)
     except Exception:
         return False
     if ledger_corrupt:
-        return _skill_promotion_path_shape_match(root, path)
-    return path in inflight
+        return _skill_promotion_path_shape_match(effective_root, path)
+    if path in inflight:
+        return True
+    for candidate in inflight:
+        try:
+            if os.path.samefile(path, candidate):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
 
 
 def _protected_skill_ledger_and_proposal_paths(root: Path) -> tuple:
@@ -657,11 +835,93 @@ def _protected_skill_ledger_and_proposal_paths(root: Path) -> tuple:
     return ledger_path, proposals_dir
 
 
-def _is_protected_skill_ledger_or_proposal_path(path: Path) -> bool:
+def _skill_ledger_or_proposal_shape_match_no_root(path: Path) -> bool:
+    """Root-FREE shape match for the skill-candidate ledger file's fixed
+    relative-path SUFFIX, or for ANY path containing the skill-proposals
+    directory's fixed relative-path shape as a contiguous, non-trailing
+    window (i.e. with at least one more component beneath it) -- with NO
+    project-root comparison at all. Used ONLY as the fail-CLOSED fallback in
+    `_is_protected_skill_ledger_or_proposal_path()` when the caller's
+    trusted `cwd` could not be resolved to ANY root at all
+    (`identity_unresolved=True`), mirroring
+    `_reliability_gates_path_shape_match()`'s identical no-root fallback
+    role (ADR 0033 deferred-sibling fix, applied here proactively).
+    Component comparison goes through `_normalized_leaf()` throughout, for
+    the same case-fold/Unicode-normalization reason REM-FIX cycle 8
+    required it for the reliability-gates predicate's own fallback."""
+    ledger_rel_parts = Path(skill_ledger.DEFAULT_LEDGER_PATH).parts
+    proposals_rel_parts = Path(skill_promote.DEFAULT_PROPOSALS_DIR).parts
+    path_parts = path.parts
+
+    if len(path_parts) >= len(ledger_rel_parts) and all(
+        _normalized_leaf(a) == _normalized_leaf(b)
+        for a, b in zip(path_parts[-len(ledger_rel_parts) :], ledger_rel_parts)
+    ):
+        return True
+
+    n = len(proposals_rel_parts)
+    for start in range(0, len(path_parts) - n):
+        window = path_parts[start : start + n]
+        if all(_normalized_leaf(a) == _normalized_leaf(b) for a, b in zip(window, proposals_rel_parts)):
+            return True
+    return False
+
+
+def _is_protected_skill_ledger_or_proposal_path(
+    path: Path, project_root: "Path | None" = None, *, identity_unresolved: bool = False
+) -> bool:
     """True if `path` is exactly the skill-candidate ledger file
     (`.craftflow/state/project/skill-candidates.json`) or ANY path under its
     staged-proposals directory (`.craftflow/state/project/skill-proposals/`)
     -- existing or not (REM-FIX round 4, architectural fix).
+
+    `project_root`, when given, anchors the protected-path root to that
+    SPECIFIC project identity instead of this process's own
+    environment-derived identity (`project_dir()`'s `CLAUDE_PROJECT_DIR` /
+    `Path.cwd()`). Every confinement-sensitive caller MUST pass the trusted
+    `PreToolUse` payload `cwd` here -- otherwise this check computes the
+    protected paths for a DIFFERENT, unrelated project and silently fails
+    to protect the caller's OWN ledger/proposals tree, a real,
+    live-reproduced bypass this parameter closes (ADR 0033 deferred
+    sibling; same pattern as `has_memory_finalize_permit(project_root=...)`
+    and `_is_protected_reliability_gates_path(project_root=...)`). Omitting
+    it reproduces the pre-existing single-parameter behavior exactly.
+
+    `identity_unresolved=True` signals that the caller's trusted `cwd` was
+    PRESENT but could not be resolved to ANY path at all -- a strictly
+    different situation from `project_root=None` meaning "no cwd was
+    supplied" (DD-4's disclosed, preserved degradation). Falling back to
+    `project_dir()` in the unresolved case would silently substitute THIS
+    PROCESS's own environment identity for the write target's actual
+    project. Fails CLOSED instead, via
+    `_skill_ledger_or_proposal_shape_match_no_root()`, mirroring
+    `_is_protected_reliability_gates_path()`'s own `identity_unresolved`
+    handling (REM-FIX cycle 3 for that predicate, applied here
+    proactively).
+
+    REAL FILESYSTEM IDENTITY, not string identity (ADR 0033 deferred-sibling
+    fix, applying `_is_protected_reliability_gates_path()`'s REM-FIX cycle 4
+    lesson proactively): both the ledger-file equality check and the
+    proposals-directory membership check below used to be plain string
+    comparisons (`path == ledger_path` / `path.relative_to(proposals_dir)`),
+    which silently miss a real, on-disk match whenever the write target
+    spells a path component differently (case/Unicode-normalization) than
+    the trusted root's own resolved spelling. Both checks now fall back to
+    `os.path.samefile()`.
+
+    ANCESTOR / DEPTH-MISMATCH (ADR 0033 deferred-sibling fix, applying
+    `_is_protected_reliability_gates_path()`'s Bug-A fix proactively): `root`
+    can be a real ANCESTOR of the write target's own project (an ordinary
+    monorepo/workspace root), not the project directory itself -- in which
+    case the naive `root / DEFAULT_LEDGER_PATH` / `root / DEFAULT_PROPOSALS_DIR`
+    candidates sit at the WRONG depth entirely and a plain string/samefile
+    comparison against them never matches the real, deeper ledger/proposal.
+    Both checks below additionally derive a candidate root from `path`'s own
+    trailing structure (the ledger's fixed relative suffix, or a scan for the
+    proposals directory's fixed relative shape at any position) and accept it
+    via `_root_prefix_matches()` when that candidate root's own leading
+    components identify `root` -- regardless of how many additional real
+    directories lie between `root` and the ledger/proposal.
 
     Live-reproduced tamper sequence this closes (originally CRITICAL 1,
     REM-FIX round 3): stage an in-flight candidate, confirm a `Write` to its
@@ -707,18 +967,54 @@ def _is_protected_skill_ledger_or_proposal_path(path: Path) -> bool:
     path-resolution error (matches this module's established fail-open-on-
     resolution-error posture -- distinct from the ledger-CONTENT corruption
     handled separately by CRITICAL 2 above)."""
+    if identity_unresolved:
+        return _skill_ledger_or_proposal_shape_match_no_root(path)
     try:
-        root = project_dir().resolve()
+        root = (project_root or project_dir()).resolve()
         ledger_path, proposals_dir = _protected_skill_ledger_and_proposal_paths(root)
     except Exception:
         return False
+
+    path_parts = path.parts
+    root_parts = root.parts
+
+    # Ledger file identity: fast string equality, then real filesystem
+    # identity, then the ancestor-derivation fallback (see docstring).
     if path == ledger_path:
         return True
     try:
+        if os.path.samefile(path, ledger_path):
+            return True
+    except (OSError, ValueError):
+        pass
+
+    ledger_rel_parts = Path(skill_ledger.DEFAULT_LEDGER_PATH).parts
+    if len(path_parts) >= len(ledger_rel_parts) and all(
+        _normalized_leaf(a) == _normalized_leaf(b)
+        for a, b in zip(path_parts[-len(ledger_rel_parts) :], ledger_rel_parts)
+    ):
+        candidate_root_parts = path_parts[: -len(ledger_rel_parts)]
+        if _root_prefix_matches(candidate_root_parts, root_parts, root):
+            return True
+
+    # Proposals-tree membership: fast prefix check, then the same
+    # ancestor-derivation fallback applied to a scan for the proposals
+    # directory's own fixed relative shape anywhere in `path`'s components.
+    try:
         path.relative_to(proposals_dir)
+        return True
     except ValueError:
-        return False
-    return True
+        pass
+
+    proposals_rel_parts = Path(skill_promote.DEFAULT_PROPOSALS_DIR).parts
+    n = len(proposals_rel_parts)
+    for start in range(0, len(path_parts) - n + 1):
+        window = path_parts[start : start + n]
+        if not all(_normalized_leaf(a) == _normalized_leaf(b) for a, b in zip(window, proposals_rel_parts)):
+            continue
+        if _root_prefix_matches(path_parts[:start], root_parts, root):
+            return True
+    return False
 
 
 def _protected_reliability_gates_path(root: Path) -> Path:
@@ -1488,7 +1784,9 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     # is craftflow_skill_promote.py's own internal file I/O. Independent
     # violation type, always denied (see the unconditional-deny block below),
     # never lifted by the memory-finalize permit or gated by memoryWrites.
-    if _is_protected_skill_promotion_path(path):
+    if _is_protected_skill_promotion_path(
+        path, project_root=trusted_root, identity_unresolved=trusted_root_unresolved
+    ):
         violations.append("skill-promotion-path")
 
     # CRITICAL 1 (REM-FIX round 3): the skill-candidate ledger and its
@@ -1496,7 +1794,9 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     # check above trusts -- protect them the same unconditional way, or the
     # ledger itself becomes the tamper vector (see
     # `_is_protected_skill_ledger_or_proposal_path()`'s own docstring).
-    if _is_protected_skill_ledger_or_proposal_path(path):
+    if _is_protected_skill_ledger_or_proposal_path(
+        path, project_root=trusted_root, identity_unresolved=trusted_root_unresolved
+    ):
         violations.append("skill-ledger-write")
 
     # Phase 4 (reliability-gates ledger protection): the reliability-gates
@@ -1900,7 +2200,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     try:
         for target in extract_redirect_targets(command):
             _confined, resolved = resolve_confinement(target, cwd, worktree_path)
-            if _is_protected_skill_promotion_path(resolved):
+            if _is_protected_skill_promotion_path(resolved, project_root=cwd):
                 skill_promotion_violations.append(str(resolved))
 
         # `open(...)`/`Path(...).write_text(...)` targets (`-c` one-liners
@@ -1908,7 +2208,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         # command-text scan already used for memory-file protection above.
         for target in _python_script_write_targets(command):
             _confined, resolved = resolve_confinement(target, cwd, worktree_path)
-            if _is_protected_skill_promotion_path(resolved):
+            if _is_protected_skill_promotion_path(resolved, project_root=cwd):
                 skill_promotion_violations.append(str(resolved))
 
         # `os.system(`/`subprocess.*(`/`shutil.*(`/`os.rename|replace(` (and
@@ -1921,7 +2221,12 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         # on disk yet), so the "protected paths" fed in here are the
         # resolved canonical paths for every ledger-in-flight skill name
         # instead.
-        inflight_skill_paths, _ledger_corrupt_unused = _inflight_skill_promotion_paths(project_dir().resolve())
+        #
+        # ADR 0033 deferred-sibling fix (D9): this root derivation fed the
+        # python-suspicious-mechanism lane from `project_dir()`, so the
+        # in-flight set it built belonged to an UNRELATED project whenever
+        # CLAUDE_PROJECT_DIR and the payload `cwd` diverged.
+        inflight_skill_paths, _ledger_corrupt_unused = _inflight_skill_promotion_paths(cwd)
         if inflight_skill_paths:
             skill_promotion_violations.extend(
                 _python_suspicious_mechanism_targets(command, inflight_skill_paths, cwd)
@@ -1956,16 +2261,18 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     try:
         for target in extract_redirect_targets(command):
             _confined, resolved = resolve_confinement(target, cwd, worktree_path)
-            if _is_protected_skill_ledger_or_proposal_path(resolved):
+            if _is_protected_skill_ledger_or_proposal_path(resolved, project_root=cwd):
                 skill_ledger_violations.append(str(resolved))
 
         for target in _python_script_write_targets(command):
             _confined, resolved = resolve_confinement(target, cwd, worktree_path)
-            if _is_protected_skill_ledger_or_proposal_path(resolved):
+            if _is_protected_skill_ledger_or_proposal_path(resolved, project_root=cwd):
                 skill_ledger_violations.append(str(resolved))
 
-        ledger_root = project_dir().resolve()
-        ledger_path, _proposals_dir_unused = _protected_skill_ledger_and_proposal_paths(ledger_root)
+        # ADR 0033 deferred-sibling fix (D10): the literal ledger path fed to
+        # the python-suspicious-mechanism lane must be the CALLER's own, not
+        # CLAUDE_PROJECT_DIR's.
+        ledger_path, _proposals_dir_unused = _protected_skill_ledger_and_proposal_paths(cwd)
         skill_ledger_violations.extend(
             _python_suspicious_mechanism_targets(command, {ledger_path}, cwd)
         )
@@ -2035,9 +2342,9 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 _confined, resolved = resolve_confinement(target, cwd, worktree_path)
                 if resolved in protected_paths:
                     protected_write_violations.append(str(resolved))
-                if _is_protected_skill_promotion_path(resolved):
+                if _is_protected_skill_promotion_path(resolved, project_root=cwd):
                     skill_promotion_violations.append(str(resolved))
-                if _is_protected_skill_ledger_or_proposal_path(resolved):
+                if _is_protected_skill_ledger_or_proposal_path(resolved, project_root=cwd):
                     skill_ledger_violations.append(str(resolved))
                 if _is_protected_reliability_gates_path(resolved, project_root=cwd):
                     reliability_gates_violations.append(str(resolved))
