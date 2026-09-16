@@ -1459,6 +1459,108 @@ def test_pretooluse_guard_allows_project_tier_memory_write_when_newer_unrelated_
     ok(name)
 
 
+def test_pretooluse_guard_project_tier_memory_write_bypassed_by_unrelated_env_project_permit(
+    tmp_dir: Path,
+) -> None:
+    """CRITICAL (REM-FIX cycle 10, silent-failure-hunter Phase 5 live-repro):
+    the permit-lift call `has_memory_finalize_permit(memory_write_permit_uuid)`
+    in `_handle_edit_write()` omits `project_root=trusted_root`, even though
+    `_memory_write_permit_workflow_uuid(path, trusted_root)` (the sibling call
+    two lines above it) IS correctly anchored to `trusted_root`. For
+    project-tier paths `_memory_write_permit_workflow_uuid()` returns None
+    (any currently valid permit is sufficient, by design), which makes the
+    unanchored `has_memory_finalize_permit(None)` presence-only against
+    WHATEVER `CLAUDE_PROJECT_DIR` happens to resolve to for this process --
+    a completely different, decoupled identity source than the trusted
+    payload `cwd`. When `CLAUDE_PROJECT_DIR` diverges from `cwd` and that
+    unrelated env-derived project happens to have ANY valid
+    `.memory-finalize` sentinel of its own lying around, a write to the
+    CALLING project's own protected project-tier memory file is silently
+    ALLOWED even though the calling project holds no permit at all. Must
+    DENY."""
+    name = "pretooluse-guard/project-tier-memory-write-bypassed-by-unrelated-env-project-permit"
+    env_proj = tmp_dir / "env-proj"
+    cwd_proj = tmp_dir / "cwd-proj"
+    (env_proj / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    (cwd_proj / ".craftflow" / "state" / "project").mkdir(parents=True, exist_ok=True)
+    # env_proj holds a stale/unrelated permit -- nothing to do with cwd_proj.
+    (env_proj / ".craftflow" / "state" / ".memory-finalize").write_text(
+        "wf-unrelated-env-project-permit", encoding="utf-8"
+    )
+    # cwd_proj -- the CALLING project -- has NO permit of its own.
+    target = cwd_proj / ".craftflow" / "state" / "project" / "activeContext.md"
+    target.write_text("# Active Context\n", encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Edit",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(target)},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            f"cwd_proj (the calling project) holds no permit of its own -- expected "
+            f"DENY regardless of an unrelated env-derived project's stale permit; "
+            f"got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_workflow_scoped_memory_write_false_denied_when_claude_project_dir_diverges(
+    tmp_dir: Path,
+) -> None:
+    """HIGH (REM-FIX cycle 10, silent-failure-hunter Phase 5 live-repro): same
+    missing `project_root=trusted_root` kwarg as the CRITICAL bypass above,
+    opposite direction. For workflow-scoped memory paths,
+    `_memory_write_permit_workflow_uuid()` correctly derives the real
+    workflow uuid from the target path itself (anchored to `trusted_root`),
+    but the unanchored `has_memory_finalize_permit(uuid)` call then reads the
+    permit file via env-derived `CLAUDE_PROJECT_DIR` instead of the trusted
+    `cwd` -- so the router's own correctly-issued permit, written under
+    `cwd_proj/.craftflow/state/.memory-finalize` and matching the real
+    `wf_uuid`, is falsely DENIED whenever `CLAUDE_PROJECT_DIR` diverges from
+    `cwd`. Must ALLOW."""
+    name = (
+        "pretooluse-guard/workflow-scoped-memory-write-false-denied-"
+        "when-claude-project-dir-diverges"
+    )
+    env_proj = tmp_dir / "env-proj"
+    cwd_proj = tmp_dir / "cwd-proj"
+    (env_proj / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    wf_uuid = "wf-cwd-proj-real-workflow-20260916-000000-aaaaaaaa"
+    wf_dir = cwd_proj / ".craftflow" / "state" / "workflows"
+    wf_memory_dir = wf_dir / wf_uuid
+    wf_memory_dir.mkdir(parents=True, exist_ok=True)
+    (wf_dir / f"{wf_uuid}.json").write_text(
+        f'{{"workflow_uuid":"{wf_uuid}"}}', encoding="utf-8"
+    )
+    # cwd_proj's OWN, genuinely valid, correctly-issued permit for the real
+    # workflow uuid -- written under cwd_proj, not env_proj.
+    (cwd_proj / ".craftflow" / "state" / ".memory-finalize").write_text(
+        wf_uuid, encoding="utf-8"
+    )
+    target = wf_memory_dir / "activeContext.md"
+    target.write_text("# Active Context\n", encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(target), "content": "# updated\n"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out:
+        fail(
+            name,
+            f"cwd_proj holds its own genuinely valid permit for the real workflow "
+            f"uuid -- expected ALLOW; the permit lookup must anchor to the trusted "
+            f"payload cwd, not env-derived CLAUDE_PROJECT_DIR; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # Phase 4: pretooluse_guard.py protected-path extension, Bash-write
 # inspection, Edit/Write worktree confinement, hooks.json Bash registration.
@@ -2667,17 +2769,31 @@ def test_pretooluse_guard_bash_worktree_confinement_only_message_omits_skill_tex
     # above). A Bash redirect into a protected memory file, from a cwd
     # outside its confinement, with zero skill relevance, must get accurate,
     # violation-specific text instead.
+    #
+    # Phase 5 [CHECKPOINT-1] update: `_protected_bash_write_paths()` is now
+    # anchored to the trusted payload `cwd` (D13), so every protected path it
+    # names is necessarily a descendant of `cwd` itself -- a "protected path
+    # that also escapes cwd/worktree_path confinement" can no longer arise
+    # from an identity MISMATCH (the pre-Phase-5 `elsewhere` fixture). It can
+    # still arise from a real symlink: `cwd`'s own protected memory file is a
+    # symlink whose resolved target genuinely lives outside `cwd`'s
+    # confinement -- a legitimate, non-bug-dependent way to reconstruct the
+    # same violation-message scenario.
     name = "pretooluse-guard/bash-worktree-confinement-only-message-omits-skill-text"
-    project_root = tmp_dir / "project"
-    elsewhere = tmp_dir / "elsewhere"
-    project_root.mkdir(parents=True)
-    elsewhere.mkdir(parents=True)
-    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
-    target = project_root / ".craftflow" / "state" / "activeContext.md"
+    session = tmp_dir / "session"
+    leaked = tmp_dir / "leaked"
+    session.mkdir(parents=True)
+    leaked.mkdir(parents=True)
+    real_target = leaked / "activeContext.md"
+    real_target.write_text("# leaked\n", encoding="utf-8")
+    symlinked_target = session / ".craftflow" / "state" / "activeContext.md"
+    symlinked_target.parent.mkdir(parents=True)
+    symlinked_target.symlink_to(real_target)
+    env = {"CLAUDE_PROJECT_DIR": str(session), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
     payload = {
         "tool_name": "Bash",
-        "cwd": str(elsewhere.resolve()),
-        "tool_input": {"command": f"echo hi > {target.resolve()}"},
+        "cwd": str(session.resolve()),
+        "tool_input": {"command": f"echo hi > {symlinked_target}"},
     }
     _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
     if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
@@ -3195,19 +3311,23 @@ def test_pretooluse_guard_bash_second_consecutive_denial_is_escalated(tmp_dir: P
     # Edit/Write -- proves the hard stop is not hardcoded to one tool
     # surface. Two consecutive Bash redirects into the SAME protected
     # memory file (memoryWrites/protectedWrites unconditional lane is not
-    # used here -- worktree-confinement is unconditional and simplest to
-    # trigger deterministically).
+    # used here -- the unconditional "bash-write-protected-path" lane is
+    # unconditional and simplest to trigger deterministically).
+    #
+    # Phase 5 [CHECKPOINT-1] update: `cwd` must now be the SAME identity as
+    # the protected memory file's own project (`_protected_bash_write_paths()`
+    # is anchored to the trusted payload `cwd`, D13) -- a divergent `cwd`
+    # (the pre-Phase-5 `elsewhere` fixture) means the target is simply not a
+    # protected path at all anymore, and neither lane fires.
     name = "pretooluse-guard/bash-second-consecutive-denial-is-escalated"
     project_root = tmp_dir / "project"
-    elsewhere = tmp_dir / "elsewhere"
     project_root.mkdir(parents=True)
-    elsewhere.mkdir(parents=True)
     env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
     target = project_root / ".craftflow" / "state" / "activeContext.md"
     payload = {
         "tool_name": "Bash",
         "session_id": "sess-itemb-3",
-        "cwd": str(elsewhere.resolve()),
+        "cwd": str(project_root.resolve()),
         "tool_input": {"command": f"echo hi > {target.resolve()}"},
     }
     _, out1 = run_hook("craftflow_pretooluse_guard.py", payload, env)
@@ -3571,11 +3691,16 @@ def test_pretooluse_guard_bash_protected_path_write_still_denied_when_unrelated_
     # Regression for _handle_bash's confinement_violations lane (line 1206, the one call site
     # this plan wires): an unrelated workspace_writable_paths entry must not weaken the
     # pre-existing protected-memory-file denial.
+    #
+    # Phase 5 [CHECKPOINT-1] update: `cwd` must now be the SAME identity as
+    # `project_root` -- `_protected_bash_write_paths()` is anchored to the
+    # trusted payload `cwd` (D13), so a divergent `cwd` (the pre-Phase-5
+    # `elsewhere` fixture) would mean the target is not a protected path at
+    # all from `cwd`'s own perspective, and the denial this test exists to
+    # prove would not fire for any reason.
     name = "pretooluse-guard/bash-protected-path-write-still-denied-when-unrelated-workspace-writable-paths-present"
     project_root = tmp_dir / "project"
-    elsewhere = tmp_dir / "elsewhere"
     project_root.mkdir(parents=True)
-    elsewhere.mkdir(parents=True)
     unrelated_allowlisted = tmp_dir / "workspace" / "CONTRACTS.md"
     (tmp_dir / "workspace").mkdir(parents=True)
     _write_workflow_json_fixture(
@@ -3585,7 +3710,7 @@ def test_pretooluse_guard_bash_protected_path_write_still_denied_when_unrelated_
     target = project_root / ".craftflow" / "state" / "activeContext.md"
     payload = {
         "tool_name": "Bash",
-        "cwd": str(elsewhere.resolve()),
+        "cwd": str(project_root.resolve()),
         "tool_input": {"command": f"echo hi > {target.resolve()}"},
     }
     _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
@@ -3654,19 +3779,46 @@ def test_pretooluse_guard_bash_confinement_lane_no_longer_flags_target_once_it_i
     # `protectedWrites` toggle) still correctly denies it. This asymmetry -- one violation type
     # disappearing while an unrelated one persists -- is the actual proof the line-1206 wiring is
     # real, not a no-op deny either way.
+    #
+    # Phase 5 [CHECKPOINT-1] update: `_protected_bash_write_paths()` is now
+    # anchored to the trusted payload `cwd` (D13) -- every path it names is
+    # necessarily a descendant of `cwd`, so "protected AND unconfined by
+    # plain {cwd, worktree_path}" can no longer be reconstructed via an
+    # identity mismatch (the pre-Phase-5 `elsewhere` fixture). It is
+    # reconstructed here instead via a real symlink: `cwd`'s own
+    # workflow-artifact JSON entry is a symlink whose resolved target
+    # genuinely lives outside `cwd`'s confinement (a legitimate scenario --
+    # the glob still matches the symlink's NAME under `cwd`, but `.resolve()`
+    # follows it to the real, external location, exactly as it would for a
+    # real symlinked memory file).
     name = "pretooluse-guard/bash-confinement-lane-no-longer-flags-workspace-allowlisted-protected-path-target"
-    project_root = tmp_dir / "project"
-    elsewhere = tmp_dir / "elsewhere"
-    project_root.mkdir(parents=True)
-    elsewhere.mkdir(parents=True)
+    session = tmp_dir / "session"
+    leaked = tmp_dir / "leaked"
+    session.mkdir(parents=True)
+    leaked.mkdir(parents=True)
     wf_uuid = "wf-fixture-self-target"
-    target = (project_root / ".craftflow" / "state" / "workflows" / f"{wf_uuid}.json").resolve()
-    _write_workflow_json_fixture(project_root, None, wf_uuid=wf_uuid, workspace_writable_paths=[str(target)])
-    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    real_target = (leaked / f"{wf_uuid}.json").resolve()
+    real_target.write_text(json.dumps({"workflow_uuid": wf_uuid}), encoding="utf-8")
+    symlinked_target = (session / ".craftflow" / "state" / "workflows" / f"{wf_uuid}.json").resolve()
+    symlinked_target.parent.mkdir(parents=True, exist_ok=True)
+    symlinked_target.symlink_to(real_target)
+    # This fixture is reused as the write TARGET itself, discovered via
+    # _protected_bash_write_paths()'s cwd-anchored workflows_dir() glob,
+    # which follows the symlink to `real_target` when computing the
+    # protected-path set (Task 5.2 Step 1).
+    #
+    # `cwd`'s own live workflow grants `workspace_writable_paths` for the
+    # RESOLVED real target -- resolve_confinement()'s extra_exact_paths
+    # match is by exact resolved-path equality (see its own docstring), so
+    # the grant must name `real_target`, not the symlink path.
+    _write_workflow_json_fixture(
+        session, None, wf_uuid="wf-session-live", workspace_writable_paths=[str(real_target)]
+    )
+    env = {"CLAUDE_PROJECT_DIR": str(session), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
     payload = {
         "tool_name": "Bash",
-        "cwd": str(elsewhere.resolve()),
-        "tool_input": {"command": f"echo hi > {target}"},
+        "cwd": str(session.resolve()),
+        "tool_input": {"command": f"echo hi > {symlinked_target}"},
     }
     _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
     if "worktree-confinement" in out:
@@ -4086,7 +4238,7 @@ def test_pretooluse_guard_handles_workflow_payload_race_in_wf_uuid_lookup(tmp_di
 
     call_count = {"n": 0}
 
-    def _fake_latest_live_workflow_payload(session_id=None):
+    def _fake_latest_live_workflow_payload(session_id=None, project_root=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             return {}
@@ -18190,6 +18342,1697 @@ def test_pretooluse_guard_workspace_memory_diverges_cwd_and_claude_project_dir(t
     ok(name)
 
 
+def _identity_divergence_fixture(tmp_dir: Path) -> tuple[Path, Path]:
+    """Two sibling project roots for cwd-vs-CLAUDE_PROJECT_DIR divergence tests.
+
+    Returns (env_proj, cwd_proj): `env_proj` is what CLAUDE_PROJECT_DIR points
+    at (the WRONG identity), `cwd_proj` is the PreToolUse payload's own trusted
+    `cwd` (the RIGHT identity). Both carry the same protected-path shapes so a
+    bypass can only come from the guard resolving the wrong root, never from a
+    missing file. Mirrors the fixture shape of
+    test_pretooluse_guard_workspace_memory_diverges_cwd_and_claude_project_dir.
+    """
+    env_proj = tmp_dir / "env-proj"
+    cwd_proj = tmp_dir / "cwd-proj"
+    for proj in (env_proj, cwd_proj):
+        (proj / ".craftflow" / "state" / "project").mkdir(parents=True, exist_ok=True)
+        (proj / ".craftflow" / "state" / "workflows").mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q"], cwd=str(proj), check=True, capture_output=True)
+        state_project = proj / ".craftflow" / "state" / "project"
+        (state_project / "reliability-gates.json").write_text('{"gates": []}', encoding="utf-8")
+        (state_project / "skill-candidates.json").write_text('{"candidates": []}', encoding="utf-8")
+    return env_proj, cwd_proj
+
+
+def _deny_out(out: str) -> bool:
+    return '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out
+
+
+def test_pretooluse_guard_reliability_gates_diverges_cwd_and_claude_project_dir(tmp_dir: Path) -> None:
+    # Follow-up to ADR 0033's deferred CRITICAL siblings (live-reproduced):
+    # `_is_protected_reliability_gates_path()` resolved its protected-path root
+    # via `project_dir()` (CLAUDE_PROJECT_DIR / Path.cwd()), NOT the trusted
+    # PreToolUse payload `cwd`. With the two diverged, a write to the CALLER's
+    # OWN reliability-gates ledger was compared against an UNRELATED project's
+    # ledger path, did not match, and was silently ALLOWED.
+    name = "pretooluse-guard/reliability-gates-diverges-cwd-and-claude-project-dir"
+    env_proj, cwd_proj = _identity_divergence_fixture(tmp_dir)
+    target = cwd_proj / ".craftflow" / "state" / "project" / "reliability-gates.json"
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    # Part 1 (Edit/Write lane, the diverged case) -> DENY.
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-identity-diverge",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(name, f"Edit/Write diverged case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"Edit/Write diverged case: expected a 'reliability-gates-write' reason, got: {out!r}")
+        return
+
+    # Part 2 (Bash lane, the diverged case) -> DENY.
+    bash_payload = {
+        "tool_name": "Bash",
+        "session_id": "wf-identity-diverge",
+        "cwd": str(cwd_proj),
+        "tool_input": {"command": f"echo x > {target}"},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", bash_payload, env)
+    if not _deny_out(out):
+        fail(name, f"Bash diverged case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+
+    # Part 3 (negative control): an UNRELATED project's ledger must NOT become
+    # protected just because CLAUDE_PROJECT_DIR names it -- protection follows
+    # the trusted cwd, and a write there is denied for worktree-confinement
+    # (escaping cwd), never for reliability-gates-write.
+    foreign = env_proj / ".craftflow" / "state" / "project" / "reliability-gates.json"
+    payload_foreign = {
+        "tool_name": "Write",
+        "session_id": "wf-identity-diverge",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(foreign)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_foreign, env)
+    if not _deny_out(out):
+        fail(name, f"foreign-target control: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"foreign-target control: expected 'worktree-confinement' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_ledger_diverges_cwd_and_claude_project_dir(tmp_dir: Path) -> None:
+    # Phase 2 sibling of the reliability-gates fix above:
+    # `_is_protected_skill_ledger_or_proposal_path()` resolved its protected-
+    # path root via `project_dir()` (CLAUDE_PROJECT_DIR / Path.cwd()), NOT the
+    # trusted PreToolUse payload `cwd`. With the two diverged, a write to the
+    # CALLER's OWN skill-candidate ledger, or to a file staged under its
+    # skill-proposals tree, was compared against an UNRELATED project's
+    # paths, did not match, and was silently ALLOWED.
+    name = "pretooluse-guard/skill-ledger-diverges-cwd-and-claude-project-dir"
+    env_proj, cwd_proj = _identity_divergence_fixture(tmp_dir)
+    ledger_target = cwd_proj / ".craftflow" / "state" / "project" / "skill-candidates.json"
+    proposal_dir = cwd_proj / ".craftflow" / "state" / "project" / "skill-proposals" / "abc123"
+    proposal_dir.mkdir(parents=True, exist_ok=True)
+    proposal_target = proposal_dir / "SKILL.md"
+    proposal_target.write_text(
+        '---\nname: demo-proposal\ndescription: "Use when probing skill-proposals-tree protection."\n---\n\nBody.\n',
+        encoding="utf-8",
+    )
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    # Part 1 (Edit/Write lane, ledger target, diverged case) -> DENY.
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-identity-diverge-skill-ledger",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(ledger_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(name, f"Edit/Write ledger diverged case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"Edit/Write ledger diverged case: expected a 'skill-ledger-write' reason, got: {out!r}")
+        return
+
+    # Part 2 (Bash lane, ledger target, diverged case) -> DENY.
+    bash_payload = {
+        "tool_name": "Bash",
+        "session_id": "wf-identity-diverge-skill-ledger",
+        "cwd": str(cwd_proj),
+        "tool_input": {"command": f"echo x > {ledger_target}"},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", bash_payload, env)
+    if not _deny_out(out):
+        fail(name, f"Bash ledger diverged case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"Bash ledger diverged case: expected a 'skill-ledger-write' reason, got: {out!r}")
+        return
+
+    # Part 3 (Edit/Write lane, staged-proposal target, diverged case) -> DENY.
+    payload_proposal = {
+        "tool_name": "Write",
+        "session_id": "wf-identity-diverge-skill-ledger",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(proposal_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_proposal, env)
+    if not _deny_out(out):
+        fail(name, f"Edit/Write proposal diverged case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"Edit/Write proposal diverged case: expected a 'skill-ledger-write' reason, got: {out!r}")
+        return
+
+    # Part 4 (negative control): an UNRELATED project's ledger must NOT
+    # become protected just because CLAUDE_PROJECT_DIR names it -- protection
+    # follows the trusted cwd, and a write there is denied for
+    # worktree-confinement (escaping cwd), never for skill-ledger-write.
+    foreign = env_proj / ".craftflow" / "state" / "project" / "skill-candidates.json"
+    payload_foreign = {
+        "tool_name": "Write",
+        "session_id": "wf-identity-diverge-skill-ledger",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(foreign)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_foreign, env)
+    if not _deny_out(out):
+        fail(name, f"foreign-target control: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"foreign-target control: expected 'worktree-confinement' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_promotion_diverges_cwd_and_claude_project_dir(tmp_dir: Path) -> None:
+    # Phase 2 sibling of the reliability-gates fix above:
+    # `_is_protected_skill_promotion_path()` resolved its protected-path root
+    # via `project_dir()` (CLAUDE_PROJECT_DIR / Path.cwd()), NOT the trusted
+    # PreToolUse payload `cwd`. With the two diverged, the CALLER's own
+    # in-flight ledger entry lives in the WRONG project's ledger file, this
+    # predicate never sees it as in-flight, and a write to the promoted
+    # SKILL.md was silently ALLOWED.
+    name = "pretooluse-guard/skill-promotion-diverges-cwd-and-claude-project-dir"
+    env_proj, cwd_proj = _identity_divergence_fixture(tmp_dir)
+    state_project = cwd_proj / ".craftflow" / "state" / "project"
+    ledger_path = state_project / "skill-candidates.json"
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "candidates": [
+                    {
+                        "id": "cand0001",
+                        "surface": "test/surface",
+                        "signature": "test recurring signature",
+                        "workflows": ["wf-a", "wf-b"],
+                        "distinct_workflows": 2,
+                        "max_severity": "high",
+                        "evidence": [],
+                        "first_seen": "2026-01-01T00:00:00Z",
+                        "last_seen": "2026-01-01T00:00:00Z",
+                        "status": "candidate",
+                        "promoted_skill": None,
+                        "rejected_reason": None,
+                        "rejected_at_distinct_workflows": None,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    proposal_dir = state_project / "skill-proposals" / "cand0001"
+    proposal_dir.mkdir(parents=True, exist_ok=True)
+    (proposal_dir / "SKILL.md").write_text(
+        '---\nname: demo\ndescription: "Use when probing narrowed skill-promotion protection end to end."\n---\n\nBody.\n',
+        encoding="utf-8",
+    )
+    skill_dir = cwd_proj / ".claude" / "skills" / "demo"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    target = skill_dir / "SKILL.md"
+
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    # Part 1 (Edit/Write lane, diverged case) -> DENY.
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-identity-diverge-skill-promotion",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(name, f"Edit/Write diverged case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"Edit/Write diverged case: expected a 'skill-promotion-path' reason, got: {out!r}")
+        return
+
+    # Part 2 (Bash lane, diverged case) -> DENY.
+    bash_payload = {
+        "tool_name": "Bash",
+        "session_id": "wf-identity-diverge-skill-promotion",
+        "cwd": str(cwd_proj),
+        "tool_input": {"command": f"echo x > {target}"},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", bash_payload, env)
+    if not _deny_out(out):
+        fail(name, f"Bash diverged case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"Bash diverged case: expected a 'skill-promotion-path' reason, got: {out!r}")
+        return
+
+    # Part 3 (negative control): an unrelated, hand-authored skill with no
+    # in-flight ledger entry in the TRUSTED project must not be treated as a
+    # skill-promotion-path write just because CLAUDE_PROJECT_DIR names a
+    # DIFFERENT project -- denied only for worktree-confinement if it
+    # escapes cwd, never for skill-promotion-path.
+    foreign_skill_dir = env_proj / ".claude" / "skills" / "unrelated"
+    foreign_skill_dir.mkdir(parents=True, exist_ok=True)
+    foreign_target = foreign_skill_dir / "SKILL.md"
+    payload_foreign = {
+        "tool_name": "Write",
+        "session_id": "wf-identity-diverge-skill-promotion",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(foreign_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_foreign, env)
+    if not _deny_out(out):
+        fail(name, f"foreign-target control: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"foreign-target control: expected 'worktree-confinement' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_promotion_ledger_corrupt_case_fold_bypass(tmp_dir: Path) -> None:
+    """CRITICAL 1 (REM-FIX cycle 9, code-reviewer, live-reproduced):
+    `_skill_promotion_path_shape_match()` -- the fallback
+    `_is_protected_skill_promotion_path()` uses when the skill-candidate
+    ledger EXISTS but cannot be trusted (`ledger_corrupt=True`) -- compared
+    path components with plain string equality
+    (`parts[0] in (".claude", ".cursor")`, `parts[1] == "skills"`,
+    `parts[3] == "SKILL.md"`), unlike its own root-FREE sibling
+    `_skill_promotion_path_shape_match_no_root()`, which already normalizes
+    every component via `_normalized_leaf()`. On a
+    case-insensitive-but-case-preserving filesystem (this repo's default,
+    macOS/APFS), a case-varied write target (`.CLAUDE/Skills/demo/SKILL.MD`)
+    was silently ALLOWED under a corrupt ledger while the canonical-case
+    spelling was correctly DENIED."""
+    name = "pretooluse-guard/skill-promotion-ledger-corrupt-case-fold-bypass"
+    proj = tmp_dir / "ledger-corrupt-case-fold-proj"
+    state_project = proj / ".craftflow" / "state" / "project"
+    state_project.mkdir(parents=True, exist_ok=True)
+    (state_project / "skill-candidates.json").write_text("{not valid json", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=str(proj), check=True, capture_output=True)
+
+    env = {"CLAUDE_PROJECT_DIR": str(proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    # Positive control: canonical-case spelling must be denied (this already
+    # worked pre-fix -- the corrupt-ledger fallback fires at all).
+    canonical_dir = proj / ".claude" / "skills" / "canonical-demo"
+    canonical_dir.mkdir(parents=True, exist_ok=True)
+    canonical_target = canonical_dir / "SKILL.md"
+    payload_canonical = {
+        "tool_name": "Write",
+        "session_id": "wf-ledger-corrupt-case-fold",
+        "cwd": str(proj),
+        "tool_input": {"file_path": str(canonical_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_canonical, env)
+    if not _deny_out(out) or "skill-promotion-path" not in out:
+        fail(
+            name,
+            f"positive control: canonical-case SKILL.md under a corrupt ledger "
+            f"must be DENIED, got exit={code}, stdout={out!r}",
+        )
+        return
+
+    # The live-reproduced bypass: a case-varied spelling of the SAME shape
+    # must ALSO be denied -- not silently allowed via raw string comparison.
+    case_varied_dir = proj / ".CLAUDE" / "Skills" / "demo"
+    case_varied_dir.mkdir(parents=True, exist_ok=True)
+    case_varied_target = case_varied_dir / "SKILL.MD"
+    payload_case_varied = {
+        "tool_name": "Write",
+        "session_id": "wf-ledger-corrupt-case-fold",
+        "cwd": str(proj),
+        "tool_input": {"file_path": str(case_varied_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_case_varied, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (case-varied SKILL.md under a corrupt ledger must "
+            f"fail closed the same as the canonical spelling), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"expected a 'skill-promotion-path' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_ledger_no_root_fallback_survives_none_skill_modules(tmp_dir: Path) -> None:
+    """CRITICAL 2 (REM-FIX cycle 9, silent-failure-hunter, live-reproduced):
+    `_skill_ledger_or_proposal_shape_match_no_root()` -- the fail-CLOSED
+    fallback `_is_protected_skill_ledger_or_proposal_path()` uses when the
+    caller's trusted `cwd` could not be resolved to ANY root at all
+    (`identity_unresolved=True`) -- dereferenced
+    `skill_ledger.DEFAULT_LEDGER_PATH` / `skill_promote.DEFAULT_PROPOSALS_DIR`
+    with NO guard against these sibling modules being `None` (the documented
+    degradation for a partial/interrupted plugin-cache sync, per this file's
+    own top-of-file comment, which claims "every call site already degrades
+    safely" -- false for this call path). Combined with an unresolvable
+    `cwd` (a cyclic symlink, which sets `identity_unresolved=True`), this
+    crashed `_handle_edit_write` with an uncaught `AttributeError:
+    'NoneType' object has no attribute 'DEFAULT_LEDGER_PATH'` -- FAIL-OPEN
+    for every check in the function (memory-write, skill-promotion-path,
+    skill-ledger-write, reliability-gates-write, worktree-confinement), not
+    just this one. Fixed by hardcoding the two fixed relative-path literals
+    in the no-root fallback, mirroring how its sibling
+    `_skill_promotion_path_shape_match_no_root()` already has zero
+    dependency on `skill_ledger`/`skill_promote`."""
+    name = "pretooluse-guard/skill-ledger-no-root-fallback-survives-none-skill-modules"
+    proj = tmp_dir / "none-skill-modules-proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    target = proj / ".craftflow" / "state" / "project" / "skill-candidates.json"
+
+    cyclic = tmp_dir / "cyclic-cwd-loop-none-modules"
+    os.symlink(cyclic, cyclic)
+
+    original_skill_ledger = pretooluse_guard.skill_ledger
+    original_skill_promote = pretooluse_guard.skill_promote
+    pretooluse_guard.skill_ledger = None
+    pretooluse_guard.skill_promote = None
+
+    buf = io.StringIO()
+    old_stdout = sys.stdout
+    crashed_exc = None
+    result = None
+    try:
+        sys.stdout = buf
+        try:
+            data = {"cwd": str(cyclic)}
+            mode = {"memoryWrites": "block"}
+            tool_input = {"file_path": str(target)}
+            result = pretooluse_guard._handle_edit_write(data, mode, tool_input)
+        except Exception as exc:  # the exact crash CRITICAL 2 warns about
+            crashed_exc = exc
+    finally:
+        sys.stdout = old_stdout
+        pretooluse_guard.skill_ledger = original_skill_ledger
+        pretooluse_guard.skill_promote = original_skill_promote
+
+    if crashed_exc is not None:
+        fail(
+            name,
+            f"_handle_edit_write crashed instead of degrading gracefully with "
+            f"skill_ledger/skill_promote == None: {crashed_exc!r}",
+        )
+        return
+    out = buf.getvalue().strip()
+    if result != 0:
+        fail(name, f"expected _handle_edit_write to return 0 (real decision, not crash); got {result!r}")
+        return
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(name, f"expected a DENY decision (fail-closed shape match), got: {out!r}")
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected a 'skill-ledger-write' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_literal_constants_pinned_to_live_modules() -> None:
+    """HIGH (REM-FIX cycle 9, silent-failure-hunter re-hunt, live-reproduced
+    drift scenario): `_SKILL_LEDGER_REL_PATH_LITERAL` /
+    `_SKILL_PROPOSALS_DIR_REL_PATH_LITERAL` back the fail-CLOSED
+    `identity_unresolved` fallback for `_is_protected_skill_ledger_or_proposal_path()`.
+    They are now captured from `skill_ledger.DEFAULT_LEDGER_PATH` /
+    `skill_promote.DEFAULT_PROPOSALS_DIR` at import time when those modules
+    are available, rather than hand-duplicated as separate string literals --
+    but that guarantee only holds for as long as this test keeps passing. A
+    future rename of either module constant with no matching update here
+    would silently reintroduce the exact drift the hunter live-reproduced:
+    the fail-closed fallback keeps defending a now-stale, meaningless shape
+    while missing the real (renamed) resource, with no other test failure to
+    flag it."""
+    name = "pretooluse-guard/skill-literal-constants-pinned-to-live-modules"
+    if pretooluse_guard.skill_ledger is None or pretooluse_guard.skill_promote is None:
+        # Modules genuinely unavailable in this environment -- the ASCII
+        # literal fallback in the source is the only option and there is no
+        # live constant to pin against. Not a failure of this test's own
+        # assertion; the module-availability precondition itself is already
+        # covered by test_pretooluse_guard_skill_ledger_no_root_fallback_survives_none_skill_modules.
+        ok(name)
+        return
+    if pretooluse_guard._SKILL_LEDGER_REL_PATH_LITERAL != pretooluse_guard.skill_ledger.DEFAULT_LEDGER_PATH:
+        fail(
+            name,
+            "drift detected: _SKILL_LEDGER_REL_PATH_LITERAL "
+            f"{pretooluse_guard._SKILL_LEDGER_REL_PATH_LITERAL!r} != "
+            f"skill_ledger.DEFAULT_LEDGER_PATH {pretooluse_guard.skill_ledger.DEFAULT_LEDGER_PATH!r}",
+        )
+        return
+    if pretooluse_guard._SKILL_PROPOSALS_DIR_REL_PATH_LITERAL != pretooluse_guard.skill_promote.DEFAULT_PROPOSALS_DIR:
+        fail(
+            name,
+            "drift detected: _SKILL_PROPOSALS_DIR_REL_PATH_LITERAL "
+            f"{pretooluse_guard._SKILL_PROPOSALS_DIR_REL_PATH_LITERAL!r} != "
+            f"skill_promote.DEFAULT_PROPOSALS_DIR {pretooluse_guard.skill_promote.DEFAULT_PROPOSALS_DIR!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_ledger_no_root_fallback_protects_bare_proposals_dir() -> None:
+    """HIGH 4 (REM-FIX cycle 9, silent-failure-hunter, live-reproduced): the
+    main logic's ledger/proposals scan
+    (`_is_protected_skill_ledger_or_proposal_path()`'s own loop at
+    `range(0, len(path_parts) - n + 1)`) includes the bare proposals
+    directory itself as protected. The `identity_unresolved` fallback's scan
+    (`_skill_ledger_or_proposal_shape_match_no_root()`) used
+    `range(0, len(path_parts) - n)` instead -- excluding that exact case,
+    inverting the design principle that a no-root/shape-only fallback must
+    be AT LEAST as protective as the main path, never less. A `mv`/`rm -rf`
+    targeting the bare `skill-proposals` directory itself (not a file
+    beneath it) was silently un-protected under this fallback while every
+    path one level deeper was correctly denied."""
+    name = "pretooluse-guard/skill-ledger-no-root-fallback-protects-bare-proposals-dir"
+    # identity_unresolved=True short-circuits before any root resolution --
+    # no real filesystem root is consulted, so a fabricated path with the
+    # exact trailing shape is sufficient.
+    target = Path("/unresolved-identity/proj/.craftflow/state/project/skill-proposals")
+    if not pretooluse_guard._is_protected_skill_ledger_or_proposal_path(
+        target, identity_unresolved=True
+    ):
+        fail(
+            name,
+            "expected the bare skill-proposals directory itself to be "
+            "protected under the identity_unresolved fallback, got False",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_root_prefix_matches_trusts_definitive_samefile_false() -> None:
+    """HIGH 2 (REM-FIX cycle 9, silent-failure-hunter, live-reproduced):
+    `_root_prefix_matches()` used to `if os.path.samefile(...): return True`
+    with NO `else` -- silently falling through to the normalized-leaf
+    fallback even on a DEFINITIVE `False` from `samefile()` (no exception).
+    The reference contract this helper claims to mirror
+    (`_is_protected_reliability_gates_path()`'s own ancestor-derivation
+    logic, `return os.path.samefile(root_prefix_path, root)`) trusts BOTH
+    `True` and `False`, falling through ONLY on a raised exception. Fixed to
+    match: a definitive `samefile()` result is now trusted and returned
+    directly; only `(OSError, ValueError)` falls through to the
+    normalized-leaf comparison."""
+    name = "pretooluse-guard/root-prefix-matches-trusts-definitive-samefile-false"
+    tmp = Path(tempfile.mkdtemp(prefix="cf9-hp23a-"))
+    try:
+        root = tmp / "RealRoot"
+        root.mkdir()
+        # `other` deliberately does NOT exist on disk -- `samefile()` is
+        # mocked below to always return a definitive `False` regardless, so
+        # no real filesystem identity is ever consulted. Only `root.exists()`
+        # matters for reaching the branch under test.
+        other = tmp / "realroot"  # case-fold-equal to root's own leaf name
+
+        original_samefile = os.path.samefile
+        os.path.samefile = lambda a, b: False  # definitive: NOT the same file
+        try:
+            result = pretooluse_guard._root_prefix_matches(other.parts, root.parts, root)
+        finally:
+            os.path.samefile = original_samefile
+
+        if result is not False:
+            fail(
+                name,
+                "expected a definitive samefile()==False to be trusted "
+                f"(not degraded to the case-fold fallback), got: {result!r}",
+            )
+            return
+        ok(name)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_pretooluse_guard_relative_parts_under_root_trusts_definitive_samefile_false() -> None:
+    """HIGH 3 (REM-FIX cycle 9, silent-failure-hunter, live-reproduced):
+    `_relative_parts_under_root()` had the identical bug as HIGH 2's
+    `_root_prefix_matches()` -- falling through to the normalized-leaf
+    fallback even on a definitive `samefile()==False`. Fixed the same way:
+    a definitive result is trusted directly; only an exception falls
+    through (now logged via `log_event()`, matching the reference
+    contract's own Bug-B fallback)."""
+    name = "pretooluse-guard/relative-parts-under-root-trusts-definitive-samefile-false"
+    tmp = Path(tempfile.mkdtemp(prefix="cf9-hp23b-"))
+    try:
+        root = tmp / "RealRoot"
+        root.mkdir()
+        # `other_base` deliberately does NOT exist on disk -- `samefile()` is
+        # mocked below to always return a definitive `False` regardless, so
+        # no real filesystem identity is ever consulted. Only `root.exists()`
+        # matters for reaching the branch under test.
+        other_base = tmp / "realroot"  # case-fold-equal to root's own leaf name
+        path = other_base / "leftover.txt"
+
+        original_samefile = os.path.samefile
+        os.path.samefile = lambda a, b: False
+        try:
+            result = pretooluse_guard._relative_parts_under_root(path, root)
+        finally:
+            os.path.samefile = original_samefile
+
+        if result is not None:
+            fail(
+                name,
+                "expected a definitive samefile()==False to be trusted "
+                f"(path must NOT be treated as reachable under root), got: {result!r}",
+            )
+            return
+        ok(name)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_pretooluse_guard_skill_ledger_cwd_is_ancestor_of_project(tmp_dir: Path) -> None:
+    """HIGH 1 (REM-FIX cycle 9, code-reviewer -- missing permanent regression
+    coverage): ports
+    `test_pretooluse_guard_reliability_gates_cwd_is_ancestor_of_project`'s
+    fixture shape to `_is_protected_skill_ledger_or_proposal_path()`. The
+    mechanism itself (`_root_prefix_matches()`) was already live-verified
+    correct for this predicate before this test existed -- this closes the
+    permanent-CI-coverage gap so a future refactor cannot silently
+    reintroduce the depth-mismatch bug reliability-gates' own REM-FIX cycle
+    6 (Bug A) hit."""
+    name = "pretooluse-guard/skill-ledger-cwd-is-ancestor-of-project"
+    workspace = tmp_dir / "skill-ledger-cwd-ancestor-workspace"
+    proj_real = workspace / "proj-real"
+    ledger_dir = proj_real / ".craftflow" / "state" / "project"
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    ledger = ledger_dir / "skill-candidates.json"
+    ledger.write_text('{"candidates": []}', encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=str(proj_real), check=True, capture_output=True)
+
+    env = {"CLAUDE_PROJECT_DIR": str(workspace), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-ledger-cwd-is-ancestor",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (cwd-is-ancestor-of-project depth-mismatch bypass "
+            f"closed for the skill-candidate ledger), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected a 'skill-ledger-write' reason, got: {out!r}")
+        return
+
+    # Negative control: an UNRELATED sibling project's ledger at the same
+    # nesting depth must NOT match.
+    unrelated = tmp_dir / "skill-ledger-cwd-ancestor-unrelated-sibling"
+    unrelated_ledger_dir = unrelated / ".craftflow" / "state" / "project"
+    unrelated_ledger_dir.mkdir(parents=True, exist_ok=True)
+    unrelated_ledger = unrelated_ledger_dir / "skill-candidates.json"
+    unrelated_ledger.write_text('{"candidates": []}', encoding="utf-8")
+    payload_unrelated = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-ledger-cwd-is-ancestor",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(unrelated_ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_unrelated, env)
+    if "skill-ledger-write" in out:
+        fail(
+            name,
+            "negative control: an unrelated sibling project's ledger must "
+            f"NOT be flagged as 'skill-ledger-write', got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_ledger_case_sensitive_ancestor_fallback() -> None:
+    """HIGH 1 (REM-FIX cycle 9, code-reviewer -- missing permanent regression
+    coverage): ports
+    `test_pretooluse_guard_reliability_gates_case_sensitive_ancestor_fallback`'s
+    fixture shape (monkeypatched `os.path.samefile()` simulating a
+    case-sensitive-filesystem miss on the untrusted candidate side) to
+    `_is_protected_skill_ledger_or_proposal_path()`, calling it directly
+    in-process so the monkeypatch is visible to it (this harness's own
+    established convention for a deterministic, filesystem-independent
+    assertion)."""
+    name = "pretooluse-guard/skill-ledger-case-sensitive-ancestor-fallback"
+    tmp_dir = Path(tempfile.mkdtemp(prefix="cf9-skl-bugb-")).resolve()
+    try:
+        root = tmp_dir / "CaseSensitiveProj"
+        (root / ".craftflow" / "state" / "project").mkdir(parents=True)
+        ledger = root / ".craftflow" / "state" / "project" / "skill-candidates.json"
+        ledger.write_text('{"candidates": []}', encoding="utf-8")
+
+        wrong_case_root = tmp_dir / "casesensitiveproj"
+        target = wrong_case_root / ".craftflow" / "state" / "project" / "skill-candidates.json"
+
+        original_samefile = os.path.samefile
+        logged_events: list = []
+
+        def _fake_samefile(a, b):
+            if "casesensitiveproj" in Path(a).parts or "casesensitiveproj" in Path(b).parts:
+                raise FileNotFoundError(f"simulated case-sensitive miss: {a!r} vs {b!r}")
+            return original_samefile(a, b)
+
+        original_log_event = pretooluse_guard.log_event
+
+        def _capturing_log_event(name_arg, payload_arg):
+            logged_events.append((name_arg, payload_arg))
+
+        os.path.samefile = _fake_samefile
+        pretooluse_guard.log_event = _capturing_log_event
+        try:
+            result = pretooluse_guard._is_protected_skill_ledger_or_proposal_path(
+                target, project_root=root
+            )
+        finally:
+            os.path.samefile = original_samefile
+            pretooluse_guard.log_event = original_log_event
+
+        if result is not True:
+            fail(
+                name,
+                "expected the case-sensitive ancestor fallback to still "
+                f"recognize the real skill-candidate ledger as protected, got: {result!r}",
+            )
+            return
+        if not logged_events:
+            fail(
+                name,
+                "expected the candidate-root-unresolvable fallback to be "
+                "logged via log_event(), got no events",
+            )
+            return
+        ok(name)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_pretooluse_guard_skill_ledger_ancestor_root_has_own_ledger(tmp_dir: Path) -> None:
+    """HIGH 1 (REM-FIX cycle 9, code-reviewer -- missing permanent regression
+    coverage): ports
+    `test_pretooluse_guard_reliability_gates_ancestor_root_has_own_ledger`'s
+    fixture shape (the trusted `root` ALSO has its own real, on-disk
+    skill-candidate ledger at the naive direct-child position -- a
+    genuinely DIFFERENT real file than the nested project's own ledger) to
+    `_is_protected_skill_ledger_or_proposal_path()`."""
+    name = "pretooluse-guard/skill-ledger-ancestor-root-has-own-ledger"
+    workspace = tmp_dir / "skill-ledger-ancestor-with-own-ledger-workspace"
+    root_ledger_dir = workspace / ".craftflow" / "state" / "project"
+    root_ledger_dir.mkdir(parents=True, exist_ok=True)
+    root_ledger = root_ledger_dir / "skill-candidates.json"
+    root_ledger.write_text('{"candidates": ["root-own"]}', encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=str(workspace), check=True, capture_output=True)
+
+    nested = workspace / "nested-proj"
+    nested_ledger_dir = nested / ".craftflow" / "state" / "project"
+    nested_ledger_dir.mkdir(parents=True, exist_ok=True)
+    nested_ledger = nested_ledger_dir / "skill-candidates.json"
+    nested_ledger.write_text('{"candidates": ["nested-own"]}', encoding="utf-8")
+
+    if os.path.samefile(str(root_ledger), str(nested_ledger)):
+        fail(name, "fixture precondition failed: root and nested ledgers must be distinct files")
+        return
+
+    env = {"CLAUDE_PROJECT_DIR": str(workspace), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-ledger-ancestor-root-has-own-ledger",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(nested_ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (nested project's own ledger must be protected "
+            "even though root's naive direct-child ledger already exists "
+            f"as a different real file), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "skill-ledger-write" not in out:
+        fail(name, f"expected a 'skill-ledger-write' reason, got: {out!r}")
+        return
+
+    payload_root = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-ledger-ancestor-root-has-own-ledger",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(root_ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_root, env)
+    if not _deny_out(out) or "skill-ledger-write" not in out:
+        fail(
+            name,
+            f"positive control: expected DENY for root's own ledger too, got exit={code}, stdout={out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_promotion_cwd_is_ancestor_of_project(tmp_dir: Path) -> None:
+    """HIGH 1 (REM-FIX cycle 9, code-reviewer -- missing permanent regression
+    coverage): ports
+    `test_pretooluse_guard_reliability_gates_cwd_is_ancestor_of_project`'s
+    fixture shape to `_is_protected_skill_promotion_path()`, where `root`
+    (the trusted payload `cwd`) is a real ANCESTOR of the project holding
+    the in-flight ledger entry and its promoted `SKILL.md`."""
+    name = "pretooluse-guard/skill-promotion-cwd-is-ancestor-of-project"
+    workspace = tmp_dir / "skill-promotion-cwd-ancestor-workspace"
+    proj_real = workspace / "proj-real"
+    state_project = proj_real / ".craftflow" / "state" / "project"
+    state_project.mkdir(parents=True, exist_ok=True)
+    state_project.joinpath("skill-candidates.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "candidates": [
+                    {
+                        "id": "cand-ancestor",
+                        "surface": "test/surface",
+                        "signature": "test recurring signature",
+                        "workflows": ["wf-a", "wf-b"],
+                        "distinct_workflows": 2,
+                        "max_severity": "high",
+                        "evidence": [],
+                        "first_seen": "2026-01-01T00:00:00Z",
+                        "last_seen": "2026-01-01T00:00:00Z",
+                        "status": "candidate",
+                        "promoted_skill": None,
+                        "rejected_reason": None,
+                        "rejected_at_distinct_workflows": None,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    proposal_dir = state_project / "skill-proposals" / "cand-ancestor"
+    proposal_dir.mkdir(parents=True, exist_ok=True)
+    (proposal_dir / "SKILL.md").write_text(
+        '---\nname: demo\ndescription: "Use when probing cwd-is-ancestor skill-promotion protection."\n---\n\nBody.\n',
+        encoding="utf-8",
+    )
+    skill_dir = proj_real / ".claude" / "skills" / "demo"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    target = skill_dir / "SKILL.md"
+    subprocess.run(["git", "init", "-q"], cwd=str(proj_real), check=True, capture_output=True)
+
+    env = {"CLAUDE_PROJECT_DIR": str(workspace), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-promotion-cwd-is-ancestor",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (cwd-is-ancestor-of-project depth-mismatch bypass "
+            f"closed for skill-promotion-path), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"expected a 'skill-promotion-path' reason, got: {out!r}")
+        return
+
+    # Negative control: unrelated hand-authored skill in a sibling project,
+    # no in-flight ledger entry -- must not be flagged.
+    unrelated = tmp_dir / "skill-promotion-cwd-ancestor-unrelated-sibling"
+    unrelated_skill_dir = unrelated / ".claude" / "skills" / "unrelated"
+    unrelated_skill_dir.mkdir(parents=True, exist_ok=True)
+    unrelated_target = unrelated_skill_dir / "SKILL.md"
+    payload_unrelated = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-promotion-cwd-is-ancestor",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(unrelated_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_unrelated, env)
+    if "skill-promotion-path" in out:
+        fail(
+            name,
+            "negative control: an unrelated sibling project's hand-authored "
+            f"skill must NOT be flagged as 'skill-promotion-path', got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_skill_promotion_case_sensitive_ancestor_fallback() -> None:
+    """HIGH 1 (REM-FIX cycle 9, code-reviewer -- missing permanent regression
+    coverage): ports
+    `test_pretooluse_guard_reliability_gates_case_sensitive_ancestor_fallback`'s
+    fixture shape to `_is_protected_skill_promotion_path()`, calling it
+    directly in-process (with `os.path.samefile()` monkeypatched to
+    simulate a case-sensitive-filesystem miss on the untrusted candidate
+    root) so the monkeypatch is visible to it."""
+    name = "pretooluse-guard/skill-promotion-case-sensitive-ancestor-fallback"
+    tmp_dir = Path(tempfile.mkdtemp(prefix="cf9-skp-bugb-")).resolve()
+    try:
+        root = tmp_dir / "CaseSensitiveProj"
+        state_project = root / ".craftflow" / "state" / "project"
+        state_project.mkdir(parents=True)
+        state_project.joinpath("skill-candidates.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "candidates": [
+                        {
+                            "id": "cand-case-sensitive",
+                            "surface": "test/surface",
+                            "signature": "test recurring signature",
+                            "workflows": ["wf-a", "wf-b"],
+                            "distinct_workflows": 2,
+                            "max_severity": "high",
+                            "evidence": [],
+                            "first_seen": "2026-01-01T00:00:00Z",
+                            "last_seen": "2026-01-01T00:00:00Z",
+                            "status": "candidate",
+                            "promoted_skill": None,
+                            "rejected_reason": None,
+                            "rejected_at_distinct_workflows": None,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        proposal_dir = state_project / "skill-proposals" / "cand-case-sensitive"
+        proposal_dir.mkdir(parents=True)
+        (proposal_dir / "SKILL.md").write_text(
+            '---\nname: demo\ndescription: "Use when probing case-sensitive skill-promotion protection."\n---\n\nBody.\n',
+            encoding="utf-8",
+        )
+
+        wrong_case_root = tmp_dir / "casesensitiveproj"
+        target = wrong_case_root / ".claude" / "skills" / "demo" / "SKILL.md"
+
+        original_samefile = os.path.samefile
+        logged_events: list = []
+
+        def _fake_samefile(a, b):
+            if "casesensitiveproj" in Path(a).parts or "casesensitiveproj" in Path(b).parts:
+                raise FileNotFoundError(f"simulated case-sensitive miss: {a!r} vs {b!r}")
+            return original_samefile(a, b)
+
+        original_log_event = pretooluse_guard.log_event
+
+        def _capturing_log_event(name_arg, payload_arg):
+            logged_events.append((name_arg, payload_arg))
+
+        os.path.samefile = _fake_samefile
+        pretooluse_guard.log_event = _capturing_log_event
+        try:
+            result = pretooluse_guard._is_protected_skill_promotion_path(
+                target, project_root=root
+            )
+        finally:
+            os.path.samefile = original_samefile
+            pretooluse_guard.log_event = original_log_event
+
+        if result is not True:
+            fail(
+                name,
+                "expected the case-sensitive ancestor fallback to still "
+                f"recognize the in-flight SKILL.md as protected, got: {result!r}",
+            )
+            return
+        if not logged_events:
+            fail(
+                name,
+                "expected the candidate-root-unresolvable fallback to be "
+                "logged via log_event(), got no events",
+            )
+            return
+        ok(name)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_pretooluse_guard_skill_promotion_ancestor_root_has_own_ledger(tmp_dir: Path) -> None:
+    """HIGH 1 (REM-FIX cycle 9, code-reviewer -- missing permanent regression
+    coverage): analogous fixture to
+    `test_pretooluse_guard_reliability_gates_ancestor_root_has_own_ledger`,
+    adapted for `_is_protected_skill_promotion_path()`'s own shape: `root`
+    (the trusted `cwd`) ALSO has its own real, in-flight ledger entry and
+    promoted SKILL.md at the direct-child position, while a NESTED project
+    one level below has its OWN, separate in-flight candidate. Proves
+    `_inflight_skill_promotion_paths()` is read against the ancestor-
+    DERIVED `effective_root` (from the write target's own path), never
+    against `root` itself when `root` happens to have unrelated in-flight
+    activity of its own."""
+    name = "pretooluse-guard/skill-promotion-ancestor-root-has-own-ledger"
+    workspace = tmp_dir / "skill-promotion-ancestor-with-own-ledger-workspace"
+
+    def _seed_ledger(state_project: Path, candidate_id: str, skill_name: str) -> None:
+        state_project.mkdir(parents=True, exist_ok=True)
+        state_project.joinpath("skill-candidates.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "candidates": [
+                        {
+                            "id": candidate_id,
+                            "surface": "test/surface",
+                            "signature": "test recurring signature",
+                            "workflows": ["wf-a", "wf-b"],
+                            "distinct_workflows": 2,
+                            "max_severity": "high",
+                            "evidence": [],
+                            "first_seen": "2026-01-01T00:00:00Z",
+                            "last_seen": "2026-01-01T00:00:00Z",
+                            "status": "candidate",
+                            "promoted_skill": None,
+                            "rejected_reason": None,
+                            "rejected_at_distinct_workflows": None,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        proposal_dir = state_project / "skill-proposals" / candidate_id
+        proposal_dir.mkdir(parents=True, exist_ok=True)
+        (proposal_dir / "SKILL.md").write_text(
+            f'---\nname: {skill_name}\ndescription: "Use when probing ancestor-root-has-own-ledger skill-promotion protection."\n---\n\nBody.\n',
+            encoding="utf-8",
+        )
+
+    _seed_ledger(workspace / ".craftflow" / "state" / "project", "root-own-cand", "root-own")
+    (workspace / ".claude" / "skills" / "root-own").mkdir(parents=True, exist_ok=True)
+    root_own_target = workspace / ".claude" / "skills" / "root-own" / "SKILL.md"
+
+    nested = workspace / "nested-proj"
+    _seed_ledger(nested / ".craftflow" / "state" / "project", "nested-own-cand", "nested-demo")
+    (nested / ".claude" / "skills" / "nested-demo").mkdir(parents=True, exist_ok=True)
+    nested_target = nested / ".claude" / "skills" / "nested-demo" / "SKILL.md"
+
+    subprocess.run(["git", "init", "-q"], cwd=str(workspace), check=True, capture_output=True)
+
+    env = {"CLAUDE_PROJECT_DIR": str(workspace), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    payload_nested = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-promotion-ancestor-root-has-own-ledger",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(nested_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_nested, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (nested project's own in-flight candidate must be "
+            "protected even though root has its own separate in-flight "
+            f"activity too), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "skill-promotion-path" not in out:
+        fail(name, f"expected a 'skill-promotion-path' reason, got: {out!r}")
+        return
+
+    payload_root = {
+        "tool_name": "Write",
+        "session_id": "wf-skill-promotion-ancestor-root-has-own-ledger",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(root_own_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_root, env)
+    if not _deny_out(out) or "skill-promotion-path" not in out:
+        fail(
+            name,
+            f"positive control: expected DENY for root's own in-flight skill too, got exit={code}, stdout={out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_survives_cyclic_symlink_cwd(tmp_dir: Path) -> None:
+    """REM-FIX (silent-failure-hunter, cycle 2): commit 81f9c18 added an
+    unguarded `Path(cwd_raw).resolve()` at the top of `_handle_edit_write`
+    (BEFORE the pre-existing try/except-wrapped confinement check and BEFORE
+    `violations = []`). `.resolve()` raising on a cyclic-symlink `cwd`
+    (live-reproduced: `os.symlink(link, link)` -> `RuntimeError: Symlink loop
+    from ...`) previously crashed the ENTIRE `_handle_edit_write` function
+    uncaught -- `main()` has no top-level try/except in this file, so the
+    whole guard process exited 1 with no JSON on stdout. The harness treats a
+    crashed hook as no-decision, i.e. FAIL-OPEN for every check in the
+    function (memory-write, skill-promotion-path, skill-ledger-write,
+    reliability-gates-write, worktree-confinement), not just the newly-added
+    reliability-gates check. This proves the guard now degrades
+    `trusted_root` to None (falling back to today's project_dir()-based
+    behavior, DD-4) and still emits a valid DENY decision instead of
+    crashing."""
+    name = "pretooluse-guard/edit-write-survives-cyclic-symlink-cwd"
+    env_proj = tmp_dir / "env-proj"
+    (env_proj / ".craftflow" / "state" / "project").mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(env_proj), check=True, capture_output=True)
+    target = env_proj / ".craftflow" / "state" / "project" / "reliability-gates.json"
+    target.write_text('{"gates": []}', encoding="utf-8")
+
+    cyclic = tmp_dir / "cyclic-cwd-loop"
+    os.symlink(cyclic, cyclic)
+
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-cyclic-symlink-cwd",
+        "cwd": str(cyclic),
+        "tool_input": {"file_path": str(target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(name, f"expected the guard to exit 0 with a real decision, not crash: exit={code}, stdout={out!r}")
+        return
+    if not out:
+        fail(name, f"expected a non-empty JSON DENY decision on stdout, got empty stdout (exit={code})")
+        return
+    try:
+        decision = json.loads(out)
+    except json.JSONDecodeError as exc:
+        fail(name, f"expected valid JSON on stdout, got {out!r}: {exc}")
+        return
+    if decision.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":
+        fail(name, f"expected a deny decision, got: {out!r}")
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"expected 'reliability-gates-write' reason (fallback to project_dir() per DD-4), got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_cyclic_symlink_cwd_fails_closed_for_reliability_gates(tmp_dir: Path) -> None:
+    """REM-FIX (silent-failure-hunter, cycle 3): cycle 2 fixed the CRASH on an
+    unguarded `Path(cwd_raw).resolve()` by degrading `trusted_root` to `None`
+    on any resolution failure -- but `None` is passed straight through as
+    `project_root=None` to `_is_protected_reliability_gates_path()`, which
+    falls back to `(project_root or project_dir())` -- i.e. `CLAUDE_PROJECT_DIR`,
+    a DIFFERENT identity than the write target's own project whenever the
+    session's `CLAUDE_PROJECT_DIR` and payload `cwd` diverge (e.g. a worktree
+    session, exactly the divergence this whole plan exists to close).
+
+    An attacker who can craft a malformed `cwd` (here: a FRESH cyclic
+    symlink, not merely a diverged-but-valid path) for their own session
+    forces this fallback ON DEMAND: `trusted_root` degrades to `None`,
+    `_is_protected_reliability_gates_path()` compares the write target
+    (`cwd_proj`'s OWN ledger) against `CLAUDE_PROJECT_DIR` (`env_proj`, an
+    unrelated project) instead, the paths never match, `reliability-gates-write`
+    is never flagged -- and since `_edit_write_escapes_confinement()` ALSO
+    fails to resolve the same malformed `cwd` (caught by its own separate
+    try/except, degrading to "skip this check only"), NO violation fires at
+    all and the write was previously silently ALLOWED. This test proves
+    neither cycle 1's crash (exit 0 here) nor cycle 2's incomplete fix
+    (ALLOW here) -- the guard must now DENY, unconditionally, by shape-
+    matching the reliability-gates ledger's fixed relative path suffix
+    when the trusted identity itself could not be resolved at all."""
+    name = "pretooluse-guard/edit-write-cyclic-symlink-cwd-fails-closed-reliability-gates"
+    env_proj, cwd_proj = _identity_divergence_fixture(tmp_dir)
+    target = cwd_proj / ".craftflow" / "state" / "project" / "reliability-gates.json"
+
+    cyclic = tmp_dir / "cyclic-cwd-loop-fail-closed"
+    os.symlink(cyclic, cyclic)
+
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-cyclic-symlink-cwd-fail-closed",
+        "cwd": str(cyclic),
+        "tool_input": {"file_path": str(target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(name, f"expected the guard to exit 0 with a real decision, not crash: exit={code}, stdout={out!r}")
+        return
+    if not out:
+        fail(name, f"expected a non-empty JSON DENY decision on stdout, got empty stdout (exit={code})")
+        return
+    try:
+        decision = json.loads(out)
+    except json.JSONDecodeError as exc:
+        fail(name, f"expected valid JSON on stdout, got {out!r}: {exc}")
+        return
+    if decision.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":
+        fail(name, f"expected DENY (fail-closed on unresolvable cwd), got ALLOW: {out!r}")
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"expected 'reliability-gates-write' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_reliability_gates_case_fold_identity_bypass(tmp_dir: Path) -> None:
+    """REM-FIX cycle 4 (doubt-verifier CRITICAL, live-reproduced): `Path.resolve()`
+    on macOS/APFS does not raise, and does NOT canonicalize, when a path
+    component differs only in letter case (or, equivalently, Unicode
+    normalization form -- NFC vs NFD) -- both spellings resolve successfully
+    and refer to the SAME real file (confirmed via `os.path.samefile()`
+    below), yet `_is_protected_reliability_gates_path()`'s plain
+    `path == protected_path` string comparison treated them as different
+    files and silently ALLOWED the write.
+
+    The divergence is deliberately placed on the ledger's own LEAF
+    FILENAME only ("reliability-gates.json" vs. a differently-cased
+    spelling of the exact same file) -- NOT on the project-root directory
+    component. A directory-component case/normalization mismatch would
+    also make `resolve_confinement()`'s own `within_cwd` check spuriously
+    fail (since it string-compares `resolved.parents` against `cwd`),
+    which denies the write for "worktree-confinement" instead and would
+    mask this specific bug behind a DIFFERENT (also-correct, but
+    different-reason) deny -- confirmed empirically in this cycle. Keeping
+    `cwd` and the parent-directory spelling of the target identical isolates
+    the exact bug shape reported live: confinement still recognizes the
+    target as safely inside `cwd` (so no worktree-confinement violation
+    fires), and only the reliability-gates identity predicate's plain
+    string comparison is exercised."""
+    name = "pretooluse-guard/reliability-gates-case-fold-identity-bypass"
+    project = tmp_dir / "case-fold-proj"
+    state_dir = project / ".craftflow" / "state" / "project"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    ledger = state_dir / "reliability-gates.json"
+    ledger.write_text('{"gates": []}', encoding="utf-8")
+
+    # Same real file, same parent directory spelling, differing ONLY in the
+    # leaf filename's case.
+    case_variant_target = state_dir / "RELIABILITY-GATES.JSON"
+    try:
+        same_inode = os.path.samefile(str(ledger), str(case_variant_target))
+    except OSError as exc:
+        fail(
+            name,
+            "fixture precondition failed: could not stat the case-variant "
+            f"spelling ({exc!r}) -- this filesystem is not case-insensitive, "
+            "so this test cannot reproduce the bug here",
+        )
+        return
+    if not same_inode:
+        fail(
+            name,
+            "fixture precondition failed: case-variant spelling does not "
+            "share an inode with the real ledger -- this filesystem is not "
+            "case-insensitive; test cannot reproduce the bug here",
+        )
+        return
+
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-case-fold-identity",
+        "cwd": str(project),
+        "tool_input": {"file_path": str(case_variant_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (real filesystem identity match via "
+            f"os.path.samefile), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"expected a 'reliability-gates-write' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_reliability_gates_case_fold_identity_bypass_ledger_missing(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX cycle 5 (doubt-verifier CRITICAL, live-reproduced): cycle 4's
+    fix falls back to `os.path.samefile(path, protected)` when the plain
+    string comparison misses -- but `samefile()` requires BOTH paths to
+    already exist. When the reliability-gates ledger has NEVER been
+    created yet (a realistic first-use state, not an edge case),
+    `samefile()` raises `FileNotFoundError` for EVERY comparison against a
+    case/Unicode-variant spelling of the ledger path, degrading straight to
+    the already-known-insufficient plain string-equality result (`False`)
+    and silently ALLOWING the write -- letting an agent seed the ledger's
+    initial content via a spelling variant that evades this check entirely.
+
+    Reproduces the doubt-verifier's exact scenario: the ledger's PARENT
+    directory (`.craftflow/state/project/`) exists (mirroring a project
+    that already uses craftflow for other memory files), but the ledger
+    JSON file itself is never written before the case-variant target is
+    probed. The fixture proves this filesystem is case-insensitive via a
+    disposable probe file, never by creating (then relying on) the real
+    ledger -- creating the ledger first would not reproduce this bug at
+    all, since cycle 4's `samefile()` fallback already handles that case."""
+    name = "pretooluse-guard/reliability-gates-case-fold-identity-bypass-ledger-missing"
+    project = tmp_dir / "case-fold-missing-proj"
+    state_dir = project / ".craftflow" / "state" / "project"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+
+    canonical_name = "reliability-gates.json"
+    case_variant_target = state_dir / "RELIABILITY-GATES.JSON"
+
+    # Fixture precondition: this filesystem must be case-insensitive, and
+    # the check must be provable WITHOUT ever creating the real ledger
+    # (that is the entire point of this scenario) -- use a disposable
+    # probe file instead, then remove it.
+    probe = state_dir / "case-fold-probe.tmp"
+    probe.write_text("x", encoding="utf-8")
+    probe_variant = state_dir / "CASE-FOLD-PROBE.TMP"
+    try:
+        same_inode = os.path.samefile(str(probe), str(probe_variant))
+    except OSError as exc:
+        probe.unlink(missing_ok=True)
+        fail(
+            name,
+            "fixture precondition failed: could not stat the case-variant "
+            f"probe ({exc!r}) -- this filesystem is not case-insensitive, "
+            "so this test cannot reproduce the bug here",
+        )
+        return
+    probe.unlink(missing_ok=True)
+    if not same_inode:
+        fail(
+            name,
+            "fixture precondition failed: case-variant probe does not "
+            "share an inode with the real probe -- this filesystem is not "
+            "case-insensitive; test cannot reproduce the bug here",
+        )
+        return
+
+    ledger = state_dir / canonical_name
+    if ledger.exists():
+        fail(name, "fixture precondition failed: ledger unexpectedly exists")
+        return
+
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-case-fold-identity-missing",
+        "cwd": str(project),
+        "tool_input": {"file_path": str(case_variant_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (parent-directory samefile() + normalized-leaf "
+            "comparison must recognize this as the protected ledger even "
+            f"though it does not exist on disk yet), got exit={code}, "
+            f"stdout={out!r}",
+        )
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"expected a 'reliability-gates-write' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_reliability_gates_cwd_is_ancestor_of_project(tmp_dir: Path) -> None:
+    """REM-FIX cycle 6 (Bug A, code-reviewer CRITICAL, confidence 95,
+    live-reproduced): `_is_protected_reliability_gates_path()` compared the
+    ABSOLUTE part-count of the write target against `root /
+    RELIABILITY_GATES_LEDGER_REL_PATH`'s own absolute part-count (cycles
+    4/5's ancestor-climb/samefile/normalized-leaf logic never even ran when
+    they differed). Whenever `root` (the trusted payload `cwd`) is a real
+    ANCESTOR of the actual project holding the ledger -- e.g. an ordinary
+    monorepo/workspace root, or a worktree's parent, NOT the project root
+    itself -- the two part counts differ and the function returned `False`
+    before any of that logic ran. Live-reproduced with NO symlinks, case
+    variation, or Unicode involved at all: an everyday `cwd`-is-ancestor
+    scenario silently ALLOWED a write to a real, already-existing
+    reliability-gates ledger nested one level below `cwd`."""
+    name = "pretooluse-guard/reliability-gates-cwd-is-ancestor-of-project"
+    workspace = tmp_dir / "cwd-ancestor-workspace"
+    proj_real = workspace / "proj-real"
+    ledger_dir = proj_real / ".craftflow" / "state" / "project"
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    ledger = ledger_dir / "reliability-gates.json"
+    ledger.write_text('{"gates": []}', encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=str(proj_real), check=True, capture_output=True)
+
+    env = {"CLAUDE_PROJECT_DIR": str(workspace), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-cwd-is-ancestor",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (cwd-is-ancestor-of-project depth-mismatch bypass "
+            f"closed), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"expected a 'reliability-gates-write' reason, got: {out!r}")
+        return
+
+    # Negative control (unchanged from Part 3 of the diverged-identity test,
+    # re-asserted here at the SAME nesting depth as the positive case above):
+    # a ledger belonging to a genuinely UNRELATED sibling project must still
+    # NOT match, proving the fix widens protection only along the caller's
+    # own trusted-root subtree, never to an arbitrary same-depth path.
+    unrelated = tmp_dir / "cwd-ancestor-unrelated-sibling"
+    unrelated_ledger_dir = unrelated / ".craftflow" / "state" / "project"
+    unrelated_ledger_dir.mkdir(parents=True, exist_ok=True)
+    unrelated_ledger = unrelated_ledger_dir / "reliability-gates.json"
+    unrelated_ledger.write_text('{"gates": []}', encoding="utf-8")
+    payload_unrelated = {
+        "tool_name": "Write",
+        "session_id": "wf-cwd-is-ancestor",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(unrelated_ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_unrelated, env)
+    if "reliability-gates-write" in out:
+        fail(
+            name,
+            "negative control: an unrelated sibling project's ledger must "
+            f"NOT be flagged as 'reliability-gates-write', got: {out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_reliability_gates_case_sensitive_ancestor_fallback() -> None:
+    """REM-FIX cycle 6 (Bug B, silent-failure-hunter, live-reproduced):
+    the cycle-5 ancestor-climb proved the TRUSTED side existed before
+    calling `os.path.samefile()`, but never checked that the UNTRUSTED
+    candidate side (derived from the write target's own `file_path`) also
+    existed under its EXACT spelling. On a case-SENSITIVE filesystem
+    (Linux, or a case-sensitive APFS volume on macOS -- NOT this repo's
+    default), a case-varied directory component anywhere in the caller's
+    own project path makes `os.path.samefile()` raise `FileNotFoundError`
+    for the candidate side, which cycle 5 converted straight to `return
+    False` with NO logging -- even when the real reliability-gates ledger
+    already exists.
+
+    This cannot be reliably reproduced on the default case-INsensitive
+    macOS filesystem without provisioning a real case-sensitive volume. So,
+    matching this harness's own established convention of monkeypatching a
+    module-level function in-process for a single deterministic assertion
+    (see `test_hooklib_record_denial_concurrent_calls_do_not_lose_updates`),
+    `os.path.samefile()` is monkeypatched to simulate that EXACT
+    case-sensitive lookup failure deterministically, and
+    `_is_protected_reliability_gates_path()` is called directly (in-process,
+    not via `run_hook()`'s subprocess) so the monkeypatch is visible to it."""
+    name = "pretooluse-guard/reliability-gates-case-sensitive-ancestor-fallback"
+    # `.resolve()` on macOS can rewrite the temp dir prefix itself (e.g.
+    # `/var/folders/...` -> `/private/var/folders/...`) -- resolve `tmp_dir`
+    # ONCE up front so every path built from it below shares that same
+    # canonical prefix, exactly like a real call site's
+    # `Path(file_path).resolve()` would.
+    tmp_dir = Path(tempfile.mkdtemp(prefix="cf6-bugb-")).resolve()
+    try:
+        root = tmp_dir / "CaseSensitiveProj"
+        (root / ".craftflow" / "state" / "project").mkdir(parents=True)
+        ledger = root / ".craftflow" / "state" / "project" / "reliability-gates.json"
+        ledger.write_text('{"gates": []}', encoding="utf-8")
+
+        # The untrusted write target spells the project's own root directory
+        # with different case (`casesensitiveproj`) -- a spelling variant
+        # that would only fail to resolve on a real case-sensitive filesystem.
+        wrong_case_root = tmp_dir / "casesensitiveproj"
+        target = wrong_case_root / ".craftflow" / "state" / "project" / "reliability-gates.json"
+
+        original_samefile = os.path.samefile
+        logged_events: list = []
+
+        def _fake_samefile(a, b):
+            if "casesensitiveproj" in Path(a).parts or "casesensitiveproj" in Path(b).parts:
+                raise FileNotFoundError(f"simulated case-sensitive miss: {a!r} vs {b!r}")
+            return original_samefile(a, b)
+
+        original_log_event = pretooluse_guard.log_event
+
+        def _capturing_log_event(name_arg, payload_arg):
+            logged_events.append((name_arg, payload_arg))
+
+        os.path.samefile = _fake_samefile
+        pretooluse_guard.log_event = _capturing_log_event
+        try:
+            result = pretooluse_guard._is_protected_reliability_gates_path(
+                target, project_root=root
+            )
+        finally:
+            os.path.samefile = original_samefile
+            pretooluse_guard.log_event = original_log_event
+
+        if result is not True:
+            fail(
+                name,
+                "expected the case-sensitive ancestor fallback to still "
+                f"recognize the real ledger as protected, got: {result!r}",
+            )
+            return
+        if not logged_events:
+            fail(
+                name,
+                "expected the candidate-root-unresolvable fallback to be "
+                "logged via log_event() (REM-FIX: cycle 5 was silent), got "
+                "no events",
+            )
+            return
+        ok(name)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_pretooluse_guard_reliability_gates_ancestor_root_has_own_ledger(tmp_dir: Path) -> None:
+    """REM-FIX cycle 7 (code-reviewer and silent-failure-hunter, independently
+    converged, live-reproduced against this repo's OWN real files -- the
+    main repo root and this very worktree each track their own separate
+    `reliability-gates.json`): `_is_protected_reliability_gates_path()`'s
+    fast path used to `return os.path.samefile(path, protected)`
+    UNCONDITIONALLY, including a definitive `False` when `samefile()`
+    succeeds (no exception) but `path` and `protected` are genuinely
+    different real files.
+
+    This is a DIFFERENT fixture shape than cycle 6's
+    `test_pretooluse_guard_reliability_gates_cwd_is_ancestor_of_project`,
+    which leaves the ancestor (`root`) WITHOUT its own ledger. Here, `root`
+    (the trusted `cwd`) ALSO has its own real, on-disk ledger at the naive
+    direct-child position (`root / RELIABILITY_GATES_LEDGER_REL_PATH`) --
+    so `protected` resolves to a REAL, EXISTING, but DIFFERENT file than
+    the nested project's own ledger (`path`). `os.path.samefile(path,
+    protected)` therefore returns a definitive `False` (no exception),
+    which the pre-cycle-7 code returned immediately -- BEFORE the Bug-A
+    ancestor-derivation logic (which correctly recognizes `path` as
+    reachable under `root`) ever ran. The nested project's own ledger must
+    still be DENIED, not silently ALLOWED just because `root` happens to
+    have its own unrelated ledger at the naive position."""
+    name = "pretooluse-guard/reliability-gates-ancestor-root-has-own-ledger"
+    workspace = tmp_dir / "ancestor-with-own-ledger-workspace"
+    root_ledger_dir = workspace / ".craftflow" / "state" / "project"
+    root_ledger_dir.mkdir(parents=True, exist_ok=True)
+    root_ledger = root_ledger_dir / "reliability-gates.json"
+    root_ledger.write_text('{"gates": ["root-own"]}', encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=str(workspace), check=True, capture_output=True)
+
+    nested = workspace / "nested-proj"
+    nested_ledger_dir = nested / ".craftflow" / "state" / "project"
+    nested_ledger_dir.mkdir(parents=True, exist_ok=True)
+    nested_ledger = nested_ledger_dir / "reliability-gates.json"
+    nested_ledger.write_text('{"gates": ["nested-own"]}', encoding="utf-8")
+
+    # Precondition: the two ledgers must be REAL, DIFFERENT files (not the
+    # same inode) so `os.path.samefile()` returns a definitive `False`
+    # rather than raising -- exercising exactly the bypass path, not the
+    # already-fixed not-yet-created fallback (cycle 5).
+    if os.path.samefile(str(root_ledger), str(nested_ledger)):
+        fail(name, "fixture precondition failed: root and nested ledgers must be distinct files")
+        return
+
+    env = {"CLAUDE_PROJECT_DIR": str(workspace), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-ancestor-root-has-own-ledger",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(nested_ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (nested project's own ledger must be protected "
+            "even though root's naive direct-child ledger already exists "
+            f"as a different real file), got exit={code}, stdout={out!r}",
+        )
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"expected a 'reliability-gates-write' reason, got: {out!r}")
+        return
+
+    # Positive control: writing to root's OWN naive-position ledger must
+    # still be denied too (unchanged, aligned-identity behavior).
+    payload_root = {
+        "tool_name": "Write",
+        "session_id": "wf-ancestor-root-has-own-ledger",
+        "cwd": str(workspace),
+        "tool_input": {"file_path": str(root_ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload_root, env)
+    if not _deny_out(out) or "reliability-gates-write" not in out:
+        fail(
+            name,
+            f"positive control: expected DENY for root's own ledger too, got exit={code}, stdout={out!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_reliability_gates_case_fold_bypass_on_cyclic_symlink_cwd_fails_closed(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX cycle 8 (silent-failure-hunter CRITICAL, live-reproduced):
+    `_reliability_gates_path_shape_match()` -- the fail-CLOSED fallback used
+    by `_is_protected_reliability_gates_path()` when `identity_unresolved=True`
+    (the trusted `cwd` itself could not be resolved to ANY path at all, e.g. a
+    cyclic symlink or a NUL-byte cwd) or when `root` does not exist on disk --
+    used to compare its trailing path components via a plain tuple `==`, with
+    NONE of `_normalized_leaf()`'s case-fold + Unicode NFC-normalization
+    protection that the main (non-fallback) ancestor-derivation logic in
+    `_is_protected_reliability_gates_path()` already applies to the identical
+    kind of suffix comparison. On a case-insensitive-but-case-preserving
+    filesystem (this repo's default, macOS/APFS), a case-varied spelling of
+    the ledger's directory components (e.g.
+    `.craftflow/State/Project/reliability-gates.json`) resolves to the SAME
+    real file as the canonical spelling
+    (`.craftflow/state/project/reliability-gates.json`, confirmed via
+    `os.path.samefile()` below) yet compared UNEQUAL as a plain tuple --
+    exactly when this fallback is supposed to be MOST protective, since it
+    only activates when identity itself is uncertain. This directly
+    falsified the function's own documented invariant that this fallback
+    "can only ever produce an extra DENY, never an ALLOW that should have
+    been a DENY (BC-4 holds)". Forcing `identity_unresolved=True` requires a
+    `cwd` that cannot be resolved AT ALL -- a fresh cyclic symlink, mirroring
+    cycle 3's fixture -- so this fallback function specifically is the one
+    exercised, not the main ancestor-derivation logic that already
+    normalizes."""
+    name = "pretooluse-guard/reliability-gates-case-fold-bypass-cyclic-symlink-cwd-fails-closed"
+    project = tmp_dir / "case-fold-cyclic-proj"
+    state_dir = project / ".craftflow" / "state" / "project"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    ledger = state_dir / "reliability-gates.json"
+    ledger.write_text('{"gates": []}', encoding="utf-8")
+
+    # Case-varied spelling of the SAME real file, across multiple path
+    # components -- mirrors the exact live-reproduced report
+    # (`.craftflow/State/Project/reliability-gates.json`).
+    case_variant_target = project / ".craftflow" / "State" / "Project" / "reliability-gates.json"
+    try:
+        same_inode = os.path.samefile(str(ledger), str(case_variant_target))
+    except OSError as exc:
+        fail(
+            name,
+            "fixture precondition failed: could not stat the case-variant "
+            f"spelling ({exc!r}) -- this filesystem is not case-insensitive, "
+            "so this test cannot reproduce the bug here",
+        )
+        return
+    if not same_inode:
+        fail(
+            name,
+            "fixture precondition failed: case-variant spelling does not "
+            "share an inode with the real ledger -- this filesystem is not "
+            "case-insensitive; test cannot reproduce the bug here",
+        )
+        return
+
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    # Control: a normal, resolvable cwd correctly DENIES via the main
+    # (non-fallback) ancestor-derivation logic, which already case-folds.
+    control_payload = {
+        "tool_name": "Write",
+        "session_id": "wf-case-fold-cyclic-control",
+        "cwd": str(project),
+        "tool_input": {"file_path": str(case_variant_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", control_payload, env)
+    if not _deny_out(out) or "reliability-gates-write" not in out:
+        fail(
+            name,
+            "control precondition failed: expected DENY with a normal, "
+            f"resolvable cwd, got exit={code}, stdout={out!r}",
+        )
+        return
+
+    # The actual scenario: cwd is a FRESH cyclic symlink (forces
+    # `identity_unresolved=True`, routing into
+    # `_reliability_gates_path_shape_match()` specifically), same
+    # case-varied target.
+    cyclic = tmp_dir / "cyclic-cwd-loop-case-fold"
+    os.symlink(cyclic, cyclic)
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-case-fold-cyclic-fail-closed",
+        "cwd": str(cyclic),
+        "tool_input": {"file_path": str(case_variant_target)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(
+            name,
+            "expected DENY (fail-closed shape-match must case-fold/NFC-"
+            f"normalize like the main ancestor-derivation logic does), got "
+            f"exit={code}, stdout={out!r}",
+        )
+        return
+    if "reliability-gates-write" not in out:
+        fail(name, f"expected a 'reliability-gates-write' reason, got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_reliability_gates_shape_match_rejects_unrelated_path(
+    tmp_dir: Path,
+) -> None:
+    """Companion negative test for REM-FIX cycle 8: proves the
+    `_normalized_leaf()` fix to `_reliability_gates_path_shape_match()` did
+    not become OVER-permissive. A path that does not end in
+    `RELIABILITY_GATES_LEDGER_REL_PATH`'s shape at all -- wrong filename,
+    wrong number of trailing components -- must still be denied protection
+    (i.e. NOT flagged as the reliability-gates ledger) even when
+    `identity_unresolved=True` forces the shape-match fallback."""
+    name = "pretooluse-guard/reliability-gates-shape-match-rejects-unrelated-path"
+    project = tmp_dir / "shape-match-negative-proj"
+    other_dir = project / ".craftflow" / "state" / "project"
+    other_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+
+    # Different filename entirely -- same directory shape, wrong leaf.
+    unrelated_file = other_dir / "some-other-file.json"
+    unrelated_file.write_text("{}", encoding="utf-8")
+
+    cyclic = tmp_dir / "cyclic-cwd-loop-shape-negative"
+    os.symlink(cyclic, cyclic)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-shape-match-negative",
+        "cwd": str(cyclic),
+        "tool_input": {"file_path": str(unrelated_file)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0:
+        fail(name, f"expected the guard to exit 0 with a real decision, not crash: exit={code}, stdout={out!r}")
+        return
+    if "reliability-gates-write" in out:
+        fail(
+            name,
+            "expected the unrelated file to NOT be flagged as the "
+            f"reliability-gates ledger (over-permissive shape match), got: {out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_ai_first_setup_item10_collects_workspace_members() -> None:
     name = "ai-first-setup/item10-collects-workspace-members"
     text = (PLUGIN_ROOT / "skills" / "ai-first-setup" / "SKILL.md").read_text(encoding="utf-8")
@@ -18381,6 +20224,354 @@ def test_decision_record_exists_for_workspace_membership() -> None:
     ok(name)
 
 
+def test_decision_record_exists_for_cwd_identity_confinement() -> None:
+    name = "decisions/cwd-identity-confinement-adr-exists"
+    repo_root = PLUGIN_ROOT.parents[3]
+    decisions_dir = repo_root / "docs" / "ai" / "decisions"
+    matches = sorted(decisions_dir.glob("*-craftflow-cwd-identity-confinement.md"))
+    if not matches:
+        fail(name, f"no ADR matching '*-craftflow-cwd-identity-confinement.md' in {decisions_dir}")
+        return
+    content = matches[0].read_text(encoding="utf-8")
+    missing = [n for n in ("project_root", "0033", "worktree_path") if n not in content]
+    if missing:
+        fail(name, f"{matches[0]} exists but does not mention: {missing!r}")
+        return
+    ok(name)
+
+
+def test_hooklib_workflows_dir_project_root_override_and_no_side_effect(tmp_dir: Path) -> None:
+    # ADR 0033 deferred-sibling fix, DD-2: `state_root()`/`workflows_dir()` call
+    # .mkdir() on their OWN project's tree, which is correct for a process
+    # operating on itself. A CALLER-SUPPLIED root must never inherit that side
+    # effect -- otherwise every PreToolUse invocation would create
+    # <payload-cwd>/.craftflow/state/workflows/ in every project the user
+    # touches, including projects that have never used craftflow. Mirrors the
+    # rule `memory_finalize_permit_path()`'s docstring already states verbatim.
+    name = "hooklib/workflows-dir-project-root-override-and-no-side-effect"
+    supplied = tmp_dir / "supplied-root"
+    supplied.mkdir(parents=True, exist_ok=True)
+
+    # (a) override selects the supplied root
+    got = hooklib.workflows_dir(project_root=supplied)
+    expected = supplied / ".craftflow" / "state" / "workflows"
+    if got != expected:
+        fail(name, f"override: expected {expected}, got {got}")
+        return
+
+    # (b) NO side effect: the supplied tree is still empty
+    leftovers = sorted(p.name for p in supplied.iterdir())
+    if leftovers:
+        fail(name, f"supplying project_root created filesystem entries: {leftovers!r}")
+        return
+
+    # (c) omitting project_root preserves today's behavior exactly, INCLUDING
+    #     its mkdir side effect on the process's own project.
+    own = tmp_dir / "own-root"
+    own.mkdir(parents=True, exist_ok=True)
+    prev = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(own)
+    try:
+        default_got = hooklib.workflows_dir()
+    finally:
+        if prev is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = prev
+    if default_got != own / ".craftflow" / "state" / "workflows":
+        fail(name, f"default path changed: got {default_got}")
+        return
+    if not default_got.is_dir():
+        fail(name, "default (no project_root) call must still create its own project's tree")
+        return
+    ok(name)
+
+
+def test_hooklib_latest_live_workflow_payload_project_root_selects_supplied_project(tmp_dir: Path) -> None:
+    # The bug-1 chain: latest_live_workflow_payload -> read_latest_live_workflow_state
+    # -> latest_live_workflow_file -> workflows_dir. With CLAUDE_PROJECT_DIR and the
+    # supplied project_root diverged, the payload returned must come from the
+    # SUPPLIED root's workflows dir, never the env-derived one.
+    name = "hooklib/latest-live-workflow-payload-project-root-selects-supplied-project"
+    env_proj = tmp_dir / "env-proj"
+    cwd_proj = tmp_dir / "cwd-proj"
+    for proj, uuid in ((env_proj, "wf-env"), (cwd_proj, "wf-cwd")):
+        wf_dir = proj / ".craftflow" / "state" / "workflows"
+        wf_dir.mkdir(parents=True, exist_ok=True)
+        (wf_dir / f"{uuid}.json").write_text(
+            json.dumps({"workflow_uuid": uuid, "worktree_path": None}), encoding="utf-8"
+        )
+    prev = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(env_proj)
+    try:
+        got = hooklib.latest_live_workflow_payload(None, project_root=cwd_proj)
+        default = hooklib.latest_live_workflow_payload(None)
+    finally:
+        if prev is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = prev
+    if got.get("workflow_uuid") != "wf-cwd":
+        fail(name, f"project_root override: expected wf-cwd, got {got.get('workflow_uuid')!r}")
+        return
+    if default.get("workflow_uuid") != "wf-env":
+        fail(name, f"omitted project_root must preserve env-derived selection; got {default.get('workflow_uuid')!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_worktree_path_diverges_cwd_and_claude_project_dir(tmp_dir: Path) -> None:
+    # ADR 0033 deferred-sibling fix (live-reproduced): the active workflow's
+    # `worktree_path` -- a real write GRANT handed to resolve_confinement() --
+    # was selected by globbing `workflows_dir()` = project_dir()/... rather than
+    # the trusted PreToolUse payload `cwd`. An UNRELATED project's live workflow
+    # therefore leaked its worktree grant into a different project's session:
+    # a write into that worktree was ALLOWED even though the calling project has
+    # no such workflow at all.
+    name = "pretooluse-guard/worktree-path-diverges-cwd-and-claude-project-dir"
+    env_proj = tmp_dir / "env-proj"
+    cwd_proj = tmp_dir / "cwd-proj"
+    leaked_worktree = tmp_dir / "leaked-worktree"
+    for d in (env_proj, cwd_proj, leaked_worktree):
+        d.mkdir(parents=True, exist_ok=True)
+    for proj in (env_proj, cwd_proj):
+        (proj / ".craftflow" / "state" / "workflows").mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q"], cwd=str(proj), check=True, capture_output=True)
+    (env_proj / ".craftflow" / "state" / "workflows" / "wf-env-live.json").write_text(
+        json.dumps({"workflow_uuid": "wf-env-live", "worktree_path": str(leaked_worktree)}),
+        encoding="utf-8",
+    )
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    # Part 1 (the leak): cwd=cwd_proj has NO workflow at all -> the write must
+    # be denied for worktree-confinement, not allowed by env_proj's grant.
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-worktree-diverge",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(leaked_worktree / "evil.txt")},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(name, f"leaked-worktree case: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    if "worktree-confinement" not in out:
+        fail(name, f"leaked-worktree case: expected 'worktree-confinement' reason, got: {out!r}")
+        return
+
+    # Part 2 (positive control): once cwd_proj has its OWN live workflow naming
+    # the same worktree, the SAME write must be ALLOWED -- proving the grant is
+    # anchored to cwd, not to CLAUDE_PROJECT_DIR (which still names env_proj).
+    (cwd_proj / ".craftflow" / "state" / "workflows" / "wf-cwd-live.json").write_text(
+        json.dumps({"workflow_uuid": "wf-cwd-live", "worktree_path": str(leaked_worktree)}),
+        encoding="utf-8",
+    )
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if code != 0 or out:
+        fail(name, f"own-workflow control: expected ALLOW (exit 0, empty stdout), got exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_unresolvable_cwd_does_not_leak_foreign_wf_uuid_into_log(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX (Phase 4 hunt, MEDIUM): when the trusted payload `cwd` cannot be
+    resolved at all (e.g. a cyclic symlink -> `trusted_root_unresolved=True`),
+    `_handle_edit_write`'s own `latest_live_workflow_payload(session_id,
+    project_root=trusted_root)` call previously still ran with
+    `project_root=None`, silently falling back to env-derived `project_dir()`
+    discovery for the DENY's logged `wf`/`phase` metadata -- i.e. an unrelated
+    project's live workflow uuid/phase could appear on this session's deny log
+    line. The actual confinement/grant decision was never affected (traced
+    separately, in `_edit_write_escapes_confinement()`), but the audit trail
+    was mislabeled. Fixed by skipping the lookup entirely (degrading straight
+    to None/"unknown") when `trusted_root_unresolved` is True."""
+    name = "pretooluse-guard/unresolvable-cwd-does-not-leak-foreign-wf-uuid-into-log"
+    project = tmp_dir / "log-metadata-proj"
+    state_dir = project / ".craftflow" / "state" / "project"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    ledger = state_dir / "reliability-gates.json"
+    ledger.write_text('{"gates": []}', encoding="utf-8")
+
+    # CLAUDE_PROJECT_DIR's OWN live workflow -- must NOT leak into the log
+    # metadata for a request whose cwd could not be resolved at all.
+    wf_dir = project / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True, exist_ok=True)
+    (wf_dir / "wf-should-not-leak.json").write_text(
+        json.dumps({"workflow_uuid": "wf-should-not-leak", "pending_gate": "should-not-leak-phase"}),
+        encoding="utf-8",
+    )
+
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if log_path.exists():
+        log_path.unlink()
+
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    cyclic = tmp_dir / "cyclic-cwd-loop-log-metadata"
+    os.symlink(cyclic, cyclic)
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-log-metadata-unresolvable-cwd",
+        "cwd": str(cyclic),
+        "tool_input": {"file_path": str(ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out) or "reliability-gates-write" not in out:
+        fail(name, f"expected DENY with 'reliability-gates-write', got exit={code}, stdout={out!r}")
+        return
+
+    lines = _denial_log_lines(project)
+    deny_entries = [json.loads(line) for line in lines if '"decision": "deny"' in line or '"decision":"deny"' in line]
+    if not deny_entries:
+        fail(name, f"expected at least one logged deny entry, got log lines: {lines!r}")
+        return
+    entry = deny_entries[-1]
+    if entry.get("wf") is not None:
+        fail(
+            name,
+            "expected logged 'wf' to be None (unresolvable cwd must not leak "
+            f"a foreign project's workflow uuid), got: {entry.get('wf')!r}",
+        )
+        return
+    if entry.get("phase") != "unknown":
+        fail(
+            name,
+            "expected logged 'phase' to be 'unknown' (unresolvable cwd must "
+            f"not leak a foreign project's pending_gate), got: {entry.get('phase')!r}",
+        )
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_protected_memory_paths_diverge_cwd_and_claude_project_dir(
+    tmp_dir: Path,
+) -> None:
+    """[CHECKPOINT-1] Phase 5 -- third live-reproduced instance of the ADR 0033
+    identity-mismatch bug class, found by Phase 0's mandated unscoped sweep
+    (D12/D14/D16). `_protected_memory_paths()` (guard.py),
+    `_memory_write_permit_workflow_uuid()` (guard.py), and
+    `_protected_redirect_paths()` (bash_guard.py) all computed their
+    protected-path SET / permit uuid from `state_root()`/`project_state_dir()`/
+    `workflows_dir()` with no arguments -- env-derived (`CLAUDE_PROJECT_DIR`)
+    -- rather than the trusted PreToolUse payload `cwd`. Whenever
+    `CLAUDE_PROJECT_DIR` and `cwd` diverge, both guards protect an UNRELATED
+    project's memory files while leaving the CALLING project's own
+    `.craftflow/state/project/activeContext.md` completely unprotected: an
+    Edit/Write AND a Bash-echo redirect to it are both silently ALLOWED,
+    in both `craftflow_pretooluse_guard.py` and its independent sibling
+    `craftflow_pretooluse_bash_guard.py`. (S10.)"""
+    name = "pretooluse-guard/protected-memory-paths-diverge-cwd-and-claude-project-dir"
+    env_proj = tmp_dir / "env-proj"
+    cwd_proj = tmp_dir / "cwd-proj"
+    for d in (env_proj, cwd_proj):
+        (d / ".craftflow" / "state" / "project").mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q"], cwd=str(d), check=True, capture_output=True)
+    target = cwd_proj / ".craftflow" / "state" / "project" / "activeContext.md"
+    target.write_text("# Active Context\n", encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    write_payload = {
+        "tool_name": "Write",
+        "session_id": "wf-protected-memory-diverge",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(target)},
+    }
+    bash_payload = {
+        "tool_name": "Bash",
+        "session_id": "wf-protected-memory-diverge",
+        "cwd": str(cwd_proj),
+        "tool_input": {"command": f"echo x > {target}"},
+    }
+
+    # Part 1: Edit/Write to cwd_proj's own memory file, no permit -> DENY.
+    code, out = run_hook("craftflow_pretooluse_guard.py", write_payload, env)
+    if not _deny_out(out):
+        fail(name, f"guard.py Edit/Write: expected DENY, got exit={code}, stdout={out!r}")
+        return
+
+    # Part 2: same target via guard.py's own Bash-write-inspection layer -> DENY.
+    code, out = run_hook("craftflow_pretooluse_guard.py", bash_payload, env)
+    if not _deny_out(out):
+        fail(name, f"guard.py Bash: expected DENY, got exit={code}, stdout={out!r}")
+        return
+
+    # Part 3: same target via bash_guard.py's independent protected-redirect layer -> DENY.
+    code, out = run_hook("craftflow_pretooluse_bash_guard.py", bash_payload, env)
+    if not _deny_out(out):
+        fail(name, f"bash_guard.py: expected DENY, got exit={code}, stdout={out!r}")
+        return
+
+    # Part 4: aligned-identity regression control (CLAUDE_PROJECT_DIR == cwd) must
+    # still DENY, unchanged, for all three lanes above (BC-2/P1).
+    aligned_env = {"CLAUDE_PROJECT_DIR": str(cwd_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    code, out = run_hook("craftflow_pretooluse_guard.py", write_payload, aligned_env)
+    if not _deny_out(out):
+        fail(name, f"aligned control guard.py Edit/Write: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    code, out = run_hook("craftflow_pretooluse_guard.py", bash_payload, aligned_env)
+    if not _deny_out(out):
+        fail(name, f"aligned control guard.py Bash: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    code, out = run_hook("craftflow_pretooluse_bash_guard.py", bash_payload, aligned_env)
+    if not _deny_out(out):
+        fail(name, f"aligned control bash_guard.py: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_protected_workflow_json_diverges_cwd_and_claude_project_dir(
+    tmp_dir: Path,
+) -> None:
+    """[CHECKPOINT-1] Phase 5 -- workflow-JSON sibling of the memory-file case
+    above (D13/D16): `_protected_bash_write_paths()`'s workflow-JSON glob
+    (guard.py) and `_protected_redirect_paths()`'s workflow-JSON glob
+    (bash_guard.py) both call `workflows_dir()` with no arguments --
+    env-derived -- so a divergent `CLAUDE_PROJECT_DIR` leaves the calling
+    project's OWN workflow JSON artifact unprotected against a Bash redirect
+    in both guards. (Edit/Write to workflow JSON is deliberately NOT in the
+    protected set -- the router routinely Write()s it mid-workflow -- so
+    this scenario is Bash-redirect-only, matching S11.)"""
+    name = "pretooluse-guard/protected-workflow-json-diverges-cwd-and-claude-project-dir"
+    env_proj = tmp_dir / "env-proj"
+    cwd_proj = tmp_dir / "cwd-proj"
+    for d in (env_proj, cwd_proj):
+        (d / ".craftflow" / "state" / "workflows").mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q"], cwd=str(d), check=True, capture_output=True)
+    target = cwd_proj / ".craftflow" / "state" / "workflows" / "wf-x.json"
+    target.write_text(json.dumps({"workflow_uuid": "wf-x"}), encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    bash_payload = {
+        "tool_name": "Bash",
+        "session_id": "wf-protected-workflow-json-diverge",
+        "cwd": str(cwd_proj),
+        "tool_input": {"command": f"echo x > {target}"},
+    }
+
+    code, out = run_hook("craftflow_pretooluse_guard.py", bash_payload, env)
+    if not _deny_out(out):
+        fail(name, f"guard.py Bash: expected DENY, got exit={code}, stdout={out!r}")
+        return
+
+    code, out = run_hook("craftflow_pretooluse_bash_guard.py", bash_payload, env)
+    if not _deny_out(out):
+        fail(name, f"bash_guard.py: expected DENY, got exit={code}, stdout={out!r}")
+        return
+
+    # Aligned-identity regression control -> DENY unchanged (BC-2/P1).
+    aligned_env = {"CLAUDE_PROJECT_DIR": str(cwd_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    code, out = run_hook("craftflow_pretooluse_guard.py", bash_payload, aligned_env)
+    if not _deny_out(out):
+        fail(name, f"aligned control guard.py Bash: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    code, out = run_hook("craftflow_pretooluse_bash_guard.py", bash_payload, aligned_env)
+    if not _deny_out(out):
+        fail(name, f"aligned control bash_guard.py: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -18417,6 +20608,11 @@ def main() -> int:
         test_pretooluse_guard_allows_workflow_scoped_memory_write_when_newer_unrelated_workflow_exists(tmp / "g2b")
         test_pretooluse_guard_denies_workflow_scoped_memory_write_with_permit_for_different_workflow(tmp / "g2c")
         test_pretooluse_guard_allows_project_tier_memory_write_when_newer_unrelated_workflow_exists(tmp / "g2d")
+
+        print()
+        print("[ pretooluse-guard: REM-FIX cycle 10 (silent-failure-hunter CRITICAL+HIGH -- missing project_root= on has_memory_finalize_permit() call site) ]")
+        test_pretooluse_guard_project_tier_memory_write_bypassed_by_unrelated_env_project_permit(tmp / "g2e")
+        test_pretooluse_guard_workflow_scoped_memory_write_false_denied_when_claude_project_dir_diverges(tmp / "g2f")
 
         print()
         print("[ pretooluse-guard: Phase 4 protected-path + Bash-write inspection + confinement ]")
@@ -19370,6 +21566,81 @@ def main() -> int:
     test_pretooluse_guard_workspace_memory_diverges_cwd_and_claude_project_dir(tmp / "wsm19")
 
     print()
+    print("[ pretooluse-guard: cwd-vs-project_dir() identity confinement (ADR 0033 deferred siblings) ]")
+    test_pretooluse_guard_reliability_gates_diverges_cwd_and_claude_project_dir(tmp / "idm1")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX (silent-failure-hunter cycle 2 -- unguarded cwd .resolve() must not crash _handle_edit_write) ]")
+    test_pretooluse_guard_edit_write_survives_cyclic_symlink_cwd(tmp / "idm2")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX (silent-failure-hunter cycle 3 -- cwd-resolution failure must fail CLOSED for reliability-gates, not degrade to project_dir()) ]")
+    test_pretooluse_guard_edit_write_cyclic_symlink_cwd_fails_closed_for_reliability_gates(tmp / "idm3")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX (doubt-verifier cycle 4 -- Path.resolve() case-fold/NFC-vs-NFD identity bypass on reliability-gates) ]")
+    test_pretooluse_guard_reliability_gates_case_fold_identity_bypass(tmp / "idm4")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX (doubt-verifier cycle 5 -- samefile() requires both paths to exist; ledger-not-yet-created case-fold bypass) ]")
+    test_pretooluse_guard_reliability_gates_case_fold_identity_bypass_ledger_missing(tmp / "idm5")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 6 (Bug A -- cwd-is-ancestor-of-project depth-mismatch bypass) ]")
+    test_pretooluse_guard_reliability_gates_cwd_is_ancestor_of_project(tmp / "idm6a")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 6 (Bug B -- case-sensitive-filesystem middle-of-path ancestor fallback) ]")
+    test_pretooluse_guard_reliability_gates_case_sensitive_ancestor_fallback()
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 7 (unconditional samefile() return bypasses ancestor-derivation when root has its own ledger) ]")
+    test_pretooluse_guard_reliability_gates_ancestor_root_has_own_ledger(tmp / "idm7")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 8 (silent-failure-hunter -- identity_unresolved shape-match fallback must case-fold/NFC-normalize) ]")
+    test_pretooluse_guard_reliability_gates_case_fold_bypass_on_cyclic_symlink_cwd_fails_closed(tmp / "idm8")
+    test_pretooluse_guard_reliability_gates_shape_match_rejects_unrelated_path(tmp / "idm8b")
+
+    print()
+    print("[ pretooluse-guard: Phase 2 -- skill-ledger and skill-promotion protection anchor to payload cwd (ADR 0033 deferred siblings) ]")
+    test_pretooluse_guard_skill_ledger_diverges_cwd_and_claude_project_dir(tmp / "idm9")
+    test_pretooluse_guard_skill_promotion_diverges_cwd_and_claude_project_dir(tmp / "idm10")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 (code-reviewer CRITICAL 1 -- case-fold bypass in the ledger-corrupt fail-closed fallback) ]")
+    test_pretooluse_guard_skill_promotion_ledger_corrupt_case_fold_bypass(tmp / "idm11")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 (silent-failure-hunter CRITICAL 2 -- crash when skill_ledger/skill_promote modules are None) ]")
+    test_pretooluse_guard_skill_ledger_no_root_fallback_survives_none_skill_modules(tmp / "idm12")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 re-hunt (silent-failure-hunter HIGH -- hardcoded literal drift, router-direct fix) ]")
+    test_pretooluse_guard_skill_literal_constants_pinned_to_live_modules()
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 (silent-failure-hunter HIGH 4 -- off-by-one in no-root proposals-dir fallback) ]")
+    test_pretooluse_guard_skill_ledger_no_root_fallback_protects_bare_proposals_dir()
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 (silent-failure-hunter HIGH 2+3 -- samefile() definitive-False silently degraded to a weaker fallback) ]")
+    test_pretooluse_guard_root_prefix_matches_trusts_definitive_samefile_false()
+    test_pretooluse_guard_relative_parts_under_root_trusts_definitive_samefile_false()
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 (code-reviewer HIGH 1 -- permanent ancestor/depth-mismatch regression coverage, skill-ledger) ]")
+    test_pretooluse_guard_skill_ledger_cwd_is_ancestor_of_project(tmp / "idm13a")
+    test_pretooluse_guard_skill_ledger_case_sensitive_ancestor_fallback()
+    test_pretooluse_guard_skill_ledger_ancestor_root_has_own_ledger(tmp / "idm13c")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 (code-reviewer HIGH 1 -- permanent ancestor/depth-mismatch regression coverage, skill-promotion) ]")
+    test_pretooluse_guard_skill_promotion_cwd_is_ancestor_of_project(tmp / "idm14a")
+    test_pretooluse_guard_skill_promotion_case_sensitive_ancestor_fallback()
+    test_pretooluse_guard_skill_promotion_ancestor_root_has_own_ledger(tmp / "idm14c")
+
+    print()
     print("[ Phase 3: provisioning interview + doc cross-references (structural assertions, no .py behavior change) ]")
     test_ai_first_setup_item10_collects_workspace_members()
     test_ai_first_setup_membership_snippet_survives_quote_in_workspace_root()
@@ -19380,6 +21651,22 @@ def main() -> int:
     print()
     print("[ Phase 5: decision is durable (ADR recorded) ]")
     test_decision_record_exists_for_workspace_membership()
+    test_decision_record_exists_for_cwd_identity_confinement()
+
+    print()
+    print("[ hooklib: Phase 3 -- side-effect-free project_root on the live-workflow lookup chain ]")
+    test_hooklib_workflows_dir_project_root_override_and_no_side_effect(tmp / "idm4")
+    test_hooklib_latest_live_workflow_payload_project_root_selects_supplied_project(tmp / "idm5")
+
+    print()
+    print("[ pretooluse-guard: Phase 4 -- worktree_path call sites anchor to trusted payload cwd (ADR 0033 first deferred CRITICAL sibling) ]")
+    test_pretooluse_guard_worktree_path_diverges_cwd_and_claude_project_dir(tmp / "idm6")
+    test_pretooluse_guard_unresolvable_cwd_does_not_leak_foreign_wf_uuid_into_log(tmp / "idm6b")
+
+    print()
+    print("[ pretooluse-guard: Phase 5 [CHECKPOINT-1] -- memory-file and workflow-JSON protection anchor to trusted payload cwd (ADR 0033 third deferred sibling) ]")
+    test_pretooluse_guard_protected_memory_paths_diverge_cwd_and_claude_project_dir(tmp / "idm7")
+    test_pretooluse_guard_protected_workflow_json_diverges_cwd_and_claude_project_dir(tmp / "idm8")
 
     print()
     if _errors:
