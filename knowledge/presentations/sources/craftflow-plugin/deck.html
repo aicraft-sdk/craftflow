@@ -1,0 +1,938 @@
+<title>Craftflow Playbook</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --ground:#f5f6fa;
+    --surface:#ffffff;
+    --surface-raised:#eef0f6;
+    --ink:#12141c;
+    --muted:#5b6178;
+    --accent:#3a5eff;
+    --accent-ink:#ffffff;
+    --amber:#a8670a;
+    --green:#1f9d5c;
+    --line:rgba(18,20,28,0.12);
+    --shadow:rgba(18,20,28,0.10);
+    --font-display:'Archivo','Arial Narrow',sans-serif;
+    --font-body:'IBM Plex Sans','Segoe UI',system-ui,sans-serif;
+    --font-mono:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ground:#0d0f14;
+      --surface:#161922;
+      --surface-raised:#1e2330;
+      --ink:#eef0f6;
+      --muted:#8a91a8;
+      --accent:#5b7cfa;
+      --accent-ink:#0d0f14;
+      --amber:#f5a623;
+      --green:#3ddc84;
+      --line:rgba(238,240,246,0.14);
+      --shadow:rgba(0,0,0,0.45);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0d0f14;
+    --surface:#161922;
+    --surface-raised:#1e2330;
+    --ink:#eef0f6;
+    --muted:#8a91a8;
+    --accent:#5b7cfa;
+    --accent-ink:#0d0f14;
+    --amber:#f5a623;
+    --green:#3ddc84;
+    --line:rgba(238,240,246,0.14);
+    --shadow:rgba(0,0,0,0.45);
+  }
+
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    background:var(--ground);
+    color:var(--ink);
+    font-family:var(--font-body);
+    overflow:hidden;
+  }
+  h1,h2{font-family:var(--font-display);text-wrap:balance;margin:0;letter-spacing:-0.01em;}
+  h3{font-family:var(--font-display);margin:0;}
+  p{margin:0;}
+  a{color:var(--accent);}
+  ::selection{background:var(--accent);color:var(--accent-ink);}
+
+  .deck{height:100%;display:flex;flex-direction:column;}
+
+  .chrome{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:1.1rem clamp(16px,4vw,3.2rem) 0.6rem;
+    flex:0 0 auto;
+  }
+  .brand{
+    font-family:var(--font-mono);font-size:0.82rem;font-weight:600;
+    letter-spacing:0.16em;color:var(--muted);
+  }
+  .brand strong{color:var(--ink);}
+  .counter{
+    font-family:var(--font-mono);font-variant-numeric:tabular-nums;
+    font-size:0.82rem;color:var(--muted);display:flex;gap:0.35em;
+  }
+  .counter #idx{color:var(--ink);font-weight:600;}
+
+  .viewport{
+    flex:1 1 auto;
+    display:flex;
+    overflow-x:auto;
+    overflow-y:hidden;
+    scroll-snap-type:x mandatory;
+    scroll-behavior:smooth;
+    -webkit-overflow-scrolling:touch;
+  }
+  .viewport::-webkit-scrollbar{display:none;}
+  .viewport{scrollbar-width:none;}
+  @media (prefers-reduced-motion: reduce){
+    .viewport{scroll-behavior:auto;}
+  }
+
+  .slide{
+    flex:0 0 100%;
+    width:100%;
+    scroll-snap-align:start;
+    height:100%;
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    gap:1.3rem;
+    padding:1.5rem clamp(16px,6vw,5.5rem) 2.4rem;
+    overflow-y:auto;
+  }
+  .slide-inner{max-width:980px;width:100%;margin:0 auto;display:flex;flex-direction:column;gap:1.3rem;}
+
+  .eyebrow{
+    font-family:var(--font-mono);text-transform:uppercase;letter-spacing:0.14em;
+    font-size:0.72rem;color:var(--muted);display:flex;align-items:center;gap:0.6em;
+  }
+  .eyebrow .chapter{color:var(--accent);font-weight:600;}
+
+  h1{font-size:clamp(2.6rem,7vw,4.6rem);font-weight:800;}
+  h2{font-size:clamp(1.6rem,3.4vw,2.35rem);font-weight:700;}
+  .sub{font-size:clamp(1.05rem,2vw,1.3rem);color:var(--muted);max-width:52ch;}
+  .prose{font-size:1.02rem;line-height:1.62;max-width:66ch;color:var(--ink);}
+  .prose.muted{color:var(--muted);}
+
+  .badge{
+    display:inline-flex;align-items:center;font-family:var(--font-mono);
+    font-size:0.68rem;letter-spacing:0.1em;text-transform:uppercase;
+    padding:0.32rem 0.7rem;border:1px solid var(--accent);color:var(--accent);
+    border-radius:999px;width:fit-content;
+  }
+
+  /* chip / chain flow */
+  .chain{display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem 0.7rem;}
+  .chip{
+    font-family:var(--font-mono);font-size:0.86rem;padding:0.55rem 0.95rem;
+    border-radius:9px;background:var(--surface);border:1px solid var(--line);
+    color:var(--ink);white-space:nowrap;box-shadow:0 1px 2px var(--shadow);
+  }
+  .chip.accent{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);}
+  .arrow{color:var(--accent);font-weight:700;font-size:1.05rem;}
+
+  .trio{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0.9rem;margin-top:0.2rem;}
+  .trio-item{
+    background:var(--surface);border:1px solid var(--line);border-radius:12px;
+    padding:0.95rem 1.1rem;font-size:0.94rem;line-height:1.5;
+  }
+  .trio-item .k{display:block;font-family:var(--font-mono);font-size:0.72rem;color:var(--accent);margin-bottom:0.35rem;}
+
+  /* pain points */
+  .points{display:flex;flex-direction:column;gap:0.85rem;max-width:64ch;}
+  .point{display:flex;gap:0.85rem;align-items:flex-start;font-size:1.02rem;line-height:1.55;}
+  .point .bar{flex:0 0 4px;width:4px;border-radius:2px;background:var(--accent);align-self:stretch;min-height:1.4em;margin-top:0.2em;}
+
+  .callout{
+    border:1px solid var(--line);background:var(--surface);border-radius:14px;
+    padding:1.05rem 1.3rem;font-size:1.02rem;max-width:64ch;position:relative;
+  }
+  .callout::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--accent);border-radius:4px 0 0 4px;}
+  .callout{padding-left:1.55rem;}
+
+  /* card grid (components / workflow types) */
+  .card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;}
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:14px;
+    padding:1.1rem 1.2rem;display:flex;flex-direction:column;gap:0.6rem;
+  }
+  .card-head{display:flex;align-items:center;justify-content:space-between;gap:0.6rem;}
+  .card-name{font-family:var(--font-display);font-weight:800;font-size:1.02rem;}
+  .keywords{font-family:var(--font-mono);font-size:0.74rem;color:var(--muted);}
+  .card p{font-size:0.92rem;line-height:1.5;color:var(--muted);}
+  .card .chain{gap:0.4rem 0.5rem;}
+  .card .chip{font-size:0.75rem;padding:0.4rem 0.65rem;}
+
+  /* pipeline */
+  .pipeline{display:flex;flex-wrap:wrap;gap:1.3rem 0.4rem;align-items:flex-start;}
+  .stage{flex:1 1 150px;display:flex;flex-direction:column;gap:0.35rem;}
+  .stage .n{font-family:var(--font-mono);color:var(--accent);font-size:0.78rem;}
+  .stage .t{font-weight:600;font-size:0.98rem;}
+  .stage .d{color:var(--muted);font-size:0.85rem;line-height:1.45;}
+  .pipe-arrow{align-self:center;color:var(--accent);font-size:1.1rem;font-weight:700;margin-top:1.7rem;}
+  @media (max-width:760px){.pipe-arrow{display:none;}}
+
+  /* code */
+  pre{
+    font-family:var(--font-mono);font-size:0.88rem;line-height:1.55;
+    background:var(--surface-raised);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:10px;padding:0.9rem 1.15rem;overflow-x:auto;max-width:100%;margin:0;color:var(--ink);
+  }
+  code{font-family:var(--font-mono);}
+
+  /* runsheet */
+  .runsheet{display:flex;flex-direction:column;gap:0.75rem;max-width:70ch;}
+  .step{display:flex;gap:0.9rem;align-items:flex-start;}
+  .step .num{
+    flex:0 0 auto;width:1.8rem;height:1.8rem;border-radius:50%;
+    background:var(--surface-raised);border:1px solid var(--line);
+    display:flex;align-items:center;justify-content:center;
+    font-family:var(--font-mono);font-size:0.8rem;color:var(--accent);margin-top:0.05rem;
+  }
+  .step p{font-size:0.95rem;line-height:1.5;padding-top:0.22rem;}
+
+  /* statusline mock */
+  .statusline{
+    display:inline-flex;align-items:center;gap:0.6rem;font-family:var(--font-mono);
+    font-size:0.82rem;background:var(--surface);border:1px solid var(--line);
+    border-radius:999px;padding:0.5rem 1rem 0.5rem 0.85rem;box-shadow:0 1px 2px var(--shadow);
+  }
+  .statusline .dot{width:0.5rem;height:0.5rem;border-radius:50%;background:var(--green);}
+  .statusline .bar{width:70px;height:6px;border-radius:999px;background:var(--line);overflow:hidden;}
+  .statusline .bar span{display:block;height:100%;width:60%;background:var(--accent);}
+  .statusline .phase{color:var(--muted);}
+
+  /* tracker mock */
+  .tracker{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--surface);max-width:480px;}
+  .tracker-head{
+    padding:0.7rem 1.05rem;background:var(--surface-raised);font-family:var(--font-mono);
+    font-size:0.74rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);
+    display:flex;justify-content:space-between;
+  }
+  .tracker-row{
+    display:flex;align-items:center;gap:0.75rem;padding:0.6rem 1.05rem;
+    border-top:1px solid var(--line);font-family:var(--font-mono);font-size:0.88rem;
+  }
+  .status-dot{width:0.6rem;height:0.6rem;border-radius:50%;flex:0 0 auto;}
+  .status-dot.done{background:var(--green);}
+  .status-dot.running{background:var(--amber);animation:pulse 1.4s ease-in-out infinite;}
+  .status-dot.waiting{background:transparent;border:1px solid var(--muted);}
+  @media (prefers-reduced-motion: reduce){.status-dot.running{animation:none;}}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.35;}}
+  .tracker-row .label{flex:1;}
+  .tracker-row .state{color:var(--muted);font-size:0.76rem;text-transform:uppercase;letter-spacing:0.06em;}
+
+  /* split columns */
+  .split{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1.8rem;}
+  .split.cols-4{grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1.4rem;}
+  .split h3{font-size:1.05rem;margin:0 0 0.65rem;}
+  .split ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:0.6rem;}
+  .split li{font-size:0.92rem;line-height:1.48;padding-left:1rem;position:relative;color:var(--ink);}
+  .split li::before{content:"";position:absolute;left:0;top:0.5em;width:6px;height:6px;border-radius:50%;background:var(--accent);}
+  .split pre{margin-top:0.5rem;font-size:0.8rem;}
+
+  /* takeaways */
+  .takeaways{display:flex;flex-direction:column;gap:0.85rem;max-width:68ch;}
+  .takeaway{display:flex;gap:0.9rem;align-items:flex-start;font-size:1.02rem;line-height:1.5;}
+  .takeaway .bar{flex:0 0 4px;width:4px;border-radius:2px;background:var(--accent);align-self:stretch;min-height:1.4em;margin-top:0.2em;}
+  .cta{
+    margin-top:0.3rem;border:1px solid var(--accent);background:var(--surface);
+    border-radius:14px;padding:1.05rem 1.3rem;font-size:1rem;font-weight:600;max-width:68ch;
+  }
+  .cta span{color:var(--accent);}
+
+  /* table of contents */
+  .toc{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:1.5rem;}
+  .toc-group h3{font-size:0.8rem;margin:0 0 0.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.1em;font-weight:700;}
+  .toc-list{display:flex;flex-direction:column;gap:0.15rem;}
+  .toc-link{
+    display:flex;align-items:center;gap:0.65rem;text-align:left;
+    background:none;border:none;padding:0.42rem 0.4rem;border-radius:8px;
+    font-family:var(--font-body);font-size:0.94rem;color:var(--ink);cursor:pointer;width:100%;
+  }
+  .toc-link:hover{background:var(--surface-raised);}
+  .toc-link:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  .toc-link .tn{font-family:var(--font-mono);font-size:0.74rem;color:var(--accent);flex:0 0 auto;width:1.5rem;}
+
+  /* glossary */
+  .deflist{display:flex;flex-direction:column;max-width:76ch;}
+  .term-row{display:grid;grid-template-columns:230px 1fr;gap:1rem;padding:0.8rem 0;border-top:1px solid var(--line);}
+  .term-row:first-child{border-top:none;padding-top:0;}
+  .term-row .term{font-family:var(--font-mono);color:var(--accent);font-weight:600;font-size:0.9rem;}
+  .term-row .def{font-size:0.93rem;line-height:1.55;color:var(--ink);}
+  @media (max-width:600px){.term-row{grid-template-columns:1fr;gap:0.3rem;}}
+
+  /* hero diagram */
+  .diagram-scroll{overflow-x:auto;padding-block:0.3rem;max-width:100%;}
+  .hero-svg{display:block;min-width:640px;width:100%;max-width:760px;height:auto;}
+  .hero-svg text{font-family:var(--font-mono);fill:var(--ink);}
+  .hero-svg .muted-text{fill:var(--muted);}
+  .hero-svg .node-fill{fill:var(--surface);stroke:var(--line);}
+  .hero-svg .node-fill.accent{fill:var(--accent);stroke:var(--accent);}
+  .hero-svg .flow-line{stroke:var(--accent);fill:none;opacity:0.7;}
+  .hero-svg .dash-line{stroke:var(--muted);fill:none;stroke-dasharray:4 4;opacity:0.7;}
+
+  /* nav rail */
+  .railnav{
+    position:fixed;right:calc(18px + env(safe-area-inset-right,0px));top:50%;transform:translateY(-50%);
+    display:flex;flex-direction:column;gap:0.42rem;z-index:20;
+  }
+  .dot{
+    width:7px;height:7px;border-radius:50%;border:none;padding:0;cursor:pointer;
+    background:var(--line);transition:background 0.2s, transform 0.2s;
+  }
+  .dot[aria-current="true"]{background:var(--accent);transform:scale(1.4);}
+  .dot.grp{margin-top:0.5rem;}
+  .dot:focus-visible{outline:2px solid var(--accent);outline-offset:3px;}
+  @media (max-width:680px){.railnav{display:none;}}
+
+  .controls{
+    position:fixed;left:0;right:0;bottom:calc(20px + env(safe-area-inset-bottom,0px));
+    display:flex;justify-content:space-between;padding:0 clamp(16px,4vw,3rem);
+    pointer-events:none;z-index:20;
+  }
+  .controls button{
+    pointer-events:auto;width:2.6rem;height:2.6rem;border-radius:50%;
+    border:1px solid var(--line);background:var(--surface);color:var(--ink);
+    font-size:1.2rem;line-height:1;cursor:pointer;box-shadow:0 2px 6px var(--shadow);
+  }
+  .controls button:hover{border-color:var(--accent);color:var(--accent);}
+  .controls button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+  .hint{
+    position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));
+    transform:translateX(-50%);font-family:var(--font-mono);font-size:0.74rem;
+    color:var(--muted);background:var(--surface);border:1px solid var(--line);
+    padding:0.4rem 0.8rem;border-radius:999px;opacity:1;transition:opacity 0.4s;
+    pointer-events:none;z-index:20;
+  }
+  .hint.is-hidden{opacity:0;}
+
+  @media (max-width:640px){
+    .controls{display:none;}
+  }
+</style>
+
+<div class="deck">
+  <header class="chrome">
+    <div class="brand">CRAFT<strong>FLOW</strong> · PLAYBOOK</div>
+    <div class="counter"><span id="idx">01</span><span>/</span><span id="total">19</span></div>
+  </header>
+
+  <div class="viewport" id="viewport">
+
+    <!-- 0: Title -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow">INTRO</p>
+        <h1>Craftflow</h1>
+        <p class="sub">A router-first orchestration layer for Claude Code and Cursor.</p>
+        <p class="prose muted">What it is, how it works, the components underneath, and the flows they run — plus a live run in both tools.</p>
+        <div class="diagram-scroll">
+          <svg class="hero-svg" viewBox="0 0 800 260" role="img" aria-label="Diagram: a request enters craftflow-router, which dispatches to Claude Code and Cursor, both writing back to shared .craftflow state">
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"></path>
+              </marker>
+            </defs>
+            <circle cx="60" cy="130" r="28" class="node-fill" stroke-width="1.5"></circle>
+            <text x="60" y="135" text-anchor="middle" font-size="12">request</text>
+
+            <path d="M88,130 L172,130" class="flow-line" stroke-width="2" marker-end="url(#arrow)"></path>
+
+            <rect x="180" y="95" width="170" height="70" rx="14" class="node-fill accent" stroke-width="1.5"></rect>
+            <text x="265" y="126" text-anchor="middle" font-size="13" fill="var(--accent-ink)" font-weight="600">craftflow</text>
+            <text x="265" y="144" text-anchor="middle" font-size="13" fill="var(--accent-ink)" font-weight="600">router</text>
+
+            <path d="M350,118 C420,90 460,60 512,60" class="flow-line" stroke-width="2" marker-end="url(#arrow)"></path>
+            <path d="M350,142 C420,170 460,200 512,200" class="flow-line" stroke-width="2" marker-end="url(#arrow)"></path>
+
+            <rect x="520" y="30" width="190" height="60" rx="12" class="node-fill" stroke-width="1.5"></rect>
+            <text x="615" y="65" text-anchor="middle" font-size="13" font-weight="600">Claude Code</text>
+
+            <rect x="520" y="170" width="190" height="60" rx="12" class="node-fill" stroke-width="1.5"></rect>
+            <text x="615" y="205" text-anchor="middle" font-size="13" font-weight="600">Cursor</text>
+
+            <path d="M615,90 L615,116" class="dash-line" stroke-width="1.5"></path>
+            <path d="M615,170 L615,144" class="dash-line" stroke-width="1.5"></path>
+            <rect x="535" y="118" width="160" height="26" rx="13" class="node-fill" stroke-width="1.5"></rect>
+            <text x="615" y="135" text-anchor="middle" font-size="10.5" class="muted-text">.craftflow/state</text>
+          </svg>
+        </div>
+      </div>
+    </section>
+
+    <!-- 1: Contents -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow">CONTENTS</p>
+        <h2>Jump to any section</h2>
+        <p class="prose muted">This is a working reference, not a fixed script — use the contents below or the dot rail on the right to jump straight to a topic.</p>
+        <div class="toc">
+          <div class="toc-group">
+            <h3>Orientation</h3>
+            <div class="toc-list">
+              <button class="toc-link" data-i="2"><span class="tn">02</span>What Craftflow is</button>
+              <button class="toc-link" data-i="3"><span class="tn">03</span>Why a router</button>
+            </div>
+          </div>
+          <div class="toc-group">
+            <h3>Components</h3>
+            <div class="toc-list">
+              <button class="toc-link" data-i="4"><span class="tn">04</span>Components at a glance</button>
+              <button class="toc-link" data-i="5"><span class="tn">05</span>The router</button>
+              <button class="toc-link" data-i="6"><span class="tn">06</span>Agents</button>
+              <button class="toc-link" data-i="7"><span class="tn">07</span>Skills &amp; hooks</button>
+              <button class="toc-link" data-i="8"><span class="tn">08</span>Shared state</button>
+            </div>
+          </div>
+          <div class="toc-group">
+            <h3>How work flows</h3>
+            <div class="toc-list">
+              <button class="toc-link" data-i="9"><span class="tn">09</span>Four workflow types</button>
+              <button class="toc-link" data-i="10"><span class="tn">10</span>Anatomy of a BUILD</button>
+              <button class="toc-link" data-i="11"><span class="tn">11</span>Quality gates</button>
+            </div>
+          </div>
+          <div class="toc-group">
+            <h3>Claude Code</h3>
+            <div class="toc-list">
+              <button class="toc-link" data-i="12"><span class="tn">12</span>Setup &amp; dispatch</button>
+              <button class="toc-link" data-i="13"><span class="tn">13</span>Live demo</button>
+            </div>
+          </div>
+          <div class="toc-group">
+            <h3>Cursor</h3>
+            <div class="toc-list">
+              <button class="toc-link" data-i="14"><span class="tn">14</span>Setup &amp; dispatch</button>
+              <button class="toc-link" data-i="15"><span class="tn">15</span>Live demo</button>
+            </div>
+          </div>
+          <div class="toc-group">
+            <h3>Trust &amp; reference</h3>
+            <div class="toc-list">
+              <button class="toc-link" data-i="16"><span class="tn">16</span>Safety net &amp; visibility</button>
+              <button class="toc-link" data-i="17"><span class="tn">17</span>Glossary</button>
+              <button class="toc-link" data-i="18"><span class="tn">18</span>Recap</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2: What Craftflow is -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">01</span>WHAT &amp; WHY</p>
+        <h2>A router-first orchestration layer</h2>
+        <p class="prose">Craftflow sits in front of every build, debug, review, and plan request in a project. One entry point — the router — reads the request, classifies it, and dispatches a fixed chain of specialized agents through a quality contract: spec, then TDD, then review, then verification. It runs the same way in Claude Code and Cursor, and both share one state directory.</p>
+        <div class="chain">
+          <span class="chip">route</span><span class="arrow">→</span>
+          <span class="chip">dispatch</span><span class="arrow">→</span>
+          <span class="chip">verify</span><span class="arrow">→</span>
+          <span class="chip accent">persist</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3: Why a router -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">01</span>WHAT &amp; WHY</p>
+        <h2>Why a router, not a prompt</h2>
+        <div class="points">
+          <div class="point"><span class="bar"></span><span>Ad-hoc prompting → inconsistent quality, no repeatable gate before "done"</span></div>
+          <div class="point"><span class="bar"></span><span>Claude Code and Cursor sessions didn't share memory — same feature, two blind spots</span></div>
+          <div class="point"><span class="bar"></span><span>Under deadline pressure, spec / review / verification steps get skipped first</span></div>
+        </div>
+        <div class="callout"><strong>Craftflow's answer:</strong> one entry point every dev request goes through, in both tools.</div>
+      </div>
+    </section>
+
+    <!-- 4: Components at a glance -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">02</span>COMPONENTS</p>
+        <h2>Five moving parts</h2>
+        <div class="card-grid">
+          <div class="card">
+            <div class="card-head"><span class="card-name">Router</span></div>
+            <p>Classifies each request and dispatches the matching agent chain. Two implementations, same contract: craftflow-router and cursor-router.</p>
+          </div>
+          <div class="card">
+            <div class="card-head"><span class="card-name">Agents</span></div>
+            <p>14 specialized subagents that do the actual reading, writing, reviewing, and verifying.</p>
+          </div>
+          <div class="card">
+            <div class="card-head"><span class="card-name">Skills</span></div>
+            <p>29 reference playbooks the router and agents read mid-task instead of relying on memorized instructions.</p>
+          </div>
+          <div class="card">
+            <div class="card-head"><span class="card-name">Hooks</span></div>
+            <p>Python lifecycle guards wired into tool calls — write protection, session resume, contract audits.</p>
+          </div>
+          <div class="card">
+            <div class="card-head"><span class="card-name">State</span></div>
+            <p><code>.craftflow/state/</code> — the shared memory both Claude Code and Cursor read and write.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5: Component — Router -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">02</span>COMPONENTS</p>
+        <h2>The router</h2>
+        <p class="prose">The single entry point every request goes through, before any file is touched.</p>
+        <div class="trio">
+          <div class="trio-item"><span class="k">CLAUDE CODE</span><code>craftflow-router</code> — activated as a Skill</div>
+          <div class="trio-item"><span class="k">CURSOR</span><code>cursor-router</code> — auto-injected by an always-on MDC rule</div>
+        </div>
+        <div class="runsheet">
+          <div class="step"><span class="num">1</span><p>Resolve the project root.</p></div>
+          <div class="step"><span class="num">2</span><p>Load three tiers of memory — project, in-flight workflow, workspace.</p></div>
+          <div class="step"><span class="num">3</span><p>Classify intent into BUILD, DEBUG, PLAN, or REVIEW.</p></div>
+          <div class="step"><span class="num">4</span><p>Run the Intent Readiness Gate — context-bounded, contradiction-free, specific enough.</p></div>
+          <div class="step"><span class="num">5</span><p>Dispatch the matching agent chain.</p></div>
+          <div class="step"><span class="num">6</span><p>Persist workflow state after every step.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6: Component — Agents -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">02</span>COMPONENTS</p>
+        <h2>Fourteen specialized agents</h2>
+        <div class="split cols-4">
+          <div>
+            <h3>Build &amp; fix</h3>
+            <ul>
+              <li><strong>component-builder</strong> — implements the approved phase with TDD</li>
+              <li><strong>bug-investigator</strong> — proves root cause before any fix</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Plan</h3>
+            <ul>
+              <li><strong>planner</strong> — writes the execution plan or decision RFC</li>
+              <li><strong>plan-gap-reviewer</strong> — fresh anti-anchoring check</li>
+              <li><strong>plan-bakeoff-judge</strong> — picks a winner among parallel candidates</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Review &amp; verify</h3>
+            <ul>
+              <li><strong>code-reviewer</strong> — independent review, never the builder grading itself</li>
+              <li><strong>silent-failure-hunter</strong> — catches scope creep and swallowed errors</li>
+              <li><strong>integration-verifier</strong> — proves the work end-to-end</li>
+              <li><strong>doubt-verifier</strong> — second-guesses a prior verification</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Support</h3>
+            <ul>
+              <li><strong>doc-syncer</strong> — updates docs to match the diff</li>
+              <li><strong>github-researcher</strong> / <strong>web-researcher</strong> — gather external evidence</li>
+              <li><strong>learn-distiller</strong> — mines session learnings</li>
+              <li><strong>skill-author</strong> — drafts new skills</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7: Component — Skills & hooks -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">02</span>COMPONENTS</p>
+        <h2>Playbooks and guardrails</h2>
+        <div class="split">
+          <div>
+            <h3>Skills — 29 playbooks</h3>
+            <ul>
+              <li>Router protocol, test-driven-development, systematic-debugging</li>
+              <li>diff-driven-docs, session-memory, plan-review-gate</li>
+              <li>verification-before-completion, and more</li>
+              <li>Read() mid-task — never relying on memorized instructions</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Hooks — lifecycle guards</h3>
+            <ul>
+              <li><strong>SessionStart</strong> — resumes workflow context, self-checks hook imports</li>
+              <li><strong>PreToolUse</strong> (Edit / Write / Bash) — protected-write, destructive-command, and safe-shell guards</li>
+              <li><strong>PostToolUse</strong> — workflow artifact audit, memory restore</li>
+              <li><strong>Stop</strong> — session state persistence</li>
+              <li><strong>SubagentStop</strong> — subagent contract audit</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8: Component — Shared state -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">02</span>COMPONENTS</p>
+        <h2>One state directory, two tools</h2>
+        <div class="trio">
+          <div class="trio-item"><span class="k">PROJECT/</span>Durable, cross-workflow — activeContext.md, patterns.md, progress.md</div>
+          <div class="trio-item"><span class="k">WORKFLOWS/{WF-ID}/</span>Per-run, in-flight state — current focus, active phase</div>
+          <div class="trio-item"><span class="k">WORKSPACE/</span>Optional — shared across repos under one workspace root</div>
+        </div>
+        <pre><code>.craftflow/state/workflows/{wf-id}.json          the artifact — plan, phase status, evidence
+.craftflow/state/workflows/{wf-id}.events.jsonl  append-only event log</code></pre>
+        <p class="prose muted">Feature-named ids — <code>wf-{slug}-{date}-{hex}</code> — make concurrent workflows for the same feature collide-proof and recognizable at a glance.</p>
+      </div>
+    </section>
+
+    <!-- 9: Four workflow types -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">03</span>HOW WORK FLOWS</p>
+        <h2>Four request types, four agent chains</h2>
+        <div class="card-grid">
+          <div class="card">
+            <div class="card-head"><span class="card-name">BUILD</span><span class="keywords">build · implement · create</span></div>
+            <div class="chain">
+              <span class="chip">component-builder</span><span class="arrow">→</span>
+              <span class="chip">code-reviewer</span><span class="arrow">→</span>
+              <span class="chip">silent-failure-hunter</span><span class="arrow">→</span>
+              <span class="chip">integration-verifier</span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><span class="card-name">DEBUG</span><span class="keywords">error · bug · fix · crash</span></div>
+            <div class="chain">
+              <span class="chip">bug-investigator</span><span class="arrow">→</span>
+              <span class="chip">code-reviewer</span><span class="arrow">→</span>
+              <span class="chip">integration-verifier</span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><span class="card-name">PLAN</span><span class="keywords">plan · design · spec</span></div>
+            <div class="chain">
+              <span class="chip">planner</span><span class="arrow">→</span>
+              <span class="chip">plan-gap-reviewer</span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><span class="card-name">REVIEW</span><span class="keywords">review · audit</span></div>
+            <div class="chain"><span class="chip">code-reviewer (advisory)</span></div>
+          </div>
+        </div>
+        <p class="prose muted">You don't pick the chain — the router classifies your request and picks it for you.</p>
+      </div>
+    </section>
+
+    <!-- 10: Anatomy of a BUILD -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">03</span>HOW WORK FLOWS</p>
+        <h2>Anatomy of a BUILD</h2>
+        <div class="runsheet">
+          <div class="step"><span class="num">1</span><p>Resolve the project root, load memory.</p></div>
+          <div class="step"><span class="num">2</span><p>Intent Readiness Gate — halt and ask if the request is unbounded, contradictory, or unverifiable.</p></div>
+          <div class="step"><span class="num">3</span><p>Fast-path scan — a light chain when no risk keywords are found, the full chain otherwise.</p></div>
+          <div class="step"><span class="num">4</span><p>A dedicated git worktree isolates every file write.</p></div>
+          <div class="step"><span class="num">5</span><p>The agent chain runs; any gap is classified Missing / Partial / Contradicts / Unrequested, with severity.</p></div>
+          <div class="step"><span class="num">6</span><p>Clean-tree check, merge back, worktree and branch cleaned up, memory finalized.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 11: Quality gates -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">03</span>HOW WORK FLOWS</p>
+        <h2>What the chain actually checks</h2>
+        <div class="pipeline">
+          <div class="stage"><span class="n">01</span><span class="t">Spec</span><span class="d">Traceable FR-### / SC-### requirement IDs</span></div>
+          <span class="pipe-arrow">→</span>
+          <div class="stage"><span class="n">02</span><span class="t">TDD</span><span class="d">Red → green → refactor</span></div>
+          <span class="pipe-arrow">→</span>
+          <div class="stage"><span class="n">03</span><span class="t">Review</span><span class="d">A dedicated agent, not the builder grading itself</span></div>
+          <span class="pipe-arrow">→</span>
+          <div class="stage"><span class="n">04</span><span class="t">Failure hunt</span><span class="d">Catches scope creep and swallowed errors</span></div>
+          <span class="pipe-arrow">→</span>
+          <div class="stage"><span class="n">05</span><span class="t">Verify</span><span class="d">Gaps classified: Missing / Partial / Contradicts / Unrequested</span></div>
+        </div>
+        <div class="callout">Nothing is marked done without evidence.</div>
+      </div>
+    </section>
+
+    <!-- 12: Claude Code -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">04</span>CLAUDE CODE</p>
+        <h2>Setup and dispatch</h2>
+        <pre><code>[Craftflow]|entry: craftflow:craftflow-router</code></pre>
+        <p class="prose">Add this to <code>~/.claude/CLAUDE.md</code> — every build, debug, review, or plan request now routes through Craftflow automatically.</p>
+        <div class="chain">
+          <span class="chip accent">craftflow-router (Skill)</span><span class="arrow">→</span>
+          <span class="chip">Agent(component-builder)</span><span class="arrow">→</span>
+          <span class="chip">Agent(code-reviewer)</span><span class="arrow">→</span>
+          <span class="chip">Agent(integration-verifier)</span>
+        </div>
+        <div class="trio">
+          <div class="trio-item"><span class="k">WRITES</span><code>.craftflow/state/workflows/{wf}.json</code></div>
+          <div class="trio-item"><span class="k">UPDATES</span><code>project/activeContext.md</code></div>
+        </div>
+        <p class="prose muted">Real, isolated subagents — not role-play in the router's own turn.</p>
+      </div>
+    </section>
+
+    <!-- 13: Claude Code live demo -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">04</span>CLAUDE CODE</p>
+        <span class="badge">Live demo</span>
+        <h2>Try it live</h2>
+        <div class="runsheet">
+          <div class="step"><span class="num">1</span><p>Type a small, real build request in Claude Code.</p></div>
+          <div class="step"><span class="num">2</span><p>Narrate: the router activates, classifies it as BUILD, and announces the chain.</p></div>
+          <div class="step"><span class="num">3</span><p>Watch each agent dispatch happen one by one.</p></div>
+          <div class="step"><span class="num">4</span><p>Open <code>.craftflow/state/workflows/{wf-id}.json</code> — the live artifact.</p></div>
+          <div class="step"><span class="num">5</span><p>Point out the statusline segment, shown below.</p></div>
+        </div>
+        <div class="statusline">
+          <span class="dot"></span>
+          <span>auth-refactor</span>
+          <span class="bar"><span></span></span>
+          <span>60%</span>
+          <span class="phase">phase_2</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 14: Cursor -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">05</span>CURSOR</p>
+        <h2>Setup and dispatch</h2>
+        <pre><code>bash tools/craftflow-plugin/plugins/craftflow/install-cursor.sh</code></pre>
+        <p class="prose">Installs an always-on MDC rule plus the <code>cursor-router</code> skill — Craftflow now auto-injects into <strong>every</strong> dev request, no per-message trigger needed.</p>
+        <div class="chain">
+          <span class="chip accent">craftflow-router.mdc</span><span class="arrow">→</span>
+          <span class="chip">cursor-router skill</span><span class="arrow">→</span>
+          <span class="chip">Task(generalPurpose) per phase</span>
+        </div>
+        <p class="prose muted">code-reviewer + silent-failure-hunter dispatch in parallel — two Task calls, same message. No native TaskCreate / TaskList in Cursor, so phase state is self-managed in <code>cursor-wf.json</code>.</p>
+      </div>
+    </section>
+
+    <!-- 15: Cursor live demo -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">05</span>CURSOR</p>
+        <span class="badge">Live demo</span>
+        <h2>Try the same request in Cursor</h2>
+        <div class="runsheet">
+          <div class="step"><span class="num">1</span><p>Make the same kind of build request in Cursor.</p></div>
+          <div class="step"><span class="num">2</span><p>Narrate: the MDC rule fires silently, cursor-router takes over.</p></div>
+          <div class="step"><span class="num">3</span><p>Watch the inline progress block update per phase, shown below.</p></div>
+          <div class="step"><span class="num">4</span><p>Open <code>.craftflow/state/cursor-wf.json</code> and compare it to the Claude Code artifact.</p></div>
+        </div>
+        <div class="tracker">
+          <div class="tracker-head"><span>Craftflow build</span><span>phase 2 / 4</span></div>
+          <div class="tracker-row"><span class="status-dot done"></span><span class="label">component-builder</span><span class="state">done</span></div>
+          <div class="tracker-row"><span class="status-dot running"></span><span class="label">code-reviewer</span><span class="state">running</span></div>
+          <div class="tracker-row"><span class="status-dot waiting"></span><span class="label">silent-failure-hunter</span><span class="state">waiting</span></div>
+          <div class="tracker-row"><span class="status-dot waiting"></span><span class="label">integration-verifier</span><span class="state">waiting</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 16: Safety net & visibility -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">06</span>TRUST</p>
+        <h2>What keeps it trustworthy</h2>
+        <div class="split">
+          <div>
+            <h3>Safety</h3>
+            <ul>
+              <li>Worktree isolation — BUILD runs in a dedicated git worktree by default, merged back only after a clean-tree check and lock</li>
+              <li>Hooks enforce guards in both tools — Claude Code's <code>hooks.json</code>, Cursor's project-local <code>.cursor/hooks.json</code></li>
+              <li>Constitution — <code>constitution.md</code> holds immutable project MUST-rules; PLAN halts if intent violates one</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Visibility</h3>
+            <ul>
+              <li>Live status, any time, from either tool:
+                <pre><code>craftflow status
+cfstatus --all</code></pre>
+              </li>
+              <li>Statusline segment updates every ~300ms with no agent interruption</li>
+              <li>Feature-named workflow ids stay readable across both tools' state files</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 17: Glossary -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">07</span>REFERENCE</p>
+        <h2>Quick reference</h2>
+        <div class="deflist">
+          <div class="term-row"><span class="term">wf-{slug}-{date}-{hex}</span><span class="def">Feature-named workflow id — unique per run, even for the same feature.</span></div>
+          <div class="term-row"><span class="term">Gap classification</span><span class="def">Missing / Partial / Contradicts / Unrequested — each with a severity: CRITICAL, HIGH, MEDIUM, LOW.</span></div>
+          <div class="term-row"><span class="term">JUST_GO</span><span class="def">A session setting that auto-defaults non-revert approval gates to the recommended option.</span></div>
+          <div class="term-row"><span class="term">Fast path</span><span class="def">The lighter BUILD mode chosen when no risk keywords are detected in the request.</span></div>
+          <div class="term-row"><span class="term">Constitution</span><span class="def"><code>.craftflow/state/project/constitution.md</code> — the project's immutable MUST-rules; PLAN halts if intent violates one.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 18: Recap -->
+    <section class="slide">
+      <div class="slide-inner">
+        <p class="eyebrow"><span class="chapter">08</span>CLOSE</p>
+        <h2>Quick recap</h2>
+        <div class="takeaways">
+          <div class="takeaway"><span class="bar"></span><span><strong>One router, one contract</strong> — Claude Code and Cursor both run the same classify → dispatch → verify → persist cycle.</span></div>
+          <div class="takeaway"><span class="bar"></span><span><strong>Five components</strong> — router, agents, skills, hooks, state — each with one job.</span></div>
+          <div class="takeaway"><span class="bar"></span><span><strong>Nothing ships without evidence</strong> — every BUILD or DEBUG ends in a classified, severity-ranked verification.</span></div>
+          <div class="takeaway"><span class="bar"></span><span><strong>Check anytime</strong> — <code>.craftflow/state/</code> or <code>craftflow status</code> shows exactly what's happening.</span></div>
+        </div>
+        <div class="cta"><span>Questions?</span> Any slide here is a jump-off point — use the contents page or the dot rail to go straight to it.</div>
+      </div>
+    </section>
+
+  </div>
+
+  <nav class="railnav" id="rail" aria-label="Slide navigation">
+    <button class="dot" data-i="0" aria-current="true" title="Craftflow" aria-label="Go to slide 1: Craftflow"></button>
+    <button class="dot grp" data-i="1" aria-current="false" title="Contents" aria-label="Go to slide 2: Contents"></button>
+    <button class="dot grp" data-i="2" aria-current="false" title="What Craftflow is" aria-label="Go to slide 3: What Craftflow is"></button>
+    <button class="dot" data-i="3" aria-current="false" title="Why a router" aria-label="Go to slide 4: Why a router"></button>
+    <button class="dot grp" data-i="4" aria-current="false" title="Components at a glance" aria-label="Go to slide 5: Components at a glance"></button>
+    <button class="dot" data-i="5" aria-current="false" title="The router" aria-label="Go to slide 6: The router"></button>
+    <button class="dot" data-i="6" aria-current="false" title="Agents" aria-label="Go to slide 7: Agents"></button>
+    <button class="dot" data-i="7" aria-current="false" title="Skills & hooks" aria-label="Go to slide 8: Skills and hooks"></button>
+    <button class="dot" data-i="8" aria-current="false" title="Shared state" aria-label="Go to slide 9: Shared state"></button>
+    <button class="dot grp" data-i="9" aria-current="false" title="Four workflow types" aria-label="Go to slide 10: Four workflow types"></button>
+    <button class="dot" data-i="10" aria-current="false" title="Anatomy of a BUILD" aria-label="Go to slide 11: Anatomy of a BUILD"></button>
+    <button class="dot" data-i="11" aria-current="false" title="Quality gates" aria-label="Go to slide 12: Quality gates"></button>
+    <button class="dot grp" data-i="12" aria-current="false" title="Claude Code setup" aria-label="Go to slide 13: Claude Code setup"></button>
+    <button class="dot" data-i="13" aria-current="false" title="Claude Code demo" aria-label="Go to slide 14: Claude Code demo"></button>
+    <button class="dot grp" data-i="14" aria-current="false" title="Cursor setup" aria-label="Go to slide 15: Cursor setup"></button>
+    <button class="dot" data-i="15" aria-current="false" title="Cursor demo" aria-label="Go to slide 16: Cursor demo"></button>
+    <button class="dot grp" data-i="16" aria-current="false" title="Safety net" aria-label="Go to slide 17: Safety net"></button>
+    <button class="dot grp" data-i="17" aria-current="false" title="Glossary" aria-label="Go to slide 18: Glossary"></button>
+    <button class="dot grp" data-i="18" aria-current="false" title="Recap" aria-label="Go to slide 19: Recap"></button>
+  </nav>
+
+  <div class="controls">
+    <button id="prev" aria-label="Previous slide">‹</button>
+    <button id="next" aria-label="Next slide">›</button>
+  </div>
+
+  <div class="hint" id="hint">← → to navigate · click a dot</div>
+</div>
+
+<script>
+(function(){
+  var viewport = document.getElementById('viewport');
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var total = slides.length;
+  var idxEl = document.getElementById('idx');
+  var totalEl = document.getElementById('total');
+  var dots = Array.prototype.slice.call(document.querySelectorAll('.dot'));
+  var tocLinks = Array.prototype.slice.call(document.querySelectorAll('.toc-link'));
+  var hint = document.getElementById('hint');
+
+  totalEl.textContent = total < 10 ? '0' + total : String(total);
+
+  function pad(n){ n = n + 1; return n < 10 ? '0' + n : String(n); }
+
+  function currentIndex(){
+    var w = viewport.clientWidth || 1;
+    return Math.round(viewport.scrollLeft / w);
+  }
+
+  function updateUI(i){
+    idxEl.textContent = pad(i);
+    dots.forEach(function(d, di){
+      d.setAttribute('aria-current', di === i ? 'true' : 'false');
+    });
+  }
+
+  function goTo(i, smooth){
+    i = Math.max(0, Math.min(total - 1, i));
+    viewport.scrollTo({ left: i * viewport.clientWidth, behavior: smooth === false ? 'auto' : 'smooth' });
+  }
+
+  var hintHidden = false;
+  function hideHint(){
+    if (!hintHidden && hint) { hint.classList.add('is-hidden'); hintHidden = true; }
+  }
+
+  document.getElementById('prev').addEventListener('click', function(){ hideHint(); goTo(currentIndex() - 1); });
+  document.getElementById('next').addEventListener('click', function(){ hideHint(); goTo(currentIndex() + 1); });
+
+  dots.forEach(function(d, di){
+    d.addEventListener('click', function(){ hideHint(); goTo(di); });
+  });
+
+  tocLinks.forEach(function(link){
+    link.addEventListener('click', function(){
+      hideHint();
+      goTo(parseInt(link.getAttribute('data-i'), 10));
+    });
+  });
+
+  window.addEventListener('keydown', function(e){
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' '){
+      e.preventDefault(); hideHint(); goTo(currentIndex() + 1);
+    } else if (e.key === 'ArrowLeft' || e.key === 'PageUp'){
+      e.preventDefault(); hideHint(); goTo(currentIndex() - 1);
+    } else if (e.key === 'Home'){
+      e.preventDefault(); hideHint(); goTo(0);
+    } else if (e.key === 'End'){
+      e.preventDefault(); hideHint(); goTo(total - 1);
+    }
+  });
+
+  var scrollTimer = null;
+  viewport.addEventListener('scroll', function(){
+    hideHint();
+    if (scrollTimer) cancelAnimationFrame(scrollTimer);
+    scrollTimer = requestAnimationFrame(function(){
+      var i = currentIndex();
+      updateUI(i);
+      try { localStorage.setItem('craftflow-deck-slide', String(i)); } catch(e){}
+    });
+  }, { passive: true });
+
+  window.addEventListener('resize', function(){
+    goTo(currentIndex(), false);
+  });
+
+  (function restore(){
+    try {
+      var saved = localStorage.getItem('craftflow-deck-slide');
+      if (saved !== null){
+        var i = parseInt(saved, 10);
+        if (!isNaN(i) && i > 0 && i < total){
+          requestAnimationFrame(function(){ goTo(i, false); updateUI(i); });
+          return;
+        }
+      }
+    } catch(e){}
+    updateUI(0);
+  })();
+})();
+</script>

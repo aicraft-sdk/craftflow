@@ -290,6 +290,21 @@ Use the minimal artifact schema:
 }
 ```
 
+**Step 4d:** Append the workflow_started event to a new per-workflow event log, mirroring
+Claude Code craftflow-router/SKILL.md's own event log (§ 6 "Parent workflow creation" step
+3 there). Before this step, Cursor-run workflows wrote no `.events.jsonl` file at all, which
+made them invisible to any tooling reading `.craftflow/state/workflows/*.events.jsonl` (for
+example, a cross-project metrics dashboard) — this step and the `agent_started`/
+`agent_completed` appends in § 5's Execution loop below close that gap. The `host` field is
+the only reliable signal distinguishing a Cursor-run workflow from a Claude-Code-run one,
+since this is currently the only event Cursor writes at workflow start:
+```
+Write(
+  file_path=".craftflow/state/workflows/{wf_id}.events.jsonl",
+  content="{\"ts\":\"{iso_timestamp}\",\"wf\":\"{wf_id}\",\"event\":\"workflow_started\",\"host\":\"cursor\",\"phase\":\"{WORKFLOW_TYPE}\",\"agent\":\"router\",\"decision\":\"start\",\"reason\":\"User request\"}\n"
+)
+```
+
 ## 4a. Worktree Isolation (BUILD Default)
 
 Every new BUILD workflow attempts to isolate file writes in a dedicated git worktree —
@@ -581,6 +596,11 @@ For each phase in workflow chain:
      this round (standard chain): include the `## Previous Agent Findings` section per
      "Previous Agent Findings handoff (integration-verifier only)" above.
      If this is the fast path (no reviewer/hunter ran this round): omit that section.
+  2a. Append one agent_started event per agent about to be dispatched this round (two
+      lines if step 3 below dispatches a parallel pair) to
+      .craftflow/state/workflows/{wf_id}.events.jsonl — timestamp this fresh, right
+      before invoking Task, not reused from workflow creation:
+        {"ts":"{iso_now}","wf":"{wf_id}","event":"agent_started","host":"cursor","phase":"{phase}","agent":"{agent-name}","decision":"dispatch"}
   3. If this phase is code-reviewer or silent-failure-hunter AND the other one is
      ALSO ready to run in this same round:
        Invoke Task TWICE in the SAME message — once per agent, each with its own
@@ -591,6 +611,12 @@ For each phase in workflow chain:
        this phase's dispatch prompt, and wait for its result.
   4. Capture the Router Contract YAML from each dispatched subagent's final message
   5. Validate the contract(s) (see § 6)
+  5a. Append one agent_completed event per agent that returned this round to
+      .craftflow/state/workflows/{wf_id}.events.jsonl, with `decision` set from that
+      agent's own verdict field (e.g. PASS/FAIL, APPROVE/CHANGES_REQUESTED,
+      CLEAN/ISSUES_FOUND — read straight off the Router Contract YAML, uppercased,
+      never re-derived):
+        {"ts":"{iso_now}","wf":"{wf_id}","event":"agent_completed","host":"cursor","phase":"{phase}","agent":"{agent-name}","decision":"{VERDICT}"}
   6. Update cursor-wf.json: set phase status to "completed", "failed", or "skipped".
      "skipped" is a third valid phase-status value (see § 6 "When a phase fails" →
      Resolution → (b) Skip) written when the user answers a failed-phase gate question
@@ -1024,7 +1050,19 @@ finalization — see § 5's "Simplified execution model (v1 differences from Cla
    discipline) -- without this cap, this section regrows unbounded (see craftflow-router/SKILL.md
    § 13 for the full mechanism this simplified Cursor step defers to)
 7. Write final status to .craftflow/state/workflows/{wf_id}.json
+8. Append the workflow_completed event to .craftflow/state/workflows/{wf_id}.events.jsonl
+   (the same file § 4 Step 4d created and § 5's execution loop appended to per phase) so
+   workflow duration is computable the same way as a Claude Code workflow:
+     {"ts":"{iso_now}","wf":"{wf_id}","event":"workflow_completed","host":"cursor","decision":"complete"}
 ```
+
+Scope note: this event log does not yet cover remediation_created or stop_failure events
+(Claude Code's own remediation-loop and failure-stop-gate telemetry) -- disclosed, deliberate
+scope cut, not a silently missed gap. workflow_started/agent_started/agent_completed/
+workflow_completed already give duration, per-phase timing, agent-invocation counts, and a
+clean-pass-vs-issues-found rework signal (from each agent's own verdict decision) at parity
+with Claude Code. Extending to remediation/stop-failure parity is a follow-up, not required
+for host attribution or the core metrics above.
 
 State write order matters: project/ writes are the last step. Never write project/
 memory before workflow/ memory — incomplete workflow memory would pollute project state.
