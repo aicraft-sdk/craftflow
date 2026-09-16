@@ -20445,6 +20445,95 @@ def test_pretooluse_guard_unresolvable_cwd_does_not_leak_foreign_wf_uuid_into_lo
     ok(name)
 
 
+def test_pretooluse_guard_unresolvable_file_path_denies_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """Site 1 (ADR 0035 deferred crash bug): `_handle_edit_write`'s
+    `path = Path(file_path).resolve()` was unguarded. A self-referential
+    symlink `file_path` raised RuntimeError out of the whole guard process
+    (exit 1, no deny JSON) -- which Claude Code treats as NON-BLOCKING, i.e.
+    FAIL-OPEN for every check in the function. `path` is load-bearing for
+    every one of those checks, so there is no partial degradation available:
+    an unresolvable write TARGET is denied outright."""
+    name = "pretooluse-guard/unresolvable-file-path-denies-instead-of-crashing"
+    project = tmp_dir / "unresolvable-target-proj"
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    (state_dir / "patterns.md").write_text("x\n", encoding="utf-8")
+
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    loop = tmp_dir / "unresolvable-write-target-loop"
+    os.symlink(loop, loop)
+
+    code, out = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Write",
+            "session_id": "wf-unresolvable-target",
+            "cwd": str(project),
+            "tool_input": {"file_path": str(loop)},
+        },
+        env,
+    )
+    if code != 0:
+        fail(name, f"guard process crashed (exit {code}) instead of emitting a deny -- FAIL-OPEN")
+        return
+    if not _deny_out(out) or "unresolvable-write-target" not in out:
+        fail(name, f"expected DENY with 'unresolvable-write-target', got exit={code}, stdout={out!r}")
+        return
+
+    # CONTROL (DD-5, anti-over-restriction): the same handler, same session,
+    # with a RESOLVABLE target must still produce its pre-existing decision --
+    # proving the new guard did not disturb the rest of the function.
+    code2, out2 = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Write",
+            "session_id": "wf-unresolvable-target",
+            "cwd": str(project),
+            "tool_input": {"file_path": str(state_dir / "patterns.md")},
+        },
+        env,
+    )
+    if not _deny_out(out2) or "memory" not in out2.lower():
+        fail(name, f"control case regressed: expected the pre-existing memory-write deny, got exit={code2}, stdout={out2!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_nul_byte_file_path_denies_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """DD-3: the site-1 guard must catch `Exception`, not a narrowed
+    `RuntimeError`. A NUL-byte `file_path` raises ValueError from the SAME
+    `.resolve()` call -- live-verified to crash identically before the fix.
+    A narrowed except would silently leave this second vector fail-open."""
+    name = "pretooluse-guard/nul-byte-file-path-denies-instead-of-crashing"
+    project = tmp_dir / "nul-byte-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    code, out = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Write",
+            "session_id": "wf-nul-byte",
+            "cwd": str(project),
+            "tool_input": {"file_path": "/tmp/a\x00b"},
+        },
+        env,
+    )
+    if code != 0:
+        fail(name, f"guard process crashed (exit {code}) on a NUL-byte file_path -- FAIL-OPEN")
+        return
+    if not _deny_out(out) or "unresolvable-write-target" not in out:
+        fail(name, f"expected DENY with 'unresolvable-write-target', got exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_protected_memory_paths_diverge_cwd_and_claude_project_dir(
     tmp_dir: Path,
 ) -> None:
@@ -21667,6 +21756,11 @@ def main() -> int:
     print("[ pretooluse-guard: Phase 5 [CHECKPOINT-1] -- memory-file and workflow-JSON protection anchor to trusted payload cwd (ADR 0033 third deferred sibling) ]")
     test_pretooluse_guard_protected_memory_paths_diverge_cwd_and_claude_project_dir(tmp / "idm7")
     test_pretooluse_guard_protected_workflow_json_diverges_cwd_and_claude_project_dir(tmp / "idm8")
+
+    print()
+    print("[ pretooluse-guard: unguarded Path(...).resolve() crash/fail-open hardening (ADR 0035 deferred bugs) ]")
+    test_pretooluse_guard_unresolvable_file_path_denies_instead_of_crashing(tmp / "res1")
+    test_pretooluse_guard_nul_byte_file_path_denies_instead_of_crashing(tmp / "res2")
 
     print()
     if _errors:

@@ -1903,7 +1903,50 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     if not file_path:
         return 0
 
-    path = Path(file_path).resolve()
+    # ADR 0035 deferred crash bug, site 1 (live-reproduced): this
+    # `.resolve()` was unguarded. A self-referential symlink `file_path`
+    # raises RuntimeError (and a NUL-byte `file_path` raises ValueError) out
+    # of this function and, since main() has no top-level try/except, out of
+    # the whole guard process -- exit 1 with no deny JSON, which Claude Code
+    # treats as NON-BLOCKING. That is FAIL-OPEN for every check in this
+    # function at once, the worst possible outcome.
+    #
+    # Unlike the sibling `trusted_root` degradation below, there is NO
+    # "skip just this one check" shape available here: `path` is load-bearing
+    # for literally every remaining check (_protected_memory_paths membership,
+    # all three _is_protected_* predicates, _edit_write_escapes_confinement,
+    # _memory_write_permit_workflow_uuid, and both denial-tracker keys). An
+    # unresolvable write TARGET is itself the anomaly, so this fails CLOSED.
+    # Blast radius is exactly one tool call.
+    #
+    # Deliberately does NOT call record_denial(): every other denial in this
+    # function keys the tracker on `str(path)`, the RESOLVED spelling, and
+    # clear_denial() uses that same resolved key. Recording an unresolvable
+    # raw spelling here would create a tracker entry that no later successful
+    # write could ever clear -- an orphan that only ages out via TTL.
+    try:
+        path = Path(file_path).resolve()
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard",
+                "tool_name": data.get("tool_name"),
+                "path": repr(file_path)[:512],
+                "decision": "deny",
+                "reason": "unresolvable-write-target",
+                "error": repr(exc),
+            },
+        )
+        pretool_deny(
+            "CRAFTFLOW plugin hook blocked an Edit/Write whose target path "
+            "could not be resolved (reason: unresolvable-write-target). Every "
+            "protected-path and confinement check in this guard operates on "
+            "the RESOLVED target, so an unresolvable target cannot be checked "
+            "at all and is denied rather than allowed unchecked. If this is "
+            "intentional, run it manually outside the agent session."
+        )
+        return 0
 
     # ADR 0033 deferred-sibling fix: every protected-path predicate below must
     # anchor its root to the TRUSTED PreToolUse payload `cwd`, not to
