@@ -21611,27 +21611,65 @@ _STDIN_READ_ALLOWLISTED_DEAD_CODE_FILES = {
 }
 
 
+def _sys_and_stdin_bindings(tree: ast.Module) -> tuple[set[str], set[str]]:
+    """Return (sys_module_names, stdin_object_names): every local name that
+    resolves to the `sys` module itself (via `import sys` or `import sys as
+    X`) and every local name that resolves to `sys.stdin` directly (via
+    `from sys import stdin` or `from sys import stdin as X`). Resolving
+    import bindings -- not just matching the literal `sys.stdin.read()`
+    dotted-name chain -- is required to catch `import sys as _sys` /
+    `from sys import stdin` variants of this exact call shape (a real,
+    verified blind spot found during REM-FIX cycle 6's re-review/re-hunt)."""
+    sys_names = {"sys"}  # "sys" always resolves to itself even without an explicit import in this scan
+    stdin_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "sys":
+                    sys_names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "sys":
+                for alias in node.names:
+                    if alias.name == "stdin":
+                        stdin_names.add(alias.asname or alias.name)
+    return sys_names, stdin_names
+
+
 def _stdin_read_call_sites(tree: ast.Module) -> list[tuple[int, "ast.Try | None"]]:
-    """Return (lineno, enclosing_try_or_None) for every `sys.stdin.read()`
-    call in `tree`. `enclosing_try` is the nearest ancestor `Try` node whose
-    `body` (not `handlers`/`orelse`/`finalbody`) actually contains the call
-    site's statement chain -- i.e. a `Try` that could plausibly catch an
-    exception the call raises."""
+    """Return (lineno, enclosing_try_or_None) for every stdin `.read()` call
+    in `tree`, resolving import bindings rather than matching only the
+    literal `sys.stdin.read()` dotted-name chain -- covers `sys.stdin.read()`,
+    `import sys as _sys; _sys.stdin.read()`, and
+    `from sys import stdin; stdin.read()` (and aliased forms of the latter).
+    `enclosing_try` is the nearest ancestor `Try` node whose `body` (not
+    `handlers`/`orelse`/`finalbody`) actually contains the call site's
+    statement chain -- i.e. a `Try` that could plausibly catch an exception
+    the call raises."""
     for node in ast.walk(tree):
         for child in ast.iter_child_nodes(node):
             child.parent = node  # type: ignore[attr-defined]
 
+    sys_names, stdin_names = _sys_and_stdin_bindings(tree)
+
     sites: list[tuple[int, "ast.Try | None"]] = []
     for node in ast.walk(tree):
-        if not (
+        is_sys_stdin_read = (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
             and node.func.attr == "read"
             and isinstance(node.func.value, ast.Attribute)
             and node.func.value.attr == "stdin"
             and isinstance(node.func.value.value, ast.Name)
-            and node.func.value.value.id == "sys"
-        ):
+            and node.func.value.value.id in sys_names
+        )
+        is_bare_stdin_read = (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "read"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in stdin_names
+        )
+        if not (is_sys_stdin_read or is_bare_stdin_read):
             continue
 
         enclosing_try = None
