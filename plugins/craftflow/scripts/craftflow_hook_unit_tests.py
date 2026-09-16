@@ -369,6 +369,120 @@ def test_memory_protect_restore_unresolvable_file_path_skips_instead_of_crashing
     ok(name)
 
 
+def test_memory_protect_restore_nul_byte_file_path_skips_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """DD-3 companion (mirrors pretooluse-guard/nul-byte-file-path-denies-
+    instead-of-crashing): the site-1 `.resolve()` guard in main()'s
+    PostToolUse branch already catches `Exception`, not a narrowed
+    `RuntimeError` -- so a NUL-byte `file_path` (raises ValueError from the
+    same `.resolve()` call) must degrade identically to the symlink-loop
+    case above, not just the RuntimeError vector."""
+    name = "memory-protect-restore/nul-byte-file-path-skips-instead-of-crashing"
+    project = tmp_dir / "nul-byte-restore-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+
+    env = {"CLAUDE_PROJECT_DIR": str(project)}
+    payload = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/tmp/a\x00b"},
+    }
+    code, _ = run_hook("craftflow_memory_protect_restore.py", payload, env)
+    if code != 0:
+        fail(name, f"hook crashed (exit {code}) on a NUL-byte file_path instead of degrading safely")
+        return
+
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, "expected craftflow-hook-events.log to record the degraded restore-check, but no log file was written")
+        return
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-protect-restore-target" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-target' reason, got: {log_text!r}")
+        return
+    ok(name)
+
+
+def test_memory_protect_restore_non_utf8_posttooluse_target_skips_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """CRITICAL sibling found during re-hunt of REM-FIX cycle 1: `restore_file()`
+    (line ~53) does `target.read_text(encoding="utf-8")` with no try/except.
+    main()'s PostToolUse Edit|Write branch guards `.resolve()` (commit
+    9a7702c) but the very next line's `restore_file(target)` call still
+    crashes on ANY non-UTF-8 file -- fires on every Edit/Write anywhere in
+    the repo. Live-reproduced: UnicodeDecodeError, exit 1."""
+    name = "memory-protect-restore/non-utf8-posttooluse-target-skips-instead-of-crashing"
+    project = tmp_dir / "non-utf8-posttooluse-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    target = project / "binary-target.bin"
+    target.write_bytes(b"\xff\xfe\x00\x01not-utf8")
+
+    env = {"CLAUDE_PROJECT_DIR": str(project)}
+    payload = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target)},
+    }
+    code, _ = run_hook("craftflow_memory_protect_restore.py", payload, env)
+    if code != 0:
+        fail(name, f"hook crashed (exit {code}) on a non-UTF-8 PostToolUse target instead of degrading safely")
+        return
+
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, "expected craftflow-hook-events.log to record the degraded restore-check, but no log file was written")
+        return
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-protect-restore-content" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-content' reason, got: {log_text!r}")
+        return
+    ok(name)
+
+
+def test_memory_protect_restore_non_utf8_state_file_skips_pass2_sweep_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """Same CRITICAL sibling, second reachable site: `restore_all()`'s Pass 2
+    (`for md_file in state_root.rglob("*.md"): if restore_file(md_file): ...`)
+    has no try/except -- contrast with Pass 1 just above it, which DOES wrap
+    its per-file restore. A single non-UTF-8 `.md` file under
+    `.craftflow/state/` aborted the ENTIRE rglob sweep partway through,
+    leaving later-ordered files unrestored for that Stop/SubagentStop cycle."""
+    name = "memory-protect-restore/non-utf8-state-file-skips-pass2-sweep-instead-of-crashing"
+    project = tmp_dir / "non-utf8-pass2-proj"
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    bad_file = state_dir / "corrupt.md"
+    bad_file.write_bytes(b"\xff\xfe\x00\x01not-utf8")
+
+    good_file = state_dir / "patterns.md"
+    good_content = "<!-- CRAFTFLOW_BLOCK_112233445566 -->\n"
+    good_file.write_text(good_content, encoding="utf-8")
+    import hashlib
+    key = hashlib.sha1(str(good_file).encode("utf-8")).hexdigest()[:12]
+    cache_dir = project / ".craftflow" / ".memory-protect-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / f"{key}.blocks.json").write_text(
+        json.dumps({"112233445566": "restored content\n"}), encoding="utf-8"
+    )
+
+    env = {"CLAUDE_PROJECT_DIR": str(project)}
+    payload = {"hook_event_name": "SubagentStop"}
+    code, _ = run_hook("craftflow_memory_protect_restore.py", payload, env)
+    if code != 0:
+        fail(name, f"restore_all() crashed (exit {code}) on a non-UTF-8 .md file mid-sweep instead of skipping it")
+        return
+
+    restored = good_file.read_text(encoding="utf-8")
+    if "CRAFTFLOW_BLOCK_" in restored:
+        fail(name, "the well-formed sibling .md file was not restored -- Pass 2 sweep aborted before reaching it")
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # Anti-rationalization structural tests (verify tables are in all agents)
 # ---------------------------------------------------------------------------
@@ -20731,6 +20845,9 @@ def main() -> int:
         print("[ memory-protect-restore ]")
         test_memory_protect_restore_triggers_on_subagent_stop(tmp / "r1")
         test_memory_protect_restore_unresolvable_file_path_skips_instead_of_crashing(tmp / "r2")
+        test_memory_protect_restore_nul_byte_file_path_skips_instead_of_crashing(tmp / "r3")
+        test_memory_protect_restore_non_utf8_posttooluse_target_skips_instead_of_crashing(tmp / "r4")
+        test_memory_protect_restore_non_utf8_state_file_skips_pass2_sweep_instead_of_crashing(tmp / "r5")
 
         print()
         print("[ pretooluse-guard ]")

@@ -50,7 +50,27 @@ def restore_file(target: Path) -> bool:
     """
     if not target.exists():
         return False
-    text = target.read_text(encoding="utf-8")
+    # REM-FIX (silent-failure-hunter re-hunt, cycle 2): read_text() was
+    # unguarded here. Reachable from main()'s PostToolUse Edit|Write branch
+    # (fires on EVERY Edit/Write, after the .resolve() guard added in
+    # commit 9a7702c) and from restore_all()'s Pass 2 rglob sweep (a single
+    # non-UTF-8 .md file previously aborted the whole sweep). Any binary or
+    # non-UTF-8-encoded file crashed this with UnicodeDecodeError -- degrade
+    # to "not restored" instead, with the failure logged for visibility.
+    try:
+        text = target.read_text(encoding="utf-8")
+    except Exception as exc:
+        log_event(
+            "plugin_memory_protect_restore",
+            {
+                "event": "memory_protect_restore",
+                "path": repr(str(target))[:512],
+                "decision": "skip",
+                "reason": "unresolvable-protect-restore-content",
+                "error": repr(exc),
+            },
+        )
+        return False
     if "CRAFTFLOW_BLOCK_" not in text:
         return False
 
