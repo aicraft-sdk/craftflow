@@ -2011,23 +2011,36 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     # ADR 0033 deferred-sibling fix: anchored to the same trusted `trusted_root`
     # already resolved above for the reliability-gates/skill-ledger checks in
     # this function, not an env-derived project identity.
-    try:
-        workflow = latest_live_workflow_payload(data.get("session_id"), project_root=trusted_root)
-        wf_uuid = workflow.get("workflow_uuid") or workflow.get("workflow_id")
-        pending_gate = workflow.get("pending_gate")
-    except Exception as exc:
-        log_event(
-            "plugin_pretooluse_guard",
-            {
-                "event": "pretool_guard_parse_error",
-                "command_name": "latest_live_workflow_payload",
-                "error": repr(exc),
-                "reason": "skipped_wf_uuid_lookup",
-            },
-        )
+    #
+    # REM-FIX (Phase 4 hunt, MEDIUM): when `trusted_root_unresolved` is True,
+    # `trusted_root` is None -- passing that straight to
+    # latest_live_workflow_payload(project_root=None) would silently fall back
+    # to env-derived project_dir() discovery, i.e. exactly the ADR-0033 bug
+    # this phase closes, just for this one call's wf_uuid/pending_gate log
+    # metadata. Skip the lookup entirely instead so an unresolvable cwd
+    # degrades to unknown metadata rather than a foreign project's identity.
+    if trusted_root_unresolved:
         workflow = {}
         wf_uuid = None
         pending_gate = None
+    else:
+        try:
+            workflow = latest_live_workflow_payload(data.get("session_id"), project_root=trusted_root)
+            wf_uuid = workflow.get("workflow_uuid") or workflow.get("workflow_id")
+            pending_gate = workflow.get("pending_gate")
+        except Exception as exc:
+            log_event(
+                "plugin_pretooluse_guard",
+                {
+                    "event": "pretool_guard_parse_error",
+                    "command_name": "latest_live_workflow_payload",
+                    "error": repr(exc),
+                    "reason": "skipped_wf_uuid_lookup",
+                },
+            )
+            workflow = {}
+            wf_uuid = None
+            pending_gate = None
 
     # Worktree-confinement, skill-promotion-path, and skill-ledger-write are
     # all denied unconditionally -- independent violation types (Behavior

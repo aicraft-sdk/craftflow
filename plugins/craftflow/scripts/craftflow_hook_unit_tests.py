@@ -20216,6 +20216,78 @@ def test_pretooluse_guard_worktree_path_diverges_cwd_and_claude_project_dir(tmp_
     ok(name)
 
 
+def test_pretooluse_guard_unresolvable_cwd_does_not_leak_foreign_wf_uuid_into_log(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX (Phase 4 hunt, MEDIUM): when the trusted payload `cwd` cannot be
+    resolved at all (e.g. a cyclic symlink -> `trusted_root_unresolved=True`),
+    `_handle_edit_write`'s own `latest_live_workflow_payload(session_id,
+    project_root=trusted_root)` call previously still ran with
+    `project_root=None`, silently falling back to env-derived `project_dir()`
+    discovery for the DENY's logged `wf`/`phase` metadata -- i.e. an unrelated
+    project's live workflow uuid/phase could appear on this session's deny log
+    line. The actual confinement/grant decision was never affected (traced
+    separately, in `_edit_write_escapes_confinement()`), but the audit trail
+    was mislabeled. Fixed by skipping the lookup entirely (degrading straight
+    to None/"unknown") when `trusted_root_unresolved` is True."""
+    name = "pretooluse-guard/unresolvable-cwd-does-not-leak-foreign-wf-uuid-into-log"
+    project = tmp_dir / "log-metadata-proj"
+    state_dir = project / ".craftflow" / "state" / "project"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    ledger = state_dir / "reliability-gates.json"
+    ledger.write_text('{"gates": []}', encoding="utf-8")
+
+    # CLAUDE_PROJECT_DIR's OWN live workflow -- must NOT leak into the log
+    # metadata for a request whose cwd could not be resolved at all.
+    wf_dir = project / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True, exist_ok=True)
+    (wf_dir / "wf-should-not-leak.json").write_text(
+        json.dumps({"workflow_uuid": "wf-should-not-leak", "pending_gate": "should-not-leak-phase"}),
+        encoding="utf-8",
+    )
+
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if log_path.exists():
+        log_path.unlink()
+
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    cyclic = tmp_dir / "cyclic-cwd-loop-log-metadata"
+    os.symlink(cyclic, cyclic)
+    payload = {
+        "tool_name": "Write",
+        "session_id": "wf-log-metadata-unresolvable-cwd",
+        "cwd": str(cyclic),
+        "tool_input": {"file_path": str(ledger)},
+    }
+    code, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out) or "reliability-gates-write" not in out:
+        fail(name, f"expected DENY with 'reliability-gates-write', got exit={code}, stdout={out!r}")
+        return
+
+    lines = _denial_log_lines(project)
+    deny_entries = [json.loads(line) for line in lines if '"decision": "deny"' in line or '"decision":"deny"' in line]
+    if not deny_entries:
+        fail(name, f"expected at least one logged deny entry, got log lines: {lines!r}")
+        return
+    entry = deny_entries[-1]
+    if entry.get("wf") is not None:
+        fail(
+            name,
+            "expected logged 'wf' to be None (unresolvable cwd must not leak "
+            f"a foreign project's workflow uuid), got: {entry.get('wf')!r}",
+        )
+        return
+    if entry.get("phase") != "unknown":
+        fail(
+            name,
+            "expected logged 'phase' to be 'unknown' (unresolvable cwd must "
+            f"not leak a foreign project's pending_gate), got: {entry.get('phase')!r}",
+        )
+        return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -21299,6 +21371,7 @@ def main() -> int:
     print()
     print("[ pretooluse-guard: Phase 4 -- worktree_path call sites anchor to trusted payload cwd (ADR 0033 first deferred CRITICAL sibling) ]")
     test_pretooluse_guard_worktree_path_diverges_cwd_and_claude_project_dir(tmp / "idm6")
+    test_pretooluse_guard_unresolvable_cwd_does_not_leak_foreign_wf_uuid_into_log(tmp / "idm6b")
 
     print()
     if _errors:
