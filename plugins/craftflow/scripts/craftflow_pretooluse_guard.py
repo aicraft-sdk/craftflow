@@ -302,31 +302,40 @@ def _python_suspicious_call_bindings(code_text: str) -> set:
     return patterns
 
 
-def _protected_memory_paths() -> set:
+def _protected_memory_paths(project_root: "Path | None" = None) -> set:
     """Return all active memory locations that should be write-guarded via
     the Edit/Write `file_path` check: the 3 memory .md files, plus the
     `.memory-finalize` permit sentinel (Task 4.2 step 1) -- deliberately
     NOT workflow JSON artifacts (Durable Decision, plan line 16: the router
     itself routinely Write()s workflow JSON mid-workflow; adding it here
-    would break that routine orchestration)."""
+    would break that routine orchestration).
+
+    `project_root`, when given, anchors every protected path to that SPECIFIC
+    project identity instead of this process's environment-derived one. A
+    confinement-sensitive caller MUST pass the trusted PreToolUse payload `cwd`
+    -- otherwise this set names an UNRELATED project's memory files and the
+    caller's OWN memory files are left unprotected (live-reproduced)."""
     paths: set = set()
+    root_state = None
     try:
-        paths |= {(state_root() / name).resolve() for name in PROTECTED_MEMORY_FILES}
+        root_state = state_root(project_root)
+        paths |= {(root_state / name).resolve() for name in PROTECTED_MEMORY_FILES}
     except Exception:
         pass
     try:
-        paths |= {(project_state_dir() / name).resolve() for name in PROTECTED_MEMORY_FILES}
+        project_tier = (root_state / "project") if root_state is not None else project_state_dir()
+        paths |= {(project_tier / name).resolve() for name in PROTECTED_MEMORY_FILES}
     except Exception:
         pass
     try:
-        wf_dir = workflows_dir()
+        wf_dir = workflows_dir(project_root)
         for name in PROTECTED_MEMORY_FILES:
             for candidate in wf_dir.glob(f"*/{name}"):
                 paths.add(candidate.resolve())
     except Exception:
         pass
     try:
-        paths.add(memory_finalize_permit_path().resolve())
+        paths.add(memory_finalize_permit_path(project_root).resolve())
     except Exception:
         pass
     return paths
@@ -1510,15 +1519,19 @@ def _clear_multi_target_denial(session_id: str | None, targets: list) -> None:
         clear_denial(session_id, target)
 
 
-def _protected_bash_write_paths() -> set:
+def _protected_bash_write_paths(project_root: "Path | None" = None) -> set:
     """Protected-path set for the NEW Bash-write-inspection layer only
     (Task 4.2 step 2): reuses `_protected_memory_paths()` (the 3 .md files
     + `.memory-finalize`) rather than duplicating its glob, and additionally
     includes every top-level workflow JSON artifact -- the one path class
-    deliberately excluded from the Edit/Write-gated set above."""
-    paths: set = set(_protected_memory_paths())
+    deliberately excluded from the Edit/Write-gated set above.
+
+    `project_root`, when given, anchors both the reused memory-path set and
+    the workflow-JSON glob to that SPECIFIC project identity instead of this
+    process's environment-derived one (see `_protected_memory_paths()`)."""
+    paths: set = set(_protected_memory_paths(project_root))
     try:
-        for candidate in workflows_dir().glob("*.json"):
+        for candidate in workflows_dir(project_root).glob("*.json"):
             paths.add(candidate.resolve())
     except Exception:
         pass
@@ -1790,7 +1803,9 @@ def _python_suspicious_mechanism_targets(command: str, protected_paths: set, cwd
     return list(hits)
 
 
-def _memory_write_permit_workflow_uuid(path: Path) -> str | None:
+def _memory_write_permit_workflow_uuid(
+    path: Path, project_root: "Path | None" = None
+) -> str | None:
     """Return the workflow_uuid the memory-finalize permit must match for
     `path` to be treated as lifted, or None when presence of a valid
     permit alone is sufficient (path is not owned by a single workflow).
@@ -1829,7 +1844,7 @@ def _memory_write_permit_workflow_uuid(path: Path) -> str | None:
         intent for those tiers.
     """
     try:
-        wf_dir = workflows_dir().resolve()
+        wf_dir = workflows_dir(project_root).resolve()
         if path.parent.parent == wf_dir:
             return path.parent.name
     except Exception:
@@ -1931,7 +1946,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
 
     violations = []
 
-    protected_memory = _protected_memory_paths()
+    protected_memory = _protected_memory_paths(trusted_root)
     if path in protected_memory:
         violations.append("memory-write")
 
@@ -2094,7 +2109,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     # (a "latest live workflow" heuristic that is unrelated to which
     # workflow the permit was actually issued for -- see that helper's
     # docstring for the live-reproduced bug this replaced).
-    memory_write_permit_uuid = _memory_write_permit_workflow_uuid(path)
+    memory_write_permit_uuid = _memory_write_permit_workflow_uuid(path, trusted_root)
     if "memory-write" in violations and has_memory_finalize_permit(memory_write_permit_uuid):
         # Item B fix: the finalize permit means this write IS proceeding --
         # treat it as an allow for escalation-reset purposes too.
@@ -2251,9 +2266,9 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         worktree_path = None
         workspace_writable_paths = frozenset()
 
-    protected_paths = _protected_bash_write_paths()
+    protected_paths = _protected_bash_write_paths(cwd)
     try:
-        permit_path = memory_finalize_permit_path().resolve()
+        permit_path = memory_finalize_permit_path(cwd).resolve()
     except Exception:
         permit_path = None
 

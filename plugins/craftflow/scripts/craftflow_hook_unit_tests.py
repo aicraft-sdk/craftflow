@@ -2667,17 +2667,31 @@ def test_pretooluse_guard_bash_worktree_confinement_only_message_omits_skill_tex
     # above). A Bash redirect into a protected memory file, from a cwd
     # outside its confinement, with zero skill relevance, must get accurate,
     # violation-specific text instead.
+    #
+    # Phase 5 [CHECKPOINT-1] update: `_protected_bash_write_paths()` is now
+    # anchored to the trusted payload `cwd` (D13), so every protected path it
+    # names is necessarily a descendant of `cwd` itself -- a "protected path
+    # that also escapes cwd/worktree_path confinement" can no longer arise
+    # from an identity MISMATCH (the pre-Phase-5 `elsewhere` fixture). It can
+    # still arise from a real symlink: `cwd`'s own protected memory file is a
+    # symlink whose resolved target genuinely lives outside `cwd`'s
+    # confinement -- a legitimate, non-bug-dependent way to reconstruct the
+    # same violation-message scenario.
     name = "pretooluse-guard/bash-worktree-confinement-only-message-omits-skill-text"
-    project_root = tmp_dir / "project"
-    elsewhere = tmp_dir / "elsewhere"
-    project_root.mkdir(parents=True)
-    elsewhere.mkdir(parents=True)
-    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
-    target = project_root / ".craftflow" / "state" / "activeContext.md"
+    session = tmp_dir / "session"
+    leaked = tmp_dir / "leaked"
+    session.mkdir(parents=True)
+    leaked.mkdir(parents=True)
+    real_target = leaked / "activeContext.md"
+    real_target.write_text("# leaked\n", encoding="utf-8")
+    symlinked_target = session / ".craftflow" / "state" / "activeContext.md"
+    symlinked_target.parent.mkdir(parents=True)
+    symlinked_target.symlink_to(real_target)
+    env = {"CLAUDE_PROJECT_DIR": str(session), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
     payload = {
         "tool_name": "Bash",
-        "cwd": str(elsewhere.resolve()),
-        "tool_input": {"command": f"echo hi > {target.resolve()}"},
+        "cwd": str(session.resolve()),
+        "tool_input": {"command": f"echo hi > {symlinked_target}"},
     }
     _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
     if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
@@ -3195,19 +3209,23 @@ def test_pretooluse_guard_bash_second_consecutive_denial_is_escalated(tmp_dir: P
     # Edit/Write -- proves the hard stop is not hardcoded to one tool
     # surface. Two consecutive Bash redirects into the SAME protected
     # memory file (memoryWrites/protectedWrites unconditional lane is not
-    # used here -- worktree-confinement is unconditional and simplest to
-    # trigger deterministically).
+    # used here -- the unconditional "bash-write-protected-path" lane is
+    # unconditional and simplest to trigger deterministically).
+    #
+    # Phase 5 [CHECKPOINT-1] update: `cwd` must now be the SAME identity as
+    # the protected memory file's own project (`_protected_bash_write_paths()`
+    # is anchored to the trusted payload `cwd`, D13) -- a divergent `cwd`
+    # (the pre-Phase-5 `elsewhere` fixture) means the target is simply not a
+    # protected path at all anymore, and neither lane fires.
     name = "pretooluse-guard/bash-second-consecutive-denial-is-escalated"
     project_root = tmp_dir / "project"
-    elsewhere = tmp_dir / "elsewhere"
     project_root.mkdir(parents=True)
-    elsewhere.mkdir(parents=True)
     env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
     target = project_root / ".craftflow" / "state" / "activeContext.md"
     payload = {
         "tool_name": "Bash",
         "session_id": "sess-itemb-3",
-        "cwd": str(elsewhere.resolve()),
+        "cwd": str(project_root.resolve()),
         "tool_input": {"command": f"echo hi > {target.resolve()}"},
     }
     _, out1 = run_hook("craftflow_pretooluse_guard.py", payload, env)
@@ -3571,11 +3589,16 @@ def test_pretooluse_guard_bash_protected_path_write_still_denied_when_unrelated_
     # Regression for _handle_bash's confinement_violations lane (line 1206, the one call site
     # this plan wires): an unrelated workspace_writable_paths entry must not weaken the
     # pre-existing protected-memory-file denial.
+    #
+    # Phase 5 [CHECKPOINT-1] update: `cwd` must now be the SAME identity as
+    # `project_root` -- `_protected_bash_write_paths()` is anchored to the
+    # trusted payload `cwd` (D13), so a divergent `cwd` (the pre-Phase-5
+    # `elsewhere` fixture) would mean the target is not a protected path at
+    # all from `cwd`'s own perspective, and the denial this test exists to
+    # prove would not fire for any reason.
     name = "pretooluse-guard/bash-protected-path-write-still-denied-when-unrelated-workspace-writable-paths-present"
     project_root = tmp_dir / "project"
-    elsewhere = tmp_dir / "elsewhere"
     project_root.mkdir(parents=True)
-    elsewhere.mkdir(parents=True)
     unrelated_allowlisted = tmp_dir / "workspace" / "CONTRACTS.md"
     (tmp_dir / "workspace").mkdir(parents=True)
     _write_workflow_json_fixture(
@@ -3585,7 +3608,7 @@ def test_pretooluse_guard_bash_protected_path_write_still_denied_when_unrelated_
     target = project_root / ".craftflow" / "state" / "activeContext.md"
     payload = {
         "tool_name": "Bash",
-        "cwd": str(elsewhere.resolve()),
+        "cwd": str(project_root.resolve()),
         "tool_input": {"command": f"echo hi > {target.resolve()}"},
     }
     _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
@@ -3654,30 +3677,46 @@ def test_pretooluse_guard_bash_confinement_lane_no_longer_flags_target_once_it_i
     # `protectedWrites` toggle) still correctly denies it. This asymmetry -- one violation type
     # disappearing while an unrelated one persists -- is the actual proof the line-1206 wiring is
     # real, not a no-op deny either way.
+    #
+    # Phase 5 [CHECKPOINT-1] update: `_protected_bash_write_paths()` is now
+    # anchored to the trusted payload `cwd` (D13) -- every path it names is
+    # necessarily a descendant of `cwd`, so "protected AND unconfined by
+    # plain {cwd, worktree_path}" can no longer be reconstructed via an
+    # identity mismatch (the pre-Phase-5 `elsewhere` fixture). It is
+    # reconstructed here instead via a real symlink: `cwd`'s own
+    # workflow-artifact JSON entry is a symlink whose resolved target
+    # genuinely lives outside `cwd`'s confinement (a legitimate scenario --
+    # the glob still matches the symlink's NAME under `cwd`, but `.resolve()`
+    # follows it to the real, external location, exactly as it would for a
+    # real symlinked memory file).
     name = "pretooluse-guard/bash-confinement-lane-no-longer-flags-workspace-allowlisted-protected-path-target"
-    project_root = tmp_dir / "project"
-    elsewhere = tmp_dir / "elsewhere"
-    project_root.mkdir(parents=True)
-    elsewhere.mkdir(parents=True)
+    session = tmp_dir / "session"
+    leaked = tmp_dir / "leaked"
+    session.mkdir(parents=True)
+    leaked.mkdir(parents=True)
     wf_uuid = "wf-fixture-self-target"
-    target = (project_root / ".craftflow" / "state" / "workflows" / f"{wf_uuid}.json").resolve()
+    real_target = (leaked / f"{wf_uuid}.json").resolve()
+    real_target.write_text(json.dumps({"workflow_uuid": wf_uuid}), encoding="utf-8")
+    symlinked_target = (session / ".craftflow" / "state" / "workflows" / f"{wf_uuid}.json").resolve()
+    symlinked_target.parent.mkdir(parents=True, exist_ok=True)
+    symlinked_target.symlink_to(real_target)
     # This fixture is reused as the write TARGET itself, discovered via
-    # _protected_bash_write_paths()'s untouched, env-anchored workflows_dir()
-    # glob -- unaffected by Phase 4's cwd-anchored latest_live_workflow_payload().
-    _write_workflow_json_fixture(project_root, None, wf_uuid=wf_uuid)
-    # Phase 4 (ADR 0033 deferred-sibling fix): the confinement lane's own
-    # workflow discovery is now anchored to the trusted payload `cwd`
-    # (`elsewhere`), not CLAUDE_PROJECT_DIR (`project_root`) -- so the live
-    # workflow granting `workspace_writable_paths` for `target` must live
-    # under `elsewhere`'s own workflows dir to be found by that lane.
+    # _protected_bash_write_paths()'s cwd-anchored workflows_dir() glob,
+    # which follows the symlink to `real_target` when computing the
+    # protected-path set (Task 5.2 Step 1).
+    #
+    # `cwd`'s own live workflow grants `workspace_writable_paths` for the
+    # RESOLVED real target -- resolve_confinement()'s extra_exact_paths
+    # match is by exact resolved-path equality (see its own docstring), so
+    # the grant must name `real_target`, not the symlink path.
     _write_workflow_json_fixture(
-        elsewhere, None, wf_uuid="wf-elsewhere-live", workspace_writable_paths=[str(target)]
+        session, None, wf_uuid="wf-session-live", workspace_writable_paths=[str(real_target)]
     )
-    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    env = {"CLAUDE_PROJECT_DIR": str(session), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
     payload = {
         "tool_name": "Bash",
-        "cwd": str(elsewhere.resolve()),
-        "tool_input": {"command": f"echo hi > {target}"},
+        "cwd": str(session.resolve()),
+        "tool_input": {"command": f"echo hi > {symlinked_target}"},
     }
     _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
     if "worktree-confinement" in out:
@@ -20288,6 +20327,133 @@ def test_pretooluse_guard_unresolvable_cwd_does_not_leak_foreign_wf_uuid_into_lo
     ok(name)
 
 
+def test_pretooluse_guard_protected_memory_paths_diverge_cwd_and_claude_project_dir(
+    tmp_dir: Path,
+) -> None:
+    """[CHECKPOINT-1] Phase 5 -- third live-reproduced instance of the ADR 0033
+    identity-mismatch bug class, found by Phase 0's mandated unscoped sweep
+    (D12/D14/D16). `_protected_memory_paths()` (guard.py),
+    `_memory_write_permit_workflow_uuid()` (guard.py), and
+    `_protected_redirect_paths()` (bash_guard.py) all computed their
+    protected-path SET / permit uuid from `state_root()`/`project_state_dir()`/
+    `workflows_dir()` with no arguments -- env-derived (`CLAUDE_PROJECT_DIR`)
+    -- rather than the trusted PreToolUse payload `cwd`. Whenever
+    `CLAUDE_PROJECT_DIR` and `cwd` diverge, both guards protect an UNRELATED
+    project's memory files while leaving the CALLING project's own
+    `.craftflow/state/project/activeContext.md` completely unprotected: an
+    Edit/Write AND a Bash-echo redirect to it are both silently ALLOWED,
+    in both `craftflow_pretooluse_guard.py` and its independent sibling
+    `craftflow_pretooluse_bash_guard.py`. (S10.)"""
+    name = "pretooluse-guard/protected-memory-paths-diverge-cwd-and-claude-project-dir"
+    env_proj = tmp_dir / "env-proj"
+    cwd_proj = tmp_dir / "cwd-proj"
+    for d in (env_proj, cwd_proj):
+        (d / ".craftflow" / "state" / "project").mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q"], cwd=str(d), check=True, capture_output=True)
+    target = cwd_proj / ".craftflow" / "state" / "project" / "activeContext.md"
+    target.write_text("# Active Context\n", encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    write_payload = {
+        "tool_name": "Write",
+        "session_id": "wf-protected-memory-diverge",
+        "cwd": str(cwd_proj),
+        "tool_input": {"file_path": str(target)},
+    }
+    bash_payload = {
+        "tool_name": "Bash",
+        "session_id": "wf-protected-memory-diverge",
+        "cwd": str(cwd_proj),
+        "tool_input": {"command": f"echo x > {target}"},
+    }
+
+    # Part 1: Edit/Write to cwd_proj's own memory file, no permit -> DENY.
+    code, out = run_hook("craftflow_pretooluse_guard.py", write_payload, env)
+    if not _deny_out(out):
+        fail(name, f"guard.py Edit/Write: expected DENY, got exit={code}, stdout={out!r}")
+        return
+
+    # Part 2: same target via guard.py's own Bash-write-inspection layer -> DENY.
+    code, out = run_hook("craftflow_pretooluse_guard.py", bash_payload, env)
+    if not _deny_out(out):
+        fail(name, f"guard.py Bash: expected DENY, got exit={code}, stdout={out!r}")
+        return
+
+    # Part 3: same target via bash_guard.py's independent protected-redirect layer -> DENY.
+    code, out = run_hook("craftflow_pretooluse_bash_guard.py", bash_payload, env)
+    if not _deny_out(out):
+        fail(name, f"bash_guard.py: expected DENY, got exit={code}, stdout={out!r}")
+        return
+
+    # Part 4: aligned-identity regression control (CLAUDE_PROJECT_DIR == cwd) must
+    # still DENY, unchanged, for all three lanes above (BC-2/P1).
+    aligned_env = {"CLAUDE_PROJECT_DIR": str(cwd_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    code, out = run_hook("craftflow_pretooluse_guard.py", write_payload, aligned_env)
+    if not _deny_out(out):
+        fail(name, f"aligned control guard.py Edit/Write: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    code, out = run_hook("craftflow_pretooluse_guard.py", bash_payload, aligned_env)
+    if not _deny_out(out):
+        fail(name, f"aligned control guard.py Bash: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    code, out = run_hook("craftflow_pretooluse_bash_guard.py", bash_payload, aligned_env)
+    if not _deny_out(out):
+        fail(name, f"aligned control bash_guard.py: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_protected_workflow_json_diverges_cwd_and_claude_project_dir(
+    tmp_dir: Path,
+) -> None:
+    """[CHECKPOINT-1] Phase 5 -- workflow-JSON sibling of the memory-file case
+    above (D13/D16): `_protected_bash_write_paths()`'s workflow-JSON glob
+    (guard.py) and `_protected_redirect_paths()`'s workflow-JSON glob
+    (bash_guard.py) both call `workflows_dir()` with no arguments --
+    env-derived -- so a divergent `CLAUDE_PROJECT_DIR` leaves the calling
+    project's OWN workflow JSON artifact unprotected against a Bash redirect
+    in both guards. (Edit/Write to workflow JSON is deliberately NOT in the
+    protected set -- the router routinely Write()s it mid-workflow -- so
+    this scenario is Bash-redirect-only, matching S11.)"""
+    name = "pretooluse-guard/protected-workflow-json-diverges-cwd-and-claude-project-dir"
+    env_proj = tmp_dir / "env-proj"
+    cwd_proj = tmp_dir / "cwd-proj"
+    for d in (env_proj, cwd_proj):
+        (d / ".craftflow" / "state" / "workflows").mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q"], cwd=str(d), check=True, capture_output=True)
+    target = cwd_proj / ".craftflow" / "state" / "workflows" / "wf-x.json"
+    target.write_text(json.dumps({"workflow_uuid": "wf-x"}), encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    bash_payload = {
+        "tool_name": "Bash",
+        "session_id": "wf-protected-workflow-json-diverge",
+        "cwd": str(cwd_proj),
+        "tool_input": {"command": f"echo x > {target}"},
+    }
+
+    code, out = run_hook("craftflow_pretooluse_guard.py", bash_payload, env)
+    if not _deny_out(out):
+        fail(name, f"guard.py Bash: expected DENY, got exit={code}, stdout={out!r}")
+        return
+
+    code, out = run_hook("craftflow_pretooluse_bash_guard.py", bash_payload, env)
+    if not _deny_out(out):
+        fail(name, f"bash_guard.py: expected DENY, got exit={code}, stdout={out!r}")
+        return
+
+    # Aligned-identity regression control -> DENY unchanged (BC-2/P1).
+    aligned_env = {"CLAUDE_PROJECT_DIR": str(cwd_proj), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    code, out = run_hook("craftflow_pretooluse_guard.py", bash_payload, aligned_env)
+    if not _deny_out(out):
+        fail(name, f"aligned control guard.py Bash: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    code, out = run_hook("craftflow_pretooluse_bash_guard.py", bash_payload, aligned_env)
+    if not _deny_out(out):
+        fail(name, f"aligned control bash_guard.py: expected DENY, got exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -21372,6 +21538,11 @@ def main() -> int:
     print("[ pretooluse-guard: Phase 4 -- worktree_path call sites anchor to trusted payload cwd (ADR 0033 first deferred CRITICAL sibling) ]")
     test_pretooluse_guard_worktree_path_diverges_cwd_and_claude_project_dir(tmp / "idm6")
     test_pretooluse_guard_unresolvable_cwd_does_not_leak_foreign_wf_uuid_into_log(tmp / "idm6b")
+
+    print()
+    print("[ pretooluse-guard: Phase 5 [CHECKPOINT-1] -- memory-file and workflow-JSON protection anchor to trusted payload cwd (ADR 0033 third deferred sibling) ]")
+    test_pretooluse_guard_protected_memory_paths_diverge_cwd_and_claude_project_dir(tmp / "idm7")
+    test_pretooluse_guard_protected_workflow_json_diverges_cwd_and_claude_project_dir(tmp / "idm8")
 
     print()
     if _errors:

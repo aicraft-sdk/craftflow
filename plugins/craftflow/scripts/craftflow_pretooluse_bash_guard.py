@@ -1305,7 +1305,7 @@ def _match_destructive_shape(command_name: str, rest: list) -> tuple:
     return None, [], False
 
 
-def _protected_redirect_paths() -> set:
+def _protected_redirect_paths(project_root: "Path | None" = None) -> set:
     """Return the redirect/tee-target protected-path set: the 3 memory .md
     files (under state_root(), project_state_dir(), and every
     workflows/*/), .memory-finalize, and every workflow JSON artifact
@@ -1314,36 +1314,46 @@ def _protected_redirect_paths() -> set:
     own Bash-write-inspection layer (Task 3.2 step 2) -- kept as an
     independent, duplicated-by-design check here since bash_guard.py and
     pretooluse_guard.py are separate scripts with no import dependency
-    between them."""
+    between them.
+
+    `project_root`, when given, anchors every protected path to that SPECIFIC
+    project identity instead of this process's environment-derived one. A
+    confinement-sensitive caller MUST pass the trusted PreToolUse payload `cwd`
+    -- otherwise this set names an UNRELATED project's memory files and the
+    caller's OWN memory files/workflow JSON are left unprotected
+    (live-reproduced)."""
     paths: set = set()
+    root_state = None
     try:
-        paths |= {(state_root() / name).resolve() for name in PROTECTED_MEMORY_FILES}
+        root_state = state_root(project_root)
+        paths |= {(root_state / name).resolve() for name in PROTECTED_MEMORY_FILES}
     except Exception:
         pass
     try:
-        paths |= {(project_state_dir() / name).resolve() for name in PROTECTED_MEMORY_FILES}
+        project_tier = (root_state / "project") if root_state is not None else project_state_dir()
+        paths |= {(project_tier / name).resolve() for name in PROTECTED_MEMORY_FILES}
     except Exception:
         pass
     try:
-        wf_dir = workflows_dir()
+        wf_dir = workflows_dir(project_root)
         for name in PROTECTED_MEMORY_FILES:
             for candidate in wf_dir.glob(f"*/{name}"):
                 paths.add(candidate.resolve())
     except Exception:
         pass
     try:
-        paths.add(memory_finalize_permit_path().resolve())
+        paths.add(memory_finalize_permit_path(project_root).resolve())
     except Exception:
         pass
     try:
-        for candidate in workflows_dir().glob("*.json"):
+        for candidate in workflows_dir(project_root).glob("*.json"):
             paths.add(candidate.resolve())
     except Exception:
         pass
     return paths
 
 
-def _is_protected_redirect_target(resolved: Path) -> bool:
+def _is_protected_redirect_target(resolved: Path, project_root: "Path | None" = None) -> bool:
     """True only when a redirect/tee target resolves to one of this plan's
     protected paths. Ordinary, benign redirects (`> /dev/null`,
     `2>/dev/null`) are common, legitimate shell idioms already present in
@@ -1351,7 +1361,7 @@ def _is_protected_redirect_target(resolved: Path) -> bool:
     because they resolve outside {cwd} u {worktree_path} -- this predicate
     is the gate that keeps the redirect-confinement check (Task 3.2 step 2)
     from ever running against them at all."""
-    return resolved in _protected_redirect_paths()
+    return resolved in _protected_redirect_paths(project_root)
 
 
 def _redirect_targets_in_tokens(tokens: list) -> list:
@@ -1658,10 +1668,10 @@ def main() -> int:
         for tokens in split_subcommands(command):
             for target in _redirect_targets_in_tokens(tokens):
                 _confined, resolved = resolve_confinement(target, cwd, worktree_path)
-                if not _is_protected_redirect_target(resolved):
+                if not _is_protected_redirect_target(resolved, project_root=cwd):
                     continue
                 if (
-                    resolved == memory_finalize_permit_path().resolve()
+                    resolved == memory_finalize_permit_path(cwd).resolve()
                     and matches_memory_finalize_permit_shape(tokens)
                 ):
                     continue
