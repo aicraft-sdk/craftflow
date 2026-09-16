@@ -21158,6 +21158,114 @@ def test_pretooluse_guard_nul_byte_file_path_denies_instead_of_crashing(
     ok(name)
 
 
+def test_pretooluse_guard_bash_unresolvable_cwd_denies_write_command(
+    tmp_dir: Path,
+) -> None:
+    """Site 2 (ADR 0035 deferred crash bug): `_handle_bash`'s
+    `cwd = Path(cwd_raw).resolve()` was unguarded -- a symlink-loop cwd
+    crashed the guard uncaught (exit 1, no deny JSON = FAIL-OPEN).
+
+    The design's proposed 'degrade to cwd=None and skip the cwd-anchored
+    checks' shape does NOT apply here: verified by reading the function
+    end-to-end, ALL FIVE of its violation lanes are cwd-anchored, so
+    'skip the cwd-anchored checks' would mean skipping everything, i.e.
+    reproducing the fail-open. Corrected shape: deny iff the command has
+    any cwd-INDEPENDENTLY detectable write target."""
+    name = "pretooluse-guard/bash-unresolvable-cwd-denies-write-command"
+    project = tmp_dir / "bash-unresolvable-cwd-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    loop = tmp_dir / "bash-unresolvable-cwd-loop"
+    os.symlink(loop, loop)
+
+    code, out = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-bash-unresolvable-cwd",
+            "cwd": str(loop),
+            "tool_input": {"command": "echo hi > .craftflow/state/patterns.md"},
+        },
+        env,
+    )
+    if code != 0:
+        fail(name, f"guard process crashed (exit {code}) instead of emitting a deny -- FAIL-OPEN")
+        return
+    if not _deny_out(out) or "unresolvable-cwd-with-write-target" not in out:
+        fail(name, f"expected DENY with 'unresolvable-cwd-with-write-target', got exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_unresolvable_cwd_allows_read_only_command(
+    tmp_dir: Path,
+) -> None:
+    """DD-5 anti-over-restriction pin: the site-2 fail-closed deny is scoped
+    to commands that actually write. `_handle_bash`'s entire mandate is write
+    protection, so a read-only command must stay allowed even when cwd is
+    unresolvable -- otherwise the fix blanket-bricks the session."""
+    name = "pretooluse-guard/bash-unresolvable-cwd-allows-read-only-command"
+    project = tmp_dir / "bash-unresolvable-cwd-readonly-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    loop = tmp_dir / "bash-unresolvable-cwd-readonly-loop"
+    os.symlink(loop, loop)
+
+    code, out = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-bash-unresolvable-cwd-readonly",
+            "cwd": str(loop),
+            "tool_input": {"command": "ls -la"},
+        },
+        env,
+    )
+    if code != 0:
+        fail(name, f"guard process crashed (exit {code}) on a read-only command")
+        return
+    if _deny_out(out):
+        fail(name, f"over-restriction: a read-only command was denied, stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_resolvable_cwd_unaffected_by_resolve_guard(
+    tmp_dir: Path,
+) -> None:
+    """BC-6 / P-2: for a RESOLVABLE cwd, `_handle_bash` must behave exactly as
+    it did at main@8c09173. The new degradation is reachable only from an
+    `except` branch, so the happy path is untouched by construction -- this
+    test pins that invariant against future edits."""
+    name = "pretooluse-guard/bash-resolvable-cwd-unaffected-by-resolve-guard"
+    project = tmp_dir / "bash-resolvable-cwd-proj"
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    (state_dir / "patterns.md").write_text("x\n", encoding="utf-8")
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    code, out = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-bash-resolvable-cwd",
+            "cwd": str(project),
+            "tool_input": {"command": "echo hi > .craftflow/state/patterns.md"},
+        },
+        env,
+    )
+    if not _deny_out(out) or "bash-write-protected-path" not in out:
+        fail(name, f"expected the pre-existing 'bash-write-protected-path' deny, got exit={code}, stdout={out!r}")
+        return
+    if "unresolvable-cwd" in out:
+        fail(name, f"a resolvable cwd must never reach the unresolvable-cwd branch, stdout={out!r}")
+        return
+    ok(name)
+
+
 def test_hooklib_load_input_non_utf8_stdin_degrades_instead_of_crashing(
     tmp_dir: Path,
 ) -> None:
@@ -22884,6 +22992,9 @@ def main() -> int:
     print("[ pretooluse-guard: unguarded Path(...).resolve() crash/fail-open hardening (ADR 0035 deferred bugs) ]")
     test_pretooluse_guard_unresolvable_file_path_denies_instead_of_crashing(tmp / "res1")
     test_pretooluse_guard_nul_byte_file_path_denies_instead_of_crashing(tmp / "res2")
+    test_pretooluse_guard_bash_unresolvable_cwd_denies_write_command(tmp / "res2a")
+    test_pretooluse_guard_bash_unresolvable_cwd_allows_read_only_command(tmp / "res2b")
+    test_pretooluse_guard_bash_resolvable_cwd_unaffected_by_resolve_guard(tmp / "res2c")
 
     print()
     print("[ hooklib / memory-protect-restore: REM-FIX cycle 5 -- unguarded sys.stdin.read() decode crash ]")

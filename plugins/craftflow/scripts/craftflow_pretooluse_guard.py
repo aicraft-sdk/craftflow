@@ -2282,6 +2282,94 @@ _BASH_ONLY_VIOLATION_EXPLANATIONS = {
 }
 
 
+def _command_has_any_write_target(command: str) -> bool:
+    """True if `command` contains ANY write target detectable WITHOUT a
+    resolved cwd.
+
+    Every one of `_handle_bash`'s five violation lanes is cwd-anchored
+    (`_protected_bash_write_paths(cwd)`, `resolve_confinement(..., cwd, ...)`,
+    and the three `_is_protected_*(..., project_root=cwd)` predicates), so an
+    unresolvable cwd leaves nothing to check. The TARGET EXTRACTORS, by
+    contrast, are pure token/text parsing with no filesystem access at all --
+    they are the only cwd-free machinery in the function, and they are exactly
+    what this predicate reuses. Same five detectors `_handle_bash` itself
+    already runs; nothing new is parsed and no new syntax is recognized."""
+    if extract_redirect_targets(command):
+        return True
+    if _python_script_write_targets(command):
+        return True
+    for tokens in split_subcommands(command):
+        if _bash_write_targets_in_tokens(tokens):
+            return True
+        if _cp_mv_like_write_targets(tokens):
+            return True
+        if _dd_write_targets(tokens):
+            return True
+    return False
+
+
+def _handle_bash_unresolvable_cwd(data: dict, command: str, cwd_raw, exc: BaseException) -> int:
+    """ADR 0035 deferred crash bug, site 2 (live-reproduced): degradation for
+    an unresolvable PreToolUse payload `cwd`.
+
+    Denies unconditionally (never gated by `protectedWrites`), mirroring this
+    function's own sibling `worktree-confinement` / `skill-promotion-path` /
+    `skill-ledger-write` treatment -- an unresolvable identity input is a
+    strictly worse signal than any of those, not a lesser one.
+
+    Deliberately does NOT pass `project_root=None` into any identity-anchored
+    predicate as a fallback: that is the ADR-0033/0035 foreign-identity bug
+    (`project_dir()`/`CLAUDE_PROJECT_DIR`), and silently substituting an
+    unrelated project's protected-path set is worse than not checking."""
+    try:
+        writes_something = _command_has_any_write_target(command)
+    except Exception:
+        # Detector failure on an ALREADY-anomalous payload: fail closed.
+        writes_something = True
+
+    if not writes_something:
+        # Narrowed on purpose (DD-5, anti-over-restriction): this handler's
+        # entire mandate is write protection. A read-only command has no
+        # write for an unresolvable cwd to hide, so denying it would be pure
+        # over-restriction outside this function's remit.
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard",
+                "tool_name": "Bash",
+                "cwd": f"<unresolvable:{cwd_raw!r}>",
+                "command": command,
+                "decision": "audit",
+                "reason": "unresolvable-cwd-no-write-target",
+                "error": repr(exc),
+            },
+        )
+        return 0
+
+    log_event(
+        "plugin_pretooluse_guard",
+        {
+            "event": "pretool_guard",
+            "tool_name": "Bash",
+            "cwd": f"<unresolvable:{cwd_raw!r}>",
+            "command": command,
+            "decision": "deny",
+            "reason": "unresolvable-cwd-with-write-target",
+            "error": repr(exc),
+        },
+    )
+    pretool_deny(
+        "CRAFTFLOW plugin hook blocked a Bash command that writes to a file "
+        "while the session's working directory could not be resolved "
+        "(reason: unresolvable-cwd-with-write-target). Every protected-path "
+        "and confinement check in this guard is anchored to the resolved "
+        "cwd, so no write can be checked at all in this state and is denied "
+        "rather than allowed unchecked. Read-only commands are unaffected. "
+        "If this is intentional, run it manually outside the agent session."
+    )
+    return 0
+
+
 def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     command = tool_input.get("command")
     if not command or not isinstance(command, str):
@@ -2290,7 +2378,14 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     cwd_raw = data.get("cwd")
     if not cwd_raw:
         return 0
-    cwd = Path(cwd_raw).resolve()
+    # ADR 0035 deferred crash bug, site 2 -- see
+    # `_handle_bash_unresolvable_cwd()` for the full reasoning. `if not
+    # cwd_raw: return 0` above is deliberately unchanged (DD-4): a MISSING
+    # cwd is a different, already-disclosed non-goal from an UNRESOLVABLE one.
+    try:
+        cwd = Path(cwd_raw).resolve()
+    except Exception as exc:
+        return _handle_bash_unresolvable_cwd(data, command, cwd_raw, exc)
 
     # REM-FIX (live-reproduced CRITICAL): latest_live_workflow_payload() only guarantees
     # valid JSON was parsed -- NOT that the top level is a dict. Wrap the derived reads in
