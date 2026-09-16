@@ -20072,6 +20072,86 @@ def test_decision_record_exists_for_workspace_membership() -> None:
     ok(name)
 
 
+def test_hooklib_workflows_dir_project_root_override_and_no_side_effect(tmp_dir: Path) -> None:
+    # ADR 0033 deferred-sibling fix, DD-2: `state_root()`/`workflows_dir()` call
+    # .mkdir() on their OWN project's tree, which is correct for a process
+    # operating on itself. A CALLER-SUPPLIED root must never inherit that side
+    # effect -- otherwise every PreToolUse invocation would create
+    # <payload-cwd>/.craftflow/state/workflows/ in every project the user
+    # touches, including projects that have never used craftflow. Mirrors the
+    # rule `memory_finalize_permit_path()`'s docstring already states verbatim.
+    name = "hooklib/workflows-dir-project-root-override-and-no-side-effect"
+    supplied = tmp_dir / "supplied-root"
+    supplied.mkdir(parents=True, exist_ok=True)
+
+    # (a) override selects the supplied root
+    got = hooklib.workflows_dir(project_root=supplied)
+    expected = supplied / ".craftflow" / "state" / "workflows"
+    if got != expected:
+        fail(name, f"override: expected {expected}, got {got}")
+        return
+
+    # (b) NO side effect: the supplied tree is still empty
+    leftovers = sorted(p.name for p in supplied.iterdir())
+    if leftovers:
+        fail(name, f"supplying project_root created filesystem entries: {leftovers!r}")
+        return
+
+    # (c) omitting project_root preserves today's behavior exactly, INCLUDING
+    #     its mkdir side effect on the process's own project.
+    own = tmp_dir / "own-root"
+    own.mkdir(parents=True, exist_ok=True)
+    prev = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(own)
+    try:
+        default_got = hooklib.workflows_dir()
+    finally:
+        if prev is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = prev
+    if default_got != own / ".craftflow" / "state" / "workflows":
+        fail(name, f"default path changed: got {default_got}")
+        return
+    if not default_got.is_dir():
+        fail(name, "default (no project_root) call must still create its own project's tree")
+        return
+    ok(name)
+
+
+def test_hooklib_latest_live_workflow_payload_project_root_selects_supplied_project(tmp_dir: Path) -> None:
+    # The bug-1 chain: latest_live_workflow_payload -> read_latest_live_workflow_state
+    # -> latest_live_workflow_file -> workflows_dir. With CLAUDE_PROJECT_DIR and the
+    # supplied project_root diverged, the payload returned must come from the
+    # SUPPLIED root's workflows dir, never the env-derived one.
+    name = "hooklib/latest-live-workflow-payload-project-root-selects-supplied-project"
+    env_proj = tmp_dir / "env-proj"
+    cwd_proj = tmp_dir / "cwd-proj"
+    for proj, uuid in ((env_proj, "wf-env"), (cwd_proj, "wf-cwd")):
+        wf_dir = proj / ".craftflow" / "state" / "workflows"
+        wf_dir.mkdir(parents=True, exist_ok=True)
+        (wf_dir / f"{uuid}.json").write_text(
+            json.dumps({"workflow_uuid": uuid, "worktree_path": None}), encoding="utf-8"
+        )
+    prev = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(env_proj)
+    try:
+        got = hooklib.latest_live_workflow_payload(None, project_root=cwd_proj)
+        default = hooklib.latest_live_workflow_payload(None)
+    finally:
+        if prev is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = prev
+    if got.get("workflow_uuid") != "wf-cwd":
+        fail(name, f"project_root override: expected wf-cwd, got {got.get('workflow_uuid')!r}")
+        return
+    if default.get("workflow_uuid") != "wf-env":
+        fail(name, f"omitted project_root must preserve env-derived selection; got {default.get('workflow_uuid')!r}")
+        return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -21146,6 +21226,11 @@ def main() -> int:
     print()
     print("[ Phase 5: decision is durable (ADR recorded) ]")
     test_decision_record_exists_for_workspace_membership()
+
+    print()
+    print("[ hooklib: Phase 3 -- side-effect-free project_root on the live-workflow lookup chain ]")
+    test_hooklib_workflows_dir_project_root_override_and_no_side_effect(tmp / "idm4")
+    test_hooklib_latest_live_workflow_payload_project_root_selects_supplied_project(tmp / "idm5")
 
     print()
     if _errors:

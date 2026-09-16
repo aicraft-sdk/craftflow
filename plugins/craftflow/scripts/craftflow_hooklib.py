@@ -89,13 +89,32 @@ def plugin_config_dir() -> Path:
     return plugin_root() / "config"
 
 
-def state_root() -> Path:
+def state_root(project_root: "Path | None" = None) -> Path:
+    """`.craftflow/state` for this process's own project, or -- when
+    `project_root` is given -- for that SPECIFIC project identity.
+
+    DD-2 (side-effect boundary): the caller-supplied branch NEVER calls
+    `.mkdir()`. `project_dir()`-derived roots are this process's own project,
+    where eagerly creating the state tree is correct and already relied upon.
+    A caller-supplied root is an ARBITRARY directory (e.g. a PreToolUse
+    payload's `cwd`, which may be any project the user happens to be in), and
+    computing a path for a confinement DECISION must never have a
+    directory-creation side effect -- exactly the rule
+    `memory_finalize_permit_path()` already documents for its own optional
+    `root` branch.
+    """
+    if project_root is not None:
+        return project_root / ".craftflow" / "state"
     path = project_dir() / ".craftflow" / "state"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def workflows_dir() -> Path:
+def workflows_dir(project_root: "Path | None" = None) -> Path:
+    """`.craftflow/state/workflows`. See `state_root()` for the DD-2
+    side-effect boundary: no `.mkdir()` when `project_root` is supplied."""
+    if project_root is not None:
+        return state_root(project_root) / "workflows"
     path = state_root() / "workflows"
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -399,12 +418,22 @@ def read_latest_workflow_state() -> Tuple[Dict[str, Any], Path | None, str | Non
         return {}, latest, exc.__class__.__name__
 
 
-def latest_live_workflow_payload(session_id: str | None = None) -> Dict[str, Any]:
-    payload, _, _ = read_latest_live_workflow_state(session_id)
+def latest_live_workflow_payload(
+    session_id: str | None = None, project_root: "Path | None" = None
+) -> Dict[str, Any]:
+    """`project_root`, when given, anchors the workflow-artifact lookup to that
+    SPECIFIC project identity instead of this process's environment-derived one
+    (`project_dir()`'s `CLAUDE_PROJECT_DIR` / `Path.cwd()`). Every
+    write-confinement-sensitive caller MUST pass the trusted `PreToolUse`
+    payload `cwd` -- otherwise the `worktree_path` this returns belongs to an
+    UNRELATED project's workflow and is handed to `resolve_confinement()` as a
+    write grant, a real, live-reproduced cross-project bypass (ADR 0033
+    deferred sibling)."""
+    payload, _, _ = read_latest_live_workflow_state(session_id, project_root=project_root)
     return payload
 
 
-def latest_live_workflow_file(session_id: str | None = None) -> Path | None:
+def latest_live_workflow_file(session_id: str | None = None, project_root: "Path | None" = None) -> Path | None:
     """Select the workflow artifact JSON this hook invocation should treat
     as "the active workflow" for confinement purposes.
 
@@ -481,9 +510,15 @@ def latest_live_workflow_file(session_id: str | None = None) -> Path | None:
         .craftflow/state/workflows/ corpus, 2026-08-18; comparable to the
         ~306ms this repo's own investigation already treated as an
         acceptable per-invocation cost for a security-relevant lookup),
-        for this path only."""
+        for this path only.
+
+    `project_root`: see `latest_live_workflow_payload()`. Selects WHICH
+    project's `.craftflow/state/workflows/` directory is scanned. Everything
+    below -- the two-tier session/liveness selection, the
+    `_LATEST_WORKFLOW_SCAN_WINDOW` bound, and the widen-past-window fallback --
+    is unchanged; only the directory being globbed differs."""
     candidates = sorted(
-        workflows_dir().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+        workflows_dir(project_root).glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
     )
     if not candidates:
         return None
@@ -524,8 +559,9 @@ def latest_live_workflow_file(session_id: str | None = None) -> Path | None:
 
 def read_latest_live_workflow_state(
     session_id: str | None = None,
+    project_root: "Path | None" = None,
 ) -> Tuple[Dict[str, Any], Path | None, str | None]:
-    latest = latest_live_workflow_file(session_id)
+    latest = latest_live_workflow_file(session_id, project_root=project_root)
     if latest is None:
         return {}, None, None
     try:
