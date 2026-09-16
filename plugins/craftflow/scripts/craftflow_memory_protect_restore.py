@@ -33,7 +33,7 @@ def _load_blocks(orig_key: str) -> dict[str, str]:
     if not index_path.exists():
         return {}
     try:
-        return json.loads(index_path.read_text(encoding="utf-8"))
+        parsed = json.loads(index_path.read_text(encoding="utf-8"))
     except Exception as exc:
         # REM-FIX (silent-failure-hunter re-hunt, cycle 3, HIGH): every other
         # except branch in this file logs the degradation; this one was
@@ -51,6 +51,29 @@ def _load_blocks(orig_key: str) -> dict[str, str]:
             },
         )
         return {}
+    # REM-FIX (REM-FIX cycle 4, CRITICAL, both reviewer and hunter
+    # independently live-reproduced): this function is type-hinted
+    # `-> dict[str, str]` but the hint is not runtime-enforced. Syntactically
+    # VALID JSON that is NOT a dict (a top-level array, string, number, null,
+    # or a dict with non-string values) sailed past json.loads() untouched --
+    # no exception, guard never engaged. `restore_file()`'s `blocks.get(...)`
+    # then crashed with AttributeError (or `re.sub()`'s replacement crashed
+    # with TypeError on a non-string value). Live-reproduced: a top-level
+    # array crashes with `AttributeError: 'list' object has no attribute
+    # 'get'`, exit 1.
+    if not isinstance(parsed, dict) or not all(isinstance(v, str) for v in parsed.values()):
+        log_event(
+            "plugin_memory_protect_restore",
+            {
+                "event": "memory_protect_restore",
+                "path": repr(str(index_path))[:512],
+                "decision": "skip",
+                "reason": "unresolvable-protect-restore-blocks-index-type",
+                "error": repr(type(parsed).__name__),
+            },
+        )
+        return {}
+    return parsed
 
 
 def _sha1_key(path: Path) -> str:
@@ -129,7 +152,13 @@ def restore_file(target: Path) -> bool:
                         "event": "memory_protect_restore",
                         "path": repr(str(target))[:512],
                         "decision": "skip",
-                        "reason": "unresolvable-protect-restore-write",
+                        # REM-FIX (REM-FIX cycle 4, MEDIUM): this reason was
+                        # previously identical to the block-substitution
+                        # write-back below ("unresolvable-protect-restore-write"),
+                        # making the two write-back failure paths
+                        # indistinguishable in the structured log. Distinct
+                        # reason for the .orig-fallback path.
+                        "reason": "unresolvable-protect-restore-write-fallback",
                         "error": repr(exc),
                     },
                 )
@@ -159,7 +188,13 @@ def restore_file(target: Path) -> bool:
                 "event": "memory_protect_restore",
                 "path": repr(str(target))[:512],
                 "decision": "skip",
-                "reason": "unresolvable-protect-restore-write",
+                # REM-FIX (REM-FIX cycle 4, MEDIUM): this reason was
+                # previously identical to the .orig-fallback write-back above
+                # ("unresolvable-protect-restore-write"), making the two
+                # write-back failure paths indistinguishable in the
+                # structured log. Distinct reason for the block-substitution
+                # path.
+                "reason": "unresolvable-protect-restore-write-substitution",
                 "error": repr(exc),
             },
         )

@@ -580,8 +580,11 @@ def test_memory_protect_restore_readonly_orig_fallback_writeback_skips_instead_o
         return
 
     log_text = log_path.read_text(encoding="utf-8")
-    if "unresolvable-protect-restore-write" not in log_text:
-        fail(name, f"expected a logged 'unresolvable-protect-restore-write' reason, got: {log_text!r}")
+    # REM-FIX cycle 4: the .orig-fallback and block-substitution write-back
+    # guards now log distinct reasons instead of sharing
+    # "unresolvable-protect-restore-write" -- this is the .orig-fallback path.
+    if "unresolvable-protect-restore-write-fallback" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-write-fallback' reason, got: {log_text!r}")
         return
     ok(name)
 
@@ -630,8 +633,12 @@ def test_memory_protect_restore_readonly_block_writeback_skips_instead_of_crashi
         return
 
     log_text = log_path.read_text(encoding="utf-8")
-    if "unresolvable-protect-restore-write" not in log_text:
-        fail(name, f"expected a logged 'unresolvable-protect-restore-write' reason, got: {log_text!r}")
+    # REM-FIX cycle 4: the .orig-fallback and block-substitution write-back
+    # guards now log distinct reasons instead of sharing
+    # "unresolvable-protect-restore-write" -- this is the block-substitution
+    # path.
+    if "unresolvable-protect-restore-write-substitution" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-write-substitution' reason, got: {log_text!r}")
         return
     ok(name)
 
@@ -675,6 +682,102 @@ def test_memory_protect_restore_corrupt_blocks_index_is_logged(tmp_dir: Path) ->
     log_text = log_path.read_text(encoding="utf-8")
     if "unresolvable-protect-restore-blocks-index" not in log_text:
         fail(name, f"expected a logged 'unresolvable-protect-restore-blocks-index' reason, got: {log_text!r}")
+        return
+    ok(name)
+
+
+def test_memory_protect_restore_non_dict_blocks_index_skips_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX cycle 4 (CRITICAL, both reviewer and hunter independently
+    live-reproduced): `_load_blocks()` is type-hinted `-> dict[str, str]` but
+    the hint is not runtime-enforced. Syntactically VALID JSON that is NOT a
+    dict (e.g. a top-level array) sails past `json.loads()`'s try/except
+    untouched and is returned as-is. Back in `restore_file()`,
+    `blocks.get(block_id, ...)` then crashes with `AttributeError: 'list'
+    object has no attribute 'get'`. Live-reproduced: exit 1."""
+    name = "memory-protect-restore/non-dict-blocks-index-skips-instead-of-crashing"
+    import hashlib
+
+    project = (tmp_dir / "non-dict-blocks-index-proj").resolve()
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    target = state_dir / "patterns.md"
+    target.write_text("<!-- CRAFTFLOW_BLOCK_aabbccddeeff -->\n", encoding="utf-8")
+
+    key = hashlib.sha1(str(target).encode("utf-8")).hexdigest()[:12]
+    cache_dir = project / ".craftflow" / ".memory-protect-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / f"{key}.blocks.json").write_text(
+        json.dumps(["not", "a", "dict"]), encoding="utf-8"
+    )
+
+    env = {"CLAUDE_PROJECT_DIR": str(project)}
+    payload = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target)},
+    }
+    code, _ = run_hook("craftflow_memory_protect_restore.py", payload, env)
+    if code != 0:
+        fail(name, f"hook crashed (exit {code}) on a non-dict blocks.json (top-level array) instead of degrading safely")
+        return
+
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, "expected craftflow-hook-events.log to record the non-dict blocks index, but no log file was written")
+        return
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-protect-restore-blocks-index-type" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-blocks-index-type' reason, got: {log_text!r}")
+        return
+    ok(name)
+
+
+def test_memory_protect_restore_non_string_valued_blocks_index_skips_instead_of_crashing(
+    tmp_dir: Path,
+) -> None:
+    """Companion sibling to the array case above: a `.blocks.json` that IS a
+    dict but has a non-string value (e.g. an int) satisfies `isinstance(...,
+    dict)` yet still violates the `dict[str, str]` type hint. `replace_block()`
+    passes that value straight into `re.sub()`'s replacement, which crashes
+    with `TypeError: expected str instance, int found`."""
+    name = "memory-protect-restore/non-string-valued-blocks-index-skips-instead-of-crashing"
+    import hashlib
+
+    project = (tmp_dir / "non-string-valued-blocks-index-proj").resolve()
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    target = state_dir / "patterns.md"
+    target.write_text("<!-- CRAFTFLOW_BLOCK_aabbccddeeff -->\n", encoding="utf-8")
+
+    key = hashlib.sha1(str(target).encode("utf-8")).hexdigest()[:12]
+    cache_dir = project / ".craftflow" / ".memory-protect-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / f"{key}.blocks.json").write_text(
+        json.dumps({"aabbccddeeff": 12345}), encoding="utf-8"
+    )
+
+    env = {"CLAUDE_PROJECT_DIR": str(project)}
+    payload = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target)},
+    }
+    code, _ = run_hook("craftflow_memory_protect_restore.py", payload, env)
+    if code != 0:
+        fail(name, f"hook crashed (exit {code}) on a blocks.json with a non-string value instead of degrading safely")
+        return
+
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        fail(name, "expected craftflow-hook-events.log to record the non-string-valued blocks index, but no log file was written")
+        return
+    log_text = log_path.read_text(encoding="utf-8")
+    if "unresolvable-protect-restore-blocks-index-type" not in log_text:
+        fail(name, f"expected a logged 'unresolvable-protect-restore-blocks-index-type' reason, got: {log_text!r}")
         return
     ok(name)
 
@@ -21206,6 +21309,11 @@ def main() -> int:
         test_memory_protect_restore_malformed_stdin_json_is_logged(tmp / "r11")
         test_memory_protect_restore_non_dict_stdin_json_skips_instead_of_crashing(tmp / "r12")
         test_memory_protect_restore_non_dict_tool_input_skips_instead_of_crashing(tmp / "r13")
+
+        print()
+        print("[ memory-protect-restore: REM-FIX cycle 4 (_load_blocks() JSON type validation gap) ]")
+        test_memory_protect_restore_non_dict_blocks_index_skips_instead_of_crashing(tmp / "r14")
+        test_memory_protect_restore_non_string_valued_blocks_index_skips_instead_of_crashing(tmp / "r15")
 
         print()
         print("[ pretooluse-guard ]")
