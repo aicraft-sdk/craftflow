@@ -6,14 +6,14 @@
     "url": "https://github.com/delacruzd93"
   },
   "metadata": {
-    "description": "craftflow v1.5.0 — David's owned AI-development orchestration flow, continuously extended as part of ai-craft.",
-    "version": "1.5.0"
+    "description": "craftflow v1.6.0 — David's owned AI-development orchestration flow, continuously extended as part of ai-craft.",
+    "version": "1.6.0"
   },
   "plugins": [
     {
       "name": "craftflow",
       "description": "Owned orchestration flow for AI-assisted development: router-kernel routing, adversarial review, intent-interview gate, doubt-verifier, memory-protect hooks, SDD URL caching, TDD-first execution, and proof-of-work workflow artifacts.",
-      "version": "1.5.0",
+      "version": "1.6.0",
       "author": {
         "name": "David de la Cruz Gracia",
         "email": "delacruzd93@gmail.com",

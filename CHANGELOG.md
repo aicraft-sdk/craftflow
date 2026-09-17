@@ -8,6 +8,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.6.0] - 2026-09-16
+
+### Features
+
+- add side-effect-free project_root to the live-workflow lookup chain
+- collect workspace members in ai-first-setup provisioning interview
+- wire membership-gated workspace-tier memory grant into Edit/Write guard
+- add resolve_workspace_memory_paths with symlink-escape hardening
+- add continue-past-non-member discover_workspace_root() and workspace_memory_writable()
+- add is_workspace_member() multi-segment-capable ownership predicate
+- add workspace-config reader and multi-segment-capable member-path validator to hooklib
+
+### Fixes
+
+- decouple project_tier fallback from root_state in protected-path helpers
+- anchor memory-write permit check to trusted cwd, not CLAUDE_PROJECT_DIR
+- anchor memory-file and workflow-JSON protection to trusted payload cwd
+- skip foreign-workflow wf_uuid/phase log lookup when cwd unresolvable
+- anchor worktree_path resolution to trusted payload cwd
+- close skill-ledger literal drift risk, correct docstring inversion
+- anchor skill-ledger and skill-promotion protection to trusted payload cwd
+- anchor reliability-gates predicate to trusted payload cwd
+- anchor reliability-gates protection to trusted payload cwd
+- sweep remaining python3 -c string-interpolation bug in ai-first-setup Step 5
+- pass workspace_root/CRAFTFLOW_INSTALL as argv, not interpolated python -c strings
+- anchor memory-finalize permit check to cwd, not CLAUDE_PROJECT_DIR
+- is_workspace_member() must not log for the ordinary members-key-absent case (M-6)
+
+### Documentation
+
+- record ADR 0035 cwd-identity confinement fix
+- record ADR 0033 workspace membership allowlist
+- cross-reference workspace membership provisioning and lock router read-side divergence
+- document workspace membership boundary and read-side exemption
+- land agent-teams-ai borrowable-ideas research
+
+### Tests
+
+- cover B24 symlinked-requesting-path case; document no-outer-catch design choice
+- lock NUL-byte and duplicate/self-entry handling for is_workspace_member
+
+### Chores
+
+- land pending workspace changes (metrics dashboard, event-log host tagging, demo guide)
+
+### Other
+
+- docs+test(craftflow): close 2 re-review/re-hunt MEDIUM nits on is_workspace_member() logging discipline
+
 ## [1.5.0] - 2026-09-15
 
 ### Features
