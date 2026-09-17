@@ -22117,6 +22117,41 @@ def test_bash_guard_unrelated_unresolvable_target_does_not_hide_protected_redire
     ok(name)
 
 
+def test_bash_guard_permit_path_symlink_loop_does_not_bypass_protected_redirect_deny(
+    tmp_dir: Path,
+) -> None:
+    """Site 18 (ADR 0036): `main()`'s `protected_redirect_escapes` detection
+    loop calls `memory_finalize_permit_path(cwd).resolve()` fresh on EVERY
+    iteration, unguarded -- this is neither the loop's own per-target
+    `try/except` (that only wraps `resolve_confinement()` a few lines above)
+    nor the accumulator's own `.append()` call, which is exactly why it was
+    invisible to the structural AST detector hardened for site 16 (built to
+    recognize accumulator-call shapes, not arbitrary risky calls elsewhere in
+    the loop body). Live-reproduced: planting a self-referential symlink AT
+    the permit-path location itself (`.craftflow/state/.memory-finalize`)
+    makes `.resolve()` raise `RuntimeError: Symlink loop`, which propagates
+    past the per-target guard up to `main()`'s own function-level `except`,
+    abandoning the REST of the double for-loop -- so a genuinely protected
+    redirect write in a LATER (or even the same) target is silently
+    ALLOWED."""
+    name = "pretooluse-bash-guard/permit-path-symlink-loop-does-not-bypass-protected-redirect-deny"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    permit_path = project_root / ".craftflow" / "state" / ".memory-finalize"
+    os.symlink(permit_path, permit_path)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo PWNED > .craftflow/state/project/patterns.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(name, f"BYPASS: a genuinely protected redirect write was allowed because the permit-path symlink loop raised out of the whole detection loop; stdout={out!r}")
+        return
+    ok(name)
+
+
 def test_hooklib_load_input_non_utf8_stdin_degrades_instead_of_crashing(
     tmp_dir: Path,
 ) -> None:
@@ -24519,6 +24554,10 @@ def main() -> int:
     test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_reliability_gates_violation(tmp / "res2q")
     test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_cp_mv_write_violation(tmp / "res2s")
     test_bash_guard_unrelated_unresolvable_target_does_not_hide_protected_redirect_escape(tmp / "res2r")
+
+    print()
+    print("[ pretooluse-bash-guard: REM-FIX (silent-failure-hunter, ADR 0036 site 18) -- unguarded memory_finalize_permit_path().resolve() inside protected_redirect_escapes loop ]")
+    test_bash_guard_permit_path_symlink_loop_does_not_bypass_protected_redirect_deny(tmp / "res2t")
 
     print()
     print("[ pretooluse-guard: REM-FIX cycle 7 -- unresolvable-cwd detector missed the os.system/subprocess/shutil write-mechanism bypass ]")

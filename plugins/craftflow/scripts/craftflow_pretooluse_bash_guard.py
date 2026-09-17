@@ -1829,6 +1829,26 @@ def main() -> int:
             },
         )
     else:
+        # REM-FIX (live-reproduced CRITICAL, ADR 0036 site 18): this used to
+        # call `memory_finalize_permit_path(cwd).resolve()` fresh on EVERY
+        # loop iteration below, unguarded -- neither the per-target
+        # `try/except` around `resolve_confinement()` nor the accumulator's
+        # own `.append()` call covered it, so it was invisible to the
+        # structural AST detector hardened for site 16 (built to recognize
+        # accumulator-call shapes, not arbitrary risky calls elsewhere in the
+        # loop body). A self-referential symlink planted AT the permit-path
+        # location itself raised `RuntimeError: Symlink loop` out of this
+        # entire double for-loop, up to the function-level `except` below,
+        # abandoning every remaining target for every other subcommand --
+        # the same all-or-nothing-loop bug class this whole ADR closes.
+        # Mirrors the identical hoist-and-guard pattern already established
+        # in the sibling `craftflow_pretooluse_guard.py`'s `_handle_bash`:
+        # compute once, degrade to `None` on failure, and guard the
+        # comparison below with `permit_path is not None`.
+        try:
+            permit_path = memory_finalize_permit_path(cwd).resolve()
+        except Exception:
+            permit_path = None
         try:
             for tokens in split_subcommands(command):
                 for target in _redirect_targets_in_tokens(tokens):
@@ -1862,7 +1882,8 @@ def main() -> int:
                     if not _is_protected_redirect_target(resolved, project_root=cwd):
                         continue
                     if (
-                        resolved == memory_finalize_permit_path(cwd).resolve()
+                        permit_path is not None
+                        and resolved == permit_path
                         and matches_memory_finalize_permit_shape(tokens)
                     ):
                         continue
