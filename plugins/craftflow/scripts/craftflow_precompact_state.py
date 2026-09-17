@@ -131,7 +131,7 @@ def _narrative_digest(timeout: float = PRECOMPACT_NARRATIVE_DIGEST_TIMEOUT_SECON
     return digest
 
 
-def _build_snapshot(payload: dict, trigger: str, context_usage) -> dict:
+def _build_snapshot(payload: dict, trigger: str, context_usage, narrative_digest=None) -> dict:
     """Pure snapshot-shape builder (isolated for direct unit testing)."""
     wf = payload.get("workflow_uuid") or payload.get("workflow_id")
     return {
@@ -147,6 +147,10 @@ def _build_snapshot(payload: dict, trigger: str, context_usage) -> dict:
         # fired). None when tokentracker is unavailable/failed -- never
         # blocks the snapshot itself.
         "context_usage": context_usage,
+        # Best-effort narrative digest (Current Focus/Next Steps/recent
+        # Decisions from activeContext.md), computed by _narrative_digest().
+        # None on any failure -- never blocks the snapshot itself.
+        "narrative_digest": narrative_digest,
     }
 
 
@@ -168,7 +172,12 @@ def main() -> int:
     except Exception:
         context_usage = None
 
-    snapshot = _build_snapshot(payload, data.get("trigger", "auto"), context_usage)
+    try:
+        narrative_digest = _narrative_digest()
+    except Exception:
+        narrative_digest = None
+
+    snapshot = _build_snapshot(payload, data.get("trigger", "auto"), context_usage, narrative_digest)
     try:
         out = state_root() / "precompact-state.json"
         out.write_text(json.dumps(snapshot, ensure_ascii=True), encoding="utf-8")

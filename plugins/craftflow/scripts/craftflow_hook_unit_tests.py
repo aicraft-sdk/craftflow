@@ -16958,6 +16958,53 @@ def test_precompact_narrative_digest_handles_bulleted_section_fallback(tmp_dir: 
     ok(name)
 
 
+def test_precompact_build_snapshot_includes_narrative_digest_when_available() -> None:
+    name = "precompact-state/build-snapshot-includes-narrative-digest"
+    payload = {
+        "workflow_uuid": "wf-test-pc-3",
+        "workflow_type": "BUILD",
+        "phase_cursor": "phase_1",
+        "phase_status": {},
+        "plan_file": None,
+    }
+    digest = "## Current Focus\n[2026-09-17] Something."
+    snapshot = precompact_state._build_snapshot(payload, "auto", None, digest)
+    if snapshot.get("narrative_digest") != digest:
+        fail(name, f"expected narrative_digest={digest!r} in snapshot; got {snapshot.get('narrative_digest')!r}")
+        return
+    ok(name)
+
+
+def test_precompact_build_snapshot_narrative_digest_none_when_unavailable() -> None:
+    name = "precompact-state/build-snapshot-narrative-digest-none-when-unavailable"
+    payload = {
+        "workflow_uuid": "wf-test-pc-4",
+        "workflow_type": "BUILD",
+        "phase_cursor": "phase_1",
+        "phase_status": {},
+        "plan_file": None,
+    }
+    snapshot = precompact_state._build_snapshot(payload, "auto", None, None)
+    if snapshot.get("narrative_digest") is not None:
+        fail(name, f"expected narrative_digest=None; got {snapshot.get('narrative_digest')!r}")
+        return
+    ok(name)
+
+
+def test_precompact_build_snapshot_narrative_digest_defaults_to_none_when_omitted() -> None:
+    # Backward-compat: any other existing/future caller invoking
+    # _build_snapshot() with only the original 3 positional args (payload,
+    # trigger, context_usage) must not crash -- the new parameter has a
+    # default.
+    name = "precompact-state/build-snapshot-narrative-digest-defaults-to-none"
+    payload = {"workflow_uuid": "wf-test-pc-5", "workflow_type": "BUILD", "phase_cursor": "phase_1", "phase_status": {}, "plan_file": None}
+    snapshot = precompact_state._build_snapshot(payload, "auto", None)
+    if snapshot.get("narrative_digest") is not None:
+        fail(name, f"expected narrative_digest=None by default; got {snapshot.get('narrative_digest')!r}")
+        return
+    ok(name)
+
+
 def test_precompact_context_usage_budget_stays_under_registered_hook_timeout() -> None:
     # Drift-guard, mirroring craftflow_hook_selfcheck.py's own
     # test_selfcheck_internal_budget_stays_under_registered_hook_timeout: ties
@@ -24446,6 +24493,12 @@ def main() -> int:
     test_precompact_narrative_digest_none_on_malformed_headings(tmp / "pcd4")
     test_precompact_narrative_digest_respects_char_cap_and_truncation_marker(tmp / "pcd5")
     test_precompact_narrative_digest_handles_bulleted_section_fallback(tmp / "pcd6")
+
+    print()
+    print("[ precompact-state: narrative digest — Task 1.3 _build_snapshot() wiring ]")
+    test_precompact_build_snapshot_includes_narrative_digest_when_available()
+    test_precompact_build_snapshot_narrative_digest_none_when_unavailable()
+    test_precompact_build_snapshot_narrative_digest_defaults_to_none_when_omitted()
 
     print()
     print("[ context-usage (Thread E — craftflow's own context awareness) ]")
