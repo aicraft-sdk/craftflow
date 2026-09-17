@@ -21658,6 +21658,73 @@ def test_pretooluse_guard_bash_resolvable_cwd_unaffected_by_resolve_guard(
     ok(name)
 
 
+def test_pretooluse_guard_one_unresolvable_memory_file_does_not_unprotect_the_others(
+    tmp_dir: Path,
+) -> None:
+    """NEW live-reproduced CRITICAL ([CHECKPOINT-1]): `_protected_memory_paths()`
+    built its root-state entries with an all-or-nothing set comprehension inside
+    one try, so a self-symlink at ANY one of the three memory files dropped ALL
+    THREE from the protected set -- a silent write bypass (not a crash)."""
+    name = "pretooluse-guard/one-unresolvable-memory-file-does-not-unprotect-the-others"
+    project = tmp_dir / "partial-memory-proj"
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    (state_dir / "patterns.md").write_text("x\n", encoding="utf-8")
+    (state_dir / "progress.md").write_text("x\n", encoding="utf-8")
+    loop = state_dir / "activeContext.md"
+    os.symlink(loop, loop)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    code, out = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Write",
+            "session_id": "wf-partial-memory",
+            "cwd": str(project),
+            "tool_input": {"file_path": str(state_dir / "progress.md")},
+        },
+        env,
+    )
+    if not _deny_out(out):
+        fail(name, f"BYPASS: progress.md lost its protection because a SIBLING memory file was unresolvable; exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_one_unresolvable_memory_file_does_not_unprotect_bash_writes(
+    tmp_dir: Path,
+) -> None:
+    """Same bypass via the Bash redirect lane, which reads the same
+    `_protected_memory_paths()`-derived set through
+    `_protected_bash_write_paths()`."""
+    name = "pretooluse-guard/one-unresolvable-memory-file-does-not-unprotect-bash-writes"
+    project = tmp_dir / "partial-memory-bash-proj"
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    (state_dir / "patterns.md").write_text("x\n", encoding="utf-8")
+    (state_dir / "progress.md").write_text("x\n", encoding="utf-8")
+    loop = state_dir / "activeContext.md"
+    os.symlink(loop, loop)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    code, out = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-partial-memory-bash",
+            "cwd": str(project),
+            "tool_input": {"command": "echo hi > .craftflow/state/progress.md"},
+        },
+        env,
+    )
+    if not _deny_out(out):
+        fail(name, f"BYPASS via Bash redirect; exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
 def test_hooklib_load_input_non_utf8_stdin_degrades_instead_of_crashing(
     tmp_dir: Path,
 ) -> None:
@@ -23395,6 +23462,11 @@ def main() -> int:
     test_pretooluse_guard_bash_unresolvable_cwd_denies_write_command(tmp / "res2a")
     test_pretooluse_guard_bash_unresolvable_cwd_allows_read_only_command(tmp / "res2b")
     test_pretooluse_guard_bash_resolvable_cwd_unaffected_by_resolve_guard(tmp / "res2c")
+
+    print()
+    print("[ pretooluse-guard: Phase 5 [CHECKPOINT-1] -- _protected_memory_paths per-file degradation, not all-or-nothing (live-reproduced write bypass) ]")
+    test_pretooluse_guard_one_unresolvable_memory_file_does_not_unprotect_the_others(tmp / "res2g")
+    test_pretooluse_guard_one_unresolvable_memory_file_does_not_unprotect_bash_writes(tmp / "res2h")
 
     print()
     print("[ pretooluse-guard: REM-FIX cycle 7 -- unresolvable-cwd detector missed the os.system/subprocess/shutil write-mechanism bypass ]")

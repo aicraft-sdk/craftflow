@@ -334,11 +334,31 @@ def _protected_memory_paths(project_root: "Path | None" = None) -> set:
     caller's OWN memory files are left unprotected (live-reproduced)."""
     paths: set = set()
     root_state = None
+    # [CHECKPOINT-1] (live-reproduced CRITICAL): this used to be an
+    # all-or-nothing set comprehension inside ONE try -- a single
+    # unresolvable member (e.g. a self-referential symlink planted at
+    # activeContext.md) aborted the whole comprehension and dropped ALL
+    # THREE memory files from the protected set, silently un-protecting
+    # patterns.md and progress.md for both Edit/Write and Bash redirects.
+    # Per-file now: one bad member costs only that member.
     try:
         root_state = state_root(project_root)
-        paths |= {(root_state / name).resolve() for name in PROTECTED_MEMORY_FILES}
     except Exception:
-        pass
+        root_state = None
+    if root_state is not None:
+        for name in PROTECTED_MEMORY_FILES:
+            try:
+                paths.add((root_state / name).resolve())
+            except Exception as exc:
+                log_event(
+                    "plugin_pretooluse_guard",
+                    {
+                        "event": "pretool_guard_parse_error",
+                        "command_name": "protected_memory_path_resolve",
+                        "error": repr(exc),
+                        "reason": "skipped_one_unresolvable_memory_path_only",
+                    },
+                )
     try:
         # REM-FIX (Phase 5 review, MEDIUM): compute project_tier independently
         # from project_root, not from root_state -- root_state is set inside a
@@ -352,9 +372,23 @@ def _protected_memory_paths(project_root: "Path | None" = None) -> set:
             if project_root is not None
             else project_state_dir()
         )
-        paths |= {(project_tier / name).resolve() for name in PROTECTED_MEMORY_FILES}
     except Exception:
-        pass
+        project_tier = None
+    # [CHECKPOINT-1] sibling fix: same all-or-nothing bug, same per-file cure.
+    if project_tier is not None:
+        for name in PROTECTED_MEMORY_FILES:
+            try:
+                paths.add((project_tier / name).resolve())
+            except Exception as exc:
+                log_event(
+                    "plugin_pretooluse_guard",
+                    {
+                        "event": "pretool_guard_parse_error",
+                        "command_name": "protected_memory_path_resolve",
+                        "error": repr(exc),
+                        "reason": "skipped_one_unresolvable_memory_path_only",
+                    },
+                )
     try:
         wf_dir = workflows_dir(project_root)
         for name in PROTECTED_MEMORY_FILES:
