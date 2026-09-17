@@ -17005,6 +17005,34 @@ def test_precompact_build_snapshot_narrative_digest_defaults_to_none_when_omitte
     ok(name)
 
 
+def test_precompact_state_hook_writes_narrative_digest_to_snapshot_file(tmp_dir: Path) -> None:
+    # End-to-end: run the real craftflow_precompact_state.py script as a
+    # subprocess (not a direct function call) against a real project_root
+    # with both a workflow artifact AND a real activeContext.md fixture,
+    # and assert the written precompact-state.json contains the digest.
+    name = "precompact-state/hook-writes-narrative-digest-to-snapshot-file"
+    project_root = tmp_dir / "wf7"
+    project_root.mkdir(parents=True)
+    _write_workflow_json_fixture_full(project_root, "wf-e2e-digest-1", None, worktree_mode="auto_created")
+    _write_active_context_fixture(project_root, {"Current Focus": "[2026-09-17] E2E digest marker text."})
+
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    exit_code, _ = run_hook("craftflow_precompact_state.py", {"trigger": "auto"}, env)
+    if exit_code != 0:
+        fail(name, f"expected exit 0; got {exit_code}")
+        return
+    snapshot_path = project_root / ".craftflow" / "state" / "precompact-state.json"
+    if not snapshot_path.exists():
+        fail(name, "expected precompact-state.json to be written")
+        return
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    digest = snapshot.get("narrative_digest")
+    if not digest or "E2E digest marker text" not in digest:
+        fail(name, f"expected narrative_digest to contain the fixture's marker text; got: {digest!r}")
+        return
+    ok(name)
+
+
 def test_precompact_context_usage_budget_stays_under_registered_hook_timeout() -> None:
     # Drift-guard, mirroring craftflow_hook_selfcheck.py's own
     # test_selfcheck_internal_budget_stays_under_registered_hook_timeout: ties
@@ -24499,6 +24527,10 @@ def main() -> int:
     test_precompact_build_snapshot_includes_narrative_digest_when_available()
     test_precompact_build_snapshot_narrative_digest_none_when_unavailable()
     test_precompact_build_snapshot_narrative_digest_defaults_to_none_when_omitted()
+
+    print()
+    print("[ precompact-state: narrative digest — Task 1.4 end-to-end hook-level test ]")
+    test_precompact_state_hook_writes_narrative_digest_to_snapshot_file(tmp / "pcd7")
 
     print()
     print("[ context-usage (Thread E — craftflow's own context awareness) ]")
