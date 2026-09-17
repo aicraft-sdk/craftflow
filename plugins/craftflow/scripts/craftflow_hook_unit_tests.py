@@ -17103,6 +17103,90 @@ def test_precompact_narrative_digest_budget_stays_under_registered_hook_timeout(
     ok(name)
 
 
+def test_read_precompact_snapshot_returns_dict_on_valid_file(tmp_dir: Path) -> None:
+    name = "hooklib/read-precompact-snapshot-valid-file"
+    project_root = tmp_dir / "rp1"
+    state_dir = project_root / ".craftflow" / "state"
+    state_dir.mkdir(parents=True)
+    snapshot = {"workflow_uuid": "wf-rp-1", "narrative_digest": "## Current Focus\nsomething"}
+    (state_dir / "precompact-state.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+    old_env = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(project_root)
+    try:
+        result = hooklib.read_precompact_snapshot()
+    finally:
+        if old_env is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = old_env
+    if result.get("workflow_uuid") != "wf-rp-1" or result.get("narrative_digest") != snapshot["narrative_digest"]:
+        fail(name, f"expected snapshot dict round-tripped; got: {result!r}")
+        return
+    ok(name)
+
+
+def test_read_precompact_snapshot_returns_empty_dict_on_missing_file(tmp_dir: Path) -> None:
+    name = "hooklib/read-precompact-snapshot-missing-file"
+    project_root = tmp_dir / "rp2"
+    project_root.mkdir(parents=True)
+    old_env = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(project_root)
+    try:
+        result = hooklib.read_precompact_snapshot()
+    finally:
+        if old_env is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = old_env
+    if result != {}:
+        fail(name, f"expected {{}} when precompact-state.json is missing; got: {result!r}")
+        return
+    ok(name)
+
+
+def test_read_precompact_snapshot_returns_empty_dict_on_malformed_json(tmp_dir: Path) -> None:
+    name = "hooklib/read-precompact-snapshot-malformed-json"
+    project_root = tmp_dir / "rp3"
+    state_dir = project_root / ".craftflow" / "state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "precompact-state.json").write_text("not valid json {{{", encoding="utf-8")
+    old_env = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(project_root)
+    try:
+        result = hooklib.read_precompact_snapshot()
+    finally:
+        if old_env is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = old_env
+    if result != {}:
+        fail(name, f"expected {{}} on malformed JSON; got: {result!r}")
+        return
+    ok(name)
+
+
+def test_read_precompact_snapshot_returns_empty_dict_on_non_dict_json(tmp_dir: Path) -> None:
+    name = "hooklib/read-precompact-snapshot-non-dict-json"
+    project_root = tmp_dir / "rp4"
+    state_dir = project_root / ".craftflow" / "state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "precompact-state.json").write_text("[1, 2, 3]", encoding="utf-8")
+    old_env = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(project_root)
+    try:
+        result = hooklib.read_precompact_snapshot()
+    finally:
+        if old_env is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = old_env
+    if result != {}:
+        fail(name, f"expected {{}} when JSON top level is not a dict; got: {result!r}")
+        return
+    ok(name)
+
+
 def test_postcompact_context_usage_budget_stays_under_registered_hook_timeout() -> None:
     # Companion drift-guard for the PostCompact side.
     name = "postcompact-context/context-usage-budget-under-registered-timeout"
@@ -24582,6 +24666,13 @@ def main() -> int:
     test_precompact_build_snapshot_context_usage_none_when_unavailable()
     test_postcompact_build_event_includes_context_usage_when_available()
     test_postcompact_build_event_context_usage_none_when_unavailable()
+
+    print()
+    print("[ precompact-snapshot read-side (craftflow_hooklib) ]")
+    test_read_precompact_snapshot_returns_dict_on_valid_file(tmp / "rp1")
+    test_read_precompact_snapshot_returns_empty_dict_on_missing_file(tmp / "rp2")
+    test_read_precompact_snapshot_returns_empty_dict_on_malformed_json(tmp / "rp3")
+    test_read_precompact_snapshot_returns_empty_dict_on_non_dict_json(tmp / "rp4")
 
     print()
     print("[ craftflow_memory_merge: CLI-level provenance smoke test ]")

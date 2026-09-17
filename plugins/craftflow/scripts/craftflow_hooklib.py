@@ -1032,6 +1032,22 @@ def pretool_deny(reason: str) -> None:
     )
 
 
+def read_precompact_snapshot() -> Dict[str, Any]:
+    """Best-effort read of precompact-state.json (written by
+    craftflow_precompact_state.py's PreCompact hook). Returns {} on any
+    failure -- missing file, malformed JSON, or a non-dict top level --
+    mirroring that hook's own never-raise, best-effort posture on the
+    write side."""
+    path = state_root() / "precompact-state.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
 def session_context(message: str) -> None:
     json_print(
         {
