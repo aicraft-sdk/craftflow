@@ -22765,11 +22765,31 @@ def _for_loops_directly_in_try_body(stmts: list) -> "list[ast.For | ast.AsyncFor
     return found
 
 
+def _accumulator_identity(node: "ast.expr") -> str | None:
+    """Return a stable string identity for a bare `Name` (`"violations"`)
+    or a simple `Attribute` chain rooted at a `Name`
+    (`self.violations` -> `"self.violations"`, arbitrary depth) -- so a
+    local-variable accumulator and a self/instance-attribute accumulator
+    (`self.violations.append(...)`, `self.attr.setdefault(...).append(...)`,
+    `self.attr |= {...}`) are recognized as the SAME kind of accumulator
+    shape by the rest of this detector (final hardening round, HIGH #1).
+    Returns `None` for any other expression shape (e.g. a subscript or a
+    call), since those are not stable, nameable accumulator identities."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _accumulator_identity(node.value)
+        if base is None:
+            return None
+        return f"{base}.{node.attr}"
+    return None
+
+
 def _for_loop_accumulator_name(for_node: "ast.For | ast.AsyncFor | ast.While") -> str | None:
-    """Return the accumulator variable/dict name if `for_node`'s body
-    (anywhere, full depth) uses one of the accumulation shapes this bug
-    class has actually used across all known sites plus the hardening-pass
-    blind spots:
+    """Return the accumulator variable/dict/attribute identity if
+    `for_node`'s body (anywhere, full depth) uses one of the accumulation
+    shapes this bug class has actually used across all known sites plus
+    the hardening-pass blind spots:
 
     - `<Name>.append(...)` / `<Name>.add(...)`
     - `<Name>.setdefault(key, default).append(...)` / `...add(...)`
@@ -22778,76 +22798,129 @@ def _for_loop_accumulator_name(for_node: "ast.For | ast.AsyncFor | ast.While") -
       used to BUILD a protected-path set; `+=` added in the hardening pass)
     - `d[k] = d.get(k, ...) + ...` subscript-assignment merge (REM-FIX
       hardening pass)
+    - any of the above with a self/instance-attribute receiver instead of
+      a bare `Name` (`self.violations.append(...)`,
+      `self.attr.setdefault(...).append(...)`, `self.attr |= {...}`,
+      `self.d[k] = self.d.get(k, ...) + ...` -- final hardening round,
+      HIGH #1), via `_accumulator_identity`.
 
-    Returns the FIRST match found; good enough to name a violation, not
-    intended as an exhaustive list of every accumulator a loop might
-    touch."""
+    Checked in three ORDERED passes over the full node set, most specific
+    first, rather than a single mixed-priority walk (final hardening
+    round: once `_for_loop_has_inner_try` began depending on the SPECIFIC
+    identity returned here -- not merely "is any Try present" -- a
+    same-loop, unrelated `AugAssign` (e.g. a bare counter `i += 1`
+    sitting beside the real `targets.append(...)` accumulator, or a
+    decoy-guarded counter beside an unguarded real accumulator call)
+    could win the old single-pass walk purely by BFS traversal-order
+    luck, returning the WRONG identity and corrupting the inner-try
+    check downstream. Ordering by specificity -- an explicit `.append`/
+    `.add`/`.setdefault(...).append(...)` call is stronger evidence of
+    "this is the accumulator" than a bare augmented assignment, which in
+    turn is stronger than a subscript-merge `Assign` -- removes the race
+    instead of only reshuffling which node type wins by luck. Returns the
+    FIRST match found within the first pass that finds one; good enough
+    to name a violation, not intended as an exhaustive list of every
+    accumulator a loop might touch."""
     for node in ast.walk(for_node):
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
             and node.func.attr in _ALL_OR_NOTHING_LOOP_ACCUMULATOR_METHODS
         ):
-            if isinstance(node.func.value, ast.Name):
-                return node.func.value.id
+            identity = _accumulator_identity(node.func.value)
+            if identity is not None:
+                return identity
             if (
                 isinstance(node.func.value, ast.Call)
                 and isinstance(node.func.value.func, ast.Attribute)
                 and node.func.value.func.attr == "setdefault"
-                and isinstance(node.func.value.func.value, ast.Name)
             ):
-                return node.func.value.func.value.id
+                identity = _accumulator_identity(node.func.value.func.value)
+                if identity is not None:
+                    return identity
+    for node in ast.walk(for_node):
         if (
             isinstance(node, ast.AugAssign)
             and isinstance(node.op, (ast.BitOr, ast.Add))
-            and isinstance(node.target, ast.Name)
         ):
-            return node.target.id
+            identity = _accumulator_identity(node.target)
+            if identity is not None:
+                return identity
+    for node in ast.walk(for_node):
         if (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Subscript)
-            and isinstance(node.targets[0].value, ast.Name)
             and isinstance(node.value, ast.BinOp)
             and isinstance(node.value.op, ast.Add)
         ):
-            dict_name = node.targets[0].value.id
-            for side in (node.value.left, node.value.right):
-                if (
-                    isinstance(side, ast.Call)
-                    and isinstance(side.func, ast.Attribute)
-                    and side.func.attr == "get"
-                    and isinstance(side.func.value, ast.Name)
-                    and side.func.value.id == dict_name
-                ):
-                    return dict_name
+            dict_identity = _accumulator_identity(node.targets[0].value)
+            if dict_identity is not None:
+                for side in (node.value.left, node.value.right):
+                    if (
+                        isinstance(side, ast.Call)
+                        and isinstance(side.func, ast.Attribute)
+                        and side.func.attr == "get"
+                        and _accumulator_identity(side.func.value) == dict_identity
+                    ):
+                        return dict_identity
     return None
 
 
-def _for_loop_has_inner_try(for_node: "ast.For | ast.AsyncFor") -> bool:
-    """True when `for_node`'s own body already contains a nested `Try`
-    anywhere -- the fix shape this REM-FIX applied at all 16 known sites:
-    the loop's own per-item risky call (e.g. `resolve_confinement()`) is
-    wrapped in its OWN try/except INSIDE the loop, so one bad item costs
-    only that item instead of aborting the whole loop."""
-    return any(isinstance(node, ast.Try) for node in ast.walk(for_node) if node is not for_node)
+def _for_loop_has_inner_try(for_node: "ast.For | ast.AsyncFor | ast.While", accumulator: str) -> bool:
+    """True when `for_node`'s own body contains a nested `Try` whose OWN
+    subtree resolves to the SAME `accumulator` identity via
+    `_for_loop_accumulator_name` -- i.e. a `Try` that actually wraps the
+    accumulator's own per-item call/statement, not merely "any `Try` node
+    exists somewhere in the loop" (final hardening round, MEDIUM: the old
+    "any Try anywhere" check produced a false negative for a DECOY inner
+    try guarding an unrelated statement -- e.g. a counter increment or a
+    logging call -- while the real accumulator call stayed unguarded)."""
+    for node in ast.walk(for_node):
+        if isinstance(node, ast.Try) and node is not for_node:
+            if _for_loop_accumulator_name(node) == accumulator:
+                return True
+    return False
 
 
 _COMPREHENSION_TYPES = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 
 
+_FILESYSTEM_RISKY_CALL_METHODS = ("resolve",)
+
+
 def _comprehension_has_risky_call(comp: "ast.expr") -> bool:
     """True when a comprehension's output expression (`elt`, or `key`/
-    `value` for a dict comprehension) contains a method call
-    (`<expr>.method(...)`) -- the shape of the original CHECKPOINT-1 bug
-    (`(root_state / name).resolve()` inside a set comprehension). A
-    comprehension with no method call in its output expression is treated
-    as plain data-shaping, not filesystem-risky, and is not flagged, to
-    avoid false positives."""
+    `value` for a dict comprehension) contains a `.resolve()` call
+    (`<expr>.resolve(...)`) -- the exact shape of the original
+    CHECKPOINT-1 bug (`(root_state / name).resolve()` inside a set
+    comprehension) and every real site and test fixture this detector
+    family covers. A comprehension with no `.resolve()` call in its
+    output expression is treated as plain data-shaping, not
+    filesystem-risky, and is not flagged, to avoid false positives.
+
+    REM-FIX (final hardening round): narrowed from "any method call
+    (`<expr>.method(...)`)" to specifically `.resolve()`. Widening the
+    plain-`Assign` shape (final hardening round, HIGH #2) exposed that a
+    generic "any attribute call" heuristic false-positives on ordinary,
+    benign "collect results via comprehension" code (e.g.
+    `observed = [hooklib.record_tool_call(...) for _ in range(6)]` inside
+    a bare `try` in this same test harness's own test bodies) -- a shape
+    with nothing to do with the filesystem-`.resolve()`-raising bug class
+    this whole detector family exists to catch. Every real fixed site in
+    ADR 0036 and every existing/new fixture in
+    `test_all_or_nothing_loop_detector_closes_known_blind_spots` already
+    uses `.resolve()`, so this narrowing loses no coverage against the
+    known bug class while removing the false-positive surface introduced
+    by widening the target statement shape."""
     targets = [comp.key, comp.value] if isinstance(comp, ast.DictComp) else [comp.elt]
     for target in targets:
         for node in ast.walk(target):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in _FILESYSTEM_RISKY_CALL_METHODS
+            ):
                 return True
     return False
 
@@ -22878,14 +22951,19 @@ def _statements_directly_in_try_body(stmts: list) -> list:
 def _comprehension_accumulator_violations_directly_in_try_body(stmts: list) -> "list[tuple[int, str]]":
     """Find comprehension-based accumulators (`ListComp`/`SetComp`/
     `DictComp`/`GeneratorExp`) that sit directly in a try body via
-    `paths |= {...}` / `paths += [...]` augassign, or
-    `paths.update({...})` / `paths.extend([...])` calls -- the ORIGINAL
-    all-or-nothing bug shape (CHECKPOINT-1's `_protected_memory_paths()`:
-    "this used to be an all-or-nothing set comprehension inside ONE
-    try"). Unlike a `for`/`while` loop, a comprehension can never contain
-    its own try/except (Python syntax), so any comprehension found here
-    that calls something risky is unconditionally unguarded per-item --
-    there is no equivalent of `_for_loop_has_inner_try` to check."""
+    `paths |= {...}` / `paths += [...]` augassign, `paths.update({...})` /
+    `paths.extend([...])` calls, or a PLAIN (non-augmented) `Assign` whose
+    value is one of the comprehension types (`paths = [(root / name)
+    .resolve() for name in names]` -- final hardening round, HIGH #2: a
+    MORE idiomatic assignment form carrying the identical CHECKPOINT-1 bug
+    shape that the augassign/`.update()`/`.extend()` checks alone missed).
+    This is the ORIGINAL all-or-nothing bug shape (CHECKPOINT-1's
+    `_protected_memory_paths()`: "this used to be an all-or-nothing set
+    comprehension inside ONE try"). Unlike a `for`/`while` loop, a
+    comprehension can never contain its own try/except (Python syntax), so
+    any comprehension found here that calls something risky is
+    unconditionally unguarded per-item -- there is no equivalent of
+    `_for_loop_has_inner_try` to check."""
     violations: "list[tuple[int, str]]" = []
     for stmt in _statements_directly_in_try_body(stmts):
         if (
@@ -22896,6 +22974,17 @@ def _comprehension_accumulator_violations_directly_in_try_body(stmts: list) -> "
             and _comprehension_has_risky_call(stmt.value)
         ):
             violations.append((stmt.lineno, stmt.target.id))
+        elif (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], (ast.Name, ast.Subscript))
+            and isinstance(stmt.value, _COMPREHENSION_TYPES)
+            and _comprehension_has_risky_call(stmt.value)
+        ):
+            target = stmt.targets[0]
+            identity = target.id if isinstance(target, ast.Name) else _accumulator_identity(target.value)
+            if identity is not None:
+                violations.append((stmt.lineno, identity))
         elif (
             isinstance(stmt, ast.Expr)
             and isinstance(stmt.value, ast.Call)
@@ -22935,7 +23024,7 @@ def _scan_tree_for_all_or_nothing_loop_violations(tree: ast.Module, filename: st
             accumulator = _for_loop_accumulator_name(loop_node)
             if accumulator is None:
                 continue
-            if _for_loop_has_inner_try(loop_node):
+            if _for_loop_has_inner_try(loop_node, accumulator):
                 continue
             if (filename, loop_node.lineno) in _ALL_OR_NOTHING_LOOP_ALLOWLIST:
                 continue
@@ -23144,6 +23233,104 @@ def test_all_or_nothing_loop_detector_closes_known_blind_spots() -> None:
     """
     if _violations_in_snippet(guarded_plus_equals):
         failures.append("per-item guarded `+=` equivalent was FALSELY flagged")
+
+    # Blind spot 6 (final hardening round, HIGH #1): self/instance-attribute
+    # accumulator. The Call-based branch of `_for_loop_accumulator_name`
+    # required `isinstance(node.func.value, ast.Name)`, so
+    # `self.violations.append(...)` was never recognized as an accumulator
+    # shape at all -- an unguarded per-item call on an attribute-based
+    # accumulator sailed through undetected.
+    unguarded_self_attribute = """
+        try:
+            for target in targets:
+                self.violations.append(target.resolve())
+        except Exception:
+            pass
+    """
+    if not _violations_in_snippet(unguarded_self_attribute):
+        failures.append("self/instance-attribute accumulator (self.violations.append(...)) in a bare try was NOT flagged")
+
+    guarded_self_attribute = """
+        try:
+            for target in targets:
+                try:
+                    self.violations.append(target.resolve())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    """
+    if _violations_in_snippet(guarded_self_attribute):
+        failures.append("per-item guarded self/instance-attribute accumulator equivalent was FALSELY flagged")
+
+    # Blind spot 7 (final hardening round, HIGH #2): a plain (non-augmented)
+    # `Assign` whose value is a risky comprehension, directly in a bare try
+    # -- structurally the identical CHECKPOINT-1 bug shape
+    # (`_protected_memory_paths()`'s original `paths |= {...}`) via a MORE
+    # idiomatic assignment form (`paths = [...]`) that
+    # `_comprehension_accumulator_violations_directly_in_try_body` never
+    # matched, since it only checked `AugAssign` (`|=`/`+=`) and
+    # `.update()`/`.extend()` calls.
+    unguarded_plain_assign_comprehension = """
+        try:
+            paths = [(root / name).resolve() for name in names]
+        except Exception:
+            pass
+    """
+    if not _violations_in_snippet(unguarded_plain_assign_comprehension):
+        failures.append("plain Assign with a risky comprehension value in a bare try was NOT flagged")
+
+    guarded_plain_assign_comprehension_equivalent = """
+        try:
+            paths = []
+            for name in names:
+                try:
+                    paths.append((root / name).resolve())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    """
+    if _violations_in_snippet(guarded_plain_assign_comprehension_equivalent):
+        failures.append("per-item guarded for-loop equivalent of the plain-Assign-comprehension shape was FALSELY flagged")
+
+    # Blind spot 8 (final hardening round, MEDIUM): a decoy inner try.
+    # `_for_loop_has_inner_try` used to check only "does ANY `ast.Try` node
+    # exist anywhere in the loop body", not "does a Try specifically wrap
+    # the accumulator's own call/statement". A decoy inner try around an
+    # UNRELATED statement (e.g. guarding a counter increment) while the
+    # real accumulator call stays unguarded previously produced a false
+    # negative.
+    unguarded_decoy_inner_try = """
+        try:
+            for target in targets:
+                try:
+                    counter += 1
+                except Exception:
+                    pass
+                violations.append(target.resolve())
+        except Exception:
+            pass
+    """
+    if not _violations_in_snippet(unguarded_decoy_inner_try):
+        failures.append("decoy inner try guarding an unrelated statement (accumulator call itself left unguarded) was NOT flagged")
+
+    guarded_decoy_inner_try = """
+        try:
+            for target in targets:
+                try:
+                    counter += 1
+                except Exception:
+                    pass
+                try:
+                    violations.append(target.resolve())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    """
+    if _violations_in_snippet(guarded_decoy_inner_try):
+        failures.append("decoy inner try alongside a PROPERLY guarded accumulator call was FALSELY flagged")
 
     # Blind spot 4, helper-function indirection: a KNOWN, ACCEPTED,
     # DISCLOSED limitation (see the comment on `_for_loop_accumulator_name`
