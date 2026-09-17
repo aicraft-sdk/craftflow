@@ -11840,6 +11840,145 @@ def test_bash_guard_bounded_time_for_many_brace_bearing_path_segments_end_to_end
     ok(name)
 
 
+def test_pretooluse_bash_guard_unresolvable_cwd_treats_targets_as_escapes(
+    tmp_dir: Path,
+) -> None:
+    """Site 3 (ADR 0035 deferred crash bug): `main()`'s
+    `cwd = Path(cwd_raw).resolve()` was unguarded -- a symlink-loop cwd
+    crashed the guard uncaught (exit 1, no deny JSON = FAIL-OPEN), so
+    `rm -rf /etc/passwd` sailed straight through.
+
+    Degradation reuses THIS SAME LOOP'S own already-shipped fail-closed
+    precedent (its resolve_confinement() except branch already does
+    `escapes.append(str(path_token)); continue`)."""
+    name = "pretooluse-bash-guard/unresolvable-cwd-treats-targets-as-escapes"
+    project = tmp_dir / "bg-unresolvable-cwd-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    loop = tmp_dir / "bg-unresolvable-cwd-loop"
+    os.symlink(loop, loop)
+
+    code, out = run_hook(
+        "craftflow_pretooluse_bash_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-bg-unresolvable-cwd",
+            "cwd": str(loop),
+            "tool_input": {"command": "rm -rf /etc/passwd"},
+        },
+        env,
+    )
+    if code != 0:
+        fail(name, f"guard process crashed (exit {code}) instead of emitting a deny -- FAIL-OPEN")
+        return
+    if not _deny_out(out) or "escapes-cwd" not in out:
+        fail(name, f"expected DENY with 'escapes-cwd', got exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_bash_guard_unresolvable_cwd_preserves_dynamic_traversal_deny(
+    tmp_dir: Path,
+) -> None:
+    """The load-bearing justification for site 3's degrade-rather-than-blanket-
+    deny shape: `denied_dynamic` is fed ONLY by `_destructive_targets()` and
+    `command_has_traversal_or_wildcard()`, both pure and cwd-independent.
+    Live-proven before the fix: with a symlink-loop cwd this deny was lost
+    entirely to the crash, while the identical command under a resolvable cwd
+    produced `dynamic-target-with-traversal:rm`."""
+    name = "pretooluse-bash-guard/unresolvable-cwd-preserves-dynamic-traversal-deny"
+    project = tmp_dir / "bg-dynamic-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    loop = tmp_dir / "bg-dynamic-loop"
+    os.symlink(loop, loop)
+
+    code, out = run_hook(
+        "craftflow_pretooluse_bash_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-bg-dynamic",
+            "cwd": str(loop),
+            "tool_input": {"command": "rm -rf $TARGET/../x"},
+        },
+        env,
+    )
+    if code != 0:
+        fail(name, f"guard process crashed (exit {code}) -- FAIL-OPEN")
+        return
+    if not _deny_out(out) or "dynamic-target-with-traversal" not in out:
+        fail(name, f"expected the cwd-INDEPENDENT 'dynamic-target-with-traversal' deny to survive an unresolvable cwd, got exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_bash_guard_unresolvable_cwd_allows_non_destructive_command(
+    tmp_dir: Path,
+) -> None:
+    """DD-5 anti-over-restriction pin: the site-3 fail-closed escape applies
+    only to tokens `_destructive_targets()` actually classified as destructive.
+    A non-destructive command yields command_name=None and must stay allowed."""
+    name = "pretooluse-bash-guard/unresolvable-cwd-allows-non-destructive-command"
+    project = tmp_dir / "bg-readonly-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    loop = tmp_dir / "bg-readonly-loop"
+    os.symlink(loop, loop)
+
+    code, out = run_hook(
+        "craftflow_pretooluse_bash_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-bg-readonly",
+            "cwd": str(loop),
+            "tool_input": {"command": "ls -la"},
+        },
+        env,
+    )
+    if code != 0:
+        fail(name, f"guard process crashed (exit {code}) on a non-destructive command")
+        return
+    if _deny_out(out):
+        fail(name, f"over-restriction: a non-destructive command was denied, stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_bash_guard_resolvable_cwd_unaffected_by_resolve_guard(
+    tmp_dir: Path,
+) -> None:
+    """BC-6 / P-2: for a RESOLVABLE cwd, main() must behave exactly as it did
+    at main@8c09173 -- the new degradation is reachable only from an `except`
+    branch and from `cwd_unresolved` guards, so the happy path is untouched
+    by construction. This pins that invariant."""
+    name = "pretooluse-bash-guard/resolvable-cwd-unaffected-by-resolve-guard"
+    project = tmp_dir / "bg-resolvable-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    code, out = run_hook(
+        "craftflow_pretooluse_bash_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-bg-resolvable",
+            "cwd": str(project),
+            "tool_input": {"command": "rm -rf /etc/passwd"},
+        },
+        env,
+    )
+    if not _deny_out(out) or "escapes-cwd" not in out:
+        fail(name, f"expected the pre-existing 'escapes-cwd' deny, got exit={code}, stdout={out!r}")
+        return
+    if "unresolvable" in out:
+        fail(name, f"a resolvable cwd must never reach the unresolvable-cwd branch, stdout={out!r}")
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # Skill-candidate ledger (craftflow_skill_ledger.py) -- white-box + subprocess
 # ---------------------------------------------------------------------------
@@ -22465,6 +22604,13 @@ def main() -> int:
         test_bash_guard_iter_brace_groups_bounded_time_for_deeply_nested_empty_braces()
         test_bash_guard_blocks_rm_rf_deeply_nested_empty_braces_dos_payload_end_to_end(tmp / "b153")
         test_bash_guard_bounded_time_for_many_brace_bearing_path_segments_end_to_end(tmp / "b154")
+
+        print()
+        print("[ pretooluse-bash-guard: unguarded cwd Path(...).resolve() crash/fail-open hardening (ADR 0035 deferred bugs) ]")
+        test_pretooluse_bash_guard_unresolvable_cwd_treats_targets_as_escapes(tmp / "bg1")
+        test_pretooluse_bash_guard_unresolvable_cwd_preserves_dynamic_traversal_deny(tmp / "bg2")
+        test_pretooluse_bash_guard_unresolvable_cwd_allows_non_destructive_command(tmp / "bg3")
+        test_pretooluse_bash_guard_resolvable_cwd_unaffected_by_resolve_guard(tmp / "bg4")
 
         print()
         print("[ hooklib shared-helper (white-box) ]")

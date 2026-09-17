@@ -1521,7 +1521,37 @@ def main() -> int:
     cwd_raw = data.get("cwd")
     if not cwd_raw:
         return 0
-    cwd = Path(cwd_raw).resolve()
+    # ADR 0035 deferred crash bug, site 3 (live-reproduced): this `.resolve()`
+    # was unguarded -- a symlink-loop cwd raised RuntimeError out of main()
+    # and out of the whole process (exit 1, no deny JSON), which Claude Code
+    # treats as NON-BLOCKING: fail-open for every check below.
+    #
+    # Unlike the sibling `_handle_bash` in craftflow_pretooluse_guard.py
+    # (where all five violation lanes are cwd-anchored and the correct shape
+    # is a write-target-gated deny), THIS function genuinely has
+    # cwd-INDEPENDENT lanes: `denied_dynamic` and `unverifiable` are fed only
+    # by `_destructive_targets()` (pure token parsing) and
+    # `command_has_traversal_or_wildcard()` (pure text). Live-proven: with a
+    # symlink-loop cwd, `rm -rf $TARGET/../x` lost its
+    # `dynamic-target-with-traversal` deny purely to the crash. So here,
+    # degrading beats blanket-denying: it RECOVERS real protection.
+    #
+    # `if not cwd_raw: return 0` above is unchanged (DD-4).
+    cwd_unresolved = False
+    try:
+        cwd = Path(cwd_raw).resolve()
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_bash_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "cwd_resolve",
+                "error": repr(exc),
+                "reason": "cwd_unresolved_static_destructive_targets_fail_closed_as_escapes",
+            },
+        )
+        cwd = None
+        cwd_unresolved = True
 
     mode = load_mode()
     # REM-FIX (HIGH, doubt-verify cycle 2): the identical unvalidated
@@ -1551,38 +1581,46 @@ def main() -> int:
     # active workflow JSON via the shared hooklib helper, never raising --
     # absence of a workflow JSON, or worktree_path: null, degrades every
     # confinement check below to cwd-only (Behavior Contract rule 8).
-    try:
-        # Item A fix (cross-session workflow-identity leak): thread the
-        # PreToolUse payload's own "session_id" through so this call site
-        # gets the same session-scoped / non-terminal-only selection as
-        # the sibling craftflow_pretooluse_guard.py (see
-        # latest_live_workflow_file()'s docstring in craftflow_hooklib.py).
-        # Write-confinement-sensitive call site (Finding 1, REM-FIX cycle
-        # 1) -- uses the *_live_* variant, not the plain newest-by-mtime
-        # latest_workflow_payload().
-        #
-        # ADR 0033 deferred-sibling fix: anchor the worktree_path lookup to the
-        # trusted PreToolUse payload `cwd`, mirroring the sibling
-        # craftflow_pretooluse_guard.py call sites.
-        worktree_path = latest_live_workflow_payload(
-            data.get("session_id"), project_root=cwd
-        ).get("worktree_path")
-    except Exception as exc:
-        # REM-FIX cycle 4 (consistency, MEDIUM): mirrors the equivalent
-        # latest_live_workflow_payload() except blocks in the sibling
-        # craftflow_pretooluse_guard.py -- this block was silently swallowing the
-        # exception with no log_event() call, unlike every other parse-error
-        # fallback in this file.
-        log_event(
-            "plugin_pretooluse_bash_guard",
-            {
-                "event": "pretool_guard_parse_error",
-                "command_name": "latest_live_workflow_payload",
-                "error": repr(exc),
-                "reason": "skipped_worktree_lookup",
-            },
-        )
+    if cwd_unresolved:
+        # Never fall back to project_root=None here: that is the
+        # ADR-0033/0035 foreign-identity bug (an UNRELATED project's live
+        # workflow would supply this session's worktree_path grant). Skip
+        # entirely -- the lanes that consume worktree_path are themselves
+        # skipped or fail-closed below.
         worktree_path = None
+    else:
+        try:
+            # Item A fix (cross-session workflow-identity leak): thread the
+            # PreToolUse payload's own "session_id" through so this call site
+            # gets the same session-scoped / non-terminal-only selection as
+            # the sibling craftflow_pretooluse_guard.py (see
+            # latest_live_workflow_file()'s docstring in craftflow_hooklib.py).
+            # Write-confinement-sensitive call site (Finding 1, REM-FIX cycle
+            # 1) -- uses the *_live_* variant, not the plain newest-by-mtime
+            # latest_workflow_payload().
+            #
+            # ADR 0033 deferred-sibling fix: anchor the worktree_path lookup to the
+            # trusted PreToolUse payload `cwd`, mirroring the sibling
+            # craftflow_pretooluse_guard.py call sites.
+            worktree_path = latest_live_workflow_payload(
+                data.get("session_id"), project_root=cwd
+            ).get("worktree_path")
+        except Exception as exc:
+            # REM-FIX cycle 4 (consistency, MEDIUM): mirrors the equivalent
+            # latest_live_workflow_payload() except blocks in the sibling
+            # craftflow_pretooluse_guard.py -- this block was silently swallowing the
+            # exception with no log_event() call, unlike every other parse-error
+            # fallback in this file.
+            log_event(
+                "plugin_pretooluse_bash_guard",
+                {
+                    "event": "pretool_guard_parse_error",
+                    "command_name": "latest_live_workflow_payload",
+                    "error": repr(exc),
+                    "reason": "skipped_worktree_lookup",
+                },
+            )
+            worktree_path = None
 
     # CRITICAL 3 (REM-FIX Phase 3 review+hunt): worktree_path is an untyped
     # read from JSON -- coerce any value that isn't str/None to None
@@ -1630,6 +1668,16 @@ def main() -> int:
             else:
                 unverifiable.append(command_name)
         for path_token in path_tokens:
+            if cwd_unresolved:
+                # Identical fail-CLOSED shape to this same loop's existing
+                # resolve_confinement() except branch immediately below
+                # (which also appends the RAW path_token, not a resolved
+                # path) -- reused deliberately rather than invented. Still
+                # subject to the pre-existing `block_mode`
+                # (bashDestructiveTraversal) gate, so an operator who chose
+                # "audit" still gets audit: no new over-restriction.
+                escapes.append(str(path_token))
+                continue
             # CRITICAL 3 (REM-FIX Phase 3 review+hunt): this call site had no
             # try/except, unlike its sibling in the redirect-confinement
             # block below -- an uncaught exception here (e.g. a malformed
@@ -1675,28 +1723,46 @@ def main() -> int:
     # exception: the router's own memory-finalize permit-write shape must
     # stay allowed even though it targets a protected path.
     protected_redirect_escapes = []
-    try:
-        for tokens in split_subcommands(command):
-            for target in _redirect_targets_in_tokens(tokens):
-                _confined, resolved = resolve_confinement(target, cwd, worktree_path)
-                if not _is_protected_redirect_target(resolved, project_root=cwd):
-                    continue
-                if (
-                    resolved == memory_finalize_permit_path(cwd).resolve()
-                    and matches_memory_finalize_permit_shape(tokens)
-                ):
-                    continue
-                protected_redirect_escapes.append(str(resolved))
-    except Exception as exc:
+    if cwd_unresolved:
+        # Both `_is_protected_redirect_target(..., project_root=cwd)` and
+        # `memory_finalize_permit_path(cwd)` require a resolved identity;
+        # passing None would substitute an UNRELATED project's protected-path
+        # set (ADR 0033/0035). Skipping is the correct, disclosed degradation
+        # -- and the sibling `_handle_bash` in craftflow_pretooluse_guard.py
+        # runs on the SAME Bash tool call and denies any write under an
+        # unresolvable cwd, so the composite posture still fails closed.
         log_event(
             "plugin_pretooluse_bash_guard",
             {
                 "event": "pretool_guard_parse_error",
                 "command_name": "redirect_confinement_check",
-                "error": repr(exc),
-                "reason": "skipped_redirect_confinement_check",
+                "error": "cwd_unresolved",
+                "reason": "skipped_redirect_confinement_check_cwd_unresolved",
             },
         )
+    else:
+        try:
+            for tokens in split_subcommands(command):
+                for target in _redirect_targets_in_tokens(tokens):
+                    _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+                    if not _is_protected_redirect_target(resolved, project_root=cwd):
+                        continue
+                    if (
+                        resolved == memory_finalize_permit_path(cwd).resolve()
+                        and matches_memory_finalize_permit_shape(tokens)
+                    ):
+                        continue
+                    protected_redirect_escapes.append(str(resolved))
+        except Exception as exc:
+            log_event(
+                "plugin_pretooluse_bash_guard",
+                {
+                    "event": "pretool_guard_parse_error",
+                    "command_name": "redirect_confinement_check",
+                    "error": repr(exc),
+                    "reason": "skipped_redirect_confinement_check",
+                },
+            )
 
     if not (
         escapes
@@ -1750,7 +1816,7 @@ def main() -> int:
         {
             "event": "pretool_guard",
             "tool_name": "Bash",
-            "cwd": str(cwd),
+            "cwd": str(cwd) if cwd is not None else f"<unresolvable:{cwd_raw!r}>",
             "command": command,
             "decision": bash_destructive_traversal_decision if deny_now else "audit",
             "reason": reason,
