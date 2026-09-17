@@ -8,6 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.6.1] - 2026-09-17
+
+### Fixes
+
+- widen _is_protected_skill_promotion_path's except clause for consistency
+- guard unguarded memory_finalize_permit_path().resolve() in bash_guard's redirect loop (ADR 0036 site 18)
+- close final 3 detector-completeness gaps in all-or-nothing-loop test
+- harden all-or-nothing-loop prevention test against 4 blind spots
+- close 7 all-or-nothing violation-detection loops + add structural prevention test
+- stop one unresolvable workflow JSON from unprotecting its siblings
+- stop one unresolvable redirect path from unprotecting its siblings
+- stop one unresolvable memory path from unprotecting its siblings
+- fail closed on an unresolvable cwd in the Bash destructive guard
+- REM-FIX cycle 9 -- close whitespace-tolerance bypass in python alias-detection
+- stop over-restricting aliased-but-unused python imports
+- REM-FIX cycle 7 — close os.system/subprocess/shutil write-mechanism bypass in unresolvable-cwd detector
+- deny Bash writes when the payload cwd cannot be resolved
+- resolve import bindings in stdin-read prevention test
+- REM-FIX cycle 6 (final) - close remaining unguarded stdin decode crash sites
+- REM-FIX cycle 5 - guard load_input() stdin decode crash
+- REM-FIX cycle 4 - close _load_blocks() JSON type validation gap
+- comprehensive close-out of memory-protect-restore error handling (REM-FIX cycle 3)
+- guard restore_file() read_text() against non-UTF-8 crash
+- degrade memory-protect-restore instead of crashing on unresolvable PostToolUse target
+- deny Edit/Write targets whose path cannot be resolved
+
+### Refactoring
+
+- localize the confinement cwd-resolve guard and fix its log label
+
+### Documentation
+
+- record ADR 0036 guard resolve-crash hardening
+
 ## [1.6.0] - 2026-09-16
 
 ### Features
