@@ -21901,6 +21901,222 @@ def test_bash_guard_one_unresolvable_workflow_json_does_not_unprotect_the_others
     ok(name)
 
 
+def test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_protected_write_violation(
+    tmp_dir: Path,
+) -> None:
+    """NEW live-reproduced CRITICAL (re-reviewer, different code SHAPE than
+    [CHECKPOINT-1]/sites 5-8): `_handle_bash`'s `protected_write_violations`
+    detection loop (not the protected-SET-building functions those sites
+    fixed) wrapped its ENTIRE `for tokens in split_subcommands(command): for
+    target in _bash_write_targets_in_tokens(tokens): resolve_confinement(...)`
+    double loop in ONE try, with `protected_write_violations = []` in the
+    except. A command with TWO subcommands -- an EARLIER, wholly UNRELATED
+    self-referential symlink target and a LATER genuinely protected write --
+    raised on the first target and silently dropped the second, never-even-
+    reached subcommand's violation. Exact repro from the live finding:
+    `echo x > scratch/loop.txt; echo pwned > .craftflow/state/workflows/wf-alive.json`
+    where scratch/loop.txt has nothing to do with the protected target."""
+    name = "pretooluse-guard/bash-unrelated-unresolvable-target-does-not-hide-protected-write-violation"
+    project = tmp_dir / "order-dep-write-proj"
+    workflows = project / ".craftflow" / "state" / "workflows"
+    workflows.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    (workflows / "wf-alive.json").write_text(json.dumps({"workflow_uuid": "wf-alive"}), encoding="utf-8")
+    scratch = project / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    loop = scratch / "loop.txt"
+    os.symlink(loop, loop)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    code, out = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-order-dep-write",
+            "cwd": str(project),
+            "tool_input": {"command": "echo x > scratch/loop.txt; echo pwned > .craftflow/state/workflows/wf-alive.json"},
+        },
+        env,
+    )
+    if not _deny_out(out):
+        fail(name, f"BYPASS: wf-alive.json write was allowed because an UNRELATED earlier target was unresolvable; exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_confinement_violation(
+    tmp_dir: Path,
+) -> None:
+    """Same bug class, `confinement_violations` lane (`extract_redirect_targets`
+    loop): an earlier unrelated unresolvable redirect target must not hide a
+    later genuine worktree-confinement escape."""
+    name = "pretooluse-guard/bash-unrelated-unresolvable-target-does-not-hide-confinement-violation"
+    session = tmp_dir / "order-dep-confinement-session"
+    leaked = tmp_dir / "order-dep-confinement-leaked"
+    session.mkdir(parents=True)
+    leaked.mkdir(parents=True)
+    real_target = leaked / "activeContext.md"
+    real_target.write_text("# leaked\n", encoding="utf-8")
+    symlinked_target = session / ".craftflow" / "state" / "activeContext.md"
+    symlinked_target.parent.mkdir(parents=True)
+    symlinked_target.symlink_to(real_target)
+    scratch = session / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    loop = scratch / "loop.txt"
+    os.symlink(loop, loop)
+    env = {"CLAUDE_PROJECT_DIR": str(session), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(session.resolve()),
+        "tool_input": {"command": f"echo x > scratch/loop.txt; echo hi > {symlinked_target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(name, f"BYPASS: confinement-escaping write was allowed because an UNRELATED earlier target was unresolvable; stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_skill_promotion_violation(
+    tmp_dir: Path,
+) -> None:
+    """Same bug class, `skill_promotion_violations` lane."""
+    name = "pretooluse-guard/bash-unrelated-unresolvable-target-does-not-hide-skill-promotion-violation"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    _stage_inflight_skill_candidate(tmp_dir, "orderfoo", candidate_id="cand-order")
+    target = tmp_dir / ".claude" / "skills" / "orderfoo" / "SKILL.md"
+    scratch = tmp_dir / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    loop = scratch / "loop.txt"
+    os.symlink(loop, loop)
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": f"echo x > scratch/loop.txt; echo pwned > {target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(name, f"BYPASS: in-flight skill's SKILL.md write was allowed because an UNRELATED earlier target was unresolvable; stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_skill_ledger_violation(
+    tmp_dir: Path,
+) -> None:
+    """Same bug class, `skill_ledger_violations` lane."""
+    name = "pretooluse-guard/bash-unrelated-unresolvable-target-does-not-hide-skill-ledger-violation"
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    ledger_target = tmp_dir / ".craftflow" / "state" / "project" / "skill-candidates.json"
+    scratch = tmp_dir / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    loop = scratch / "loop.txt"
+    os.symlink(loop, loop)
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(tmp_dir),
+        "tool_input": {"command": f"echo x > scratch/loop.txt; echo pwned > {ledger_target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(name, f"BYPASS: skill-candidate ledger overwrite was allowed because an UNRELATED earlier target was unresolvable; stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_reliability_gates_violation(
+    tmp_dir: Path,
+) -> None:
+    """Same bug class, `reliability_gates_violations` lane."""
+    name = "pretooluse-guard/bash-unrelated-unresolvable-target-does-not-hide-reliability-gates-violation"
+    project_root = tmp_dir / "project"
+    gates_target = project_root / ".craftflow" / "state" / "project" / "reliability-gates.json"
+    scratch = project_root / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    loop = scratch / "loop.txt"
+    os.symlink(loop, loop)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": f"echo x > scratch/loop.txt; echo tampered > {gates_target}"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(name, f"BYPASS: reliability-gates ledger overwrite was allowed because an UNRELATED earlier target was unresolvable; stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_cp_mv_write_violation(
+    tmp_dir: Path,
+) -> None:
+    """A 7th site of the SAME bug class, discovered while building this
+    REM-FIX's own comprehensive prevention test (Task B) rather than named by
+    the re-reviewer's original 6: `_handle_bash`'s cp/mv/ln/install/rsync/dd
+    destination-argument write-detection loop shares the identical
+    unguarded-per-target shape as `protected_write_violations`'s redirect
+    lane above, just for `_cp_mv_like_write_targets()`/`_dd_write_targets()`
+    tokens instead of `>`/`>>`/`tee` targets. An earlier unrelated
+    unresolvable cp destination must not hide a later genuine cp write to a
+    protected path."""
+    name = "pretooluse-guard/bash-unrelated-unresolvable-target-does-not-hide-cp-mv-write-violation"
+    project = tmp_dir / "order-dep-cp-proj"
+    workflows = project / ".craftflow" / "state" / "workflows"
+    workflows.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    (workflows / "wf-alive.json").write_text(json.dumps({"workflow_uuid": "wf-alive"}), encoding="utf-8")
+    (project / "src.txt").write_text("x\n", encoding="utf-8")
+    scratch = project / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    loop = scratch / "loop.txt"
+    os.symlink(loop, loop)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    code, out = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-order-dep-cp",
+            "cwd": str(project),
+            "tool_input": {"command": "cp src.txt scratch/loop.txt; cp src.txt .craftflow/state/workflows/wf-alive.json"},
+        },
+        env,
+    )
+    if not _deny_out(out):
+        fail(name, f"BYPASS: cp write to wf-alive.json was allowed because an UNRELATED earlier cp destination was unresolvable; exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_unrelated_unresolvable_target_does_not_hide_protected_redirect_escape(
+    tmp_dir: Path,
+) -> None:
+    """Same bug class in `craftflow_pretooluse_bash_guard.py`'s
+    `protected_redirect_escapes` detection loop -- the order-dependent
+    partial variant: no explicit `= []` reset, but an abandoned mid-loop
+    iteration still means a later, genuinely protected target is never even
+    reached once an earlier unrelated target raises."""
+    name = "pretooluse-bash-guard/unrelated-unresolvable-target-does-not-hide-protected-redirect-escape"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    scratch = project_root / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    loop = scratch / "loop.txt"
+    os.symlink(loop, loop)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo x > scratch/loop.txt; echo PWNED > .craftflow/state/project/patterns.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if not _deny_out(out):
+        fail(name, f"BYPASS: protected-redirect overwrite was allowed because an UNRELATED earlier target was unresolvable; stdout={out!r}")
+        return
+    ok(name)
+
+
 def test_hooklib_load_input_non_utf8_stdin_degrades_instead_of_crashing(
     tmp_dir: Path,
 ) -> None:
@@ -22503,6 +22719,138 @@ def test_no_unguarded_or_mis_guarded_stdin_read_call_sites() -> None:
 
     if violations:
         fail(name, "unguarded/mis-guarded sys.stdin.read() call site(s):\n  " + "\n  ".join(violations))
+        return
+    ok(name)
+
+
+# REM-FIX (Task B, re-reviewer-recommended methodology): structural
+# prevention test for the "all-or-nothing violation-detection loop"
+# antipattern this whole ADR 0036 pass has been closing -- a `for` loop that
+# accumulates into a list/set sitting directly inside a `try` with no
+# per-item inner try/except around its own risky work. Whether the
+# surrounding `except` resets the accumulator to `[]`/`set()` (sites 1-10)
+# or merely abandons the loop mid-iteration with no explicit reset (site 6's
+# `protected_redirect_escapes` / the 6 new sites), the observable defect is
+# identical: one unresolvable/raising member silently drops every OTHER
+# member's already-found-or-not-yet-checked accumulator entry. Modeled on
+# this same file's own `_stdin_read_call_sites()` AST-walk precedent
+# (Phase 1 REM-FIX cycle 6) rather than a text/regex heuristic.
+_ALL_OR_NOTHING_LOOP_ACCUMULATOR_METHODS = ("append", "add")
+
+
+def _for_loops_directly_in_try_body(stmts: list) -> "list[ast.For | ast.AsyncFor]":
+    """Yield every `for`/`async for` loop reachable from `stmts` (a `try`
+    node's own `body` list) through simple control statements (`if`,
+    `with`) -- WITHOUT crossing into a nested `Try`'s body (a for-loop
+    nested inside its own already-distinct try is that try's own concern,
+    evaluated independently when `ast.walk()` reaches it) or into a nested
+    `def`/`class`/`lambda` (different scope). A `for` loop's own nested
+    `for` loops are also yielded, for completeness."""
+    found: "list[ast.For | ast.AsyncFor]" = []
+    for stmt in stmts:
+        if isinstance(stmt, (ast.For, ast.AsyncFor)):
+            found.append(stmt)
+            found.extend(_for_loops_directly_in_try_body(stmt.body))
+        elif isinstance(stmt, ast.Try):
+            continue
+        elif isinstance(stmt, ast.If):
+            found.extend(_for_loops_directly_in_try_body(stmt.body))
+            found.extend(_for_loops_directly_in_try_body(stmt.orelse))
+        elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+            found.extend(_for_loops_directly_in_try_body(stmt.body))
+    return found
+
+
+def _for_loop_accumulator_name(for_node: "ast.For | ast.AsyncFor") -> str | None:
+    """Return the accumulator variable name if `for_node`'s body (anywhere,
+    full depth) calls `<Name>.append(...)`/`<Name>.add(...)`, or
+    augassigns `<Name> |= ...` (the `set |= {...}` shape used to BUILD a
+    protected-path set) -- the three accumulation shapes this bug class
+    actually used across all 16 known sites. Returns the FIRST match found;
+    good enough to name a violation, not intended as an exhaustive list of
+    every accumulator a loop might touch."""
+    for node in ast.walk(for_node):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _ALL_OR_NOTHING_LOOP_ACCUMULATOR_METHODS
+            and isinstance(node.func.value, ast.Name)
+        ):
+            return node.func.value.id
+        if (
+            isinstance(node, ast.AugAssign)
+            and isinstance(node.op, ast.BitOr)
+            and isinstance(node.target, ast.Name)
+        ):
+            return node.target.id
+    return None
+
+
+def _for_loop_has_inner_try(for_node: "ast.For | ast.AsyncFor") -> bool:
+    """True when `for_node`'s own body already contains a nested `Try`
+    anywhere -- the fix shape this REM-FIX applied at all 16 known sites:
+    the loop's own per-item risky call (e.g. `resolve_confinement()`) is
+    wrapped in its OWN try/except INSIDE the loop, so one bad item costs
+    only that item instead of aborting the whole loop."""
+    return any(isinstance(node, ast.Try) for node in ast.walk(for_node) if node is not for_node)
+
+
+# Deliberately empty: the heuristic below currently reports ZERO false
+# positives against both guard scripts (verified by running it against the
+# finished, fully-fixed tree -- every accumulating for-loop directly inside
+# a try in both files now has its own per-item inner try/except). If a
+# future genuinely-safe pattern trips this heuristic, add
+# `("craftflow_pretooluse_guard.py", <lineno>)` here with a comment
+# explaining why it is safe DESPITE the shape, rather than weakening the
+# detector itself.
+_ALL_OR_NOTHING_LOOP_ALLOWLIST: "set[tuple[str, int]]" = set()
+
+
+def test_no_all_or_nothing_violation_detection_loops_in_guard_scripts() -> None:
+    """Comprehensive structural prevention test (Task B): scan
+    `craftflow_pretooluse_guard.py` and `craftflow_pretooluse_bash_guard.py`
+    for the all-or-nothing-loop antipattern that produced 16 live-reproduced
+    CRITICAL findings across this entire ADR 0036 pass (10 in the
+    protected-path SET-BUILDING functions, fixed earlier in this phase; 6
+    more in `_handle_bash()`'s/`main()`'s violation-DETECTION loops, fixed
+    by this same REM-FIX). A `try` whose body directly contains a `for` loop
+    that accumulates into a list/set, where that loop's own per-item work is
+    NOT itself wrapped in an inner try/except, is flagged regardless of
+    whether the surrounding `except` explicitly resets the accumulator --
+    either shape silently drops already-found-or-not-yet-checked entries
+    when any single member raises."""
+    name = "hook-scripts/no-all-or-nothing-violation-detection-loops-in-guard-scripts"
+    violations: list[str] = []
+
+    for filename in ("craftflow_pretooluse_guard.py", "craftflow_pretooluse_bash_guard.py"):
+        path = SCRIPTS / filename
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError as exc:
+            violations.append(f"{filename}: could not parse for static scan ({exc})")
+            continue
+
+        for try_node in ast.walk(tree):
+            if not isinstance(try_node, ast.Try):
+                continue
+            for for_node in _for_loops_directly_in_try_body(try_node.body):
+                accumulator = _for_loop_accumulator_name(for_node)
+                if accumulator is None:
+                    continue
+                if _for_loop_has_inner_try(for_node):
+                    continue
+                if (filename, for_node.lineno) in _ALL_OR_NOTHING_LOOP_ALLOWLIST:
+                    continue
+                violations.append(
+                    f"{filename}:{for_node.lineno}: for-loop accumulating into "
+                    f"`{accumulator}` sits directly inside a try with no per-item "
+                    "inner try/except -- one unresolvable/raising member can "
+                    "silently drop already-found or not-yet-checked entries "
+                    "(all-or-nothing-loop antipattern)"
+                )
+
+    if violations:
+        fail(name, "all-or-nothing violation-detection loop(s) found:\n  " + "\n  ".join(violations))
         return
     ok(name)
 
@@ -23656,6 +24004,16 @@ def main() -> int:
     test_bash_guard_one_unresolvable_workflow_json_does_not_unprotect_the_others(tmp / "res2l")
 
     print()
+    print("[ pretooluse-guard + pretooluse-bash-guard: REM-FIX (re-reviewer) -- _handle_bash violation-DETECTION loops per-target degradation, not all-or-nothing (live-reproduced write bypass, sweep-methodology gap) ]")
+    test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_protected_write_violation(tmp / "res2m")
+    test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_confinement_violation(tmp / "res2n")
+    test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_skill_promotion_violation(tmp / "res2o")
+    test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_skill_ledger_violation(tmp / "res2p")
+    test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_reliability_gates_violation(tmp / "res2q")
+    test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_cp_mv_write_violation(tmp / "res2s")
+    test_bash_guard_unrelated_unresolvable_target_does_not_hide_protected_redirect_escape(tmp / "res2r")
+
+    print()
     print("[ pretooluse-guard: REM-FIX cycle 7 -- unresolvable-cwd detector missed the os.system/subprocess/shutil write-mechanism bypass ]")
     test_pretooluse_guard_bash_unresolvable_cwd_denies_python_write_mechanism_command(tmp / "res2d")
     test_pretooluse_guard_bash_unresolvable_cwd_allows_aliased_import_that_is_never_called(tmp / "res2e")
@@ -23679,6 +24037,10 @@ def main() -> int:
     test_sdd_cache_pre_non_utf8_stdin_degrades_instead_of_crashing(tmp / "res6")
     test_sdd_cache_post_non_utf8_stdin_degrades_instead_of_crashing(tmp / "res7")
     test_no_unguarded_or_mis_guarded_stdin_read_call_sites()
+
+    print()
+    print("[ pretooluse-guard + pretooluse-bash-guard: Task B prevention test -- no all-or-nothing violation-detection loops (structural AST sweep) ]")
+    test_no_all_or_nothing_violation_detection_loops_in_guard_scripts()
 
     print()
     if _errors:

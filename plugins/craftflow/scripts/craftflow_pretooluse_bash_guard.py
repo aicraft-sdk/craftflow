@@ -1832,7 +1832,33 @@ def main() -> int:
         try:
             for tokens in split_subcommands(command):
                 for target in _redirect_targets_in_tokens(tokens):
-                    _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+                    # REM-FIX (live-reproduced CRITICAL, re-reviewer, order-
+                    # dependent partial variant of the same bug class fixed
+                    # in the sibling `_handle_bash` above): this call had no
+                    # per-target try/except, so an earlier unrelated
+                    # unresolvable redirect target (e.g. a self-referential
+                    # symlink) raised out of this ENTIRE nested loop before a
+                    # LATER genuinely protected redirect target was ever even
+                    # reached -- no explicit `= []` reset exists here, but
+                    # the abandoned mid-loop iteration silently drops any
+                    # violation found at or after the exception point all
+                    # the same. Per-target now, same fail-closed shape
+                    # already established by this exact file's own
+                    # `escapes.append(str(path_token))` precedent above.
+                    try:
+                        _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+                    except Exception as exc:
+                        log_event(
+                            "plugin_pretooluse_bash_guard",
+                            {
+                                "event": "pretool_guard_parse_error",
+                                "command_name": "redirect_confinement_check",
+                                "error": repr(exc),
+                                "reason": "fail_closed_unresolvable_protected_redirect_target",
+                            },
+                        )
+                        protected_redirect_escapes.append(str(target))
+                        continue
                     if not _is_protected_redirect_target(resolved, project_root=cwd):
                         continue
                     if (

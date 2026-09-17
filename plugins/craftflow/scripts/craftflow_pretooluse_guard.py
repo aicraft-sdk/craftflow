@@ -2604,7 +2604,36 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     try:
         for tokens in split_subcommands(command):
             for target in _bash_write_targets_in_tokens(tokens):
-                _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+                # REM-FIX (live-reproduced CRITICAL, re-reviewer sweep-
+                # methodology gap): this call used to have no per-target
+                # try/except -- an unresolvable target (e.g. a self-
+                # referential symlink at an UNRELATED path in an EARLIER
+                # subcommand of the same command) raised out of this ENTIRE
+                # nested loop, and the outer `except` below used to reset
+                # `protected_write_violations = []`, silently dropping every
+                # OTHER subcommand's already-found (or not-yet-checked)
+                # violation -- the same all-or-nothing-loop bug class
+                # [CHECKPOINT-1] fixed for the protected-SET-BUILDING
+                # functions, here in the violation-DETECTION loop instead.
+                # Per-target now: fail closed by treating the unresolvable
+                # target itself as a violation (mirrors
+                # `_handle_bash_unresolvable_cwd`'s own fail-closed posture
+                # for an unverifiable write), and `continue` so every other
+                # target in the command is still fully checked.
+                try:
+                    _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+                except Exception as exc:
+                    log_event(
+                        "plugin_pretooluse_guard",
+                        {
+                            "event": "pretool_guard_parse_error",
+                            "command_name": "bash_write_protected_path_check",
+                            "error": repr(exc),
+                            "reason": "fail_closed_unresolvable_bash_write_target",
+                        },
+                    )
+                    protected_write_violations.append(str(target))
+                    continue
                 if resolved not in protected_paths:
                     continue
                 if permit_path is not None and resolved == permit_path:
@@ -2627,7 +2656,20 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         # never see. Never permit-shape-matched: a python write is never
         # the documented printf permit shape.
         for target in _python_script_write_targets(command):
-            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            try:
+                _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            except Exception as exc:
+                log_event(
+                    "plugin_pretooluse_guard",
+                    {
+                        "event": "pretool_guard_parse_error",
+                        "command_name": "bash_write_protected_path_check",
+                        "error": repr(exc),
+                        "reason": "fail_closed_unresolvable_python_write_target",
+                    },
+                )
+                protected_write_violations.append(str(target))
+                continue
             if resolved not in protected_paths:
                 continue
             protected_write_violations.append(str(resolved))
@@ -2641,16 +2683,24 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
             _python_suspicious_mechanism_targets(command, protected_paths, cwd)
         )
     except Exception as exc:
+        # REM-FIX (re-reviewer): never reset an already-populated violations
+        # list here -- both resolve_confinement() call sites above now
+        # handle their own unresolvable-target failures per-target and
+        # never propagate, so this outer except is reached only by a
+        # genuinely unexpected failure in the surrounding parsing helpers
+        # (split_subcommands/_bash_write_targets_in_tokens/
+        # _python_script_write_targets/_python_suspicious_mechanism_targets).
+        # Whatever violations were already found before that point must
+        # survive, not be silently discarded.
         log_event(
             "plugin_pretooluse_guard",
             {
                 "event": "pretool_guard_parse_error",
                 "command_name": "bash_write_protected_path_check",
                 "error": repr(exc),
-                "reason": "skipped_bash_write_protected_path_check",
+                "reason": "skipped_remaining_bash_write_protected_path_check",
             },
         )
-        protected_write_violations = []
 
     # Worktree confinement against redirect/tee targets, scoped to protected
     # paths only (mirrors Phase 3's bash_guard.py scoping): ordinary benign
@@ -2671,7 +2721,27 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     confinement_violations: list = []
     try:
         for target in extract_redirect_targets(command):
-            _confined, resolved = resolve_confinement(target, cwd, worktree_path, workspace_writable_paths)
+            # REM-FIX (live-reproduced CRITICAL, re-reviewer): per-target
+            # try/except, same shape and same reasoning as
+            # protected_write_violations above -- an earlier unrelated
+            # unresolvable redirect target must not abort this loop before
+            # a LATER genuine confinement escape is even reached. Fail
+            # closed: an unresolvable target's own confinement cannot be
+            # verified, so it is treated as an escape.
+            try:
+                _confined, resolved = resolve_confinement(target, cwd, worktree_path, workspace_writable_paths)
+            except Exception as exc:
+                log_event(
+                    "plugin_pretooluse_guard",
+                    {
+                        "event": "pretool_guard_parse_error",
+                        "command_name": "bash_write_confinement_check",
+                        "error": repr(exc),
+                        "reason": "fail_closed_unresolvable_confinement_target",
+                    },
+                )
+                confinement_violations.append(str(target))
+                continue
             if resolved not in protected_paths:
                 continue
             if not _confined:
@@ -2683,10 +2753,9 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 "event": "pretool_guard_parse_error",
                 "command_name": "bash_write_confinement_check",
                 "error": repr(exc),
-                "reason": "skipped_bash_write_confinement_check",
+                "reason": "skipped_remaining_bash_write_confinement_check",
             },
         )
-        confinement_violations = []
 
     # HIGH 5 (REM-FIX): skill promotion must never happen via a Bash
     # redirect/tee -- the sole authorized writer of a promoted skill's
@@ -2710,7 +2779,26 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     skill_promotion_violations: list = []
     try:
         for target in extract_redirect_targets(command):
-            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            # REM-FIX (live-reproduced CRITICAL, re-reviewer): per-target
+            # try/except, same shape as protected_write_violations above --
+            # an earlier unrelated unresolvable redirect target must not
+            # abort this loop before a LATER genuine skill-promotion-path
+            # write is even reached. Fail closed: an unresolvable target
+            # cannot be proven to NOT be an in-flight skill's SKILL.md.
+            try:
+                _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            except Exception as exc:
+                log_event(
+                    "plugin_pretooluse_guard",
+                    {
+                        "event": "pretool_guard_parse_error",
+                        "command_name": "bash_skill_promotion_path_check",
+                        "error": repr(exc),
+                        "reason": "fail_closed_unresolvable_skill_promotion_redirect_target",
+                    },
+                )
+                skill_promotion_violations.append(str(target))
+                continue
             if _is_protected_skill_promotion_path(resolved, project_root=cwd):
                 skill_promotion_violations.append(str(resolved))
 
@@ -2718,7 +2806,20 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         # AND heredoc/stdin-fed scripts) -- same detector, same whole-
         # command-text scan already used for memory-file protection above.
         for target in _python_script_write_targets(command):
-            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            try:
+                _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            except Exception as exc:
+                log_event(
+                    "plugin_pretooluse_guard",
+                    {
+                        "event": "pretool_guard_parse_error",
+                        "command_name": "bash_skill_promotion_path_check",
+                        "error": repr(exc),
+                        "reason": "fail_closed_unresolvable_skill_promotion_python_target",
+                    },
+                )
+                skill_promotion_violations.append(str(target))
+                continue
             if _is_protected_skill_promotion_path(resolved, project_root=cwd):
                 skill_promotion_violations.append(str(resolved))
 
@@ -2749,10 +2850,9 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 "event": "pretool_guard_parse_error",
                 "command_name": "bash_skill_promotion_path_check",
                 "error": repr(exc),
-                "reason": "skipped_bash_skill_promotion_path_check",
+                "reason": "skipped_remaining_bash_skill_promotion_path_check",
             },
         )
-        skill_promotion_violations = []
 
     # CRITICAL 1 (REM-FIX round 3): the skill-candidate ledger and its
     # staged proposals are the untrusted data source the skill-promotion-path
@@ -2771,12 +2871,42 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     skill_ledger_violations: list = []
     try:
         for target in extract_redirect_targets(command):
-            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            # REM-FIX (live-reproduced CRITICAL, re-reviewer): per-target
+            # try/except, same shape and reasoning as skill_promotion_
+            # violations above. Fail closed: an unresolvable target cannot
+            # be proven to NOT be the skill-candidate ledger/proposal tree.
+            try:
+                _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            except Exception as exc:
+                log_event(
+                    "plugin_pretooluse_guard",
+                    {
+                        "event": "pretool_guard_parse_error",
+                        "command_name": "bash_skill_ledger_write_check",
+                        "error": repr(exc),
+                        "reason": "fail_closed_unresolvable_skill_ledger_redirect_target",
+                    },
+                )
+                skill_ledger_violations.append(str(target))
+                continue
             if _is_protected_skill_ledger_or_proposal_path(resolved, project_root=cwd):
                 skill_ledger_violations.append(str(resolved))
 
         for target in _python_script_write_targets(command):
-            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            try:
+                _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            except Exception as exc:
+                log_event(
+                    "plugin_pretooluse_guard",
+                    {
+                        "event": "pretool_guard_parse_error",
+                        "command_name": "bash_skill_ledger_write_check",
+                        "error": repr(exc),
+                        "reason": "fail_closed_unresolvable_skill_ledger_python_target",
+                    },
+                )
+                skill_ledger_violations.append(str(target))
+                continue
             if _is_protected_skill_ledger_or_proposal_path(resolved, project_root=cwd):
                 skill_ledger_violations.append(str(resolved))
 
@@ -2794,10 +2924,9 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 "event": "pretool_guard_parse_error",
                 "command_name": "bash_skill_ledger_write_check",
                 "error": repr(exc),
-                "reason": "skipped_bash_skill_ledger_write_check",
+                "reason": "skipped_remaining_bash_skill_ledger_write_check",
             },
         )
-        skill_ledger_violations = []
 
     # Phase 4 (reliability-gates ledger protection): mirrors the
     # skill_ledger_violations lane immediately above -- redirect/tee,
@@ -2806,12 +2935,42 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     reliability_gates_violations: list = []
     try:
         for target in extract_redirect_targets(command):
-            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            # REM-FIX (live-reproduced CRITICAL, re-reviewer): per-target
+            # try/except, same shape and reasoning as skill_ledger_
+            # violations above. Fail closed: an unresolvable target cannot
+            # be proven to NOT be the reliability-gates ledger.
+            try:
+                _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            except Exception as exc:
+                log_event(
+                    "plugin_pretooluse_guard",
+                    {
+                        "event": "pretool_guard_parse_error",
+                        "command_name": "bash_reliability_gates_write_check",
+                        "error": repr(exc),
+                        "reason": "fail_closed_unresolvable_reliability_gates_redirect_target",
+                    },
+                )
+                reliability_gates_violations.append(str(target))
+                continue
             if _is_protected_reliability_gates_path(resolved, project_root=cwd):
                 reliability_gates_violations.append(str(resolved))
 
         for target in _python_script_write_targets(command):
-            _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            try:
+                _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+            except Exception as exc:
+                log_event(
+                    "plugin_pretooluse_guard",
+                    {
+                        "event": "pretool_guard_parse_error",
+                        "command_name": "bash_reliability_gates_write_check",
+                        "error": repr(exc),
+                        "reason": "fail_closed_unresolvable_reliability_gates_python_target",
+                    },
+                )
+                reliability_gates_violations.append(str(target))
+                continue
             if _is_protected_reliability_gates_path(resolved, project_root=cwd):
                 reliability_gates_violations.append(str(resolved))
 
@@ -2830,10 +2989,9 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 "event": "pretool_guard_parse_error",
                 "command_name": "bash_reliability_gates_write_check",
                 "error": repr(exc),
-                "reason": "skipped_bash_reliability_gates_write_check",
+                "reason": "skipped_remaining_bash_reliability_gates_write_check",
             },
         )
-        reliability_gates_violations = []
 
     # cp/mv/ln/install/rsync/dd destination-argument write detection
     # (REM-FIX round 5, systemic gap -- see `_cp_mv_like_write_targets()`
@@ -2850,7 +3008,30 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     try:
         for tokens in split_subcommands(command):
             for target in _cp_mv_like_write_targets(tokens) + _dd_write_targets(tokens):
-                _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+                # REM-FIX (live-reproduced CRITICAL, discovered while
+                # building this REM-FIX's own comprehensive prevention test
+                # -- a 7th site of the same bug class, not one of the
+                # re-reviewer's named 6): per-target try/except, same shape
+                # as protected_write_violations's redirect lane above. Fail
+                # closed into `protected_write_violations` (this loop's own
+                # nominal violation class per its docstring above) when a
+                # cp/mv/dd destination cannot be resolved, so an earlier
+                # unrelated unresolvable destination never hides a LATER
+                # genuine write to a protected path in the same command.
+                try:
+                    _confined, resolved = resolve_confinement(target, cwd, worktree_path)
+                except Exception as exc:
+                    log_event(
+                        "plugin_pretooluse_guard",
+                        {
+                            "event": "pretool_guard_parse_error",
+                            "command_name": "bash_cp_mv_like_write_check",
+                            "error": repr(exc),
+                            "reason": "fail_closed_unresolvable_cp_mv_dd_target",
+                        },
+                    )
+                    protected_write_violations.append(str(target))
+                    continue
                 if resolved in protected_paths:
                     protected_write_violations.append(str(resolved))
                 if _is_protected_skill_promotion_path(resolved, project_root=cwd):
