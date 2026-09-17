@@ -20288,6 +20288,74 @@ def test_pretooluse_guard_edit_write_cyclic_symlink_cwd_fails_closed_for_reliabi
     ok(name)
 
 
+def test_pretooluse_guard_edit_write_confinement_logs_accurate_cwd_resolve_failure(
+    tmp_dir: Path,
+) -> None:
+    """Site 4 (the design's explicit open question -- RESOLVED as INCLUDE).
+
+    `_edit_write_escapes_confinement`'s own `cwd = Path(cwd_raw).resolve()` is
+    unguarded, but -- live-verified -- it does NOT crash: its caller's generic
+    `except Exception` catches it and degrades to 'skip only the
+    worktree-confinement check'. Security value of guarding it today: zero,
+    and this test asserts that the allow/deny outcome is UNCHANGED.
+
+    What it does fix: (1) the caller logs `command_name: "resolve_confinement"`
+    when the thing that actually failed was the cwd resolve, BEFORE
+    resolve_confinement() was ever reached -- a misleading pointer in an
+    incident; (2) exception safety stops depending on a distant caller's
+    generic catch, which a future refactor could narrow or relocate, silently
+    creating a 4th crash site."""
+    name = "pretooluse-guard/edit-write-confinement-logs-accurate-cwd-resolve-failure"
+    project = tmp_dir / "confinement-diag-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if log_path.exists():
+        log_path.unlink()
+
+    loop = tmp_dir / "confinement-diag-loop"
+    os.symlink(loop, loop)
+
+    code, out = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Write",
+            "session_id": "wf-confinement-diag",
+            "cwd": str(loop),
+            "tool_input": {"file_path": str(project / "ordinary.txt")},
+        },
+        env,
+    )
+    # Decision parity: identical to main@8c09173 -- allowed, no deny emitted.
+    if code != 0 or _deny_out(out):
+        fail(name, f"decision must be UNCHANGED (exit 0, no deny), got exit={code}, stdout={out!r}")
+        return
+
+    entries = []
+    if log_path.exists():
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            try:
+                entries.append(json.loads(line))
+            except Exception:
+                continue
+    matching = [
+        e for e in entries
+        if e.get("command_name") == "edit_write_confinement_cwd_resolve"
+        and e.get("reason") == "skipped_worktree_confinement_check"
+    ]
+    if not matching:
+        fail(
+            name,
+            "expected a log entry naming the REAL failing call "
+            "(command_name='edit_write_confinement_cwd_resolve'); got "
+            f"{[ (e.get('command_name'), e.get('reason')) for e in entries ]!r}",
+        )
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_reliability_gates_case_fold_identity_bypass(tmp_dir: Path) -> None:
     """REM-FIX cycle 4 (doubt-verifier CRITICAL, live-reproduced): `Path.resolve()`
     on macOS/APFS does not raise, and does NOT canonicalize, when a path
@@ -23336,6 +23404,10 @@ def main() -> int:
     print()
     print("[ pretooluse-guard: REM-FIX cycle 9 -- whitespace-tolerance bypass in alias-detection patterns (both lanes) ]")
     test_pretooluse_guard_bash_unresolvable_cwd_denies_python_alias_space_before_paren_write_mechanism_command(tmp / "res2f")
+
+    print()
+    print("[ pretooluse-guard: Phase 4 -- worktree-confinement cwd-resolve guard reports accurate cause ]")
+    test_pretooluse_guard_edit_write_confinement_logs_accurate_cwd_resolve_failure(tmp / "res3")
 
     print()
     print("[ hooklib / memory-protect-restore: REM-FIX cycle 5 -- unguarded sys.stdin.read() decode crash ]")

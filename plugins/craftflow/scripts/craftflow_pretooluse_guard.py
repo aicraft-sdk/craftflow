@@ -1576,7 +1576,43 @@ def _edit_write_escapes_confinement(data: dict, path: Path) -> bool:
     cwd_raw = data.get("cwd")
     if not cwd_raw:
         return False
-    cwd = Path(cwd_raw).resolve()
+    # ADR 0035 deferred crash bug, site 4 -- the ONE site in this family that
+    # does not actually crash: the caller's generic `except Exception` around
+    # `_edit_write_escapes_confinement(data, path)` already catches this and
+    # degrades to "skip only worktree-confinement" (Behavior Contract rule 9).
+    # Live-verified: exit 0, clean.
+    #
+    # Guarded here anyway, for two NON-security reasons stated plainly so no
+    # later reader over-credits this hunk:
+    #   1. Accuracy. The caller logs `command_name: "resolve_confinement"` for
+    #      this failure, but resolve_confinement() was never reached -- the
+    #      cwd resolve above it failed. That sends an incident reader to the
+    #      wrong function.
+    #   2. Locality. Exception safety here depended on a DISTANT caller's
+    #      generic catch; narrowing or relocating that catch in a future
+    #      refactor would silently create a 4th crash site.
+    #
+    # Returns False (= "does not escape confinement" = no violation appended),
+    # which is EXACTLY the outcome the caller's catch already produces --
+    # decision behavior is provably unchanged, and this deliberately does NOT
+    # flip to True/deny, which would be unrequested over-restriction (DD-5).
+    # Note the composite posture is already partly hardened for this case:
+    # when cwd is unresolvable, _handle_edit_write's `trusted_root_unresolved`
+    # is already True, so its reliability-gates / skill-ledger /
+    # skill-promotion lanes already fail closed.
+    try:
+        cwd = Path(cwd_raw).resolve()
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "edit_write_confinement_cwd_resolve",
+                "error": repr(exc),
+                "reason": "skipped_worktree_confinement_check",
+            },
+        )
+        return False
     # Item A fix: session_id-scoped, liveness-filtered selection (see
     # latest_live_workflow_file()'s own docstring) -- the PreToolUse hook
     # payload's own "session_id" field is threaded through so a matching,
