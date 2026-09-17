@@ -2316,8 +2316,18 @@ def _command_has_any_write_target(command: str) -> bool:
         return True
     if _PYTHON_INVOCATION_RE.search(command):
         code_text = _extract_python_code_text(command)
-        if _PYTHON_SUSPICIOUS_MECHANISM_RE.search(code_text) or _python_suspicious_call_bindings(
-            code_text
+        # REM-FIX cycle 8 (silent-failure-hunter HIGH, live-reproduced): a bare
+        # truthy alias_call_patterns set only means os/subprocess/shutil was
+        # IMPORTED with an alias -- it does NOT mean the alias was ever called
+        # for a suspicious attribute. The sibling cwd-anchored function
+        # (_python_suspicious_mechanism_targets, above) already gets this right
+        # by requiring the pattern to actually occur as a substring in the code
+        # text before counting it as a marker; this cwd-free check must do the
+        # same or it over-restricts plain read-only aliased imports (e.g.
+        # `import os as o; print(o.getcwd())`) under an unresolvable cwd.
+        alias_call_patterns = _python_suspicious_call_bindings(code_text)
+        if _PYTHON_SUSPICIOUS_MECHANISM_RE.search(code_text) or any(
+            pattern in code_text for pattern in alias_call_patterns
         ):
             return True
     for tokens in split_subcommands(command):

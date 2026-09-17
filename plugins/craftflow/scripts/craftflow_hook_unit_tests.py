@@ -21251,6 +21251,54 @@ def test_pretooluse_guard_bash_unresolvable_cwd_denies_python_write_mechanism_co
     ok(name)
 
 
+def test_pretooluse_guard_bash_unresolvable_cwd_allows_aliased_import_that_is_never_called(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX cycle 8 (silent-failure-hunter HIGH, live-reproduced):
+    cycle 7's cwd-free write-mechanism check reused
+    `_python_suspicious_call_bindings()` as a bare truthy gate -- a
+    non-empty set only means os/subprocess/shutil was IMPORTED with an
+    alias, not that the alias was ever called for a suspicious attribute.
+    This over-restricted plain read-only aliased imports (e.g.
+    `import os as o; print(o.getcwd())`) under an unresolvable cwd, denying
+    a command that never writes anything -- directly contradicting the
+    deny message's own 'Read-only commands are unaffected' claim. Fixed by
+    requiring the alias-bound pattern to actually occur as a substring in
+    the code text, mirroring the sibling cwd-anchored function's
+    (`_python_suspicious_mechanism_targets`) already-correct check."""
+    name = "pretooluse-guard/bash-unresolvable-cwd-allows-aliased-import-that-is-never-called"
+    project = tmp_dir / "bash-unresolvable-cwd-aliased-unused-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    loop = tmp_dir / "bash-unresolvable-cwd-aliased-unused-loop"
+    os.symlink(loop, loop)
+
+    code, out = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-bash-unresolvable-cwd-aliased-unused",
+            "cwd": str(loop),
+            "tool_input": {
+                "command": 'python3 -c "import os as o; print(o.getcwd())"',
+            },
+        },
+        env,
+    )
+    if code != 0:
+        fail(name, f"guard process crashed (exit {code}) instead of allowing -- FAIL-OPEN")
+        return
+    if code == 0 and out:
+        fail(
+            name,
+            "expected ALLOW (exit 0, empty stdout) for an aliased import that is "
+            f"never called for a suspicious attribute, got exit={code}, stdout={out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_bash_unresolvable_cwd_allows_read_only_command(
     tmp_dir: Path,
 ) -> None:
@@ -23052,6 +23100,7 @@ def main() -> int:
     print()
     print("[ pretooluse-guard: REM-FIX cycle 7 -- unresolvable-cwd detector missed the os.system/subprocess/shutil write-mechanism bypass ]")
     test_pretooluse_guard_bash_unresolvable_cwd_denies_python_write_mechanism_command(tmp / "res2d")
+    test_pretooluse_guard_bash_unresolvable_cwd_allows_aliased_import_that_is_never_called(tmp / "res2e")
 
     print()
     print("[ hooklib / memory-protect-restore: REM-FIX cycle 5 -- unguarded sys.stdin.read() decode crash ]")
