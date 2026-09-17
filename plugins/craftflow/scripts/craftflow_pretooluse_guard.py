@@ -2293,11 +2293,33 @@ def _command_has_any_write_target(command: str) -> bool:
     contrast, are pure token/text parsing with no filesystem access at all --
     they are the only cwd-free machinery in the function, and they are exactly
     what this predicate reuses. Same five detectors `_handle_bash` itself
-    already runs; nothing new is parsed and no new syntax is recognized."""
+    already runs; nothing new is parsed and no new syntax is recognized.
+
+    REM-FIX (cycle 7, code-reviewer, live-reproduced CRITICAL): a 6th check
+    is needed alongside those five. `_python_suspicious_mechanism_targets()`
+    (os.system/subprocess.run|call|Popen|check_call/shutil.copy|copyfile|move/
+    os.rename|replace, including import-aliased forms) is conceptually two
+    halves: a cwd-FREE marker/alias-detection half
+    (`_PYTHON_SUSPICIOUS_MECHANISM_RE` / `_python_suspicious_call_bindings()`)
+    and a cwd-DEPENDENT co-occurrence-with-protected-paths half. Only the
+    first half can run here -- the second needs a resolved cwd to build the
+    protected-path set this function doesn't have. Before this fix, NONE of
+    the five reused extractors recognized this call shape at all, so a
+    `python3 -c "os.system('... > <protected path>')"` (or subprocess/shutil/
+    os.rename equivalent) with an unresolvable cwd was silently ALLOWED.
+    Deliberately fail-closed: a marker/alias match alone is treated as a
+    write target unconditionally, without requiring protected-path
+    co-occurrence, matching this function's own cwd-free remit."""
     if extract_redirect_targets(command):
         return True
     if _python_script_write_targets(command):
         return True
+    if _PYTHON_INVOCATION_RE.search(command):
+        code_text = _extract_python_code_text(command)
+        if _PYTHON_SUSPICIOUS_MECHANISM_RE.search(code_text) or _python_suspicious_call_bindings(
+            code_text
+        ):
+            return True
     for tokens in split_subcommands(command):
         if _bash_write_targets_in_tokens(tokens):
             return True

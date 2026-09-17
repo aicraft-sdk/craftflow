@@ -21198,6 +21198,59 @@ def test_pretooluse_guard_bash_unresolvable_cwd_denies_write_command(
     ok(name)
 
 
+def test_pretooluse_guard_bash_unresolvable_cwd_denies_python_write_mechanism_command(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX cycle 7 (code-reviewer, live-reproduced CRITICAL):
+    `_command_has_any_write_target()` reuses 5 of the 6 existing cwd-free
+    write-target extractors, but OMITTED the marker/alias-detection half of
+    `_python_suspicious_mechanism_targets()` -- the ONLY half of that
+    function that doesn't itself need a resolved cwd (the other half,
+    co-occurrence with a protected-path literal, does). With cwd
+    unresolvable, a Bash command using `os.system(...)` (or
+    subprocess.run/call/Popen/check_call, shutil.copy/copyfile/move,
+    os.rename/replace) to write to a protected file was silently ALLOWED
+    instead of denied, because none of the other 5 extractors recognize
+    this shape at all. Fixed by adding a 6th, cwd-free check reusing ONLY
+    the marker/alias-detection half and treating a match as a write target
+    unconditionally (fail-closed -- no protected-path co-occurrence
+    required, since that check needs a cwd this function doesn't have)."""
+    name = "pretooluse-guard/bash-unresolvable-cwd-denies-python-write-mechanism-command"
+    project = tmp_dir / "bash-unresolvable-cwd-pymech-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    loop = tmp_dir / "bash-unresolvable-cwd-pymech-loop"
+    os.symlink(loop, loop)
+
+    code, out = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-bash-unresolvable-cwd-pymech",
+            "cwd": str(loop),
+            "tool_input": {
+                "command": (
+                    "python3 -c \"import os; "
+                    "os.system('echo pwned > .craftflow/state/activeContext.md')\""
+                )
+            },
+        },
+        env,
+    )
+    if code != 0:
+        fail(name, f"guard process crashed (exit {code}) instead of emitting a deny -- FAIL-OPEN")
+        return
+    if not _deny_out(out) or "unresolvable-cwd-with-write-target" not in out:
+        fail(
+            name,
+            f"expected DENY with 'unresolvable-cwd-with-write-target' for an "
+            f"os.system(...) write mechanism, got exit={code}, stdout={out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_bash_unresolvable_cwd_allows_read_only_command(
     tmp_dir: Path,
 ) -> None:
@@ -22995,6 +23048,10 @@ def main() -> int:
     test_pretooluse_guard_bash_unresolvable_cwd_denies_write_command(tmp / "res2a")
     test_pretooluse_guard_bash_unresolvable_cwd_allows_read_only_command(tmp / "res2b")
     test_pretooluse_guard_bash_resolvable_cwd_unaffected_by_resolve_guard(tmp / "res2c")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 7 -- unresolvable-cwd detector missed the os.system/subprocess/shutil write-mechanism bypass ]")
+    test_pretooluse_guard_bash_unresolvable_cwd_denies_python_write_mechanism_command(tmp / "res2d")
 
     print()
     print("[ hooklib / memory-protect-restore: REM-FIX cycle 5 -- unguarded sys.stdin.read() decode crash ]")
