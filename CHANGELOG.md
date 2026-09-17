@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.7.0] - 2026-09-17
+
+### Features
+
+- append precompact narrative digest on SessionStart(source=compact)
+- add hooklib.read_precompact_snapshot() read-side helper
+- wire narrative digest into PreCompact snapshot main()
+- add bounded narrative-digest extraction to precompact snapshot
+- add dual-shape section-entry extraction for precompact digest
+
+### Tests
+
+- import craftflow_sessionstart_context module for direct testing
+- add drift-guard for combined PreCompact subprocess timeout budget
+- add end-to-end PreCompact hook test for narrative digest
+
 ## [1.6.1] - 2026-09-17
 
 ### Fixes
