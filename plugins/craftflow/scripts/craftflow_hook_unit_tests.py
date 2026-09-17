@@ -16798,6 +16798,166 @@ def test_precompact_section_entries_empty_body_returns_empty_string() -> None:
     ok(name)
 
 
+def _write_active_context_fixture(project_root: Path, body_by_section: dict[str, str]) -> Path:
+    """Write a minimal project/activeContext.md fixture with only the
+    given `## Heading` sections populated, mirroring this repo's real file
+    layout (Current Focus, Next Steps, Decisions, plus a couple of
+    unrelated headings that must be ignored by the digest)."""
+    lines = []
+    for heading in ("Current Focus", "Recent Changes", "Next Steps", "Decisions", "Learnings"):
+        lines.append(f"## {heading}")
+        lines.append(body_by_section.get(heading, "(none)"))
+        lines.append("")
+    path = project_root / ".craftflow" / "state" / "project"
+    path.mkdir(parents=True, exist_ok=True)
+    out = path / "activeContext.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    return out
+
+
+def test_precompact_narrative_digest_present_on_well_formed_fixture(tmp_dir: Path) -> None:
+    name = "precompact-state/narrative-digest-present-on-well-formed-fixture"
+    project_root = tmp_dir / "wf1"
+    _write_active_context_fixture(project_root, {
+        "Current Focus": "[2026-09-17] Newest focus entry.\n\n[2026-09-16] Older focus entry.",
+        "Next Steps": "1. Do the next thing.\n2. Then this other thing.",
+        "Decisions": "[2026-09-17] Decision C.\n\n[2026-09-16] Decision B.\n\n[2026-09-15] Decision A.\n\n[2026-09-14] Decision Z (should be dropped, only 3 kept).",
+    })
+    real_psd = precompact_state.project_state_dir
+    precompact_state.project_state_dir = lambda: project_root / ".craftflow" / "state" / "project"
+    try:
+        digest = precompact_state._narrative_digest()
+    finally:
+        precompact_state.project_state_dir = real_psd
+    if digest is None:
+        fail(name, "expected a non-None digest for a well-formed fixture")
+        return
+    if "Newest focus entry" not in digest:
+        fail(name, f"expected latest Current Focus entry in digest; got: {digest!r}")
+        return
+    if "Older focus entry" in digest:
+        fail(name, f"expected only 1 Current Focus entry; got: {digest!r}")
+        return
+    if "Do the next thing" not in digest or "Then this other thing" not in digest:
+        fail(name, f"expected the whole Next Steps block in digest; got: {digest!r}")
+        return
+    if "Decision Z" in digest:
+        fail(name, f"expected only the 3 most recent Decisions kept; got: {digest!r}")
+        return
+    if "Decision A" not in digest or "Decision B" not in digest or "Decision C" not in digest:
+        fail(name, f"expected the 3 most recent Decisions in digest; got: {digest!r}")
+        return
+    ok(name)
+
+
+def test_precompact_narrative_digest_none_on_subprocess_failure(tmp_dir: Path) -> None:
+    name = "precompact-state/narrative-digest-none-on-subprocess-failure"
+    project_root = tmp_dir / "wf2"
+    _write_active_context_fixture(project_root, {"Current Focus": "[2026-09-17] Something."})
+    real_psd = precompact_state.project_state_dir
+    real_run = precompact_state.subprocess.run
+    precompact_state.project_state_dir = lambda: project_root / ".craftflow" / "state" / "project"
+
+    def _raise(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="craftflow_state_query.py", timeout=2.0)
+
+    precompact_state.subprocess.run = _raise
+    try:
+        digest = precompact_state._narrative_digest()
+    finally:
+        precompact_state.project_state_dir = real_psd
+        precompact_state.subprocess.run = real_run
+    if digest is not None:
+        fail(name, f"expected None on subprocess timeout; got: {digest!r}")
+        return
+    ok(name)
+
+
+def test_precompact_narrative_digest_none_on_missing_activecontext(tmp_dir: Path) -> None:
+    name = "precompact-state/narrative-digest-none-on-missing-activecontext"
+    project_root = tmp_dir / "wf3"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    real_psd = precompact_state.project_state_dir
+    precompact_state.project_state_dir = lambda: project_root / ".craftflow" / "state" / "project"
+    try:
+        digest = precompact_state._narrative_digest()
+    finally:
+        precompact_state.project_state_dir = real_psd
+    if digest is not None:
+        fail(name, f"expected None when activeContext.md does not exist; got: {digest!r}")
+        return
+    ok(name)
+
+
+def test_precompact_narrative_digest_none_on_malformed_headings(tmp_dir: Path) -> None:
+    name = "precompact-state/narrative-digest-none-on-malformed-headings"
+    project_root = tmp_dir / "wf4"
+    path = project_root / ".craftflow" / "state" / "project"
+    path.mkdir(parents=True)
+    (path / "activeContext.md").write_text("## Unrelated Heading\nsome text\n", encoding="utf-8")
+    real_psd = precompact_state.project_state_dir
+    precompact_state.project_state_dir = lambda: path
+    try:
+        digest = precompact_state._narrative_digest()
+    finally:
+        precompact_state.project_state_dir = real_psd
+    if digest is not None:
+        fail(name, f"expected None when none of the 3 expected headings are present; got: {digest!r}")
+        return
+    ok(name)
+
+
+def test_precompact_narrative_digest_respects_char_cap_and_truncation_marker(tmp_dir: Path) -> None:
+    name = "precompact-state/narrative-digest-respects-char-cap"
+    project_root = tmp_dir / "wf5"
+    huge_entry = "[2026-09-17] " + ("X" * 2000) + " end-of-entry-marker-should-not-appear"
+    _write_active_context_fixture(project_root, {"Current Focus": huge_entry})
+    real_psd = precompact_state.project_state_dir
+    precompact_state.project_state_dir = lambda: project_root / ".craftflow" / "state" / "project"
+    try:
+        digest = precompact_state._narrative_digest()
+    finally:
+        precompact_state.project_state_dir = real_psd
+    if digest is None:
+        fail(name, "expected a truncated (not None) digest for an oversized entry")
+        return
+    if len(digest) > precompact_state.NARRATIVE_DIGEST_MAX_CHARS:
+        fail(name, f"expected digest <= {precompact_state.NARRATIVE_DIGEST_MAX_CHARS} chars; got {len(digest)}")
+        return
+    if precompact_state.NARRATIVE_DIGEST_TRUNCATION_MARKER not in digest:
+        fail(name, f"expected truncation marker present in digest; got: {digest!r}")
+        return
+    if "end-of-entry-marker-should-not-appear" in digest:
+        fail(name, "expected the entry's tail to actually be cut off, not just marked")
+        return
+    ok(name)
+
+
+def test_precompact_narrative_digest_handles_bulleted_section_fallback(tmp_dir: Path) -> None:
+    name = "precompact-state/narrative-digest-handles-bulleted-fallback"
+    project_root = tmp_dir / "wf6"
+    _write_active_context_fixture(project_root, {
+        "Current Focus": "- oldest focus bullet\n- newest focus bullet",
+        "Decisions": "- decision one\n- decision two\n- decision three\n- decision four",
+    })
+    real_psd = precompact_state.project_state_dir
+    precompact_state.project_state_dir = lambda: project_root / ".craftflow" / "state" / "project"
+    try:
+        digest = precompact_state._narrative_digest()
+    finally:
+        precompact_state.project_state_dir = real_psd
+    if digest is None:
+        fail(name, "expected a non-None digest for a bulleted fixture")
+        return
+    if "newest focus bullet" not in digest or "oldest focus bullet" in digest:
+        fail(name, f"expected only the last Current Focus bullet kept; got: {digest!r}")
+        return
+    if "decision one" in digest:
+        fail(name, f"expected only the last 3 Decisions bullets kept; got: {digest!r}")
+        return
+    ok(name)
+
+
 def test_precompact_context_usage_budget_stays_under_registered_hook_timeout() -> None:
     # Drift-guard, mirroring craftflow_hook_selfcheck.py's own
     # test_selfcheck_internal_budget_stays_under_registered_hook_timeout: ties
@@ -24277,6 +24437,15 @@ def main() -> int:
     test_precompact_section_entries_returns_whole_body_when_limit_none()
     test_precompact_section_entries_returns_last_n_bullets_when_no_paragraphs()
     test_precompact_section_entries_empty_body_returns_empty_string()
+
+    print()
+    print("[ precompact-state: narrative digest — Task 1.2 _narrative_digest() bounded extraction ]")
+    test_precompact_narrative_digest_present_on_well_formed_fixture(tmp / "pcd1")
+    test_precompact_narrative_digest_none_on_subprocess_failure(tmp / "pcd2")
+    test_precompact_narrative_digest_none_on_missing_activecontext(tmp / "pcd3")
+    test_precompact_narrative_digest_none_on_malformed_headings(tmp / "pcd4")
+    test_precompact_narrative_digest_respects_char_cap_and_truncation_marker(tmp / "pcd5")
+    test_precompact_narrative_digest_handles_bulleted_section_fallback(tmp / "pcd6")
 
     print()
     print("[ context-usage (Thread E — craftflow's own context awareness) ]")

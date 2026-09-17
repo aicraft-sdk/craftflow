@@ -84,6 +84,53 @@ def _section_entries(body: str, limit: "int | None") -> str:
     return ""
 
 
+def _narrative_digest(timeout: float = PRECOMPACT_NARRATIVE_DIGEST_TIMEOUT_SECONDS) -> "str | None":
+    """Best-effort narrative digest of activeContext.md's Current
+    Focus/Next Steps/Decisions sections, computed via a bounded subprocess
+    call to the EXISTING craftflow_state_query.py --mode summary (never a
+    raw Read, never new summarization logic layered on the file itself --
+    that script's own CLI contract is untouched). Returns None on ANY
+    failure: script/file missing, subprocess timeout/non-zero-exit, or
+    none of the 3 expected headings present in the output -- same
+    best-effort, never-raise posture as `_context_usage()`."""
+    script = Path(__file__).resolve().parent / "craftflow_state_query.py"
+    active_context = project_state_dir() / "activeContext.md"
+    if not script.exists() or not active_context.exists():
+        return None
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script), str(active_context), "--mode", "summary"],
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        sections = parse_markdown_sections(result.stdout)
+    except Exception:
+        return None
+
+    parts = []
+    for heading, limit in NARRATIVE_DIGEST_SECTIONS:
+        body = sections.get(heading)
+        if not body:
+            continue
+        text = _section_entries(body, limit)
+        if text:
+            parts.append(f"## {heading}\n{text}")
+    if not parts:
+        return None
+
+    digest = "\n\n".join(parts)
+    if len(digest) > NARRATIVE_DIGEST_MAX_CHARS:
+        cut = NARRATIVE_DIGEST_MAX_CHARS - len(NARRATIVE_DIGEST_TRUNCATION_MARKER)
+        digest = digest[:cut] + NARRATIVE_DIGEST_TRUNCATION_MARKER
+    return digest
+
+
 def _build_snapshot(payload: dict, trigger: str, context_usage) -> dict:
     """Pure snapshot-shape builder (isolated for direct unit testing)."""
     wf = payload.get("workflow_uuid") or payload.get("workflow_id")
