@@ -16749,6 +16749,55 @@ def test_context_usage_returns_none_on_malformed_json() -> None:
     ok(name)
 
 
+def test_precompact_section_entries_returns_single_latest_paragraph() -> None:
+    name = "precompact-state/section-entries-single-latest-paragraph"
+    body = (
+        "\n[2026-09-17] Newest entry text here.\n"
+        "\n[2026-09-16] Older entry text here.\n"
+        "\n[2026-09-15] Oldest entry text here.\n"
+    )
+    result = precompact_state._section_entries(body, 1)
+    if "Newest entry text here." not in result:
+        fail(name, f"expected the newest (first) paragraph only; got: {result!r}")
+        return
+    if "Older entry text here." in result or "Oldest entry text here." in result:
+        fail(name, f"expected exactly 1 paragraph, got extras: {result!r}")
+        return
+    ok(name)
+
+
+def test_precompact_section_entries_returns_whole_body_when_limit_none() -> None:
+    name = "precompact-state/section-entries-whole-body-when-limit-none"
+    body = "1. First step\n2. Second step\n"
+    result = precompact_state._section_entries(body, None)
+    if result != body.strip():
+        fail(name, f"expected whole body returned unchanged (stripped); got: {result!r}")
+        return
+    ok(name)
+
+
+def test_precompact_section_entries_returns_last_n_bullets_when_no_paragraphs() -> None:
+    name = "precompact-state/section-entries-bullet-fallback"
+    body = "- oldest bullet\n- middle bullet\n- newest bullet\n"
+    result = precompact_state._section_entries(body, 2)
+    if "middle bullet" not in result or "newest bullet" not in result:
+        fail(name, f"expected the last 2 bullets kept; got: {result!r}")
+        return
+    if "oldest bullet" in result:
+        fail(name, f"expected the oldest bullet dropped; got: {result!r}")
+        return
+    ok(name)
+
+
+def test_precompact_section_entries_empty_body_returns_empty_string() -> None:
+    name = "precompact-state/section-entries-empty-body"
+    result = precompact_state._section_entries("   \n\n  ", 3)
+    if result != "":
+        fail(name, f"expected empty string for a blank body; got: {result!r}")
+        return
+    ok(name)
+
+
 def test_precompact_context_usage_budget_stays_under_registered_hook_timeout() -> None:
     # Drift-guard, mirroring craftflow_hook_selfcheck.py's own
     # test_selfcheck_internal_budget_stays_under_registered_hook_timeout: ties
@@ -24221,6 +24270,16 @@ def main() -> int:
     test_context_usage_returns_none_on_timeout()
     test_context_usage_returns_none_on_non_zero_exit()
     test_context_usage_returns_none_on_malformed_json()
+
+    print()
+    print("[ precompact-state: narrative digest — Task 1.1 section-entries dual-shape extraction ]")
+    test_precompact_section_entries_returns_single_latest_paragraph()
+    test_precompact_section_entries_returns_whole_body_when_limit_none()
+    test_precompact_section_entries_returns_last_n_bullets_when_no_paragraphs()
+    test_precompact_section_entries_empty_body_returns_empty_string()
+
+    print()
+    print("[ context-usage (Thread E — craftflow's own context awareness) ]")
     test_precompact_context_usage_budget_stays_under_registered_hook_timeout()
     test_postcompact_context_usage_budget_stays_under_registered_hook_timeout()
     test_report_statusline_appends_ctx_segment_when_available()
