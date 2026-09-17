@@ -21109,6 +21109,30 @@ def test_decision_record_exists_for_cwd_identity_confinement() -> None:
     ok(name)
 
 
+def test_decision_record_exists_for_guard_resolve_crash_hardening() -> None:
+    """Phase 5: the decision is durable (ADR recorded)."""
+    name = "decisions/record-exists-for-guard-resolve-crash-hardening"
+    # PLUGIN_ROOT.parents[3] -- copied verbatim from the sibling
+    # test_decision_record_exists_for_cwd_identity_confinement(). PLUGIN_ROOT
+    # is .../tools/craftflow-plugin/plugins/craftflow, so parents[3] is the
+    # repo root. Do NOT "simplify" this index.
+    repo_root = PLUGIN_ROOT.parents[3]
+    decisions_dir = repo_root / "docs" / "ai" / "decisions"
+    matches = sorted(decisions_dir.glob("*-craftflow-guard-resolve-crash-hardening.md"))
+    if not matches:
+        fail(name, "expected an ADR matching *-craftflow-guard-resolve-crash-hardening.md")
+        return
+    text = matches[0].read_text(encoding="utf-8")
+    for section in ("## What Changed", "## Why", "## Alternatives Considered", "## Impact", "## Links"):
+        if section not in text:
+            fail(name, f"ADR is missing the mandatory section {section!r}")
+            return
+    if "unresolvable-write-target" not in text:
+        fail(name, "ADR must name the deny reason it introduced")
+        return
+    ok(name)
+
+
 def test_hooklib_workflows_dir_project_root_override_and_no_side_effect(tmp_dir: Path) -> None:
     # ADR 0033 deferred-sibling fix, DD-2: `state_root()`/`workflows_dir()` call
     # .mkdir() on their OWN project's tree, which is correct for a process
@@ -23439,6 +23463,7 @@ def main() -> int:
     print("[ Phase 5: decision is durable (ADR recorded) ]")
     test_decision_record_exists_for_workspace_membership()
     test_decision_record_exists_for_cwd_identity_confinement()
+    test_decision_record_exists_for_guard_resolve_crash_hardening()
 
     print()
     print("[ hooklib: Phase 3 -- side-effect-free project_root on the live-workflow lookup chain ]")
