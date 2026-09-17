@@ -21819,6 +21819,88 @@ def test_bash_guard_one_unresolvable_redirect_path_does_not_unprotect_project_ti
     ok(name)
 
 
+def test_pretooluse_guard_one_unresolvable_workflow_json_does_not_unprotect_the_others(
+    tmp_dir: Path,
+) -> None:
+    """NEW live-reproduced CRITICAL (silent-failure-hunter REM-FIX):
+    `_protected_bash_write_paths()`'s workflow-JSON glob wrapped the ENTIRE
+    `for candidate in workflows_dir(project_root).glob("*.json")` loop in ONE
+    try, so a self-referential symlink at any single workflows/*.json file
+    made `.resolve()` raise and dropped EVERY OTHER workflow's JSON file from
+    the protected set at once -- a silent write bypass (not a crash), the
+    same bug class as [CHECKPOINT-1]'s `_protected_memory_paths()` fix but in
+    the workflow-JSON glob specifically. Unlike a literal-trailing-segment
+    glob (e.g. `glob(f"*/{name}")`), `glob("*.json")`'s WILDCARD trailing
+    segment enumerates a broken-symlink candidate as a match before
+    `.resolve()` is ever called on it, so the raise is live-reproducible
+    here. Empirically verified live on this filesystem: naming the loop
+    `wf-loop.json` sorts it before `wf-healthy.json` in
+    `Path.glob("*.json")`'s own directory-iteration order, so the healthy
+    sibling is the one that gets dropped."""
+    name = "pretooluse-guard/one-unresolvable-workflow-json-does-not-unprotect-the-others"
+    project = tmp_dir / "partial-workflow-json-proj"
+    workflows = project / ".craftflow" / "state" / "workflows"
+    workflows.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    (workflows / "wf-healthy.json").write_text(
+        json.dumps({"workflow_uuid": "wf-healthy"}), encoding="utf-8"
+    )
+    loop = workflows / "wf-loop.json"
+    os.symlink(loop, loop)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    code, out = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-partial-workflow-json",
+            "cwd": str(project),
+            "tool_input": {"command": "echo hi > .craftflow/state/workflows/wf-healthy.json"},
+        },
+        env,
+    )
+    if not _deny_out(out):
+        fail(name, f"BYPASS: wf-healthy.json lost its protection because a SIBLING workflow JSON was unresolvable; exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_one_unresolvable_workflow_json_does_not_unprotect_the_others(
+    tmp_dir: Path,
+) -> None:
+    """Sibling of the above in `craftflow_pretooluse_bash_guard.py`'s own
+    independently duplicated `_protected_redirect_paths()`: its workflow-JSON
+    glob block has the IDENTICAL all-or-nothing-loop bug (same shape, same
+    root cause, different script -- no import dependency between the two
+    guard scripts, by design)."""
+    name = "pretooluse-bash-guard/one-unresolvable-workflow-json-does-not-unprotect-the-others"
+    project = tmp_dir / "partial-workflow-json-bash-proj"
+    workflows = project / ".craftflow" / "state" / "workflows"
+    workflows.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    (workflows / "wf-healthy.json").write_text(
+        json.dumps({"workflow_uuid": "wf-healthy"}), encoding="utf-8"
+    )
+    loop = workflows / "wf-loop.json"
+    os.symlink(loop, loop)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    code, out = run_hook(
+        "craftflow_pretooluse_bash_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-partial-workflow-json-bash",
+            "cwd": str(project),
+            "tool_input": {"command": "echo hi > .craftflow/state/workflows/wf-healthy.json"},
+        },
+        env,
+    )
+    if not _deny_out(out):
+        fail(name, f"BYPASS: wf-healthy.json lost its redirect protection because a SIBLING workflow JSON was unresolvable; exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
 def test_hooklib_load_input_non_utf8_stdin_degrades_instead_of_crashing(
     tmp_dir: Path,
 ) -> None:
@@ -23567,6 +23649,11 @@ def main() -> int:
     print("[ pretooluse-bash-guard: Phase 5 [CHECKPOINT-1] sibling -- _protected_redirect_paths per-file degradation, not all-or-nothing (live-reproduced write bypass) ]")
     test_bash_guard_one_unresolvable_redirect_path_does_not_unprotect_root_state_siblings(tmp / "res2i")
     test_bash_guard_one_unresolvable_redirect_path_does_not_unprotect_project_tier_siblings(tmp / "res2j")
+
+    print()
+    print("[ pretooluse-guard + pretooluse-bash-guard: REM-FIX (silent-failure-hunter) -- workflow-JSON glob per-file degradation, not all-or-nothing (live-reproduced write bypass) ]")
+    test_pretooluse_guard_one_unresolvable_workflow_json_does_not_unprotect_the_others(tmp / "res2k")
+    test_bash_guard_one_unresolvable_workflow_json_does_not_unprotect_the_others(tmp / "res2l")
 
     print()
     print("[ pretooluse-guard: REM-FIX cycle 7 -- unresolvable-cwd detector missed the os.system/subprocess/shutil write-mechanism bypass ]")

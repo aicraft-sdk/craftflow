@@ -1382,22 +1382,73 @@ def _protected_redirect_paths(project_root: "Path | None" = None) -> set:
                         "reason": "skipped_one_unresolvable_redirect_path_only",
                     },
                 )
+    # REM-FIX (silent-failure-hunter MEDIUM, defense-in-depth; independently
+    # duplicated sibling of the identical guard.py fix): same all-or-nothing-
+    # loop SHAPE as the workflow-JSON glob fix below, applied here for
+    # consistency even though a live bypass could NOT be reproduced at this
+    # specific call site: `glob(f"*/{name}")`'s trailing segment is LITERAL
+    # (not a wildcard), and a broken symlink at that literal path is
+    # silently omitted by glob() itself (existence-checked via stat, which
+    # fails closed for a broken symlink) before this loop's own
+    # `.resolve()` is ever reached -- unlike the wildcard-trailing-segment
+    # `glob("*.json")` case below. Per-file now, for defense-in-depth
+    # against a future refactor of this call shape, not because a live
+    # bypass was demonstrated here.
     try:
         wf_dir = workflows_dir(project_root)
-        for name in PROTECTED_MEMORY_FILES:
-            for candidate in wf_dir.glob(f"*/{name}"):
-                paths.add(candidate.resolve())
     except Exception:
-        pass
+        wf_dir = None
+    if wf_dir is not None:
+        for name in PROTECTED_MEMORY_FILES:
+            try:
+                candidates = list(wf_dir.glob(f"*/{name}"))
+            except Exception:
+                candidates = []
+            for candidate in candidates:
+                try:
+                    paths.add(candidate.resolve())
+                except Exception as exc:
+                    log_event(
+                        "plugin_pretooluse_bash_guard",
+                        {
+                            "event": "pretool_bash_guard_parse_error",
+                            "command_name": "protected_redirect_workflow_memory_path_resolve",
+                            "error": repr(exc),
+                            "reason": "skipped_one_unresolvable_workflow_memory_path_only",
+                        },
+                    )
     try:
         paths.add(memory_finalize_permit_path(project_root).resolve())
     except Exception:
         pass
+    # REM-FIX (silent-failure-hunter, live-reproduced CRITICAL, independently
+    # duplicated sibling of the identical bug fixed in
+    # craftflow_pretooluse_guard.py's `_protected_bash_write_paths()`): this
+    # used to wrap the ENTIRE `for candidate in ... glob("*.json")` loop in
+    # ONE try, so a single unresolvable candidate (e.g. a self-referential
+    # symlink at any one workflows/*.json file) aborted the whole loop and
+    # dropped every OTHER workflow's JSON enumerated at or after it from the
+    # protected set at once. Unlike a literal-trailing-segment glob, this
+    # wildcard trailing segment DOES yield an unresolvable symlink candidate
+    # before `.resolve()` is ever called on it, so this is live-reproducible.
+    # Per-file now: one bad member costs only that member.
     try:
-        for candidate in workflows_dir(project_root).glob("*.json"):
-            paths.add(candidate.resolve())
+        candidates = list(workflows_dir(project_root).glob("*.json"))
     except Exception:
-        pass
+        candidates = []
+    for candidate in candidates:
+        try:
+            paths.add(candidate.resolve())
+        except Exception as exc:
+            log_event(
+                "plugin_pretooluse_bash_guard",
+                {
+                    "event": "pretool_bash_guard_parse_error",
+                    "command_name": "protected_redirect_workflow_json_resolve",
+                    "error": repr(exc),
+                    "reason": "skipped_one_unresolvable_workflow_json_only",
+                },
+            )
     return paths
 
 
