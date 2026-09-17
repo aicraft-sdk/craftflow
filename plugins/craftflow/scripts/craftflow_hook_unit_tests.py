@@ -5099,6 +5099,44 @@ def test_pretooluse_guard_denies_bash_python_import_alias_os_system_write_to_mem
     ok(name)
 
 
+def test_pretooluse_guard_denies_bash_python_import_alias_os_system_space_before_paren_write_to_memory_md(
+    tmp_dir: Path,
+) -> None:
+    # REM-FIX cycle 9 (silent-failure-hunter CRITICAL, live-reproduced):
+    # `_python_suspicious_call_bindings()` builds alias-detection patterns as
+    # bare literal strings (`f"{alias}.{attr}("`) matched via plain substring
+    # containment -- ZERO whitespace tolerance, unlike the literal marker
+    # regex `_PYTHON_SUSPICIOUS_MECHANISM_RE` which already tolerates
+    # whitespace before the call paren via `\s*\(`. A one-character
+    # formatting change (a space before the paren) silently defeated this
+    # already-shipped protected-memory-file guard: `o.system ('printf x >
+    # <protected path>')` was live-verified to ALLOW instead of DENY before
+    # this fix, even with a fully resolvable cwd.
+    name = "pretooluse-guard/denies-bash-python-import-alias-os-system-space-before-paren-write-to-memory-md"
+    project_root = tmp_dir / "project"
+    (project_root / ".craftflow" / "state" / "project").mkdir(parents=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {
+            "command": (
+                "python3 -c \"import os as o; o.system ('printf x > "
+                ".craftflow/state/project/patterns.md')\""
+            )
+        },
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if '"permissionDecision": "deny"' not in out and '"permissionDecision":"deny"' not in out:
+        fail(
+            name,
+            f"expected deny for an import-aliased `o.system (...)` (space before "
+            f"paren) write to a memory .md file; got: {out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_denies_bash_python_from_import_system_write_to_memory_md(tmp_dir: Path) -> None:
     # REM-FIX (doubt-verify cycle 2, Problem 2 -- from-import bypass):
     # live-verified before this fix -- `from os import system;
@@ -21299,6 +21337,52 @@ def test_pretooluse_guard_bash_unresolvable_cwd_allows_aliased_import_that_is_ne
     ok(name)
 
 
+def test_pretooluse_guard_bash_unresolvable_cwd_denies_python_alias_space_before_paren_write_mechanism_command(
+    tmp_dir: Path,
+) -> None:
+    """REM-FIX cycle 9 (silent-failure-hunter CRITICAL, live-reproduced):
+    the same whitespace-tolerance bypass as the resolvable-cwd sibling test
+    above also affects this cwd-free check -- `_command_has_any_write_target()`
+    reuses `_python_suspicious_call_bindings()`'s bare literal-string alias
+    patterns via plain substring containment. `o.system ('...')` (space
+    before the paren) was live-verified to ALLOW instead of DENY under an
+    unresolvable cwd before this fix."""
+    name = "pretooluse-guard/bash-unresolvable-cwd-denies-python-alias-space-before-paren-write-mechanism-command"
+    project = tmp_dir / "bash-unresolvable-cwd-pymech-space-proj"
+    (project / ".craftflow" / "state").mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    loop = tmp_dir / "bash-unresolvable-cwd-pymech-space-loop"
+    os.symlink(loop, loop)
+
+    code, out = run_hook(
+        "craftflow_pretooluse_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-bash-unresolvable-cwd-pymech-space",
+            "cwd": str(loop),
+            "tool_input": {
+                "command": (
+                    "python3 -c \"import os as o; "
+                    "o.system ('echo pwned > .craftflow/state/activeContext.md')\""
+                )
+            },
+        },
+        env,
+    )
+    if code != 0:
+        fail(name, f"guard process crashed (exit {code}) instead of emitting a deny -- FAIL-OPEN")
+        return
+    if not _deny_out(out) or "unresolvable-cwd-with-write-target" not in out:
+        fail(
+            name,
+            f"expected DENY with 'unresolvable-cwd-with-write-target' for an "
+            f"o.system (...) (space before paren) write mechanism, got exit={code}, stdout={out!r}",
+        )
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_bash_unresolvable_cwd_allows_read_only_command(
     tmp_dir: Path,
 ) -> None:
@@ -22116,6 +22200,7 @@ def main() -> int:
         print("[ pretooluse-guard: REM-FIX (doubt-verify cycle 2: statement-proximity + import-alias coverage) ]")
         test_pretooluse_guard_allows_bash_python_subprocess_run_harmless_mention_of_protected_path(tmp / "g33")
         test_pretooluse_guard_denies_bash_python_import_alias_os_system_write_to_memory_md(tmp / "g34")
+        test_pretooluse_guard_denies_bash_python_import_alias_os_system_space_before_paren_write_to_memory_md(tmp / "g34b")
         test_pretooluse_guard_denies_bash_python_from_import_system_write_to_memory_md(tmp / "g35")
         test_pretooluse_guard_allows_bash_python_variable_reference_then_call_write_to_memory_md_disclosed_gap(tmp / "g36")
 
@@ -23101,6 +23186,10 @@ def main() -> int:
     print("[ pretooluse-guard: REM-FIX cycle 7 -- unresolvable-cwd detector missed the os.system/subprocess/shutil write-mechanism bypass ]")
     test_pretooluse_guard_bash_unresolvable_cwd_denies_python_write_mechanism_command(tmp / "res2d")
     test_pretooluse_guard_bash_unresolvable_cwd_allows_aliased_import_that_is_never_called(tmp / "res2e")
+
+    print()
+    print("[ pretooluse-guard: REM-FIX cycle 9 -- whitespace-tolerance bypass in alias-detection patterns (both lanes) ]")
+    test_pretooluse_guard_bash_unresolvable_cwd_denies_python_alias_space_before_paren_write_mechanism_command(tmp / "res2f")
 
     print()
     print("[ hooklib / memory-protect-restore: REM-FIX cycle 5 -- unguarded sys.stdin.read() decode crash ]")

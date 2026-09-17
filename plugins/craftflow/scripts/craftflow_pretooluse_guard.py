@@ -276,16 +276,33 @@ def _split_statement_like_chunks(text: str) -> list:
 
 def _python_suspicious_call_bindings(code_text: str) -> set:
     """Scan python source text for `import X as Y` / `from X import Y`
-    forms of os/subprocess/shutil and return the set of alias/bound-name
-    call-open substrings (e.g. `"o.system("`, `"system("`) that should be
-    treated as equivalent to the literal marker regex above. Does NOT
-    trace a name through further re-assignment (`func = os.system`) --
-    that requires real AST analysis and is a disclosed, out-of-scope gap
-    (see LIMITATIONS on `_python_suspicious_mechanism_targets` below)."""
+    forms of os/subprocess/shutil and return a set of COMPILED REGEXES
+    matching the alias/bound-name call-open shape (e.g. `o.system(`,
+    `system(`) that should be treated as equivalent to the literal marker
+    regex above. Does NOT trace a name through further re-assignment
+    (`func = os.system`) -- that requires real AST analysis and is a
+    disclosed, out-of-scope gap (see LIMITATIONS on
+    `_python_suspicious_mechanism_targets` below).
+
+    REM-FIX cycle 9 (silent-failure-hunter CRITICAL, live-reproduced): these
+    patterns used to be bare literal strings matched via plain substring
+    containment (`"o.system(" in code_text`) -- ZERO whitespace tolerance,
+    unlike the literal marker regex `_PYTHON_SUSPICIOUS_MECHANISM_RE` above,
+    which already tolerates whitespace before the call paren via `\\s*\\(`.
+    `o.system ('...')` (one space before the paren) silently defeated the
+    alias-detection half of BOTH consumers of this function -- the
+    resolvable-cwd protected-memory-file guard
+    (`_python_suspicious_mechanism_targets`) AND the cwd-free write-target
+    check (`_command_has_any_write_target`). Compiling a whitespace-tolerant
+    regex here, once, means every consumer that switches from `pattern in
+    text` to `pattern.search(text)` inherits the same tolerance as the
+    literal marker, instead of duplicating the fix at each call site."""
     patterns: set = set()
     for module, alias in _IMPORT_AS_RE.findall(code_text):
         for attr in _SUSPICIOUS_ATTRS_BY_MODULE[module]:
-            patterns.add(f"{alias}.{attr}(")
+            patterns.add(
+                re.compile(rf"{re.escape(alias)}\s*\.\s*{re.escape(attr)}\s*\(")
+            )
     for module, names_blob in _FROM_IMPORT_RE.findall(code_text):
         for name_part in names_blob.split(","):
             name_part = name_part.strip()
@@ -298,7 +315,7 @@ def _python_suspicious_call_bindings(code_text: str) -> set:
             else:
                 orig = bound = name_part
             if orig in _SUSPICIOUS_ATTRS_BY_MODULE[module]:
-                patterns.add(f"{bound}(")
+                patterns.add(re.compile(rf"{re.escape(bound)}\s*\("))
     return patterns
 
 
@@ -1804,7 +1821,7 @@ def _python_suspicious_mechanism_targets(command: str, protected_paths: set, cwd
     hits: set = set()
     for statement in _split_statement_like_chunks(code_text):
         has_marker = bool(_PYTHON_SUSPICIOUS_MECHANISM_RE.search(statement)) or any(
-            pattern in statement for pattern in alias_call_patterns
+            pattern.search(statement) for pattern in alias_call_patterns
         )
         if not has_marker:
             continue
@@ -2327,7 +2344,7 @@ def _command_has_any_write_target(command: str) -> bool:
         # `import os as o; print(o.getcwd())`) under an unresolvable cwd.
         alias_call_patterns = _python_suspicious_call_bindings(code_text)
         if _PYTHON_SUSPICIOUS_MECHANISM_RE.search(code_text) or any(
-            pattern in code_text for pattern in alias_call_patterns
+            pattern.search(code_text) for pattern in alias_call_patterns
         ):
             return True
     for tokens in split_subcommands(command):
