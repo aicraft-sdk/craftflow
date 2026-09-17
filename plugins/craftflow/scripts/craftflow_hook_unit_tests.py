@@ -22738,17 +22738,21 @@ def test_no_unguarded_or_mis_guarded_stdin_read_call_sites() -> None:
 _ALL_OR_NOTHING_LOOP_ACCUMULATOR_METHODS = ("append", "add")
 
 
-def _for_loops_directly_in_try_body(stmts: list) -> "list[ast.For | ast.AsyncFor]":
-    """Yield every `for`/`async for` loop reachable from `stmts` (a `try`
-    node's own `body` list) through simple control statements (`if`,
-    `with`) -- WITHOUT crossing into a nested `Try`'s body (a for-loop
-    nested inside its own already-distinct try is that try's own concern,
+def _for_loops_directly_in_try_body(stmts: list) -> "list[ast.For | ast.AsyncFor | ast.While]":
+    """Yield every `for`/`async for`/`while` loop reachable from `stmts` (a
+    `try` node's own `body` list) through simple control statements (`if`,
+    `with`) -- WITHOUT crossing into a nested `Try`'s body (a loop nested
+    inside its own already-distinct try is that try's own concern,
     evaluated independently when `ast.walk()` reaches it) or into a nested
-    `def`/`class`/`lambda` (different scope). A `for` loop's own nested
-    `for` loops are also yielded, for completeness."""
-    found: "list[ast.For | ast.AsyncFor]" = []
+    `def`/`class`/`lambda` (different scope). A loop's own nested loops are
+    also yielded, for completeness.
+
+    REM-FIX (hardening pass): originally `ast.For`/`ast.AsyncFor` only --
+    a `while` loop accumulating into a list/set directly inside a bare try
+    is the identical bug shape, just a different loop statement type."""
+    found: "list[ast.For | ast.AsyncFor | ast.While]" = []
     for stmt in stmts:
-        if isinstance(stmt, (ast.For, ast.AsyncFor)):
+        if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
             found.append(stmt)
             found.extend(_for_loops_directly_in_try_body(stmt.body))
         elif isinstance(stmt, ast.Try):
@@ -22761,28 +22765,62 @@ def _for_loops_directly_in_try_body(stmts: list) -> "list[ast.For | ast.AsyncFor
     return found
 
 
-def _for_loop_accumulator_name(for_node: "ast.For | ast.AsyncFor") -> str | None:
-    """Return the accumulator variable name if `for_node`'s body (anywhere,
-    full depth) calls `<Name>.append(...)`/`<Name>.add(...)`, or
-    augassigns `<Name> |= ...` (the `set |= {...}` shape used to BUILD a
-    protected-path set) -- the three accumulation shapes this bug class
-    actually used across all 16 known sites. Returns the FIRST match found;
-    good enough to name a violation, not intended as an exhaustive list of
-    every accumulator a loop might touch."""
+def _for_loop_accumulator_name(for_node: "ast.For | ast.AsyncFor | ast.While") -> str | None:
+    """Return the accumulator variable/dict name if `for_node`'s body
+    (anywhere, full depth) uses one of the accumulation shapes this bug
+    class has actually used across all known sites plus the hardening-pass
+    blind spots:
+
+    - `<Name>.append(...)` / `<Name>.add(...)`
+    - `<Name>.setdefault(key, default).append(...)` / `...add(...)`
+      (dict-of-lists/sets accumulator -- REM-FIX hardening pass)
+    - `<Name> |= ...` / `<Name> += ...` augassign (the `set |= {...}` shape
+      used to BUILD a protected-path set; `+=` added in the hardening pass)
+    - `d[k] = d.get(k, ...) + ...` subscript-assignment merge (REM-FIX
+      hardening pass)
+
+    Returns the FIRST match found; good enough to name a violation, not
+    intended as an exhaustive list of every accumulator a loop might
+    touch."""
     for node in ast.walk(for_node):
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
             and node.func.attr in _ALL_OR_NOTHING_LOOP_ACCUMULATOR_METHODS
-            and isinstance(node.func.value, ast.Name)
         ):
-            return node.func.value.id
+            if isinstance(node.func.value, ast.Name):
+                return node.func.value.id
+            if (
+                isinstance(node.func.value, ast.Call)
+                and isinstance(node.func.value.func, ast.Attribute)
+                and node.func.value.func.attr == "setdefault"
+                and isinstance(node.func.value.func.value, ast.Name)
+            ):
+                return node.func.value.func.value.id
         if (
             isinstance(node, ast.AugAssign)
-            and isinstance(node.op, ast.BitOr)
+            and isinstance(node.op, (ast.BitOr, ast.Add))
             and isinstance(node.target, ast.Name)
         ):
             return node.target.id
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Subscript)
+            and isinstance(node.targets[0].value, ast.Name)
+            and isinstance(node.value, ast.BinOp)
+            and isinstance(node.value.op, ast.Add)
+        ):
+            dict_name = node.targets[0].value.id
+            for side in (node.value.left, node.value.right):
+                if (
+                    isinstance(side, ast.Call)
+                    and isinstance(side.func, ast.Attribute)
+                    and side.func.attr == "get"
+                    and isinstance(side.func.value, ast.Name)
+                    and side.func.value.id == dict_name
+                ):
+                    return dict_name
     return None
 
 
@@ -22793,6 +22831,83 @@ def _for_loop_has_inner_try(for_node: "ast.For | ast.AsyncFor") -> bool:
     wrapped in its OWN try/except INSIDE the loop, so one bad item costs
     only that item instead of aborting the whole loop."""
     return any(isinstance(node, ast.Try) for node in ast.walk(for_node) if node is not for_node)
+
+
+_COMPREHENSION_TYPES = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+
+def _comprehension_has_risky_call(comp: "ast.expr") -> bool:
+    """True when a comprehension's output expression (`elt`, or `key`/
+    `value` for a dict comprehension) contains a method call
+    (`<expr>.method(...)`) -- the shape of the original CHECKPOINT-1 bug
+    (`(root_state / name).resolve()` inside a set comprehension). A
+    comprehension with no method call in its output expression is treated
+    as plain data-shaping, not filesystem-risky, and is not flagged, to
+    avoid false positives."""
+    targets = [comp.key, comp.value] if isinstance(comp, ast.DictComp) else [comp.elt]
+    for target in targets:
+        for node in ast.walk(target):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                return True
+    return False
+
+
+def _statements_directly_in_try_body(stmts: list) -> list:
+    """Yield every statement reachable from `stmts` (a `try` node's own
+    `body` list) through simple control statements (`if`, `with`) --
+    WITHOUT crossing into a nested `Try`, a nested `for`/`async for`/
+    `while` loop's body (loop-internal accumulator shapes are
+    `_for_loop_accumulator_name`'s own concern), or a nested `def`/`class`/
+    `lambda` (different scope). Used to find comprehension-based
+    accumulators that sit directly in a try body: a comprehension can
+    never contain its own try/except (a Python syntax restriction), so any
+    one found here is structurally unguarded per-item."""
+    found: list = []
+    for stmt in stmts:
+        if isinstance(stmt, (ast.Try, ast.For, ast.AsyncFor, ast.While)):
+            continue
+        found.append(stmt)
+        if isinstance(stmt, ast.If):
+            found.extend(_statements_directly_in_try_body(stmt.body))
+            found.extend(_statements_directly_in_try_body(stmt.orelse))
+        elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+            found.extend(_statements_directly_in_try_body(stmt.body))
+    return found
+
+
+def _comprehension_accumulator_violations_directly_in_try_body(stmts: list) -> "list[tuple[int, str]]":
+    """Find comprehension-based accumulators (`ListComp`/`SetComp`/
+    `DictComp`/`GeneratorExp`) that sit directly in a try body via
+    `paths |= {...}` / `paths += [...]` augassign, or
+    `paths.update({...})` / `paths.extend([...])` calls -- the ORIGINAL
+    all-or-nothing bug shape (CHECKPOINT-1's `_protected_memory_paths()`:
+    "this used to be an all-or-nothing set comprehension inside ONE
+    try"). Unlike a `for`/`while` loop, a comprehension can never contain
+    its own try/except (Python syntax), so any comprehension found here
+    that calls something risky is unconditionally unguarded per-item --
+    there is no equivalent of `_for_loop_has_inner_try` to check."""
+    violations: "list[tuple[int, str]]" = []
+    for stmt in _statements_directly_in_try_body(stmts):
+        if (
+            isinstance(stmt, ast.AugAssign)
+            and isinstance(stmt.op, (ast.BitOr, ast.Add))
+            and isinstance(stmt.target, ast.Name)
+            and isinstance(stmt.value, _COMPREHENSION_TYPES)
+            and _comprehension_has_risky_call(stmt.value)
+        ):
+            violations.append((stmt.lineno, stmt.target.id))
+        elif (
+            isinstance(stmt, ast.Expr)
+            and isinstance(stmt.value, ast.Call)
+            and isinstance(stmt.value.func, ast.Attribute)
+            and stmt.value.func.attr in ("update", "extend")
+            and isinstance(stmt.value.func.value, ast.Name)
+        ):
+            for arg in stmt.value.args:
+                if isinstance(arg, _COMPREHENSION_TYPES) and _comprehension_has_risky_call(arg):
+                    violations.append((stmt.lineno, stmt.value.func.value.id))
+                    break
+    return violations
 
 
 # Deliberately empty: the heuristic below currently reports ZERO false
@@ -22806,6 +22921,43 @@ def _for_loop_has_inner_try(for_node: "ast.For | ast.AsyncFor") -> bool:
 _ALL_OR_NOTHING_LOOP_ALLOWLIST: "set[tuple[str, int]]" = set()
 
 
+def _scan_tree_for_all_or_nothing_loop_violations(tree: ast.Module, filename: str) -> "list[str]":
+    """Shared scan core used both by the real-file prevention test below
+    and by the synthetic-fixture hardening test
+    (`test_all_or_nothing_loop_detector_closes_known_blind_spots`) -- so
+    the fixtures prove the SAME code path the real guard-script scan uses,
+    not a parallel reimplementation that could silently drift."""
+    violations: "list[str]" = []
+    for try_node in ast.walk(tree):
+        if not isinstance(try_node, ast.Try):
+            continue
+        for loop_node in _for_loops_directly_in_try_body(try_node.body):
+            accumulator = _for_loop_accumulator_name(loop_node)
+            if accumulator is None:
+                continue
+            if _for_loop_has_inner_try(loop_node):
+                continue
+            if (filename, loop_node.lineno) in _ALL_OR_NOTHING_LOOP_ALLOWLIST:
+                continue
+            violations.append(
+                f"{filename}:{loop_node.lineno}: loop accumulating into "
+                f"`{accumulator}` sits directly inside a try with no per-item "
+                "inner try/except -- one unresolvable/raising member can "
+                "silently drop already-found or not-yet-checked entries "
+                "(all-or-nothing-loop antipattern)"
+            )
+        for lineno, accumulator in _comprehension_accumulator_violations_directly_in_try_body(try_node.body):
+            if (filename, lineno) in _ALL_OR_NOTHING_LOOP_ALLOWLIST:
+                continue
+            violations.append(
+                f"{filename}:{lineno}: comprehension-based accumulator `{accumulator}` "
+                "sits directly inside a try -- a comprehension can never contain its "
+                "own try/except, so one unresolvable/raising element silently drops "
+                "the whole accumulator (all-or-nothing-loop antipattern, comprehension shape)"
+            )
+    return violations
+
+
 def test_no_all_or_nothing_violation_detection_loops_in_guard_scripts() -> None:
     """Comprehensive structural prevention test (Task B): scan
     `craftflow_pretooluse_guard.py` and `craftflow_pretooluse_bash_guard.py`
@@ -22813,10 +22965,11 @@ def test_no_all_or_nothing_violation_detection_loops_in_guard_scripts() -> None:
     CRITICAL findings across this entire ADR 0036 pass (10 in the
     protected-path SET-BUILDING functions, fixed earlier in this phase; 6
     more in `_handle_bash()`'s/`main()`'s violation-DETECTION loops, fixed
-    by this same REM-FIX). A `try` whose body directly contains a `for` loop
-    that accumulates into a list/set, where that loop's own per-item work is
-    NOT itself wrapped in an inner try/except, is flagged regardless of
-    whether the surrounding `except` explicitly resets the accumulator --
+    by this same REM-FIX). A `try` whose body directly contains a `for`/
+    `while` loop or a comprehension that accumulates into a list/set/dict,
+    where that per-item work is NOT itself wrapped in an inner try/except
+    (impossible by construction for a comprehension), is flagged regardless
+    of whether the surrounding `except` explicitly resets the accumulator --
     either shape silently drops already-found-or-not-yet-checked entries
     when any single member raises."""
     name = "hook-scripts/no-all-or-nothing-violation-detection-loops-in-guard-scripts"
@@ -22830,27 +22983,194 @@ def test_no_all_or_nothing_violation_detection_loops_in_guard_scripts() -> None:
             violations.append(f"{filename}: could not parse for static scan ({exc})")
             continue
 
-        for try_node in ast.walk(tree):
-            if not isinstance(try_node, ast.Try):
-                continue
-            for for_node in _for_loops_directly_in_try_body(try_node.body):
-                accumulator = _for_loop_accumulator_name(for_node)
-                if accumulator is None:
-                    continue
-                if _for_loop_has_inner_try(for_node):
-                    continue
-                if (filename, for_node.lineno) in _ALL_OR_NOTHING_LOOP_ALLOWLIST:
-                    continue
-                violations.append(
-                    f"{filename}:{for_node.lineno}: for-loop accumulating into "
-                    f"`{accumulator}` sits directly inside a try with no per-item "
-                    "inner try/except -- one unresolvable/raising member can "
-                    "silently drop already-found or not-yet-checked entries "
-                    "(all-or-nothing-loop antipattern)"
-                )
+        violations.extend(_scan_tree_for_all_or_nothing_loop_violations(tree, filename))
 
     if violations:
         fail(name, "all-or-nothing violation-detection loop(s) found:\n  " + "\n  ".join(violations))
+        return
+    ok(name)
+
+
+def _violations_in_snippet(snippet: str) -> "list[str]":
+    """Parse a synthetic code snippet and run it through the SAME scan
+    core the real guard-script prevention test uses (see
+    `_scan_tree_for_all_or_nothing_loop_violations`)."""
+    tree = ast.parse(textwrap.dedent(snippet))
+    return _scan_tree_for_all_or_nothing_loop_violations(tree, "<synthetic-blind-spot-fixture>")
+
+
+def test_all_or_nothing_loop_detector_closes_known_blind_spots() -> None:
+    """REM-FIX (hardening pass): the AST prevention test above was
+    empirically confirmed by both code-reviewer and silent-failure-hunter
+    to have blind spots -- shapes that are STRUCTURALLY the same
+    all-or-nothing bug but that the original
+    `_for_loops_directly_in_try_body` / `_for_loop_accumulator_name` did
+    not recognize as a loop/accumulator shape at all. Each closed blind
+    spot below is proven BOTH ways: the unguarded synthetic snippet MUST
+    be flagged, and its per-item-guarded twin MUST NOT be (no false
+    positives introduced by widening the detector). One blind spot
+    (helper-function indirection) is a documented, accepted limitation --
+    see its assertion below and ADR 0036's hardening addendum."""
+    name = "hook-scripts/all-or-nothing-loop-detector-closes-known-blind-spots"
+    failures: list[str] = []
+
+    # Blind spot 1: comprehension accumulator directly in a try -- the
+    # ORIGINAL CHECKPOINT-1 bug shape. `_protected_memory_paths()`'s own
+    # REM-FIX comment says: "this used to be an all-or-nothing set
+    # comprehension inside ONE try".
+    unguarded_comprehension = """
+        try:
+            paths |= {(root / name).resolve() for name in names}
+        except Exception:
+            pass
+    """
+    if not _violations_in_snippet(unguarded_comprehension):
+        failures.append("comprehension accumulator (|=) in a bare try was NOT flagged")
+
+    guarded_comprehension_equivalent = """
+        try:
+            for name in names:
+                try:
+                    paths.add((root / name).resolve())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    """
+    if _violations_in_snippet(guarded_comprehension_equivalent):
+        failures.append("per-item guarded for-loop equivalent of the comprehension shape was FALSELY flagged")
+
+    # Blind spot 2: `while` loops -- same accumulator shape as `for`, just
+    # a different loop statement type.
+    unguarded_while = """
+        try:
+            i = 0
+            while i < len(names):
+                targets.append(Path(names[i]).resolve())
+                i += 1
+        except Exception:
+            pass
+    """
+    if not _violations_in_snippet(unguarded_while):
+        failures.append("while-loop accumulator in a bare try was NOT flagged")
+
+    guarded_while = """
+        try:
+            i = 0
+            while i < len(names):
+                try:
+                    targets.append(Path(names[i]).resolve())
+                except Exception:
+                    pass
+                i += 1
+        except Exception:
+            pass
+    """
+    if _violations_in_snippet(guarded_while):
+        failures.append("per-item guarded while-loop equivalent was FALSELY flagged")
+
+    # Blind spot 3a: dict-of-lists/sets accumulator via
+    # `.setdefault(key, []).append(...)`.
+    unguarded_setdefault = """
+        try:
+            for name in names:
+                grouped.setdefault(name.parent, []).append(name.resolve())
+        except Exception:
+            pass
+    """
+    if not _violations_in_snippet(unguarded_setdefault):
+        failures.append(".setdefault(...).append(...) accumulator in a bare try was NOT flagged")
+
+    guarded_setdefault = """
+        try:
+            for name in names:
+                try:
+                    grouped.setdefault(name.parent, []).append(name.resolve())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    """
+    if _violations_in_snippet(guarded_setdefault):
+        failures.append("per-item guarded .setdefault(...).append(...) equivalent was FALSELY flagged")
+
+    # Blind spot 3b: dict subscript-assignment merge,
+    # `d[k] = d.get(k, []) + [...]`.
+    unguarded_subscript_merge = """
+        try:
+            for name in names:
+                grouped[name.parent] = grouped.get(name.parent, []) + [name.resolve()]
+        except Exception:
+            pass
+    """
+    if not _violations_in_snippet(unguarded_subscript_merge):
+        failures.append("subscript-assignment-merge accumulator in a bare try was NOT flagged")
+
+    guarded_subscript_merge = """
+        try:
+            for name in names:
+                try:
+                    grouped[name.parent] = grouped.get(name.parent, []) + [name.resolve()]
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    """
+    if _violations_in_snippet(guarded_subscript_merge):
+        failures.append("per-item guarded subscript-assignment-merge equivalent was FALSELY flagged")
+
+    # Blind spot 5 (lower priority per the hardening request, closed here
+    # alongside the higher-priority ones): `+=` augmented assignment --
+    # the same shape as `|=`, just a different operator.
+    unguarded_plus_equals = """
+        try:
+            for name in names:
+                found += [name.resolve()]
+        except Exception:
+            pass
+    """
+    if not _violations_in_snippet(unguarded_plus_equals):
+        failures.append("`+=` accumulator in a bare try was NOT flagged")
+
+    guarded_plus_equals = """
+        try:
+            for name in names:
+                try:
+                    found += [name.resolve()]
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    """
+    if _violations_in_snippet(guarded_plus_equals):
+        failures.append("per-item guarded `+=` equivalent was FALSELY flagged")
+
+    # Blind spot 4, helper-function indirection: a KNOWN, ACCEPTED,
+    # DISCLOSED limitation (see the comment on `_for_loop_accumulator_name`
+    # and ADR 0036's hardening addendum). A shallow one-hop call-graph
+    # resolution was judged too complex/risky for this fix's scope: the
+    # loop's only call is to a small shared helper (`_record(violations,
+    # target)`) whose OWN body does the per-item accumulator append, one
+    # level of indirection away from the loop this detector inspects. This
+    # assertion documents the gap IN THE SUITE ITSELF so it cannot
+    # silently regress into "we thought we fixed this" -- if a future
+    # change happens to start catching this shape, this assertion fails
+    # loudly and must be updated deliberately, not silently deleted.
+    helper_indirection_not_caught = """
+        try:
+            for target in targets:
+                _record(violations, target)
+        except Exception:
+            pass
+    """
+    if _violations_in_snippet(helper_indirection_not_caught):
+        failures.append(
+            "helper-function indirection shape is now flagged -- this was a documented "
+            "accepted limitation; update this test and ADR 0036's hardening addendum to match"
+        )
+
+    if failures:
+        fail(name, "; ".join(failures))
         return
     ok(name)
 
@@ -24041,6 +24361,10 @@ def main() -> int:
     print()
     print("[ pretooluse-guard + pretooluse-bash-guard: Task B prevention test -- no all-or-nothing violation-detection loops (structural AST sweep) ]")
     test_no_all_or_nothing_violation_detection_loops_in_guard_scripts()
+
+    print()
+    print("[ all-or-nothing-loop detector: hardening pass -- closes comprehension/while/dict/+= blind spots ]")
+    test_all_or_nothing_loop_detector_closes_known_blind_spots()
 
     print()
     if _errors:
