@@ -3,6 +3,7 @@ from craftflow_hooklib import (
     latest_workflow_payload,
     load_input,
     log_event,
+    read_precompact_snapshot,
     session_context,
 )
 
@@ -31,6 +32,20 @@ def main() -> int:
         f"research_quality={overall_quality} pending_gate={pending} "
         f"incomplete_phases={', '.join(incomplete) if incomplete else 'none'}."
     )
+
+    if source == "compact":
+        try:
+            snapshot = read_precompact_snapshot()
+        except Exception:
+            snapshot = {}
+        # Explicit non-empty guard: workflow_uuid may be None/"" on BOTH
+        # sides (a malformed current payload and/or a malformed/foreign
+        # snapshot) -- None == None must never be treated as a match.
+        if workflow_uuid and snapshot.get("workflow_uuid") == workflow_uuid:
+            digest = snapshot.get("narrative_digest")
+            if digest:
+                message = f"{message}\n\n{digest}"
+
     log_event(
         "plugin_sessionstart_context",
         {

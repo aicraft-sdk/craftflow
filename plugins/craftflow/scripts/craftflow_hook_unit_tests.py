@@ -17188,6 +17188,149 @@ def test_read_precompact_snapshot_returns_empty_dict_on_non_dict_json(tmp_dir: P
     ok(name)
 
 
+def test_sessionstart_context_compact_source_with_matching_snapshot_includes_digest(tmp_dir: Path) -> None:
+    name = "sessionstart-context/compact-matching-snapshot-includes-digest"
+    project_root = tmp_dir / "ss1"
+    project_root.mkdir(parents=True)
+    _write_workflow_json_fixture_full(project_root, "wf-ss-1", None, worktree_mode="auto_created")
+    state_dir = project_root / ".craftflow" / "state"
+    snapshot = {"workflow_uuid": "wf-ss-1", "narrative_digest": "## Current Focus\nUNIQUE_DIGEST_MARKER_1"}
+    (state_dir / "precompact-state.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    exit_code, out = run_hook("craftflow_sessionstart_context.py", {"source": "compact"}, env)
+    if exit_code != 0:
+        fail(name, f"expected exit 0; got {exit_code}")
+        return
+    parsed = json.loads(out)
+    message = parsed.get("hookSpecificOutput", {}).get("additionalContext", "")
+    if "UNIQUE_DIGEST_MARKER_1" not in message:
+        fail(name, f"expected digest marker in injected message; got: {message!r}")
+        return
+    ok(name)
+
+
+def test_sessionstart_context_compact_source_with_mismatched_workflow_uuid_falls_back(tmp_dir: Path) -> None:
+    name = "sessionstart-context/compact-mismatched-uuid-falls-back"
+    project_root = tmp_dir / "ss2"
+    project_root.mkdir(parents=True)
+    _write_workflow_json_fixture_full(project_root, "wf-ss-2-current", None, worktree_mode="auto_created")
+    state_dir = project_root / ".craftflow" / "state"
+    snapshot = {"workflow_uuid": "wf-ss-2-STALE", "narrative_digest": "## Current Focus\nSHOULD_NOT_APPEAR"}
+    (state_dir / "precompact-state.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    exit_code, out = run_hook("craftflow_sessionstart_context.py", {"source": "compact"}, env)
+    if exit_code != 0:
+        fail(name, f"expected exit 0; got {exit_code}")
+        return
+    parsed = json.loads(out)
+    message = parsed.get("hookSpecificOutput", {}).get("additionalContext", "")
+    if "SHOULD_NOT_APPEAR" in message:
+        fail(name, f"expected no digest appended on workflow_uuid mismatch; got: {message!r}")
+        return
+    ok(name)
+
+
+def test_sessionstart_context_compact_source_with_missing_snapshot_falls_back(tmp_dir: Path) -> None:
+    name = "sessionstart-context/compact-missing-snapshot-falls-back"
+    project_root = tmp_dir / "ss3"
+    project_root.mkdir(parents=True)
+    _write_workflow_json_fixture_full(project_root, "wf-ss-3", None, worktree_mode="auto_created")
+    # Deliberately no precompact-state.json written.
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    exit_code, out = run_hook("craftflow_sessionstart_context.py", {"source": "compact"}, env)
+    if exit_code != 0:
+        fail(name, f"expected exit 0; got {exit_code}")
+        return
+    parsed = json.loads(out)
+    message = parsed.get("hookSpecificOutput", {}).get("additionalContext", "")
+    if "CRAFTFLOW v10 workflow context (compact):" not in message:
+        fail(name, f"expected today's bookkeeping-only message shape preserved; got: {message!r}")
+        return
+    ok(name)
+
+
+def test_sessionstart_context_startup_source_unaffected_by_precompact_snapshot(tmp_dir: Path) -> None:
+    # Regression guard: even with a workflow_uuid-MATCHING precompact
+    # snapshot present, source=="startup" must never append the digest.
+    name = "sessionstart-context/startup-source-unaffected-by-snapshot"
+    project_root = tmp_dir / "ss4"
+    project_root.mkdir(parents=True)
+    _write_workflow_json_fixture_full(project_root, "wf-ss-4", None, worktree_mode="auto_created")
+    state_dir = project_root / ".craftflow" / "state"
+    snapshot = {"workflow_uuid": "wf-ss-4", "narrative_digest": "## Current Focus\nSHOULD_NOT_APPEAR_ON_STARTUP"}
+    (state_dir / "precompact-state.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    exit_code, out = run_hook("craftflow_sessionstart_context.py", {"source": "startup"}, env)
+    if exit_code != 0:
+        fail(name, f"expected exit 0; got {exit_code}")
+        return
+    parsed = json.loads(out)
+    message = parsed.get("hookSpecificOutput", {}).get("additionalContext", "")
+    if "SHOULD_NOT_APPEAR_ON_STARTUP" in message:
+        fail(name, f"expected no digest appended on source=='startup'; got: {message!r}")
+        return
+    ok(name)
+
+
+def test_sessionstart_context_resume_source_unaffected_by_precompact_snapshot(tmp_dir: Path) -> None:
+    # Companion regression guard for source=="resume".
+    name = "sessionstart-context/resume-source-unaffected-by-snapshot"
+    project_root = tmp_dir / "ss5"
+    project_root.mkdir(parents=True)
+    _write_workflow_json_fixture_full(project_root, "wf-ss-5", None, worktree_mode="auto_created")
+    state_dir = project_root / ".craftflow" / "state"
+    snapshot = {"workflow_uuid": "wf-ss-5", "narrative_digest": "## Current Focus\nSHOULD_NOT_APPEAR_ON_RESUME"}
+    (state_dir / "precompact-state.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    exit_code, out = run_hook("craftflow_sessionstart_context.py", {"source": "resume"}, env)
+    if exit_code != 0:
+        fail(name, f"expected exit 0; got {exit_code}")
+        return
+    parsed = json.loads(out)
+    message = parsed.get("hookSpecificOutput", {}).get("additionalContext", "")
+    if "SHOULD_NOT_APPEAR_ON_RESUME" in message:
+        fail(name, f"expected no digest appended on source=='resume'; got: {message!r}")
+        return
+    ok(name)
+
+
+def test_sessionstart_context_compact_source_both_workflow_uuid_none_does_not_falsely_match(tmp_dir: Path) -> None:
+    # Real edge case, not hypothetical: a naive `snapshot.get("workflow_uuid")
+    # == workflow_uuid` comparison is TRUE when BOTH sides are None/missing
+    # (e.g. a malformed current workflow artifact with no workflow_uuid key,
+    # alongside an equally malformed/foreign snapshot) -- must not leak a
+    # stale/foreign digest in that case.
+    name = "sessionstart-context/compact-both-uuid-none-does-not-false-match"
+    project_root = tmp_dir / "ss6"
+    project_root.mkdir(parents=True)
+    _write_workflow_json_fixture_full(project_root, "wf-ss-6", None, worktree_mode="auto_created")
+    workflow_path = project_root / ".craftflow" / "state" / "workflows" / "wf-ss-6.json"
+    payload = json.loads(workflow_path.read_text(encoding="utf-8"))
+    payload.pop("workflow_uuid", None)
+    payload.pop("workflow_id", None)
+    workflow_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    state_dir = project_root / ".craftflow" / "state"
+    snapshot = {"narrative_digest": "## Current Focus\nSHOULD_NOT_FALSELY_MATCH"}  # no workflow_uuid key either
+    (state_dir / "precompact-state.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    exit_code, out = run_hook("craftflow_sessionstart_context.py", {"source": "compact"}, env)
+    if exit_code != 0:
+        fail(name, f"expected exit 0; got {exit_code}")
+        return
+    parsed = json.loads(out)
+    message = parsed.get("hookSpecificOutput", {}).get("additionalContext", "")
+    if "SHOULD_NOT_FALSELY_MATCH" in message:
+        fail(name, f"expected no digest appended when both workflow_uuids are absent (None==None must not match); got: {message!r}")
+        return
+    ok(name)
+
+
 def test_postcompact_context_usage_budget_stays_under_registered_hook_timeout() -> None:
     # Companion drift-guard for the PostCompact side.
     name = "postcompact-context/context-usage-budget-under-registered-timeout"
@@ -24674,6 +24817,15 @@ def main() -> int:
     test_read_precompact_snapshot_returns_empty_dict_on_missing_file(tmp / "rp2")
     test_read_precompact_snapshot_returns_empty_dict_on_malformed_json(tmp / "rp3")
     test_read_precompact_snapshot_returns_empty_dict_on_non_dict_json(tmp / "rp4")
+
+    print()
+    print("[ sessionstart-context: compact-source narrative digest ]")
+    test_sessionstart_context_compact_source_with_matching_snapshot_includes_digest(tmp / "ss1")
+    test_sessionstart_context_compact_source_with_mismatched_workflow_uuid_falls_back(tmp / "ss2")
+    test_sessionstart_context_compact_source_with_missing_snapshot_falls_back(tmp / "ss3")
+    test_sessionstart_context_startup_source_unaffected_by_precompact_snapshot(tmp / "ss4")
+    test_sessionstart_context_resume_source_unaffected_by_precompact_snapshot(tmp / "ss5")
+    test_sessionstart_context_compact_source_both_workflow_uuid_none_does_not_falsely_match(tmp / "ss6")
 
     print()
     print("[ craftflow_memory_merge: CLI-level provenance smoke test ]")
