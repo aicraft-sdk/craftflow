@@ -17067,6 +17067,42 @@ def test_precompact_context_usage_budget_stays_under_registered_hook_timeout() -
     ok(name)
 
 
+def test_precompact_narrative_digest_budget_stays_under_registered_hook_timeout() -> None:
+    # Drift-guard, mirroring test_precompact_context_usage_budget_stays_
+    # under_registered_hook_timeout: ties the COMBINED context-usage +
+    # narrative-digest subprocess budget to the REAL registered PreCompact
+    # timeout in hooks/hooks.json.
+    name = "precompact-state/narrative-digest-budget-under-registered-timeout"
+    path = PLUGIN_ROOT / "hooks" / "hooks.json"
+    if not path.exists():
+        fail(name, f"hooks.json not found at {path}")
+        return
+    hooks = json.loads(path.read_text(encoding="utf-8"))
+    precompact_hooks = hooks.get("hooks", {}).get("PreCompact", [])
+    registered_timeout = None
+    for entry in precompact_hooks:
+        for h in entry.get("hooks", []):
+            if "craftflow_precompact_state" in h.get("command", ""):
+                registered_timeout = h.get("timeout")
+    if registered_timeout is None:
+        fail(name, "could not find a registered timeout for craftflow_precompact_state in hooks/hooks.json")
+        return
+    combined_budget = (
+        precompact_state.PRECOMPACT_CONTEXT_USAGE_TIMEOUT_SECONDS
+        + precompact_state.PRECOMPACT_NARRATIVE_DIGEST_TIMEOUT_SECONDS
+    )
+    min_margin_seconds = 1
+    if combined_budget + min_margin_seconds > registered_timeout:
+        fail(
+            name,
+            f"combined context-usage + narrative-digest subprocess budget "
+            f"({combined_budget}s) leaves less than {min_margin_seconds}s margin "
+            f"under the registered PreCompact hook timeout ({registered_timeout}s)",
+        )
+        return
+    ok(name)
+
+
 def test_postcompact_context_usage_budget_stays_under_registered_hook_timeout() -> None:
     # Companion drift-guard for the PostCompact side.
     name = "postcompact-context/context-usage-budget-under-registered-timeout"
@@ -24535,6 +24571,7 @@ def main() -> int:
     print()
     print("[ context-usage (Thread E — craftflow's own context awareness) ]")
     test_precompact_context_usage_budget_stays_under_registered_hook_timeout()
+    test_precompact_narrative_digest_budget_stays_under_registered_hook_timeout()
     test_postcompact_context_usage_budget_stays_under_registered_hook_timeout()
     test_report_statusline_appends_ctx_segment_when_available()
     test_report_statusline_omits_ctx_segment_when_unavailable()
