@@ -1013,7 +1013,7 @@ def _is_protected_skill_promotion_path(
         return _skill_promotion_path_shape_match_no_root(path)
     try:
         root = (project_root or project_dir()).resolve()
-    except (OSError, ValueError):
+    except Exception:
         return False
 
     path_parts = path.parts
