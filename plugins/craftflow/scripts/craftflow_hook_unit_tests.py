@@ -21749,6 +21749,76 @@ def test_pretooluse_guard_one_unresolvable_memory_file_does_not_unprotect_bash_w
     ok(name)
 
 
+def test_bash_guard_one_unresolvable_redirect_path_does_not_unprotect_root_state_siblings(
+    tmp_dir: Path,
+) -> None:
+    """Sibling of [CHECKPOINT-1] found during that same fix's mandated Task 5.2
+    sweep: `craftflow_pretooluse_bash_guard.py` independently duplicates
+    `_protected_redirect_paths()` (no import dependency on guard.py's
+    `_protected_memory_paths()`), and its root-state block had the IDENTICAL
+    all-or-nothing set comprehension -- a self-symlink at ANY one of the
+    three root-tier memory files dropped ALL THREE from the protected set,
+    silently allowing a Bash redirect overwrite of a healthy sibling."""
+    name = "pretooluse-bash-guard/one-unresolvable-redirect-path-does-not-unprotect-root-state-siblings"
+    project = tmp_dir / "partial-redirect-root-proj"
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    (state_dir / "patterns.md").write_text("x\n", encoding="utf-8")
+    (state_dir / "progress.md").write_text("x\n", encoding="utf-8")
+    loop = state_dir / "activeContext.md"
+    os.symlink(loop, loop)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    code, out = run_hook(
+        "craftflow_pretooluse_bash_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-partial-redirect-root",
+            "cwd": str(project),
+            "tool_input": {"command": "echo hi > .craftflow/state/progress.md"},
+        },
+        env,
+    )
+    if not _deny_out(out):
+        fail(name, f"BYPASS: progress.md lost its redirect protection because a SIBLING root-state memory file was unresolvable; exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_one_unresolvable_redirect_path_does_not_unprotect_project_tier_siblings(
+    tmp_dir: Path,
+) -> None:
+    """Same duplicated-by-design bug in `_protected_redirect_paths()`'s
+    SECOND block (the `.craftflow/state/project/` tier), mirroring
+    `_protected_memory_paths()`'s own project_tier fix in guard.py."""
+    name = "pretooluse-bash-guard/one-unresolvable-redirect-path-does-not-unprotect-project-tier-siblings"
+    project = tmp_dir / "partial-redirect-project-tier-proj"
+    project_tier = project / ".craftflow" / "state" / "project"
+    project_tier.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    (project_tier / "patterns.md").write_text("x\n", encoding="utf-8")
+    (project_tier / "progress.md").write_text("x\n", encoding="utf-8")
+    loop = project_tier / "activeContext.md"
+    os.symlink(loop, loop)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+    code, out = run_hook(
+        "craftflow_pretooluse_bash_guard.py",
+        {
+            "tool_name": "Bash",
+            "session_id": "wf-partial-redirect-project-tier",
+            "cwd": str(project),
+            "tool_input": {"command": "echo hi > .craftflow/state/project/progress.md"},
+        },
+        env,
+    )
+    if not _deny_out(out):
+        fail(name, f"BYPASS: progress.md lost its redirect protection because a SIBLING project-tier memory file was unresolvable; exit={code}, stdout={out!r}")
+        return
+    ok(name)
+
+
 def test_hooklib_load_input_non_utf8_stdin_degrades_instead_of_crashing(
     tmp_dir: Path,
 ) -> None:
@@ -23492,6 +23562,11 @@ def main() -> int:
     print("[ pretooluse-guard: Phase 5 [CHECKPOINT-1] -- _protected_memory_paths per-file degradation, not all-or-nothing (live-reproduced write bypass) ]")
     test_pretooluse_guard_one_unresolvable_memory_file_does_not_unprotect_the_others(tmp / "res2g")
     test_pretooluse_guard_one_unresolvable_memory_file_does_not_unprotect_bash_writes(tmp / "res2h")
+
+    print()
+    print("[ pretooluse-bash-guard: Phase 5 [CHECKPOINT-1] sibling -- _protected_redirect_paths per-file degradation, not all-or-nothing (live-reproduced write bypass) ]")
+    test_bash_guard_one_unresolvable_redirect_path_does_not_unprotect_root_state_siblings(tmp / "res2i")
+    test_bash_guard_one_unresolvable_redirect_path_does_not_unprotect_project_tier_siblings(tmp / "res2j")
 
     print()
     print("[ pretooluse-guard: REM-FIX cycle 7 -- unresolvable-cwd detector missed the os.system/subprocess/shutil write-mechanism bypass ]")
