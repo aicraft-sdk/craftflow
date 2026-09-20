@@ -8,6 +8,7 @@ The client must never touch the real network in these tests.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import sys
@@ -59,6 +60,23 @@ class _FakeResponse:
 
 def fake_response(status: int, body_bytes: bytes) -> _FakeResponse:
     return _FakeResponse(status, body_bytes)
+
+
+class _FakeResponseReadRaises:
+    """Context-manager stand-in whose .read() raises a mid-response failure
+    (connection succeeded, but the body could not be fully read)."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    def read(self) -> bytes:
+        raise self._exc
+
+    def __enter__(self) -> "_FakeResponseReadRaises":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
 
 
 def _http_error(code: int, msg: str = "error") -> urllib.error.HTTPError:
@@ -414,6 +432,56 @@ def test_key_never_appears_in_exception_or_log_payloads() -> None:
         fail("key-never-in-logs", f"result={result!r} logged={logged!r} state_root_text={state_root_text!r}")
 
 
+def test_incomplete_read_during_response_body_returns_none() -> None:
+    logged: list = []
+
+    def fake_log(name, payload):
+        logged.append((name, payload))
+
+    def fake_urlopen(req, timeout=None):
+        return _FakeResponseReadRaises(http.client.IncompleteRead(b"", 10))
+
+    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+        result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log)
+
+    payload_dump = json.dumps(logged, default=str)
+    if (
+        result is None
+        and logged
+        and logged[0][1].get("decision") == "jev_call_failed"
+        and logged[0][1].get("error") == "IncompleteRead"
+        and SENTINEL_KEY not in payload_dump
+    ):
+        ok("IncompleteRead during response body read returns None")
+    else:
+        fail("incomplete-read-returns-none", f"result={result!r} logged={logged!r}")
+
+
+def test_connection_reset_during_response_body_returns_none() -> None:
+    logged: list = []
+
+    def fake_log(name, payload):
+        logged.append((name, payload))
+
+    def fake_urlopen(req, timeout=None):
+        return _FakeResponseReadRaises(ConnectionResetError("connection reset"))
+
+    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+        result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log)
+
+    payload_dump = json.dumps(logged, default=str)
+    if (
+        result is None
+        and logged
+        and logged[0][1].get("decision") == "jev_call_failed"
+        and logged[0][1].get("error") == "ConnectionResetError"
+        and SENTINEL_KEY not in payload_dump
+    ):
+        ok("ConnectionResetError during response body read returns None")
+    else:
+        fail("connection-reset-returns-none", f"result={result!r} logged={logged!r}")
+
+
 def test_endpoint_override_honored_only_for_loopback() -> None:
     captured: dict = {}
 
@@ -475,6 +543,8 @@ def main() -> int:
     test_cache_hit_skips_network_and_marks_cache_hit()
     test_cache_entry_never_contains_state_or_key()
     test_key_never_appears_in_exception_or_log_payloads()
+    test_incomplete_read_during_response_body_returns_none()
+    test_connection_reset_during_response_body_returns_none()
     test_endpoint_override_honored_only_for_loopback()
 
     print()
