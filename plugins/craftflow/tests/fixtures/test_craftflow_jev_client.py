@@ -578,6 +578,85 @@ def test_endpoint_override_honored_only_for_loopback() -> None:
         )
 
 
+def test_non_json_serializable_state_returns_none() -> None:
+    logged: list = []
+
+    def fake_log(name, payload):
+        logged.append((name, payload))
+
+    # A `set` is not JSON-serializable -- json.dumps() raises TypeError.
+    bad_state = {"thing": {1, 2, 3}}
+
+    result_no_cache = call(
+        bad_state, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log
+    )
+    no_cache_payload_dump = json.dumps(logged, default=str)
+    no_cache_ok = (
+        result_no_cache is None
+        and logged
+        and logged[0][1].get("decision") == "jev_call_failed"
+        and logged[0][1].get("error") == "TypeError"
+        and SENTINEL_KEY not in no_cache_payload_dump
+    )
+
+    logged.clear()
+    with tempfile.TemporaryDirectory() as tmp:
+        result_with_cache = call(
+            bad_state,
+            {},
+            api_key=SENTINEL_KEY,
+            model="jev-1.12",
+            timeout=2.5,
+            cache_dir=Path(tmp),
+            log=fake_log,
+        )
+        cache_files = list(Path(tmp).glob("*.json"))
+    with_cache_payload_dump = json.dumps(logged, default=str)
+    with_cache_ok = (
+        result_with_cache is None
+        and not cache_files
+        and logged
+        and logged[0][1].get("decision") == "jev_call_failed"
+        and logged[0][1].get("error") == "TypeError"
+        and SENTINEL_KEY not in with_cache_payload_dump
+    )
+
+    if no_cache_ok and with_cache_ok:
+        ok("non-JSON-serializable state returns None (cache_dir=None and cache_dir=tmp)")
+    else:
+        fail(
+            "non-json-serializable-state",
+            f"result_no_cache={result_no_cache!r} result_with_cache={result_with_cache!r} logged={logged!r}",
+        )
+
+
+def test_non_numeric_timeout_returns_none() -> None:
+    logged: list = []
+
+    def fake_log(name, payload):
+        logged.append((name, payload))
+
+    def fake_urlopen(req, timeout=None):
+        raise AssertionError("network should not be reached when timeout is invalid")
+
+    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+        result = call(
+            {}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=None, cache_dir=None, log=fake_log
+        )
+
+    payload_dump = json.dumps(logged, default=str)
+    if (
+        result is None
+        and logged
+        and logged[0][1].get("decision") == "jev_call_failed"
+        and logged[0][1].get("error") == "TypeError"
+        and SENTINEL_KEY not in payload_dump
+    ):
+        ok("non-numeric timeout (None) returns None instead of raising")
+    else:
+        fail("non-numeric-timeout", f"result={result!r} logged={logged!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_client: running")
     print(f"  (ENDPOINT = {ENDPOINT}, RETRY_STATUSES = {RETRY_STATUSES})")
@@ -598,6 +677,8 @@ def main() -> int:
     test_memory_error_during_response_read_returns_none()
     test_recursion_error_from_hostile_json_returns_none()
     test_endpoint_override_honored_only_for_loopback()
+    test_non_json_serializable_state_returns_none()
+    test_non_numeric_timeout_returns_none()
 
     print()
     print("=" * 40)
