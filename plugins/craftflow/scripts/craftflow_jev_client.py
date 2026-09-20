@@ -121,27 +121,49 @@ def call(
     Never raises. Every failure path logs a single `jev_call_failed` event via
     `log` (name, status, error class name, attempt) and returns None.
     """
-    cache_path: Optional[Path] = None
-    if cache_dir is not None:
-        cache_path = Path(cache_dir) / f"{_cache_key(state, questions, model)}.json"
-        cached = _read_cache(cache_path, ttl_seconds)
-        if cached is not None:
-            return {
-                "answers": cached["answers"],
-                "usage": cached.get("usage"),
-                "model": cached.get("model", model),
-                "latency_ms": 0,
-                "cache_hit": True,
-            }
+    try:
+        cache_path: Optional[Path] = None
+        if cache_dir is not None:
+            cache_path = Path(cache_dir) / f"{_cache_key(state, questions, model)}.json"
+            cached = _read_cache(cache_path, ttl_seconds)
+            if cached is not None:
+                return {
+                    "answers": cached["answers"],
+                    "usage": cached.get("usage"),
+                    "model": cached.get("model", model),
+                    "latency_ms": 0,
+                    "cache_hit": True,
+                }
 
-    endpoint = _resolve_endpoint(os.environ, log)
-    req = _build_request(endpoint, state, questions, model, api_key)
+        endpoint = _resolve_endpoint(os.environ, log)
+        req = _build_request(endpoint, state, questions, model, api_key)
+    except Exception as exc:
+        # Pre-loop setup (cache-key hashing, cache read, endpoint resolution,
+        # request construction) sits outside the per-attempt try/except below
+        # and can raise on malformed inputs -- e.g. a non-JSON-serializable
+        # `state`/`questions` value raises TypeError from json.dumps() before
+        # any network attempt is made. Same terminal-failure semantics as the
+        # in-loop catch-all further down (DD-2/DD-4): log
+        # type(exc).__name__ + status=None, no retry, return None. Cache-hit
+        # short-circuiting above is unaffected -- it returns before this
+        # except can ever run.
+        log(
+            "plugin_jev_client",
+            {
+                "event": "jev_call",
+                "decision": "jev_call_failed",
+                "status": None,
+                "error": type(exc).__name__,
+                "attempt": 0,
+            },
+        )
+        return None
 
     start = time.monotonic()
     for attempt in (1, 2):
-        remaining = TOTAL_BUDGET_SECONDS - (time.monotonic() - start)
-        attempt_timeout = min(timeout, remaining)
         try:
+            remaining = TOTAL_BUDGET_SECONDS - (time.monotonic() - start)
+            attempt_timeout = min(timeout, remaining)
             with urllib.request.urlopen(req, timeout=attempt_timeout) as resp:
                 body = resp.read()
             data = json.loads(body)
