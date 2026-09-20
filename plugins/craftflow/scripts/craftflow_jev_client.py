@@ -218,5 +218,27 @@ def call(
                 },
             )
             return None
+        except Exception as exc:
+            # Broadest possible catch-all, deliberately placed last so it never
+            # shadows the more specific clauses above (each needs distinct
+            # retry/logging behavior). Closes the "never raises" docstring
+            # contract for failures that are neither OSError nor
+            # http.client.HTTPException -- e.g. MemoryError (resp.read() on an
+            # oversized body) or RecursionError (json.loads() on a hostile,
+            # deeply-nested-but-syntactically-valid body). Resource exhaustion
+            # during body read/parse is not in the 429/529 retry set (DD-4):
+            # terminal failure, no retry, same status=None/type-name-only
+            # logging as the OSError/HTTPException clause above (DD-2).
+            log(
+                "plugin_jev_client",
+                {
+                    "event": "jev_call",
+                    "decision": "jev_call_failed",
+                    "status": None,
+                    "error": type(exc).__name__,
+                    "attempt": attempt,
+                },
+            )
+            return None
 
     return None  # unreachable: loop always returns or raises above

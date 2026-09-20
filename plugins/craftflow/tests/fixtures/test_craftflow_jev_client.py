@@ -482,6 +482,56 @@ def test_connection_reset_during_response_body_returns_none() -> None:
         fail("connection-reset-returns-none", f"result={result!r} logged={logged!r}")
 
 
+def test_memory_error_during_response_read_returns_none() -> None:
+    logged: list = []
+
+    def fake_log(name, payload):
+        logged.append((name, payload))
+
+    def fake_urlopen(req, timeout=None):
+        return _FakeResponseReadRaises(MemoryError())
+
+    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+        result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log)
+
+    payload_dump = json.dumps(logged, default=str)
+    if (
+        result is None
+        and logged
+        and logged[0][1].get("decision") == "jev_call_failed"
+        and logged[0][1].get("error") == "MemoryError"
+        and SENTINEL_KEY not in payload_dump
+    ):
+        ok("MemoryError during response body read returns None")
+    else:
+        fail("memory-error-returns-none", f"result={result!r} logged={logged!r}")
+
+
+def test_recursion_error_from_hostile_json_returns_none() -> None:
+    logged: list = []
+
+    def fake_log(name, payload):
+        logged.append((name, payload))
+
+    hostile_body = (b"[" * 100000) + (b"]" * 100000)
+
+    def fake_urlopen(req, timeout=None):
+        return fake_response(200, hostile_body)
+
+    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+        result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log)
+
+    if (
+        result is None
+        and logged
+        and logged[0][1].get("decision") == "jev_call_failed"
+        and logged[0][1].get("error") == "RecursionError"
+    ):
+        ok("RecursionError from real json.loads on hostile body returns None")
+    else:
+        fail("recursion-error-returns-none", f"result={result!r} logged={logged!r}")
+
+
 def test_endpoint_override_honored_only_for_loopback() -> None:
     captured: dict = {}
 
@@ -545,6 +595,8 @@ def main() -> int:
     test_key_never_appears_in_exception_or_log_payloads()
     test_incomplete_read_during_response_body_returns_none()
     test_connection_reset_during_response_body_returns_none()
+    test_memory_error_during_response_read_returns_none()
+    test_recursion_error_from_hostile_json_returns_none()
     test_endpoint_override_honored_only_for_loopback()
 
     print()
