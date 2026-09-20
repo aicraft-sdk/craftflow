@@ -24,7 +24,7 @@ grep.
 
 ## Canonical hook events
 
-The 10 event names below are Claude Code's native hook event vocabulary
+The 11 event names below are Claude Code's native hook event vocabulary
 (`tools/craftflow-plugin/plugins/craftflow/hooks/hooks.json`). Every hook script keys off
 `hook_event_name` (or the underlying function names below) matching one of these.
 
@@ -40,6 +40,13 @@ The 10 event names below are Claude Code's native hook event vocabulary
 | `Stop` | the main agent turn ends | unmatched |
 | `StopFailure` | the main agent turn ends abnormally | unmatched |
 | `InstructionsLoaded` | project/global instruction files are loaded | unmatched |
+| `UserPromptSubmit` | the user submits a prompt, before the model sees it (opt-in Jev hint; inert by default) | unmatched |
+
+`UserPromptSubmit` is intentionally absent from `HookEventName` in `scripts/craftflow_hooklib.py`
+(which keeps its 10 members): `craftflow_jev_prompt_hint.py` does not use the `TypedDict`s or any
+event-typed helper, and `craftflow_hooklib.py` is frozen for that feature. `pnpm run
+verify:event-contract` reads this table, not the Literal, so this table is the registered-event
+vocabulary and the Literal is the typed subset.
 
 ## Request shape (`load_input()`)
 
@@ -62,11 +69,14 @@ class HookRequestOptional(TypedDict, total=False):
 actually reads. `cwd` and `workspace_roots` are host-native fields passed through
 unvalidated — no current script depends on them, they are documented here so a future
 binding knows they exist and are host-specific, not part of the required core.
+`prompt` (UserPromptSubmit only, Claude Code native) is read solely by
+`craftflow_jev_prompt_hint.py` and is not added to the `TypedDict`s — it is passed through
+unvalidated like `cwd`.
 
 ## Response shape (`json_print()`)
 
 Hook scripts write one JSON object to stdout via `craftflow_hooklib.json_print()`.
-Three call sites build it:
+Four call sites build it:
 
 ```python
 class HookSpecificOutput(TypedDict, total=False):
@@ -84,6 +94,7 @@ class HookResponse(TypedDict, total=False):
 | `pretool_deny(reason)` | `"PreToolUse"` | `permissionDecision: "deny"`, `permissionDecisionReason` | blocking a tool call before it runs |
 | `posttool_context(message)` | `"PostToolUse"` | `additionalContext` | non-blocking nudge after a tool already ran (no `permissionDecision` — too late to deny) |
 | `session_context(message)` | `"SessionStart"` | `additionalContext` | injecting context at session boot/resume/compact |
+| `craftflow_jev_prompt_hint.py` (inline `json_print`) | `"UserPromptSubmit"` | `additionalContext` | advisory routing/skill hint injected before the model sees the prompt (never a decision) |
 
 A script that emits no output (prints nothing) is the implicit "allow, no comment"
 response — this is not a distinct shape, it's simply skipping the optional write.
@@ -133,7 +144,7 @@ invoked them.
 ## Keeping this doc honest
 
 `scripts/verify-craftflow-event-contract.mjs` (`pnpm run verify:event-contract`) asserts
-every `HookEventName` value above has a real match in
+every canonical event in the table above has a real match in
 `hooks/hooks.json`, and that `.cursor/hooks.json`'s adapter invocations only ever pass
 `--event` values drawn from the same set. Run it after editing this doc or either
 `hooks.json` file.

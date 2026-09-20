@@ -236,6 +236,18 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_jev_prompt_hint.py\"",
+            "timeout": 5,
+            "statusMessage": "CRAFTFLOW optional Jev routing hint (inert unless config/jev.json enables it)"
+          }
+        ]
+      }
     ]
   }
 }

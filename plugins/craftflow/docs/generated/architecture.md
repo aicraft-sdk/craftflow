@@ -25,6 +25,7 @@ flowchart LR
   event_Stop["Stop"]
   event_StopFailure["StopFailure"]
   event_InstructionsLoaded["InstructionsLoaded"]
+  event_UserPromptSubmit["UserPromptSubmit"]
   script_craftflow_pretooluse_guard_py(["craftflow_pretooluse_guard.py"])
   script_craftflow_sdd_cache_pre_py(["craftflow_sdd_cache_pre.py"])
   script_craftflow_pretooluse_bash_guard_py(["craftflow_pretooluse_bash_guard.py"])
@@ -44,6 +45,7 @@ flowchart LR
   script_craftflow_stop_verify_py(["craftflow_stop_verify.py"])
   script_craftflow_stop_failure_log_py(["craftflow_stop_failure_log.py"])
   script_craftflow_instructions_loaded_audit_py(["craftflow_instructions_loaded_audit.py"])
+  script_craftflow_jev_prompt_hint_py(["craftflow_jev_prompt_hint.py"])
   event_PreToolUse -->|"Edit / Write"| script_craftflow_pretooluse_guard_py
   event_PreToolUse -->|"Read"| script_craftflow_pretooluse_guard_py
   event_PreToolUse -->|"WebFetch"| script_craftflow_sdd_cache_pre_py
@@ -67,9 +69,10 @@ flowchart LR
   event_Stop --> script_craftflow_stop_verify_py
   event_StopFailure --> script_craftflow_stop_failure_log_py
   event_InstructionsLoaded --> script_craftflow_instructions_loaded_audit_py
+  event_UserPromptSubmit --> script_craftflow_jev_prompt_hint_py
 ```
 
-23 hook registrations across 10 event types, 19 distinct scripts.
+24 hook registrations across 11 event types, 20 distinct scripts.
 
 ## Agent -> declared skills
 
@@ -143,4 +146,4 @@ flowchart LR
 
 - 14 agents (`agents/*.md`)
 - 29 skills (`skills/*/SKILL.md`)
-- 19 hook scripts wired in `hooks/hooks.json`
+- 20 hook scripts wired in `hooks/hooks.json`
