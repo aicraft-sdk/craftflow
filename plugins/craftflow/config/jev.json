@@ -1,0 +1,8 @@
+{
+  "enabled": false,
+  "model": "jev-latest",
+  "features": {"routingHint": "audit", "skillHint": "audit"},
+  "thresholds": {"routing": 0.85, "skill": 0.7},
+  "maxStateChars": 4000,
+  "timeoutSeconds": 2.5
+}
