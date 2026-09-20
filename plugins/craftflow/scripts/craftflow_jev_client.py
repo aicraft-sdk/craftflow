@@ -23,6 +23,7 @@ Design constraints (see docs/plans/2026-09-19-plan-optional-jev-typesafe-routi-p
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import socket
@@ -190,6 +191,22 @@ def call(
             )
             return None
         except (json.JSONDecodeError, ValueError, UnicodeDecodeError) as exc:
+            log(
+                "plugin_jev_client",
+                {
+                    "event": "jev_call",
+                    "decision": "jev_call_failed",
+                    "status": None,
+                    "error": type(exc).__name__,
+                    "attempt": attempt,
+                },
+            )
+            return None
+        except (http.client.HTTPException, OSError) as exc:
+            # Connection succeeded (headers received) but resp.read() failed mid-body
+            # (e.g. IncompleteRead, ConnectionResetError). Not a retryable condition
+            # per DD-4 -- treat as a terminal failure for this attempt, same as the
+            # non-429/529 HTTPError path above.
             log(
                 "plugin_jev_client",
                 {
