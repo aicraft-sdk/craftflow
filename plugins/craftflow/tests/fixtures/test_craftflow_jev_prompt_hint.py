@@ -5,6 +5,8 @@ Run: python3 tests/fixtures/test_craftflow_jev_prompt_hint.py
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -12,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unittest.mock as mock
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -28,9 +31,39 @@ from craftflow_jev_prompt_hint import (  # noqa: E402
     render_block,
     telemetry_rows,
 )
+import craftflow_jev_prompt_hint as prompt_hint_module  # noqa: E402
 
 TELEMETRY_KEYS_SKILL = set(TELEMETRY_KEYS)
 TELEMETRY_KEYS_ROUTING = set(TELEMETRY_KEYS) | {"agree_risk"}
+
+
+@contextlib.contextmanager
+def _env(overrides: dict):
+    """Temporarily set/delete os.environ entries (None value == delete)."""
+    _missing = object()
+    saved = {}
+    for key, value in overrides.items():
+        saved[key] = os.environ.get(key, _missing)
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is _missing:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _write_skill(skills_dir: Path, name: str, description: str) -> None:
+    skill_dir = skills_dir / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f'---\nname: {name}\ndescription: "{description}"\n---\n\n# {name}\n', encoding="utf-8"
+    )
 
 _passes = 0
 _errors: list[str] = []
@@ -412,6 +445,334 @@ def test_telemetry_rows_exact_keys_and_agreement() -> None:
         fail("telemetry-rows-schema", f"checks={checks!r} rows={rows!r}")
 
 
+# ---------------------------------------------------------------------------
+# Task 3.2: run_active() I/O shell -- roster sources, telemetry writes,
+# advise-mode injection, fail-open end-to-end proof.
+# ---------------------------------------------------------------------------
+
+
+def _base_cfg(enabled: bool = True) -> dict:
+    cfg = json.loads((PLUGIN_ROOT / "config" / "jev.json").read_text())
+    cfg["enabled"] = enabled
+    return cfg
+
+
+def test_audit_mode_writes_two_rows_and_no_stdout() -> None:
+    tmp = tempfile.TemporaryDirectory()
+    with tmp:
+        root = Path(tmp.name)
+        project = root / "project"
+        plugin = root / "plugin"
+        project.mkdir(parents=True)
+        (plugin / "skills").mkdir(parents=True)
+        cfg = _base_cfg()
+        fake_result = {
+            "answers": _GATE_ANSWERS,
+            "usage": {"tokens": 10},
+            "model": "jev-latest",
+            "latency_ms": 50,
+            "cache_hit": False,
+        }
+        with _env({"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin), "TYPESAFE_API_KEY": "k-test"}):
+            with mock.patch("craftflow_jev_prompt_hint.jev_call", return_value=fake_result) as mocked:
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    code = prompt_hint_module.run_active({"prompt": "fix the login bug"}, cfg)
+            events_path = project / ".craftflow" / "state" / "jev" / "events.jsonl"
+            rows = [json.loads(ln) for ln in events_path.read_text().splitlines()] if events_path.exists() else []
+        if code == 0 and buf.getvalue() == "" and len(rows) == 2 and mocked.called:
+            ok("audit mode writes two telemetry rows to events.jsonl and prints nothing")
+        else:
+            fail("audit-mode-two-rows", f"code={code} stdout={buf.getvalue()!r} rows={len(rows)}")
+
+
+def test_advise_mode_prints_additional_context_only_when_gated() -> None:
+    tmp = tempfile.TemporaryDirectory()
+    with tmp:
+        root = Path(tmp.name)
+        project = root / "project"
+        plugin = root / "plugin"
+        project.mkdir(parents=True)
+        (plugin / "skills").mkdir(parents=True)
+        cfg = _base_cfg()
+        cfg["features"] = {"routingHint": "advise", "skillHint": "advise"}
+        gated_result = {
+            "answers": _GATE_ANSWERS,
+            "usage": None,
+            "model": "jev-latest",
+            "latency_ms": 10,
+            "cache_hit": False,
+        }
+        low_conf_answers = {
+            **_GATE_ANSWERS,
+            "workflow": dict(_GATE_ANSWERS["workflow"], confidence=0.1),
+            "skill": dict(_GATE_ANSWERS["skill"], confidence=0.1),
+        }
+        ungated_result = dict(gated_result, answers=low_conf_answers)
+        with _env({"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin), "TYPESAFE_API_KEY": "k-test"}):
+            with mock.patch("craftflow_jev_prompt_hint.jev_call", return_value=gated_result):
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    prompt_hint_module.run_active({"prompt": "fix the login bug"}, cfg)
+            gated_out = buf.getvalue()
+            with mock.patch("craftflow_jev_prompt_hint.jev_call", return_value=ungated_result):
+                buf2 = io.StringIO()
+                with contextlib.redirect_stdout(buf2):
+                    prompt_hint_module.run_active({"prompt": "fix the login bug"}, cfg)
+            ungated_out = buf2.getvalue()
+        gated_payload = json.loads(gated_out) if gated_out.strip() else None
+        if (
+            gated_payload is not None
+            and gated_payload["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+            and "<craftflow_routing_hint" in gated_payload["hookSpecificOutput"]["additionalContext"]
+            and ungated_out.strip() == ""
+        ):
+            ok("advise mode prints additionalContext only when the gate is satisfied")
+        else:
+            fail("advise-mode-gated", f"gated_out={gated_out!r} ungated_out={ungated_out!r}")
+
+
+def test_no_key_never_calls_client() -> None:
+    def _boom(*args, **kwargs):
+        raise AssertionError("jev_call must not be called without an API key")
+
+    tmp = tempfile.TemporaryDirectory()
+    with tmp:
+        root = Path(tmp.name)
+        project = root / "project"
+        plugin = root / "plugin"
+        project.mkdir(parents=True)
+        (plugin / "skills").mkdir(parents=True)
+        cfg = _base_cfg()
+        with _env({"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin), "TYPESAFE_API_KEY": None}):
+            with mock.patch("craftflow_jev_prompt_hint.jev_call", side_effect=_boom):
+                code = prompt_hint_module.run_active({"prompt": "fix the login bug"}, cfg)
+        if code == 0:
+            ok("run_active never calls jev_call when no API key is present")
+        else:
+            fail("no-key-never-calls-client", f"code={code}")
+
+
+def test_slash_command_prompt_skips_call() -> None:
+    def _boom(*args, **kwargs):
+        raise AssertionError("jev_call must not be called for a slash-command prompt")
+
+    cfg = _base_cfg()
+    with mock.patch("craftflow_jev_prompt_hint.jev_call", side_effect=_boom):
+        code = prompt_hint_module.run_active({"prompt": "/craftflow status"}, cfg)
+    if code == 0:
+        ok("slash-command prompts skip the jev call")
+    else:
+        fail("slash-command-skip", f"code={code}")
+
+
+def test_empty_prompt_skips_call() -> None:
+    def _boom(*args, **kwargs):
+        raise AssertionError("jev_call must not be called for an empty prompt")
+
+    cfg = _base_cfg()
+    with mock.patch("craftflow_jev_prompt_hint.jev_call", side_effect=_boom):
+        code = prompt_hint_module.run_active({"prompt": "   "}, cfg)
+    if code == 0:
+        ok("empty/whitespace-only prompts skip the jev call")
+    else:
+        fail("empty-prompt-skip", f"code={code}")
+
+
+def test_roster_sources_read_project_skills_plugin_skills_and_patterns_hints() -> None:
+    tmp = tempfile.TemporaryDirectory()
+    with tmp:
+        root = Path(tmp.name)
+        project = root / "project"
+        plugin = root / "plugin"
+        (project / ".claude" / "skills").mkdir(parents=True)
+        (plugin / "skills").mkdir(parents=True)
+        _write_skill(project / ".claude" / "skills", "my-project-skill", "Use for project-specific work.")
+        _write_skill(plugin / "skills", "some-plugin-skill", "Use when doing plugin things.")
+        state_project_tier = project / ".craftflow" / "state" / "project"
+        state_project_tier.mkdir(parents=True)
+        (state_project_tier / "patterns.md").write_text(
+            "## Project SKILL_HINTS\n\n- craftflow:some-plugin-skill\n", encoding="utf-8"
+        )
+        with _env({"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin)}):
+            project_skills, plugin_skills, hints = prompt_hint_module._read_roster_sources()
+        project_names = [n for n, _ in project_skills]
+        plugin_names = [n for n, _ in plugin_skills]
+        if (
+            project_names == ["my-project-skill"]
+            and plugin_names == ["some-plugin-skill"]
+            and hints == ["craftflow:some-plugin-skill"]
+        ):
+            ok("_read_roster_sources reads project skills, plugin skills, and patterns.md hints")
+        else:
+            fail(
+                "roster-sources-read",
+                f"project_names={project_names!r} plugin_names={plugin_names!r} hints={hints!r}",
+            )
+
+
+def test_roster_hints_prefer_project_patterns_then_root_fallback() -> None:
+    tmp = tempfile.TemporaryDirectory()
+    with tmp:
+        root = Path(tmp.name)
+        project = root / "project"
+        plugin = root / "plugin"
+        (project / ".claude" / "skills").mkdir(parents=True)
+        (plugin / "skills").mkdir(parents=True)
+        state_dir = project / ".craftflow" / "state"
+        project_tier = state_dir / "project"
+        project_tier.mkdir(parents=True)
+        (project_tier / "patterns.md").write_text("## Project SKILL_HINTS\n\n- craftflow:a\n", encoding="utf-8")
+        (state_dir / "patterns.md").write_text("## Project SKILL_HINTS\n\n- craftflow:b\n", encoding="utf-8")
+        with _env({"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin)}):
+            _, _, hints_both = prompt_hint_module._read_roster_sources()
+            (project_tier / "patterns.md").unlink()
+            _, _, hints_fallback = prompt_hint_module._read_roster_sources()
+            (state_dir / "patterns.md").unlink()
+            _, _, hints_none = prompt_hint_module._read_roster_sources()
+        if hints_both == ["craftflow:a"] and hints_fallback == ["craftflow:b"] and hints_none == []:
+            ok("roster hints prefer project/patterns.md, fall back to root-flat, else empty")
+        else:
+            fail(
+                "roster-hints-fallback",
+                f"hints_both={hints_both!r} hints_fallback={hints_fallback!r} hints_none={hints_none!r}",
+            )
+
+
+def test_real_plugin_roster_size_matches_exclusion_rule() -> None:
+    tmp = tempfile.TemporaryDirectory()
+    with tmp:
+        project = Path(tmp.name) / "project"
+        project.mkdir(parents=True)
+        with _env({"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}):
+            _, plugin_skills, _ = prompt_hint_module._read_roster_sources()
+    host_ops = {"craftflow-router", "cursor-router", "status", "update"}
+    internal = sum(1 for _, desc in plugin_skills if (desc or "").strip().startswith("Internal skill"))
+    host_ops_not_internal = sum(
+        1
+        for name, desc in plugin_skills
+        if name in host_ops and not (desc or "").strip().startswith("Internal skill")
+    )
+    expected = len(plugin_skills) - internal - host_ops_not_internal + 1  # + "none"
+    roster = build_roster(project=[], plugin=plugin_skills, hint_bullets=[])
+    if len(roster) == expected and roster[-1]["id"] == "none":
+        ok("real plugin roster size matches the dynamically recomputed exclusion rule (finding 7)")
+    else:
+        fail("real-plugin-roster-size", f"len={len(roster)} expected={expected}")
+
+
+def test_events_jsonl_never_contains_prompt_text_or_key() -> None:
+    tmp = tempfile.TemporaryDirectory()
+    with tmp:
+        root = Path(tmp.name)
+        project = root / "project"
+        plugin = root / "plugin"
+        project.mkdir(parents=True)
+        (plugin / "skills").mkdir(parents=True)
+        cfg = _base_cfg()
+        sentinel_key = "sk-ZEBRA-SENTINEL-KEY"
+        sentinel_prompt = "ZEBRA-9911 fix the login bug"
+        fake_result = {
+            "answers": _GATE_ANSWERS,
+            "usage": {"tokens": 5},
+            "model": "jev-latest",
+            "latency_ms": 5,
+            "cache_hit": False,
+        }
+
+        def _capture_call(state, questions, *, api_key, **kwargs):
+            if api_key != sentinel_key:
+                raise AssertionError("api_key not forwarded to jev_call correctly")
+            return fake_result
+
+        with _env(
+            {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin), "TYPESAFE_API_KEY": sentinel_key}
+        ):
+            with mock.patch("craftflow_jev_prompt_hint.jev_call", side_effect=_capture_call):
+                prompt_hint_module.run_active({"prompt": sentinel_prompt}, cfg)
+            events_path = project / ".craftflow" / "state" / "jev" / "events.jsonl"
+            text = events_path.read_text(encoding="utf-8") if events_path.exists() else ""
+        if events_path.exists() and "ZEBRA-9911" not in text and sentinel_key not in text:
+            ok("events.jsonl never contains prompt text or the API key")
+        else:
+            fail("events-jsonl-no-secrets", f"exists={events_path.exists()} text={text!r}")
+
+
+def test_subprocess_connection_refused_fails_open() -> None:
+    tmp, project, plugin, env = _setup(enabled=True)
+    with tmp:
+        env2 = dict(env)
+        env2["TYPESAFE_API_KEY"] = "sk-sentinel-refused"
+        env2["CRAFTFLOW_JEV_ENDPOINT"] = "http://127.0.0.1:9/"
+        code, out, err = run_hook({"hook_event_name": "UserPromptSubmit", "prompt": "fix the login bug"}, env2)
+        log_path = project / ".craftflow/state/craftflow-hook-events.log"
+        log_text = log_path.read_text() if log_path.exists() else ""
+        failed_lines = [ln for ln in log_text.splitlines() if "jev_call_failed" in ln]
+        if (code, out) == (0, "") and len(failed_lines) == 1 and "sk-sentinel-refused" not in log_text:
+            ok("subprocess connection-refused endpoint fails open (exit 0, one jev_call_failed line, no key leak)")
+        else:
+            fail(
+                "subprocess-connection-refused",
+                f"code={code} out={out!r} err={err!r} failed_lines={failed_lines!r}",
+            )
+
+
+def test_eight_malformed_stdin_variants_exit_zero_silently() -> None:
+    tmp, project, plugin, env = _setup(enabled=True)
+    with tmp:
+        env2 = dict(env)
+        env2["TYPESAFE_API_KEY"] = "sk-sentinel-malformed"
+        variants = [
+            b"",
+            b"[1]",
+            b"{",
+            b"\xff\xfe",
+            b"null",
+            b'{"prompt": 5}',
+            b'{"hook_event_name":"Stop"}',
+            b'{"prompt":""}',
+        ]
+        failures = []
+        for variant in variants:
+            merged_env = {k: v for k, v in os.environ.items() if k != "TYPESAFE_API_KEY"}
+            merged_env.update(env2)
+            result = subprocess.run(
+                [sys.executable, str(SCRIPTS / "craftflow_jev_prompt_hint.py")],
+                input=variant,
+                capture_output=True,
+                env=merged_env,
+            )
+            if result.returncode != 0 or result.stdout.strip() != b"":
+                failures.append((variant, result.returncode, result.stdout, result.stderr))
+        if not failures:
+            ok("8 malformed-stdin variants all exit 0 silently")
+        else:
+            fail("malformed-stdin-variants", f"failures={failures!r}")
+
+
+def test_stdout_never_contains_decision_or_blockreason() -> None:
+    tmp, project, plugin, env = _setup(enabled=True)
+    with tmp:
+        env2 = dict(env)
+        env2["TYPESAFE_API_KEY"] = "sk-sentinel-stdout-check"
+        env2["CRAFTFLOW_JEV_ENDPOINT"] = "http://127.0.0.1:9/"
+        scenarios = [
+            {"hook_event_name": "UserPromptSubmit", "prompt": "fix the login bug"},
+            {"hook_event_name": "UserPromptSubmit", "prompt": "/craftflow status"},
+            {"hook_event_name": "UserPromptSubmit", "prompt": ""},
+            {"hook_event_name": "Stop"},
+        ]
+        failures = []
+        for payload in scenarios:
+            code, out, err = run_hook(payload, env2)
+            if "decision" in out or "blockReason" in out or code != 0:
+                failures.append((payload, code, out))
+        if not failures:
+            ok("stdout never contains decision/blockReason across off/advise/skip/non-matching branches")
+        else:
+            fail("stdout-no-decision-blockreason", f"failures={failures!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_prompt_hint: running")
     test_disabled_config_exits_silently_and_writes_nothing()
@@ -431,6 +792,19 @@ def main() -> int:
     test_gate_skips_malformed_workflow_and_degrades_malformed_risk()
     test_render_block_is_byte_stable()
     test_telemetry_rows_exact_keys_and_agreement()
+
+    test_audit_mode_writes_two_rows_and_no_stdout()
+    test_advise_mode_prints_additional_context_only_when_gated()
+    test_no_key_never_calls_client()
+    test_slash_command_prompt_skips_call()
+    test_empty_prompt_skips_call()
+    test_roster_sources_read_project_skills_plugin_skills_and_patterns_hints()
+    test_roster_hints_prefer_project_patterns_then_root_fallback()
+    test_real_plugin_roster_size_matches_exclusion_rule()
+    test_events_jsonl_never_contains_prompt_text_or_key()
+    test_subprocess_connection_refused_fails_open()
+    test_eight_malformed_stdin_variants_exit_zero_silently()
+    test_stdout_never_contains_decision_or_blockreason()
 
     print()
     print("=" * 40)
