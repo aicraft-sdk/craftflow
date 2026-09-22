@@ -13,6 +13,7 @@ This directory now serves two different purposes:
    - `Stop` — workflow state snapshot and memory placeholder restore on session stop; opt-in stop-verify gate (`craftflow_stop_verify.py` — inert unless `config/stop-verify.json` sets `{"enabled": true, "command": "..."}`; concept ported from `xai-org/grok-build`, see this plugin's `NOTICE`)
    - `StopFailure` — API error logging (async)
    - `InstructionsLoaded` — instruction file load audit (async)
+   - `UserPromptSubmit` — optional Jev routing/skill hint (`craftflow_jev_prompt_hint.py`; inert unless `config/jev.json` sets `enabled:true` AND `TYPESAFE_API_KEY` is set; when enabled it sends the submitted prompt text (capped at `maxStateChars`), the project folder name and the active workflow type off-machine to TypeSafe AI; advisory `additionalContext` only, never a decision)
 2. **Optional git pre-commit helper** via `pre-commit`
 
 **Not the same file as Cursor's hooks.json.** A separate `hooks.json` lives at the plugin root
@@ -95,6 +96,7 @@ The shipped runtime hooks are intentionally minimal. Most hooks operate in audit
 - restore memory placeholders after Edit/Write and on SubagentStop and Stop
 - snapshot workflow state before compaction and on session stop; optionally block session completion until a configured verify command passes (opt-in, off by default; concept ported from `xai-org/grok-build`, see `NOTICE`)
 - log API failures and instruction file loads for telemetry
+- optionally ask TypeSafe AI's Jev classifier for a routing/skill hint via the `UserPromptSubmit` hook before each prompt (opt-in, off by default; sends prompt text off-machine only when enabled; never blocks)
 
 ## Internal Publication Audit
 

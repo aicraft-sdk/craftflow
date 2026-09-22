@@ -929,6 +929,43 @@ def test_router_docs_carry_jev_precedence_rules() -> None:
         fail("router-docs-jev-precedence", f"failures={failures!r}")
 
 
+def test_readme_and_hook_inventory_docs_document_jev() -> None:
+    readme = (PLUGIN_ROOT / "README.md").read_text(encoding="utf-8")
+    hooks_readme = (PLUGIN_ROOT / "hooks" / "README.md").read_text(encoding="utf-8")
+    policy_doc = (
+        PLUGIN_ROOT
+        / "skills"
+        / "craftflow-router"
+        / "references"
+        / "workflow-artifact-and-hook-policy.md"
+    ).read_text(encoding="utf-8")
+
+    failures = []
+    if "## Optional: Jev routing hint (TypeSafe AI)" not in readme:
+        failures.append("plugin README missing the 'Optional: Jev routing hint (TypeSafe AI)' heading")
+    else:
+        section_start = readme.find("## Optional: Jev routing hint (TypeSafe AI)")
+        next_heading = readme.find("\n## ", section_start + 1)
+        section = readme[section_start : next_heading if next_heading != -1 else len(readme)]
+        if "enabled" not in section:
+            failures.append("plugin README jev section missing 'enabled'")
+        if "--disable" not in section:
+            failures.append("plugin README jev section missing '--disable'")
+
+    if hooks_readme.count("`UserPromptSubmit`") < 2:
+        failures.append("hooks/README.md does not mention `UserPromptSubmit` at least twice")
+    if "off-machine" not in hooks_readme:
+        failures.append("hooks/README.md missing the phrase 'off-machine'")
+
+    if "`UserPromptSubmit` for the optional Jev" not in policy_doc:
+        failures.append("workflow-artifact-and-hook-policy.md missing '`UserPromptSubmit` for the optional Jev'")
+
+    if not failures:
+        ok("plugin README + hook inventory docs document the optional jev routing hint")
+    else:
+        fail("readme-and-hook-inventory-docs-jev", f"failures={failures!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_prompt_hint: running")
     test_disabled_config_exits_silently_and_writes_nothing()
@@ -967,6 +1004,7 @@ def main() -> int:
     test_stdout_never_contains_decision_or_blockreason()
 
     test_router_docs_carry_jev_precedence_rules()
+    test_readme_and_hook_inventory_docs_document_jev()
 
     print()
     print("=" * 40)

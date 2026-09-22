@@ -252,6 +252,66 @@ Workflow state lives at `.craftflow/state/` in the project root:
 
 ---
 
+## Optional: Jev routing hint (TypeSafe AI)
+
+An opt-in `UserPromptSubmit` hook (`craftflow_jev_prompt_hint.py`) can ask TypeSafe AI's
+Jev classifier for a routing/skill hint before each prompt. It is **`enabled: false` by
+default** in the committed `config/jev.json` — off by default means zero behavior change,
+zero network calls, and zero cost until an operator explicitly opts in.
+
+**Setup:** run the `jev-setup` skill, or the three underlying commands directly:
+
+```bash
+python3 scripts/craftflow_jev_setup.py --check    # canary call + prints the privacy note; writes nothing
+python3 scripts/craftflow_jev_setup.py --enable    # re-runs --check, then flips enabled:true on success
+python3 scripts/craftflow_jev_setup.py --disable   # flips enabled:false
+```
+
+**Privacy** (verbatim from `craftflow_jev_setup.py`'s printed privacy note):
+
+> PRIVACY: when enabled, each prompt you submit in Claude Code (first `maxStateChars` chars), the project folder name,
+> and the active craftflow workflow type are sent to api.typesafe.ai (TypeSafe AI) for classification.
+> Nothing else is sent; no prompt text is stored locally; telemetry rows contain only answers/latency/usage.
+> Disable at any time: `python3 scripts/craftflow_jev_setup.py --disable`
+
+**Modes:** each feature (`features.routingHint`, `features.skillHint`) is independently one
+of `off` / `audit` / `advise`. `audit` logs telemetry only and injects nothing. `advise`
+additionally injects a `<craftflow_routing_hint source="jev">` block via
+`hookSpecificOutput.additionalContext` when the answer's confidence is at/above the
+configured threshold.
+
+**Thresholds:** `thresholds.routing` (default `0.85`) and `thresholds.skill` (default
+`0.7`) gate `advise`-mode injection per feature; below threshold, nothing is injected even
+in `advise` mode.
+
+**Timeout:** `timeoutSeconds` caps the client's total deadline (default `2.5`, max `4.0`).
+At `4.0` there is no retry budget left inside the 5s hook timeout — DD-4's retry only fires
+when at least 1.0s remains after a 0.3s backoff, so a `timeoutSeconds` of `4.0` consumes the
+whole budget on the first attempt.
+
+**Promotion:** `python3 scripts/craftflow_jev_report.py` summarizes agreement rate, latency,
+and token stats per feature from the telemetry log, ending in a DD-11 `PROMOTE`/`HOLD`
+verdict (`PROMOTE` requires `n >= 100` and per-feature minimum agreement — `0.80` routing,
+`0.60` skill). Only a `PROMOTE` verdict justifies manually flipping a feature from `audit` to
+`advise` in `config/jev.json`.
+
+**Config reset on update:** a plugin update resets `config/jev.json` to the shipped
+defaults (`enabled: false`); re-run `--enable` after updating if the hint was previously
+turned on.
+
+**Telemetry:** rows are appended to `.craftflow/state/jev/events.jsonl` — never prompt text,
+never the API key.
+
+**Model:** pinned via `config/jev.json`'s `model` key (default `jev-latest`); README
+recommends pinning to `jev-1.12` for stable calibration once any feature reaches `advise`.
+
+**Never blocks:** this hook only ever adds advisory `additionalContext` or does nothing —
+it never emits a routing decision and never denies a prompt. Priority-1 ERROR keywords in
+the router's Intent Routing table always win over any Jev hint (see `router-protocol.md`
+§ Intent Routing).
+
+---
+
 ## Architecture graph
 
 `docs/generated/architecture.md` is a generated (not hand-maintained) view of

@@ -265,6 +265,7 @@ Hook policy:
   - `Stop` for workflow state snapshot and memory placeholder restore on session stop (never blocks)
 - `StopFailure` for API error logging to workflow event log (async, telemetry only)
 - `InstructionsLoaded` for instruction file load audit trail (async, telemetry only)
+- `UserPromptSubmit` for the optional Jev routing/skill hint (opt-in via `config/jev.json`, off by default; audit or advise only, never blocks; when enabled, capped prompt text leaves the machine to TypeSafe AI — see hooks/README.md)
 - Hook modes: `memoryWrites`, `protectedWrites`, `bashDestructiveTraversal`, and `taskMetadata` are enforced in block mode; all other hooks operate in audit mode. Each of the first three enum-validates its `hook-mode.json` value and fails closed (block) on a missing or malformed config. Do not rely on hooks as the only source of truth; the router still owns orchestration decisions.
 - Repo-local `.claude/settings.json` is not part of the shipped CRAFTFLOW product.
 - Optional accelerator MCPs are user-configured in Claude Code. CRAFTFLOW assumes the names `brightdata` and `octocode` if they are available, but must degrade to built-in research paths when they are absent.
