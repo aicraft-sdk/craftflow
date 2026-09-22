@@ -23,10 +23,8 @@ Design constraints (see docs/plans/2026-09-19-plan-optional-jev-typesafe-routi-p
 from __future__ import annotations
 
 import hashlib
-import http.client
 import json
 import os
-import socket
 import time
 import urllib.error
 import urllib.parse
@@ -118,9 +116,19 @@ def call(
 ) -> Optional[Dict[str, Any]]:
     """Call the Jev endpoint and return {"answers","usage","model","latency_ms","cache_hit"} or None.
 
-    Never raises. Every failure path logs a single `jev_call_failed` event via
-    `log` (name, status, error class name, attempt) and returns None.
+    Never raises. The whole function body (cache-key derivation through the
+    end of the retry loop) runs under a single outer try/except Exception --
+    ANY failure anywhere (including a broken clock, a hostile `log`
+    callable, or an exception raised while deciding whether to retry) is
+    caught there, logged as one `jev_call_failed` event (type(exc).__name__
+    + status -- best-effort from an HTTPError, else None -- + attempt), and
+    turned into a `None` return. The retry decision itself (429/529 only,
+    DD-4 budget math) has its own inner except clause purely to decide
+    retry-vs-terminal; it never itself swallows an exception -- a
+    non-retryable HTTPError is re-raised so the single outer except is the
+    only place that ever logs+returns None.
     """
+    attempt = 0
     try:
         cache_path: Optional[Path] = None
         if cache_dir is not None:
@@ -137,130 +145,67 @@ def call(
 
         endpoint = _resolve_endpoint(os.environ, log)
         req = _build_request(endpoint, state, questions, model, api_key)
+
+        start = time.monotonic()
+        for attempt in (1, 2):
+            try:
+                remaining = TOTAL_BUDGET_SECONDS - (time.monotonic() - start)
+                attempt_timeout = min(timeout, remaining)
+                with urllib.request.urlopen(req, timeout=attempt_timeout) as resp:
+                    body = resp.read()
+                data = json.loads(body)
+                if not isinstance(data, dict) or "answers" not in data:
+                    raise ValueError("jev response missing 'answers'")
+                result = {
+                    "answers": data["answers"],
+                    "usage": data.get("usage"),
+                    "model": data.get("model", model),
+                    "latency_ms": int((time.monotonic() - start) * 1000),
+                    "cache_hit": False,
+                }
+                if cache_path is not None:
+                    _write_cache(cache_path, result)
+                return result
+            except urllib.error.HTTPError as exc:
+                # Retry decision only (DD-4): 429/529 on the first attempt,
+                # with >=1.0s remaining after the 0.3s backoff, retries;
+                # anything else (wrong status, already-retried, insufficient
+                # budget) is a terminal failure -- re-raise so the single
+                # outer except below is the only place that logs+returns.
+                status = exc.code
+                remaining_after_failure = TOTAL_BUDGET_SECONDS - (time.monotonic() - start)
+                if (
+                    attempt == 1
+                    and status in RETRY_STATUSES
+                    and remaining_after_failure - _RETRY_BACKOFF_SECONDS >= _MIN_REMAINING_AFTER_BACKOFF_SECONDS
+                ):
+                    time.sleep(_RETRY_BACKOFF_SECONDS)
+                    continue
+                raise
+        return None  # unreachable: loop always returns or raises above
     except Exception as exc:
-        # Pre-loop setup (cache-key hashing, cache read, endpoint resolution,
-        # request construction) sits outside the per-attempt try/except below
-        # and can raise on malformed inputs -- e.g. a non-JSON-serializable
-        # `state`/`questions` value raises TypeError from json.dumps() before
-        # any network attempt is made. Same terminal-failure semantics as the
-        # in-loop catch-all further down (DD-2/DD-4): log
-        # type(exc).__name__ + status=None, no retry, return None. Cache-hit
-        # short-circuiting above is unaffected -- it returns before this
-        # except can ever run.
-        log(
-            "plugin_jev_client",
-            {
-                "event": "jev_call",
-                "decision": "jev_call_failed",
-                "status": None,
-                "error": type(exc).__name__,
-                "attempt": 0,
-            },
-        )
-        return None
-
-    start = time.monotonic()
-    for attempt in (1, 2):
+        # Single terminal safety net (DD-2/DD-4): covers pre-loop setup
+        # failures (bad `state`/`questions`/`timeout`), a broken clock
+        # source, every non-retryable or already-retried HTTPError
+        # re-raised above, socket/URL errors, mid-body read failures
+        # (IncompleteRead/ConnectionResetError/MemoryError/RecursionError),
+        # and malformed responses. `status` is derived from `exc` itself
+        # (not a stale outer-scope variable) so a non-HTTPError failure on
+        # attempt 2 never inherits an HTTPError status from attempt 1;
+        # every non-HTTPError failure logs status=None. The log call
+        # itself is wrapped so a hostile `log` still can't prevent this
+        # function from returning None.
         try:
-            remaining = TOTAL_BUDGET_SECONDS - (time.monotonic() - start)
-            attempt_timeout = min(timeout, remaining)
-            with urllib.request.urlopen(req, timeout=attempt_timeout) as resp:
-                body = resp.read()
-            data = json.loads(body)
-            if not isinstance(data, dict) or "answers" not in data:
-                raise ValueError("jev response missing 'answers'")
-            result = {
-                "answers": data["answers"],
-                "usage": data.get("usage"),
-                "model": data.get("model", model),
-                "latency_ms": int((time.monotonic() - start) * 1000),
-                "cache_hit": False,
-            }
-            if cache_path is not None:
-                _write_cache(cache_path, result)
-            return result
-        except urllib.error.HTTPError as exc:
-            code = exc.code
-            remaining_after_failure = TOTAL_BUDGET_SECONDS - (time.monotonic() - start)
-            if (
-                attempt == 1
-                and code in RETRY_STATUSES
-                and remaining_after_failure - _RETRY_BACKOFF_SECONDS >= _MIN_REMAINING_AFTER_BACKOFF_SECONDS
-            ):
-                time.sleep(_RETRY_BACKOFF_SECONDS)
-                continue
             log(
                 "plugin_jev_client",
                 {
                     "event": "jev_call",
                     "decision": "jev_call_failed",
-                    "status": code,
+                    "status": exc.code if isinstance(exc, urllib.error.HTTPError) else None,
                     "error": type(exc).__name__,
                     "attempt": attempt,
                 },
             )
-            return None
-        except (socket.timeout, urllib.error.URLError) as exc:
-            log(
-                "plugin_jev_client",
-                {
-                    "event": "jev_call",
-                    "decision": "jev_call_failed",
-                    "status": None,
-                    "error": type(exc).__name__,
-                    "attempt": attempt,
-                },
-            )
-            return None
-        except (json.JSONDecodeError, ValueError, UnicodeDecodeError) as exc:
-            log(
-                "plugin_jev_client",
-                {
-                    "event": "jev_call",
-                    "decision": "jev_call_failed",
-                    "status": None,
-                    "error": type(exc).__name__,
-                    "attempt": attempt,
-                },
-            )
-            return None
-        except (http.client.HTTPException, OSError) as exc:
-            # Connection succeeded (headers received) but resp.read() failed mid-body
-            # (e.g. IncompleteRead, ConnectionResetError). Not a retryable condition
-            # per DD-4 -- treat as a terminal failure for this attempt, same as the
-            # non-429/529 HTTPError path above.
-            log(
-                "plugin_jev_client",
-                {
-                    "event": "jev_call",
-                    "decision": "jev_call_failed",
-                    "status": None,
-                    "error": type(exc).__name__,
-                    "attempt": attempt,
-                },
-            )
-            return None
-        except Exception as exc:
-            # Broadest possible catch-all, deliberately placed last so it never
-            # shadows the more specific clauses above (each needs distinct
-            # retry/logging behavior). Closes the "never raises" docstring
-            # contract for failures that are neither OSError nor
-            # http.client.HTTPException -- e.g. MemoryError (resp.read() on an
-            # oversized body) or RecursionError (json.loads() on a hostile,
-            # deeply-nested-but-syntactically-valid body). Resource exhaustion
-            # during body read/parse is not in the 429/529 retry set (DD-4):
-            # terminal failure, no retry, same status=None/type-name-only
-            # logging as the OSError/HTTPException clause above (DD-2).
-            log(
-                "plugin_jev_client",
-                {
-                    "event": "jev_call",
-                    "decision": "jev_call_failed",
-                    "status": None,
-                    "error": type(exc).__name__,
-                    "attempt": attempt,
-                },
-            )
-            return None
-
-    return None  # unreachable: loop always returns or raises above
+        except Exception:
+            pass
+        return None
