@@ -18,7 +18,7 @@ SCRIPTS = PLUGIN_ROOT / "scripts"
 REPORT_SCRIPT = SCRIPTS / "craftflow_jev_report.py"
 sys.path.insert(0, str(SCRIPTS))
 
-from craftflow_jev_report import _read_lines, aggregate, verdict  # noqa: E402
+from craftflow_jev_report import _read_lines, _sanitize_json_value, aggregate, verdict  # noqa: E402
 
 _passes = 0
 _errors: list[str] = []
@@ -507,6 +507,36 @@ def test_read_lines_returns_empty_list_on_memory_error() -> None:
         fail("read-lines-memory-error", f"expected [], got {result!r}")
 
 
+class _EvilStr(str):
+    """A str subclass whose .encode() raises MemoryError, simulating an
+    allocation failure during UTF-8 encoding (worst case is 4x the codepoint
+    count in bytes)."""
+
+    def encode(self, *args, **kwargs):  # noqa: D401
+        raise MemoryError("simulated OOM during utf-8 encode")
+
+
+def test_sanitize_json_value_returns_none_on_memory_error_during_encode() -> None:
+    """12th crash variant: _sanitize_json_value()'s str.encode("utf-8") probe
+    (added to catch lone UTF-16 surrogates, see the 10th-variant test below)
+    only caught UnicodeEncodeError. str.encode() can also raise MemoryError
+    when the encoded buffer allocation fails -- the same exception class
+    already guarded at the file-read boundary in this file (_read_lines,
+    see test_read_lines_returns_empty_list_on_memory_error above). Called
+    from _summarize_feature -> aggregate() -> main() with no try/except
+    anywhere in that chain, so an uncaught MemoryError here crashes the
+    whole CLI."""
+    try:
+        result = _sanitize_json_value(_EvilStr("hostile"))
+    except MemoryError as exc:
+        fail("sanitize-json-value-memory-error", f"_sanitize_json_value() raised instead of returning None: {exc!r}")
+        return
+    if result is None:
+        ok("_sanitize_json_value: MemoryError from str.encode() returns None instead of raising")
+    else:
+        fail("sanitize-json-value-memory-error", f"expected None, got {result!r}")
+
+
 def test_cli_lone_surrogate_strings_do_not_crash_json_or_text_mode() -> None:
     """10th crash variant: a JSON string containing a lone UTF-16 surrogate
     code point (e.g. "\\ud800") is valid per json.loads (JSON doesn't validate
@@ -747,6 +777,7 @@ def main() -> int:
     test_aggregate_does_not_crash_on_huge_int_usage_tokens()
     test_aggregate_does_not_crash_on_invalid_utf8_events_file()
     test_read_lines_returns_empty_list_on_memory_error()
+    test_sanitize_json_value_returns_none_on_memory_error_during_encode()
     test_cli_lone_surrogate_strings_do_not_crash_json_or_text_mode()
     test_cli_never_crashes_on_any_hostile_value_in_any_scalar_field()
     test_cli_missing_events_file_prints_hold_no_data_and_exits_zero()

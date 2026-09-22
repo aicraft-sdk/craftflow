@@ -90,7 +90,11 @@ def _sanitize_json_value(value: Any) -> Any:
       json.dumps(ensure_ascii=True) escapes it safely, but sys.stdout.write()
       in text mode crashes with UnicodeEncodeError. Coerce any string that
       cannot UTF-8-encode to None so both output paths get identical,
-      already-sanitized data.
+      already-sanitized data. str.encode() can also raise MemoryError when
+      the encoded buffer allocation fails (UTF-8 worst case is 4x the
+      codepoint count in bytes) -- the same exception class already caught
+      at the file-read boundary in this file (_read_lines); treat it the
+      same way here.
 
     Non-float, non-container, round-trippable values (str, None, ...) pass
     through unchanged, same treatment as latency_ms/usage tokens above."""
@@ -101,7 +105,7 @@ def _sanitize_json_value(value: Any) -> Any:
     if isinstance(value, str):
         try:
             value.encode("utf-8")
-        except UnicodeEncodeError:
+        except (UnicodeEncodeError, MemoryError):
             return None
     return value
 
