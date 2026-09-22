@@ -158,8 +158,17 @@ def _summarize_feature(rows: List[Dict[str, Any]], feature: str) -> Dict[str, An
     result["invalid_latency"] = invalid_latency
     latencies = sorted(valid_latencies)
     if latencies:
-        result["mean_latency_ms"] = sum(latencies) / len(latencies)
-        result["p95_latency_ms"] = _percentile(latencies, 95.0)
+        # Each value in `latencies` passed the per-row _is_finite() guard
+        # above, but the aggregate sum()/percentile computed from them is
+        # not automatically finite -- e.g. two rows each with
+        # latency_ms=1.5e308 are individually finite yet sum to Python
+        # float inf. Re-validate at this aggregation boundary rather than
+        # trying to prevent the sum from overflowing (not practical: any
+        # sufficiently large but individually-valid inputs can sum to inf).
+        mean_latency_ms = sum(latencies) / len(latencies)
+        p95_latency_ms = _percentile(latencies, 95.0)
+        result["mean_latency_ms"] = mean_latency_ms if _is_finite(mean_latency_ms) else None
+        result["p95_latency_ms"] = p95_latency_ms if _is_finite(p95_latency_ms) else None
     result["input_tokens"] = sum(_usage_tokens(r, "input_tokens") for r in rows)
     result["output_tokens"] = sum(_usage_tokens(r, "output_tokens") for r in rows)
     result["injected"] = sum(1 for r in rows if r.get("injected") is True)
@@ -266,6 +275,14 @@ def _json_payload(events_path: Path, summary: Dict[str, Any], verdicts: Dict[str
     return payload
 
 
+def _fmt_latency(value: Optional[float]) -> str:
+    """mean_latency_ms/p95_latency_ms are None when the aggregate sum/
+    percentile overflowed to inf despite every individual latency_ms being
+    finite (see _summarize_feature) -- format that sentinel as "n/a" rather
+    than crashing ":.1f" formatting on None."""
+    return "n/a" if value is None else f"{value:.1f}"
+
+
 def _format_report_text(events_path: Path, summary: Dict[str, Any], verdicts: Dict[str, Tuple[str, str]]) -> str:
     lines = [
         "Jev telemetry report",
@@ -281,8 +298,8 @@ def _format_report_text(events_path: Path, summary: Dict[str, Any], verdicts: Di
         lines.append(f"  agreement: {feat['agreement'] * 100:.2f}%")
         if "agree_risk" in feat:
             lines.append(f"  agree_risk: {feat['agree_risk'] * 100:.2f}%")
-        lines.append(f"  mean_latency_ms: {feat['mean_latency_ms']:.1f}")
-        lines.append(f"  p95_latency_ms: {feat['p95_latency_ms']:.1f}")
+        lines.append(f"  mean_latency_ms: {_fmt_latency(feat['mean_latency_ms'])}")
+        lines.append(f"  p95_latency_ms: {_fmt_latency(feat['p95_latency_ms'])}")
         lines.append(f"  tokens: input={feat['input_tokens']} output={feat['output_tokens']}")
         lines.append(f"  injected: {feat['injected']}")
         lines.append(f"  cache_hits: {feat['cache_hits']}")

@@ -482,6 +482,56 @@ def test_aggregate_does_not_crash_on_huge_int_usage_tokens() -> None:
         fail("aggregate-huge-int-usage-tokens", f"feat={feat!r} checks={checks!r}")
 
 
+def test_aggregate_excludes_inf_from_sum_overflow_in_mean_and_p95() -> None:
+    """14th crash variant: each latency_ms=1.5e308 individually passes
+    _is_finite(value) and value >= 0 (both rows are valid, finite floats
+    below math.inf), so both land in valid_latencies unfiltered. But
+    sum(valid_latencies) itself overflows to Python float inf once the two
+    finite values are added together -- the per-row guard never re-checks
+    the aggregate. That inf then flows unguarded into mean_latency_ms (and
+    p95_latency_ms's linear interpolation) past every existing guard, and
+    crashes json.dumps(..., allow_nan=False) with ValueError: Out of range
+    float values are not JSON compliant: inf in --json mode."""
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp) / "events.jsonl"
+        rows = [
+            _routing_row(call_id="a1", latency_ms=1.5e308),
+            _routing_row(call_id="a2", latency_ms=1.5e308),
+        ]
+        events.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        proc = _run_cli(["--events", str(events), "--json"], cwd=tmp)
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            fail(
+                "cli-latency-sum-overflow",
+                f"code={proc.returncode} invalid JSON: {exc}; stdout={proc.stdout!r} err={proc.stderr!r}",
+            )
+            return
+        routing = payload.get("features", {}).get("routing", {})
+        p95 = routing.get("p95_latency_ms")
+        # mean_latency_ms = sum(both)/2 overflows to inf -> coerced to None.
+        # p95_latency_ms's linear interpolation over these 2 equal values
+        # stays in float range (each interpolation weight is < 1), so it is
+        # legitimately finite here -- not a second None case. The real proof
+        # this scenario no longer crashes is that json.loads(proc.stdout)
+        # above already succeeded: allow_nan=False would have raised
+        # ValueError had either field still been inf.
+        if (
+            proc.returncode == 0
+            and routing.get("n") == 2
+            and routing.get("mean_latency_ms") is None
+            and isinstance(p95, (int, float))
+            and math.isfinite(p95)
+        ):
+            ok(
+                "CLI --json: two individually-finite latency_ms values whose sum "
+                "overflows to inf do not crash json.dumps (mean coerced to None)"
+            )
+        else:
+            fail("cli-latency-sum-overflow", f"code={proc.returncode} payload={payload!r} err={proc.stderr!r}")
+
+
 def test_aggregate_does_not_crash_on_invalid_utf8_events_file() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         events = Path(tmp) / "events.jsonl"
@@ -804,6 +854,7 @@ def main() -> int:
     test_aggregate_sanitizes_nested_nan_infinity_in_disagreement_fields()
     test_aggregate_excludes_huge_int_latency_from_stats()
     test_aggregate_does_not_crash_on_huge_int_usage_tokens()
+    test_aggregate_excludes_inf_from_sum_overflow_in_mean_and_p95()
     test_aggregate_does_not_crash_on_invalid_utf8_events_file()
     test_read_lines_returns_empty_list_on_memory_error()
     test_sanitize_json_value_returns_none_on_memory_error_during_encode()
