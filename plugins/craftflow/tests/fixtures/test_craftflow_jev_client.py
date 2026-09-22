@@ -532,6 +532,39 @@ def test_recursion_error_from_hostile_json_returns_none() -> None:
         fail("recursion-error-returns-none", f"result={result!r} logged={logged!r}")
 
 
+def test_429_retry_then_incomplete_read_logs_status_none() -> None:
+    # Attempt 1: retryable 429 HTTPError sets a stale `status`. Attempt 2:
+    # a non-HTTPError failure (IncompleteRead) must NOT inherit that stale
+    # status -- the logged payload must report status=None, not 429.
+    calls: list = []
+    logged: list = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(timeout)
+        if len(calls) == 1:
+            raise _http_error(429, "Too Many Requests")
+        return _FakeResponseReadRaises(http.client.IncompleteRead(b"", 10))
+
+    def fake_log(name, payload):
+        logged.append((name, payload))
+
+    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen), mock.patch(
+        "craftflow_jev_client.time.sleep", return_value=None
+    ):
+        result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log)
+
+    if (
+        result is None
+        and len(calls) == 2
+        and len(logged) == 1
+        and logged[0][1].get("status") is None
+        and logged[0][1].get("error") == "IncompleteRead"
+    ):
+        ok("429 retry then IncompleteRead logs status=None (not stale 429)")
+    else:
+        fail("429-retry-then-incomplete-read-status-none", f"result={result!r} calls={calls!r} logged={logged!r}")
+
+
 def test_endpoint_override_honored_only_for_loopback() -> None:
     captured: dict = {}
 
@@ -657,6 +690,57 @@ def test_non_numeric_timeout_returns_none() -> None:
         fail("non-numeric-timeout", f"result={result!r} logged={logged!r}")
 
 
+def test_time_monotonic_failure_returns_none() -> None:
+    logged: list = []
+
+    def fake_log(name, payload):
+        logged.append((name, payload))
+
+    def fake_monotonic():
+        raise OSError("clock unavailable")
+
+    def fake_urlopen(req, timeout=None):
+        raise AssertionError("network should not be reached when the clock is broken")
+
+    try:
+        with mock.patch("craftflow_jev_client.time.monotonic", side_effect=fake_monotonic), mock.patch(
+            "craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen
+        ):
+            result = call(
+                {}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log
+            )
+    except Exception as exc:  # pragma: no cover - only raised pre-refactor
+        fail("time-monotonic-failure", f"call() raised {type(exc).__name__}: {exc} instead of returning None")
+        return
+
+    if result is None:
+        ok("time.monotonic failure returns None")
+    else:
+        fail("time-monotonic-failure", f"result={result!r}")
+
+
+def test_hostile_log_callable_never_prevents_none_return() -> None:
+    def hostile_log(name, payload):
+        raise RuntimeError("hostile log always raises")
+
+    def fake_urlopen(req, timeout=None):
+        raise _http_error(401, "Unauthorized")
+
+    try:
+        with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = call(
+                {}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=hostile_log
+            )
+    except Exception as exc:  # pragma: no cover - only raised pre-refactor
+        fail("hostile-log-callable", f"call() raised {type(exc).__name__}: {exc} instead of returning None")
+        return
+
+    if result is None:
+        ok("hostile log callable never prevents None return")
+    else:
+        fail("hostile-log-callable", f"result={result!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_client: running")
     print(f"  (ENDPOINT = {ENDPOINT}, RETRY_STATUSES = {RETRY_STATUSES})")
@@ -676,9 +760,12 @@ def main() -> int:
     test_connection_reset_during_response_body_returns_none()
     test_memory_error_during_response_read_returns_none()
     test_recursion_error_from_hostile_json_returns_none()
+    test_429_retry_then_incomplete_read_logs_status_none()
     test_endpoint_override_honored_only_for_loopback()
     test_non_json_serializable_state_returns_none()
     test_non_numeric_timeout_returns_none()
+    test_time_monotonic_failure_returns_none()
+    test_hostile_log_callable_never_prevents_none_return()
 
     print()
     print("=" * 40)
