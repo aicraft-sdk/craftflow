@@ -273,8 +273,9 @@ Rules:
 - REVIEW is advisory only. Never let REVIEW create code-changing tasks.
 - BUILD uses fast path (builder → verifier → memory) by default when no risk keywords are detected in the request. Full chain (builder → reviewer → hunter → verifier → memory) is used when risk keywords match. See each binding doc's own fast-path detection reference for keyword rules.
 - Before execution, output one line: `-> {WORKFLOW} workflow (signals: {matched keywords})`
+- Optional routing hint: when the turn context contains a `<craftflow_routing_hint source="jev">` block, priority-1 ERROR keywords still win unconditionally. Otherwise, a `workflow:` line in that block is consulted BEFORE the keyword table (the hook only emits lines already at/above the configured confidence threshold). A `risk_full_chain` value ≥ 0.5 counts as one additional risk signal for the fast-path decision and never removes a keyword-matched signal. No block, or no `workflow:` line → the keyword table applies unchanged. Announce as `-> {WORKFLOW} workflow (signals: {matched keywords}; jev: {workflow} {confidence})` when the hint was consulted.
 
-(Host-specific additions: Cursor's router applies 3 additional risk keywords — `concurrent`, `race`, `rollback` — beyond the shared fast-path keyword table, and runs an additional Cursor-only "Pending-answer precedence check" before this routing table, per its own binding doc. Neither addition belongs here — see `cursor-router/SKILL.md` § 1.)
+(Host-specific additions: Cursor's router applies 3 additional risk keywords — `concurrent`, `race`, `rollback` — beyond the shared fast-path keyword table, and runs an additional Cursor-only "Pending-answer precedence check" before this routing table, per its own binding doc. Claude Code's router may additionally receive the optional routing-hint block above from the opt-in `UserPromptSubmit` hook (`config/jev.json`, off by default; Claude Code only, no Cursor equivalent) — see `craftflow-router/SKILL.md` § 1. None of these additions belongs here — see `cursor-router/SKILL.md` § 1 and `craftflow-router/SKILL.md` § 1.)
 
 ## Dispatch Prompt Scaffold
 

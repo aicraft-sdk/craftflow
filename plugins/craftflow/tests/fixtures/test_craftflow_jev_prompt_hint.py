@@ -868,6 +868,67 @@ def test_stdout_never_contains_decision_or_blockreason() -> None:
             fail("stdout-no-decision-blockreason", f"failures={failures!r}")
 
 
+def test_router_docs_carry_jev_precedence_rules() -> None:
+    router_protocol = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md").read_text(
+        encoding="utf-8"
+    )
+    router_skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    shared_rule = (
+        '- Optional routing hint: when the turn context contains a '
+        '`<craftflow_routing_hint source="jev">` block, priority-1 ERROR keywords still win '
+        "unconditionally. Otherwise, a `workflow:` line in that block is consulted BEFORE the "
+        "keyword table (the hook only emits lines already at/above the configured confidence "
+        "threshold). A `risk_full_chain` value ≥ 0.5 counts as one additional risk signal "
+        "for the fast-path decision and never removes a keyword-matched signal. No block, or no "
+        "`workflow:` line → the keyword table applies unchanged. Announce as "
+        "`-> {WORKFLOW} workflow (signals: {matched keywords}; jev: {workflow} {confidence})` "
+        "when the hint was consulted."
+    )
+    failures = []
+    if shared_rule not in router_protocol:
+        failures.append("shared hint-precedence rule missing from router-protocol.md")
+    elif "Claude Code" in shared_rule:
+        failures.append("shared rule text unexpectedly contains 'Claude Code'")
+
+    host_sentence = (
+        "Claude Code's router may additionally receive the optional routing-hint block above "
+        "from the opt-in `UserPromptSubmit` hook (`config/jev.json`, off by default; Claude Code "
+        "only, no Cursor equivalent) — see `craftflow-router/SKILL.md` § 1."
+    )
+    host_block_start = router_protocol.find("(Host-specific additions")
+    host_block_end = router_protocol.find("\n\n", host_block_start) if host_block_start != -1 else -1
+    host_block = (
+        router_protocol[host_block_start:host_block_end]
+        if host_block_start != -1 and host_block_end != -1
+        else ""
+    )
+    if host_sentence not in host_block:
+        failures.append("host-specific sentence missing from the Host-specific additions parenthetical")
+
+    section1_sentence = (
+        "An optional Jev hint block (Claude Code only; produced by the opt-in "
+        "`UserPromptSubmit` hook gated by `config/jev.json`, off by default), when present, is "
+        "consulted per the shared doc's hint-precedence rule (ERROR keywords always win)."
+    )
+    # SKILL.md § 1 uses manual paragraph line-wrapping (real newlines mid-sentence); collapse
+    # whitespace runs on both sides before the substring check.
+    normalized_router_skill = re.sub(r"\s+", " ", router_skill)
+    normalized_section1_sentence = re.sub(r"\s+", " ", section1_sentence)
+    if normalized_section1_sentence not in normalized_router_skill:
+        failures.append("section 1 pointer sentence missing from craftflow-router/SKILL.md")
+
+    if shared_rule in router_skill:
+        failures.append("craftflow-router/SKILL.md duplicates the full shared rule text (should be pointer-only)")
+
+    if not failures:
+        ok("router docs carry jev hint-precedence rules (shared rule, host sentence, § 1 pointer, no duplication)")
+    else:
+        fail("router-docs-jev-precedence", f"failures={failures!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_prompt_hint: running")
     test_disabled_config_exits_silently_and_writes_nothing()
@@ -904,6 +965,8 @@ def main() -> int:
     test_subprocess_connection_refused_fails_open()
     test_eight_malformed_stdin_variants_exit_zero_silently()
     test_stdout_never_contains_decision_or_blockreason()
+
+    test_router_docs_carry_jev_precedence_rules()
 
     print()
     print("=" * 40)

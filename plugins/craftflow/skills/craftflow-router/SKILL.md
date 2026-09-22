@@ -30,7 +30,9 @@ proceed with routing/dispatch decisions from stale in-context memory of its cont
 file now if you have not already this session; it has the full priority/keyword/chain
 table, routing rules, and the announce-line convention.** See `references/fast-path.md`
 for the risk-keyword detection table used to choose between BUILD's fast path and full
-chain.
+chain. An optional Jev hint block (Claude Code only; produced by the opt-in
+`UserPromptSubmit` hook gated by `config/jev.json`, off by default), when present, is
+consulted per the shared doc's hint-precedence rule (ERROR keywords always win).
 
 ## 0. Resolve Project Root
 
@@ -930,6 +932,7 @@ Record the assigned effort in `telemetry.effort.{agent}` in the workflow artifac
 - Include `craftflow:architecture-patterns` only for multi-component, API, schema, auth, or integration-heavy work.
 - Include `craftflow:research` only when planner or investigator receives `## Research Files`.
 - Include project/domain skills only from `patterns.md ## Project SKILL_HINTS`.
+- A `skill:` line inside a `<craftflow_routing_hint source="jev">` block is a level-4/5 candidate only (never above explicit user prompt, repo standards, or approved plan/design); include it in SKILL_HINTS only if it names an installed skill, and never let it load an internal CRAFTFLOW skill the rules above would not load.
 - Skill precedence is strict:
   1. explicit user prompt
   2. project `CLAUDE.md` / repo standards / user standards
