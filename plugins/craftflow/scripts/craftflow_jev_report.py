@@ -59,10 +59,19 @@ def _usage_tokens(row: Dict[str, Any], key: str) -> int:
 
 
 def _sanitize_json_value(value: Any) -> Any:
-    """DD-8/--json guard: a raw NaN/Infinity float crashes `allow_nan=False`.
-    Coerce non-finite floats to None; non-float values (str, None, ...) pass
-    through unchanged, same treatment as latency_ms/usage tokens above."""
+    """DD-8/--json guard: a raw NaN/Infinity float crashes `allow_nan=False`,
+    and so does one nested inside a list/dict (e.g. {"call_id": [1, NaN]}).
+    Coerce non-finite floats to None; also coerce any list/dict container to
+    None outright rather than walking it recursively -- call_id/ts/
+    answers.choice/heuristic_result.workflow are always plain strings from
+    every legitimate producer, so an unexpected container shape is malformed
+    data, same "validate expected shape, else None" idiom used for feature/
+    usage/heuristic_result guards elsewhere in this file. Non-float, non-
+    container values (str, None, ...) pass through unchanged, same treatment
+    as latency_ms/usage tokens above."""
     if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, (dict, list)):
         return None
     return value
 

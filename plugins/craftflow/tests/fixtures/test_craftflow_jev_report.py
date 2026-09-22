@@ -380,6 +380,54 @@ def test_aggregate_sanitizes_nan_infinity_in_disagreement_fields() -> None:
         )
 
 
+def test_aggregate_sanitizes_nested_nan_infinity_in_disagreement_fields() -> None:
+    """8th crash variant: call_id/ts/answers.choice/heuristic_result.workflow can
+    themselves be a list/dict containing a nested NaN/Infinity, e.g.
+    {"call_id": [1, NaN]}. _sanitize_json_value only coerced bare non-finite
+    floats to None, so a nested NaN/Infinity inside a container passed through
+    unchanged and still reached json.dumps(..., allow_nan=False) in --json mode."""
+    rows = [
+        _routing_row(
+            call_id=[1, float("nan")],
+            ts={"a": float("inf")},
+            agree=False,
+            answers={"choice": [float("-inf")], "confidence": 0.5},
+            heuristic_result={"workflow": {"x": float("nan")}, "risk_signals": []},
+        ),
+    ]
+    lines = [json.dumps(row) for row in rows]
+    feat = aggregate(lines)["features"]["routing"]
+    expected_disagreement = {"call_id": None, "ts": None, "jev": None, "heuristic": None}
+    checks = (
+        feat["n"] == 1,
+        feat["disagreements"] == [expected_disagreement],
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp) / "events.jsonl"
+        events.write_text("\n".join(lines) + "\n")
+        proc = _run_cli(["--events", str(events), "--json"], cwd=tmp)
+    cli_ok = proc.returncode == 0 and "Traceback" not in proc.stderr
+    if cli_ok:
+        try:
+            json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            cli_ok = False
+
+    if all(checks) and cli_ok:
+        ok(
+            "aggregate() coerces nested list/dict-wrapped NaN/Infinity in "
+            "call_id/ts/answers.choice/heuristic_result.workflow to None in "
+            "disagreements, and --json exits 0 with valid JSON"
+        )
+    else:
+        fail(
+            "aggregate-nested-nan-inf-disagreement-fields",
+            f"feat={feat!r} checks={checks!r} cli_code={proc.returncode} "
+            f"cli_out={proc.stdout!r} cli_err={proc.stderr!r}",
+        )
+
+
 def test_aggregate_does_not_crash_on_invalid_utf8_events_file() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         events = Path(tmp) / "events.jsonl"
@@ -499,6 +547,7 @@ def main() -> int:
     test_aggregate_does_not_crash_on_nan_or_infinity_usage_tokens()
     test_aggregate_does_not_crash_on_non_string_feature_value()
     test_aggregate_sanitizes_nan_infinity_in_disagreement_fields()
+    test_aggregate_sanitizes_nested_nan_infinity_in_disagreement_fields()
     test_aggregate_does_not_crash_on_invalid_utf8_events_file()
     test_cli_missing_events_file_prints_hold_no_data_and_exits_zero()
     test_cli_empty_events_file_prints_hold_no_data_and_exits_zero()
