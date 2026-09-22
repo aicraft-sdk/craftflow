@@ -243,7 +243,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def _read_lines(path: Path) -> List[str]:
     try:
         return path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError, MemoryError):
         return []
 
 
