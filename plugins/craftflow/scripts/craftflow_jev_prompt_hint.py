@@ -184,6 +184,7 @@ def gate_answers(answers: Any, cfg: Dict[str, Any], roster_ids) -> List[str]:
         modes.get("routingHint") == "advise"
         and isinstance(workflow, dict)
         and isinstance(workflow.get("choice"), str)
+        and workflow["choice"] in WORKFLOWS
         and _is_number(workflow.get("confidence"))
         and workflow["confidence"] >= thresholds.get("routing", 2.0)
     ):
