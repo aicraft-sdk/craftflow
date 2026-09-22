@@ -4,7 +4,7 @@ OFF BY DEFAULT: inert unless config/jev.json has enabled:true AND TYPESAFE_API_K
 Never blocks (no decision/blockReason, exit 0 always). Design: docs/plans/2026-09-19-jev-routing-hint-design.md
 """
 from __future__ import annotations
-import json, os, sys, uuid
+import json, os, re, sys, uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from craftflow_hooklib import (
@@ -57,6 +57,27 @@ HOST_OPS_SKILLS = frozenset({"craftflow-router", "cursor-router", "status", "upd
 ROSTER_CAP = 254  # + "none" = 255 (DD-7)
 DESCRIPTION_CAP_CHARS = 200
 
+# Security fix (doubt-verifier finding): a roster-sourced skill id is only
+# membership-validated downstream (gate_answers checks `choice in roster_ids`),
+# never content-validated. A hostile id containing a newline and the literal
+# `</craftflow_routing_hint>` tag can break out of the injected block and add
+# fabricated instructions to the agent's context. Reject any candidate id
+# (skill id or patterns.md hint bullet) at roster-build time -- before it ever
+# enters `roster_ids` -- if it contains a newline, carriage return, an angle
+# bracket, or the literal substring "craftflow_routing_hint" (case-insensitive).
+# Fail-open: a rejected entry is simply excluded from the roster, never a crash.
+_HOSTILE_TAG_SUBSTRING = "craftflow_routing_hint"
+
+
+def _is_safe_roster_id(value: Any) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    if "\n" in value or "\r" in value or "<" in value or ">" in value:
+        return False
+    if _HOSTILE_TAG_SUBSTRING in value.lower():
+        return False
+    return True
+
 # DD-6: workflow choice descriptions, copied from the protocol table's
 # keyword columns (skills/_shared/router-protocol.md Intent Routing table).
 WORKFLOWS: Dict[str, str] = {
@@ -92,11 +113,14 @@ def build_roster(
     description starts with "Internal skill" or whose name is a host/ops
     skill), both sorted by name, then deduped `patterns.md` hint bullets,
     capped at 254 real entries + trailing "none"."""
-    project_sorted = sorted(project, key=lambda item: item[0])
+    project_safe = [(name, desc) for name, desc in project if _is_safe_roster_id(name)]
+    project_sorted = sorted(project_safe, key=lambda item: item[0])
     plugin_filtered = [
         (name, desc)
         for name, desc in plugin
-        if not (desc or "").strip().startswith("Internal skill") and name not in HOST_OPS_SKILLS
+        if not (desc or "").strip().startswith("Internal skill")
+        and name not in HOST_OPS_SKILLS
+        and _is_safe_roster_id(name)
     ]
     plugin_sorted = sorted(plugin_filtered, key=lambda item: item[0])
 
@@ -110,7 +134,7 @@ def build_roster(
 
     seen = {entry["id"] for entry in entries}
     for bullet in hint_bullets:
-        if isinstance(bullet, str) and bullet and bullet not in seen:
+        if _is_safe_roster_id(bullet) and bullet not in seen:
             entries.append({"id": bullet, "description": ""})
             seen.add(bullet)
 
@@ -214,10 +238,36 @@ def gate_answers(answers: Any, cfg: Dict[str, Any], roster_ids) -> List[str]:
     return lines
 
 
+_CLOSE_TAG_RE = re.compile(r"</\s*craftflow_routing_hint\s*>", re.IGNORECASE)
+
+
 def render_block(lines: List[str], model: str) -> str:
-    body = "\n".join(lines)
+    # Defensive escaping (belt-and-suspenders): even if a hostile value ever
+    # reached this function directly, no single line may inject a raw newline
+    # (which could fabricate additional lines / tags) or the closing tag
+    # substring (which could break out of the block early).
+    safe_lines: List[str] = []
+    for line in lines:
+        text = str(line).replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+        text = _CLOSE_TAG_RE.sub("", text)
+        safe_lines.append(text)
+    body = "\n".join(safe_lines)
+    # `model` is untrusted too -- it is echoed straight from the Jev API JSON
+    # response (see run_active(): result.get("model") or cfg["model"]) with no
+    # validation. Sanitize the same way `lines` are sanitized above: strip
+    # newlines (tag-count-parity breakout) and strip `<`/`>`/`"` (quote-
+    # attribute breakout that escapes the model="..." attribute entirely).
+    safe_model = (
+        str(model)
+        .replace("\r\n", " ")
+        .replace("\n", " ")
+        .replace("\r", " ")
+        .replace('"', "'")
+        .replace("<", "")
+        .replace(">", "")
+    )
     return (
-        f'<craftflow_routing_hint source="jev" model="{model}">\n'
+        f'<craftflow_routing_hint source="jev" model="{safe_model}">\n'
         f"{body}\n"
         "Advisory. ERROR keyword signals still take precedence. Ignore if it does not fit the request.\n"
         "</craftflow_routing_hint>"
@@ -301,6 +351,8 @@ def _read_skill_dir(skills_root: Path) -> List[Tuple[str, str]]:
             continue
         raw_name = fm.get("name")
         name = raw_name.strip() if isinstance(raw_name, str) and raw_name.strip() else path.parent.name
+        if not _is_safe_roster_id(name):
+            continue  # build-time sanitization: hostile id, fail-open (skip, don't crash)
         desc = fm.get("description") if isinstance(fm.get("description"), str) else ""
         found.append((name, desc))
     return found
@@ -328,7 +380,7 @@ def _read_roster_sources() -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]
         for line in extract_bullets(section):
             stripped = line.lstrip().lstrip("-").strip()
             token = stripped.split()[0] if stripped else ""
-            if token:
+            if token and _is_safe_roster_id(token):  # same injection surface as skill ids
                 hint_bullets.append(token)
     except Exception:
         hint_bullets = []
