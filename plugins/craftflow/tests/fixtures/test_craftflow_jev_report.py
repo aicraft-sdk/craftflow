@@ -537,6 +537,35 @@ def test_sanitize_json_value_returns_none_on_memory_error_during_encode() -> Non
         fail("sanitize-json-value-memory-error", f"expected None, got {result!r}")
 
 
+class _EvilStripStr(str):
+    """A str subclass whose .strip() raises MemoryError, simulating an
+    allocation failure during the strip() call's new-string copy."""
+
+    def strip(self, *args, **kwargs):  # noqa: D401
+        raise MemoryError("simulated OOM during strip")
+
+
+def test_aggregate_counts_memory_error_from_line_strip_as_malformed() -> None:
+    """aggregate()'s `line = raw_line.strip()` sits BEFORE/outside the
+    adjacent try/except that only wraps json.loads(line). str.strip()
+    allocates a new string copy and can raise MemoryError under allocation
+    pressure -- uncaught, this crashes aggregate() -> main() with no
+    try/except anywhere in that chain, the same failure class already
+    guarded at the file-read boundary (_read_lines) and the sanitize
+    boundary (_sanitize_json_value, see the two MemoryError tests above).
+    A line that raises MemoryError during strip() must be counted as
+    malformed instead of propagating."""
+    try:
+        result = aggregate([_EvilStripStr("hostile")])
+    except MemoryError as exc:
+        fail("aggregate-strip-memory-error", f"aggregate() raised instead of counting malformed: {exc!r}")
+        return
+    if result.get("malformed") == 1:
+        ok("aggregate(): MemoryError from raw_line.strip() counted as malformed instead of raising")
+    else:
+        fail("aggregate-strip-memory-error", f"expected malformed=1, got {result!r}")
+
+
 def test_cli_lone_surrogate_strings_do_not_crash_json_or_text_mode() -> None:
     """10th crash variant: a JSON string containing a lone UTF-16 surrogate
     code point (e.g. "\\ud800") is valid per json.loads (JSON doesn't validate
@@ -778,6 +807,7 @@ def main() -> int:
     test_aggregate_does_not_crash_on_invalid_utf8_events_file()
     test_read_lines_returns_empty_list_on_memory_error()
     test_sanitize_json_value_returns_none_on_memory_error_during_encode()
+    test_aggregate_counts_memory_error_from_line_strip_as_malformed()
     test_cli_lone_surrogate_strings_do_not_crash_json_or_text_mode()
     test_cli_never_crashes_on_any_hostile_value_in_any_scalar_field()
     test_cli_missing_events_file_prints_hold_no_data_and_exits_zero()

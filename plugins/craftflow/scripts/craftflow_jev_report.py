@@ -186,10 +186,10 @@ def aggregate(lines: List[str]) -> Dict[str, Any]:
     malformed = 0
     by_feature: Dict[str, List[Dict[str, Any]]] = {feature: [] for feature in FEATURES}
     for raw_line in lines:
-        line = raw_line.strip()
-        if not line:
-            continue
         try:
+            line = raw_line.strip()
+            if not line:
+                continue
             row = json.loads(line)
         except Exception:
             malformed += 1
