@@ -391,6 +391,24 @@ def test_gate_skips_malformed_workflow_and_degrades_malformed_risk() -> None:
         )
 
 
+def test_gate_skips_workflow_choice_not_in_known_set() -> None:
+    cfg = advise_cfg(thresholds={"routing": 0.85, "skill": 0.7})
+    bogus_workflow = dict(_GATE_ANSWERS, workflow=dict(_GATE_ANSWERS["workflow"], choice="HACKED"))
+    lines = gate_answers(bogus_workflow, cfg, _GATE_ROSTER_IDS)
+
+    empty_choice = dict(_GATE_ANSWERS, workflow=dict(_GATE_ANSWERS["workflow"], choice=""))
+    lines_empty = gate_answers(empty_choice, cfg, _GATE_ROSTER_IDS)
+
+    if (
+        all("workflow:" not in ln for ln in lines)
+        and any(ln.startswith("skill:") for ln in lines)
+        and all("workflow:" not in ln for ln in lines_empty)
+    ):
+        ok("gate_answers skips workflow.choice not in the known WORKFLOWS set, still injects the skill line")
+    else:
+        fail("gate-skips-unknown-workflow-choice", f"lines={lines!r} lines_empty={lines_empty!r}")
+
+
 def test_render_block_is_byte_stable() -> None:
     rendered = render_block(["workflow: DEBUG (confidence 0.91) | risk_full_chain: 0.12"], "jev-latest")
     expected = (
@@ -790,6 +808,7 @@ def main() -> int:
     test_gate_threshold_boundaries()
     test_gate_never_injects_in_audit_and_ignores_none_or_unknown_skill()
     test_gate_skips_malformed_workflow_and_degrades_malformed_risk()
+    test_gate_skips_workflow_choice_not_in_known_set()
     test_render_block_is_byte_stable()
     test_telemetry_rows_exact_keys_and_agreement()
 
