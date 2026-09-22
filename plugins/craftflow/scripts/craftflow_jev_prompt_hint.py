@@ -4,11 +4,26 @@ OFF BY DEFAULT: inert unless config/jev.json has enabled:true AND TYPESAFE_API_K
 Never blocks (no decision/blockReason, exit 0 always). Design: docs/plans/2026-09-19-jev-routing-hint-design.md
 """
 from __future__ import annotations
-import os, sys
+import json, os, sys, uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from craftflow_hooklib import load_input, log_event, now_iso, plugin_config_dir
-from craftflow_jev_config import is_active, load_config
+from craftflow_hooklib import (
+    extract_bullets,
+    json_print,
+    load_input,
+    log_event,
+    now_iso,
+    parse_markdown_sections,
+    plugin_config_dir,
+    plugin_root,
+    project_dir,
+    read_latest_workflow_state,
+    state_root,
+)
+from craftflow_jev_config import api_key, is_active, load_config
+from craftflow_jev_client import call as jev_call
+from craftflow_jev_heuristic import classify
+from craftflow_skill_promote import parse_frontmatter
 
 
 def main() -> int:
@@ -262,7 +277,132 @@ def telemetry_rows(
     return [routing_row, skill_row]
 
 
-def run_active(data, cfg) -> int:
+# ---------------------------------------------------------------------------
+# Task 3.2: run_active() -- the I/O shell around the pure core above.
+# Endpoint resolution lives in craftflow_jev_client (DD-14), not here.
+# ---------------------------------------------------------------------------
+
+
+def _read_skill_dir(skills_root: Path) -> List[Tuple[str, str]]:
+    """Read every `<skills_root>/*/SKILL.md`, returning [(name, description)].
+    Never raises -- an unreadable/malformed file is simply skipped."""
+    found: List[Tuple[str, str]] = []
+    try:
+        paths = sorted(skills_root.glob("*/SKILL.md"))
+    except Exception:
+        return []
+    for path in paths:
+        try:
+            fm = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(fm, dict):
+            continue
+        raw_name = fm.get("name")
+        name = raw_name.strip() if isinstance(raw_name, str) and raw_name.strip() else path.parent.name
+        desc = fm.get("description") if isinstance(fm.get("description"), str) else ""
+        found.append((name, desc))
+    return found
+
+
+def _read_roster_sources() -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]], List[str]]:
+    """DD-7 sources: project `.claude/skills/*/SKILL.md`, plugin
+    `skills/*/SKILL.md`, and `patterns.md ## Project SKILL_HINTS` bullets
+    (session-memory contract, finding 10): the durable project tier
+    (`state_root()/project/patterns.md`) is read first; only when that file
+    is absent is the root-flat back-compat fallback (`state_root()/patterns.md`)
+    read instead -- never both, never merged."""
+    project_skills = _read_skill_dir(project_dir() / ".claude" / "skills")
+    plugin_skills = _read_skill_dir(plugin_root() / "skills")
+
+    hint_bullets: List[str] = []
+    try:
+        project_patterns = state_root() / "project" / "patterns.md"
+        if project_patterns.exists():
+            text = project_patterns.read_text(encoding="utf-8")
+        else:
+            root_patterns = state_root() / "patterns.md"
+            text = root_patterns.read_text(encoding="utf-8") if root_patterns.exists() else ""
+        section = parse_markdown_sections(text).get("Project SKILL_HINTS", "")
+        for line in extract_bullets(section):
+            stripped = line.lstrip().lstrip("-").strip()
+            token = stripped.split()[0] if stripped else ""
+            if token:
+                hint_bullets.append(token)
+    except Exception:
+        hint_bullets = []
+
+    return project_skills, plugin_skills, hint_bullets
+
+
+def _append_events(path: Path, rows: List[Dict[str, Any]]) -> None:
+    """Append telemetry rows to `.craftflow/state/jev/events.jsonl`. Never
+    raises -- a write failure here must not fail the hook."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            for row in rows:
+                fh.write(json.dumps(row, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+
+
+def run_active(data: Dict[str, Any], cfg: Dict[str, Any]) -> int:
+    prompt = data.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip() or prompt.lstrip().startswith("/"):
+        return 0
+    modes = cfg.get("features") if isinstance(cfg.get("features"), dict) else {}
+    if modes.get("routingHint") == "off" and modes.get("skillHint") == "off":
+        return 0
+    key = api_key(os.environ)
+    if not key:                                # defense-in-depth: main() already gates on this
+        return 0
+
+    cwd = data.get("cwd") if isinstance(data.get("cwd"), str) else str(project_dir())
+    payload, _, _ = read_latest_workflow_state()               # never raises; {} when none
+    wf_type = payload.get("workflow_type") if isinstance(payload, dict) else None
+
+    project_skills, plugin_skills, hint_bullets = _read_roster_sources()
+    roster, truncated = build_roster(project_skills, plugin_skills, hint_bullets, with_truncation_flag=True)
+    if truncated:
+        log_event("plugin_jev_prompt_hint", {"event": "jev_roster", "decision": "roster_truncated", "size": len(roster)})
+
+    state = build_state(prompt, cwd=cwd, workflow_type=wf_type, max_chars=cfg["maxStateChars"])
+    questions = build_questions(roster)
+
+    result = jev_call(
+        state,
+        questions,
+        api_key=key,
+        model=cfg["model"],
+        timeout=cfg["timeoutSeconds"],
+        cache_dir=state_root() / "jev" / "cache",
+    )
+    if result is None:
+        return 0
+
+    heuristic = classify(prompt)
+    roster_ids = {entry["id"] for entry in roster}
+    lines = gate_answers(result.get("answers"), cfg, roster_ids)
+    session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
+    meta = {
+        "call_id": uuid.uuid4().hex,
+        "session_id": session_id,
+        "prompt_chars": len(prompt),
+        "prompt_truncated": state["prompt_truncated"],
+        "roster_size": len(roster),
+        "injected": bool(lines),
+    }
+    rows = telemetry_rows(result, heuristic, cfg, meta)
+    _append_events(state_root() / "jev" / "events.jsonl", rows)
+
+    if lines:
+        json_print({
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": render_block(lines, result.get("model") or cfg["model"]),
+            }
+        })
     return 0
 
 
