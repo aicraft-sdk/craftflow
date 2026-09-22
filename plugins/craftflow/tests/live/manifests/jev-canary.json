@@ -1,0 +1,24 @@
+{
+  "name": "jev-canary",
+  "workdir": ".",
+  "required_env": ["TYPESAFE_API_KEY"],
+  "environment": {
+    "CI": "true"
+  },
+  "healthcheck": {
+    "name": "Jev canary key validation",
+    "command": "python3 plugins/craftflow/scripts/craftflow_jev_setup.py --check --config /tmp/craftflow-jev-canary.json",
+    "expected": "exit 0, privacy note printed"
+  },
+  "scenarios": [
+    {
+      "name": "Audit round-trip against the real API",
+      "mode": "proof",
+      "given": "config/jev.json enabled:true with both features audit in a temp plugin root, and a real TYPESAFE_API_KEY in env",
+      "when": "the real craftflow_jev_prompt_hint.py hook is fed a UserPromptSubmit payload with a DEBUG-shaped prompt",
+      "then": "the hook exits 0 with empty stdout and events.jsonl gains exactly 2 telemetry rows (feature in {routing, skill}) containing no prompt text",
+      "command": "python3 plugins/craftflow/tests/live/jev_audit_roundtrip.py",
+      "expected": "exit 0; 2 telemetry rows; no prompt text"
+    }
+  ]
+}

@@ -54,6 +54,60 @@
       "then": "All unit tests pass and exit cleanly",
       "command": "python3 plugins/craftflow/scripts/craftflow_hook_unit_tests.py",
       "expected": "Hook unit tests exit 0"
+    },
+    {
+      "name": "Jev config fixture runner passes",
+      "mode": "proof",
+      "given": "craftflow_jev_config.py's normalize/load_config/is_active/api_key logic is covered by a standalone fixture runner",
+      "when": "The harness runs that fixture runner",
+      "then": "The runner exits cleanly",
+      "command": "python3 plugins/craftflow/tests/fixtures/test_craftflow_jev_config.py",
+      "expected": "Fixture runner exits 0"
+    },
+    {
+      "name": "Jev heuristic fixture runner passes",
+      "mode": "proof",
+      "given": "craftflow_jev_heuristic.py's deterministic keyword-table port is covered by a standalone fixture runner",
+      "when": "The harness runs that fixture runner",
+      "then": "The runner exits cleanly",
+      "command": "python3 plugins/craftflow/tests/fixtures/test_craftflow_jev_heuristic.py",
+      "expected": "Fixture runner exits 0"
+    },
+    {
+      "name": "Jev client fixture runner passes",
+      "mode": "proof",
+      "given": "craftflow_jev_client.py's urllib call, time budget, and retry logic is covered by a standalone fixture runner",
+      "when": "The harness runs that fixture runner",
+      "then": "The runner exits cleanly",
+      "command": "python3 plugins/craftflow/tests/fixtures/test_craftflow_jev_client.py",
+      "expected": "Fixture runner exits 0"
+    },
+    {
+      "name": "Jev prompt hint fixture runner passes",
+      "mode": "proof",
+      "given": "craftflow_jev_prompt_hint.py's hook wiring, gating, and telemetry logic is covered by a standalone fixture runner",
+      "when": "The harness runs that fixture runner",
+      "then": "The runner exits cleanly",
+      "command": "python3 plugins/craftflow/tests/fixtures/test_craftflow_jev_prompt_hint.py",
+      "expected": "Fixture runner exits 0"
+    },
+    {
+      "name": "Jev setup fixture runner passes",
+      "mode": "proof",
+      "given": "craftflow_jev_setup.py's --check/--enable/--disable/--status CLI and the jev-setup skill are covered by a standalone fixture runner",
+      "when": "The harness runs that fixture runner",
+      "then": "The runner exits cleanly",
+      "command": "python3 plugins/craftflow/tests/fixtures/test_craftflow_jev_setup.py",
+      "expected": "Fixture runner exits 0"
+    },
+    {
+      "name": "Jev report fixture runner passes",
+      "mode": "proof",
+      "given": "craftflow_jev_report.py's aggregate/verdict logic and CLI are covered by a standalone fixture runner",
+      "when": "The harness runs that fixture runner",
+      "then": "The runner exits cleanly",
+      "command": "python3 plugins/craftflow/tests/fixtures/test_craftflow_jev_report.py",
+      "expected": "Fixture runner exits 0"
     }
   ]
 }
