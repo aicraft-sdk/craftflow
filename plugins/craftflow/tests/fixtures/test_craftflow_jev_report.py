@@ -428,6 +428,59 @@ def test_aggregate_sanitizes_nested_nan_infinity_in_disagreement_fields() -> Non
         )
 
 
+def test_aggregate_excludes_huge_int_latency_from_stats() -> None:
+    """9th crash variant: `math.isfinite(value)` raises `OverflowError: int too
+    large to convert to float` for a plain JSON integer with magnitude >=
+    ~1.8e308 (309+ digits) -- unlike a JSON float literal like 1e400, which
+    json.loads silently coerces to math.inf with no exception."""
+    huge_int = 10**400
+    rows = [
+        _routing_row(call_id="c1", ts="t1", latency_ms=100),
+        _routing_row(call_id="c2", ts="t2", latency_ms=huge_int),
+        _routing_row(call_id="c3", ts="t3", latency_ms=200),
+    ]
+    lines = [json.dumps(row) for row in rows]
+    try:
+        feat = aggregate(lines)["features"]["routing"]
+    except OverflowError as exc:
+        fail("aggregate-huge-int-latency", f"aggregate() crashed instead of excluding: {exc!r}")
+        return
+    checks = (
+        feat["n"] == 3,
+        feat["mean_latency_ms"] == 150.0,
+        feat.get("invalid_latency") == 1,
+    )
+    if all(checks):
+        ok("aggregate() excludes a 309+ digit int latency_ms from mean/p95 instead of crashing with OverflowError")
+    else:
+        fail("aggregate-huge-int-latency", f"feat={feat!r} checks={checks!r}")
+
+
+def test_aggregate_does_not_crash_on_huge_int_usage_tokens() -> None:
+    """9th crash variant, usage.tokens call site: same OverflowError from
+    math.isfinite() on a 309+ digit int, this time in _usage_tokens()."""
+    huge_int = 10**400
+    rows = [
+        _routing_row(call_id="c1", ts="t1", usage={"input_tokens": huge_int, "output_tokens": 5}),
+        _routing_row(call_id="c2", ts="t2", usage={"input_tokens": 5, "output_tokens": huge_int}),
+    ]
+    lines = [json.dumps(row) for row in rows]
+    try:
+        feat = aggregate(lines)["features"]["routing"]
+    except OverflowError as exc:
+        fail("aggregate-huge-int-usage-tokens", f"aggregate() crashed instead of excluding: {exc!r}")
+        return
+    checks = (
+        feat["n"] == 2,
+        feat["input_tokens"] == 5,
+        feat["output_tokens"] == 5,
+    )
+    if all(checks):
+        ok("aggregate() treats a 309+ digit int usage token count as 0 instead of crashing with OverflowError")
+    else:
+        fail("aggregate-huge-int-usage-tokens", f"feat={feat!r} checks={checks!r}")
+
+
 def test_aggregate_does_not_crash_on_invalid_utf8_events_file() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         events = Path(tmp) / "events.jsonl"
@@ -437,6 +490,133 @@ def test_aggregate_does_not_crash_on_invalid_utf8_events_file() -> None:
             ok("CLI: invalid UTF-8 events file runs to completion (exit 0, no traceback)")
         else:
             fail("cli-invalid-utf8", f"code={proc.returncode} out={proc.stdout!r} err={proc.stderr!r}")
+
+
+def test_cli_lone_surrogate_strings_do_not_crash_json_or_text_mode() -> None:
+    """10th crash variant: a JSON string containing a lone UTF-16 surrogate
+    code point (e.g. "\\ud800") is valid per json.loads (JSON doesn't validate
+    UTF-16 well-formedness) but crashes sys.stdout.write() in text-mode output
+    with UnicodeEncodeError: 'utf-8' codec can't encode character ...
+    surrogates not allowed. --json mode survives because
+    json.dumps(..., ensure_ascii=True) escapes it safely; text mode has no
+    equivalent guard until fixed. call_id, ts, answers.choice, and
+    heuristic_result.workflow can all carry this."""
+    lone_surrogate = "\ud800"
+    rows = [
+        _routing_row(
+            call_id=lone_surrogate,
+            ts=lone_surrogate,
+            agree=False,
+            answers={"choice": lone_surrogate, "confidence": 0.5},
+            heuristic_result={"workflow": lone_surrogate, "risk_signals": []},
+        ),
+    ]
+    lines = [json.dumps(row) for row in rows]
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp) / "events.jsonl"
+        events.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        json_proc = _run_cli(["--events", str(events), "--json"], cwd=tmp)
+        json_ok = json_proc.returncode == 0 and "Traceback" not in json_proc.stderr
+        if json_ok:
+            try:
+                json.loads(json_proc.stdout)
+            except json.JSONDecodeError:
+                json_ok = False
+
+        text_proc = _run_cli(["--events", str(events)], cwd=tmp)
+        text_ok = text_proc.returncode == 0 and "Traceback" not in text_proc.stderr
+
+    if json_ok and text_ok:
+        ok("CLI: lone surrogate call_id/ts/answers.choice/heuristic_result.workflow exits 0 in both --json and text mode")
+    else:
+        fail(
+            "cli-lone-surrogate",
+            f"json_code={json_proc.returncode} json_err={json_proc.stderr!r} "
+            f"text_code={text_proc.returncode} text_err={text_proc.stderr!r}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Broad adversarial regression: close the whole crash-bug class in one test
+# rather than requiring an 11th hunt pass to find a 12th variant.
+# ---------------------------------------------------------------------------
+
+_HOSTILE_VALUES = (
+    float("nan"),
+    float("inf"),
+    float("-inf"),
+    10**400,
+    [1, 2, {"nested": float("nan")}],
+    {"nested": "dict"},
+    "\ud800",
+    "",
+    None,
+)
+
+_HOSTILE_SCALAR_FIELDS = (
+    "call_id",
+    "ts",
+    "answers.choice",
+    "heuristic_result.workflow",
+    "latency_ms",
+    "usage.input_tokens",
+    "usage.output_tokens",
+    "feature",
+)
+
+
+def _apply_hostile_value(row: Dict[str, Any], field: str, value: Any) -> None:
+    if field == "answers.choice":
+        row["answers"] = dict(row["answers"])
+        row["answers"]["choice"] = value
+    elif field == "heuristic_result.workflow":
+        row["heuristic_result"] = dict(row["heuristic_result"])
+        row["heuristic_result"]["workflow"] = value
+    elif field == "usage.input_tokens":
+        row["usage"] = dict(row["usage"])
+        row["usage"]["input_tokens"] = value
+    elif field == "usage.output_tokens":
+        row["usage"] = dict(row["usage"])
+        row["usage"]["output_tokens"] = value
+    else:
+        row[field] = value
+
+
+def test_cli_never_crashes_on_any_hostile_value_in_any_scalar_field() -> None:
+    all_clean = True
+    with tempfile.TemporaryDirectory() as tmp:
+        for field in _HOSTILE_SCALAR_FIELDS:
+            for value in _HOSTILE_VALUES:
+                row = _routing_row(call_id="c1", ts="t1", agree=False)
+                _apply_hostile_value(row, field, value)
+                try:
+                    line = json.dumps(row)
+                except (ValueError, TypeError) as exc:
+                    all_clean = False
+                    fail(
+                        "cli-hostile-value-matrix",
+                        f"json.dumps() itself failed for field={field} value={value!r}: {exc!r}",
+                    )
+                    continue
+                events = Path(tmp) / "events.jsonl"
+                events.write_text(line + "\n", encoding="utf-8")
+
+                for mode_args in (["--json"], []):
+                    proc = _run_cli(["--events", str(events), *mode_args], cwd=tmp)
+                    if proc.returncode != 0 or "Traceback" in proc.stderr:
+                        all_clean = False
+                        fail(
+                            "cli-hostile-value-matrix",
+                            f"field={field} value={value!r} mode={mode_args!r} "
+                            f"code={proc.returncode} err={proc.stderr!r}",
+                        )
+    if all_clean:
+        ok(
+            "CLI never crashes (exit 0, no traceback) in --json or text mode for any "
+            "hostile value (NaN/Infinity/-Infinity/huge int/nested container/lone "
+            "surrogate/empty string/None) across all untrusted scalar fields"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -548,7 +728,11 @@ def main() -> int:
     test_aggregate_does_not_crash_on_non_string_feature_value()
     test_aggregate_sanitizes_nan_infinity_in_disagreement_fields()
     test_aggregate_sanitizes_nested_nan_infinity_in_disagreement_fields()
+    test_aggregate_excludes_huge_int_latency_from_stats()
+    test_aggregate_does_not_crash_on_huge_int_usage_tokens()
     test_aggregate_does_not_crash_on_invalid_utf8_events_file()
+    test_cli_lone_surrogate_strings_do_not_crash_json_or_text_mode()
+    test_cli_never_crashes_on_any_hostile_value_in_any_scalar_field()
     test_cli_missing_events_file_prints_hold_no_data_and_exits_zero()
     test_cli_empty_events_file_prints_hold_no_data_and_exits_zero()
     test_cli_json_flag_outputs_valid_json_with_verdict_and_reason()

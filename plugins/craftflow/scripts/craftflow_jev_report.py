@@ -32,6 +32,18 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _is_finite(value: Any) -> bool:
+    """math.isfinite() raises OverflowError for a plain JSON integer whose
+    magnitude is too large to convert to a C double (>= ~1.8e308, i.e. a
+    309+ digit int) -- unlike a JSON float literal like 1e400, which
+    json.loads silently coerces to math.inf with no exception. Treat an
+    out-of-float-range int exactly like NaN/Infinity: not finite."""
+    try:
+        return math.isfinite(value)
+    except (OverflowError, TypeError):
+        return False
+
+
 def _percentile(sorted_values: List[float], pct: float) -> float:
     """Linear-interpolation percentile over an already-sorted list."""
     if not sorted_values:
@@ -53,26 +65,44 @@ def _usage_tokens(row: Dict[str, Any], key: str) -> int:
     if not isinstance(usage, dict):
         return 0
     value = usage.get(key)
-    if not _is_number(value) or not math.isfinite(value):
+    if not _is_number(value) or not _is_finite(value):
         return 0
     return int(value)
 
 
 def _sanitize_json_value(value: Any) -> Any:
-    """DD-8/--json guard: a raw NaN/Infinity float crashes `allow_nan=False`,
-    and so does one nested inside a list/dict (e.g. {"call_id": [1, NaN]}).
-    Coerce non-finite floats to None; also coerce any list/dict container to
-    None outright rather than walking it recursively -- call_id/ts/
-    answers.choice/heuristic_result.workflow are always plain strings from
-    every legitimate producer, so an unexpected container shape is malformed
-    data, same "validate expected shape, else None" idiom used for feature/
-    usage/heuristic_result guards elsewhere in this file. Non-float, non-
-    container values (str, None, ...) pass through unchanged, same treatment
-    as latency_ms/usage tokens above."""
+    """Shared sanitization boundary for untrusted scalar fields (call_id/ts/
+    answers.choice/heuristic_result.workflow) reused by BOTH the --json path
+    (_json_payload) and the text path (_format_report_text) -- one guard
+    feeding both, not two differently-behaving guards.
+
+    - A raw NaN/Infinity float crashes `allow_nan=False`, and so does one
+      nested inside a list/dict (e.g. {"call_id": [1, NaN]}). Coerce
+      non-finite floats to None; also coerce any list/dict container to None
+      outright rather than walking it recursively -- these fields are always
+      plain strings from every legitimate producer, so an unexpected
+      container shape is malformed data, same "validate expected shape, else
+      None" idiom used for feature/usage/heuristic_result guards elsewhere in
+      this file.
+    - A string containing a lone/unpaired UTF-16 surrogate code point (e.g.
+      "\\ud800") is valid per json.loads (JSON doesn't validate UTF-16
+      well-formedness) but cannot round-trip through UTF-8 encoding --
+      json.dumps(ensure_ascii=True) escapes it safely, but sys.stdout.write()
+      in text mode crashes with UnicodeEncodeError. Coerce any string that
+      cannot UTF-8-encode to None so both output paths get identical,
+      already-sanitized data.
+
+    Non-float, non-container, round-trippable values (str, None, ...) pass
+    through unchanged, same treatment as latency_ms/usage tokens above."""
     if isinstance(value, float) and not math.isfinite(value):
         return None
     if isinstance(value, (dict, list)):
         return None
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return None
     return value
 
 
@@ -114,9 +144,10 @@ def _summarize_feature(rows: List[Dict[str, Any]], feature: str) -> Dict[str, An
         value = r.get("latency_ms")
         if not _is_number(value):
             continue
-        # NaN (self-inequality), +/-Infinity, and negative values are rejected
-        # rather than silently averaged in -- they poison mean/p95 otherwise.
-        if math.isfinite(value) and value >= 0:
+        # NaN (self-inequality), +/-Infinity, out-of-float-range ints, and
+        # negative values are rejected rather than silently averaged in --
+        # they poison mean/p95 otherwise.
+        if _is_finite(value) and value >= 0:
             valid_latencies.append(value)
         else:
             invalid_latency += 1
