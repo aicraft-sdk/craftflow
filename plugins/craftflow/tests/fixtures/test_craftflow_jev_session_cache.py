@@ -162,10 +162,119 @@ def test_write_last_status_then_read_roundtrips() -> None:
         root = Path(tmp)
         write_last_status(root, True, "reason-x")
         data = read_last_status(root)
-        if data == {"active": True, "reason": "reason-x"}:
+        if data.get("active") is True and data.get("reason") == "reason-x":
             ok("write_last_status then read_last_status roundtrips")
         else:
             fail("write-last-status-roundtrips", f"data={data!r}")
+
+
+def test_read_session_status_returns_none_for_non_string_session_id() -> None:
+    # REM-FIX (CRITICAL #1): session_cache_path()'s .encode() used to be
+    # called OUTSIDE read_session_status's try block, so a non-string
+    # session_id (int/list) would crash uncaught, breaking the module's
+    # "never raises" contract on every subsequent prompt in the session.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        result_int = read_session_status(root, 12345)  # type: ignore[arg-type]
+        result_list = read_session_status(root, ["a", "b"])  # type: ignore[arg-type]
+        if result_int is None and result_list is None:
+            ok("read_session_status returns None (not raises) for non-string session_id")
+        else:
+            fail("read-none-for-non-string-session-id", f"int={result_int!r} list={result_list!r}")
+
+
+def test_write_session_status_skips_stale_write_with_older_checked_at() -> None:
+    # REM-FIX (CRITICAL #2): a delayed/hung canary from an earlier
+    # SessionStart firing must never clobber a fresher result that already
+    # landed. Compare-and-skip on checked_at (caller-overridable via
+    # **fields) enforces last-newest-checked_at-wins ordering.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_session_status(root, "sess-a", active=False, reason="timeout", checked_at=200.0)
+        write_session_status(root, "sess-a", active=True, reason=None, checked_at=100.0)  # stale, arrives late
+        entry = read_session_status(root, "sess-a")
+        if (
+            entry is not None
+            and entry.get("active") is False
+            and entry.get("reason") == "timeout"
+            and entry.get("checked_at") == 200.0
+        ):
+            ok("write_session_status skips a stale write with an older checked_at")
+        else:
+            fail("write-session-status-skips-stale-write", f"entry={entry!r}")
+
+
+def test_write_last_status_skips_stale_write_with_older_checked_at() -> None:
+    # REM-FIX (CRITICAL #4): same stale-write race, applied to the
+    # cross-session last-status.json file.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_last_status(root, False, "timeout", checked_at=200.0)
+        write_last_status(root, True, None, checked_at=100.0)  # stale, arrives late
+        data = read_last_status(root)
+        if data.get("active") is False and data.get("reason") == "timeout" and data.get("checked_at") == 200.0:
+            ok("write_last_status skips a stale write with an older checked_at")
+        else:
+            fail("write-last-status-skips-stale-write", f"data={data!r}")
+
+
+def test_status_changed_two_different_sessions_same_status_no_spurious_change() -> None:
+    # REM-FIX (HIGH #3): DD-8 explicitly chose a CROSS-session (not
+    # session-scoped) last-status.json so a healthy, unchanged status
+    # doesn't re-notify on every newly opened session -- this is the
+    # notify-storm-prevention behavior DD-8 exists for, and it is
+    # incompatible with a purely per-session comparison (a per-session-only
+    # fix would make every brand-new session_id look like "first ever run"
+    # and re-notify, defeating DD-8's purpose). What IS fixable at this
+    # layer: two different session_ids observing the SAME true status must
+    # not spuriously report a change for either one individually.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_session_status(root, "sess-a", active=True, reason="ok")
+        changed_a = status_changed(root, True, "ok")
+        write_last_status(root, True, "ok")
+        write_session_status(root, "sess-b", active=True, reason="ok")
+        changed_b = status_changed(root, True, "ok")
+        write_last_status(root, True, "ok")
+        if changed_a is True and changed_b is False:
+            ok("two different session_ids observing the same status: no spurious change for either")
+        else:
+            fail(
+                "status-changed-two-sessions-no-spurious-change",
+                f"changed_a={changed_a!r} changed_b={changed_b!r}",
+            )
+
+
+def test_write_session_status_noop_for_empty_or_none_session_id() -> None:
+    # REM-FIX (MEDIUM #5): None and "" used to collide into the same hash
+    # bucket via `(session_id or "").encode(...)`. Empty/missing session_id
+    # must now disable the cache (no-op) instead of writing into a shared
+    # bucket.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_session_status(root, "", active=True, reason=None)
+        write_session_status(root, None, active=True, reason=None)  # type: ignore[arg-type]
+        empty_bucket_path = session_cache_path(root, "")
+        if not empty_bucket_path.exists():
+            ok("write_session_status is a no-op for empty/None session_id (no shared bucket write)")
+        else:
+            fail("write-session-status-noop-empty-session-id", f"path exists: {empty_bucket_path}")
+
+
+def test_read_session_status_returns_none_for_empty_session_id() -> None:
+    # REM-FIX (MEDIUM #5): even if something else wrote into the empty-string
+    # bucket (e.g. pre-fix data on disk), reading with an empty session_id
+    # must now be treated as cache-disabled, not a hash-bucket hit.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        path = session_cache_path(root, "")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"session_id": "", "active": True}), encoding="utf-8")
+        result = read_session_status(root, "")
+        if result is None:
+            ok("read_session_status returns None for empty session_id (cache disabled)")
+        else:
+            fail("read-none-for-empty-session-id", f"result={result!r}")
 
 
 def test_write_session_status_survives_unwritable_directory() -> None:
@@ -192,6 +301,12 @@ def main() -> int:
     test_status_changed_true_when_reason_changes()
     test_status_changed_true_on_corrupt_last_status_file()
     test_write_last_status_then_read_roundtrips()
+    test_read_session_status_returns_none_for_non_string_session_id()
+    test_write_session_status_skips_stale_write_with_older_checked_at()
+    test_write_last_status_skips_stale_write_with_older_checked_at()
+    test_status_changed_two_different_sessions_same_status_no_spurious_change()
+    test_write_session_status_noop_for_empty_or_none_session_id()
+    test_read_session_status_returns_none_for_empty_session_id()
     test_write_session_status_survives_unwritable_directory()
 
     print()
