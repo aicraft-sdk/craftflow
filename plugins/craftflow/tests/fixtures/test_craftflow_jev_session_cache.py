@@ -8,12 +8,15 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import craftflow_jev_session_cache  # noqa: E402
 from craftflow_jev_session_cache import (  # noqa: E402
     session_cache_path,
     last_status_path,
@@ -288,6 +291,112 @@ def test_write_session_status_survives_unwritable_directory() -> None:
             fail("write-session-status-survives-unwritable-dir", f"raised {type(exc).__name__}: {exc}")
 
 
+def test_write_session_status_concurrent_writers_do_not_race() -> None:
+    # REM-FIX cycle 2 (re-hunter repro on commit f9e4ff2): the read-decide-
+    # write sequence as a WHOLE was not serialized -- only the final
+    # os.replace() write step was atomic. Two concurrent writers could each
+    # read the same "existing" state before either wrote, both decide
+    # "I'm not stale," and both write -- last PHYSICAL write wins, not
+    # last-checked_at-wins. This test forces that exact interleaving
+    # deterministically: the "older-writer" thread's disk read is captured
+    # first (finding nothing), then it is made to sleep -- simulating a
+    # hung/delayed canary -- before it writes its (older) checked_at. Without
+    # locking the full critical section, the "newer-writer" thread races in
+    # during that sleep window, reads the same "nothing" state, and writes
+    # its (newer) checked_at first -- which the older-writer then clobbers
+    # when it wakes up and writes, based on its stale read. If the full
+    # read-decide-write section is correctly serialized per target file,
+    # the newer-writer instead blocks until the older-writer's entire
+    # critical section (including its write) completes, then reads the
+    # older-writer's real write, compares checked_at correctly, and the
+    # newer checked_at always wins -- regardless of thread start order or
+    # timing.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        original_read = craftflow_jev_session_cache._read_raw_entry
+
+        def instrumented_read(p):
+            result = original_read(p)
+            if threading.current_thread().name == "older-writer":
+                time.sleep(0.2)  # simulate a hung/delayed canary mid-critical-section
+            return result
+
+        craftflow_jev_session_cache._read_raw_entry = instrumented_read
+        try:
+            t_old = threading.Thread(
+                name="older-writer",
+                target=write_session_status,
+                args=(root, "sess-race"),
+                kwargs={"active": False, "reason": "stale", "checked_at": 100.0},
+            )
+            t_old.start()
+            time.sleep(0.05)  # let older-writer read first, before it stalls
+            t_new = threading.Thread(
+                name="newer-writer",
+                target=write_session_status,
+                args=(root, "sess-race"),
+                kwargs={"active": True, "reason": "fresh", "checked_at": 200.0},
+            )
+            t_new.start()
+            t_old.join(timeout=5)
+            t_new.join(timeout=5)
+        finally:
+            craftflow_jev_session_cache._read_raw_entry = original_read
+
+        entry = read_session_status(root, "sess-race")
+        if (
+            entry is not None
+            and entry.get("checked_at") == 200.0
+            and entry.get("reason") == "fresh"
+        ):
+            ok("write_session_status: concurrent writers do not race -- newer checked_at always wins")
+        else:
+            fail("write-session-status-concurrent-writers-do-not-race", f"entry={entry!r}")
+
+
+def test_write_last_status_concurrent_writers_do_not_race() -> None:
+    # Same interleaving repro as above, applied to write_last_status's
+    # cross-session last-status.json file (identical read-decide-write
+    # shape, identical bug, identical fix).
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        original_read = craftflow_jev_session_cache._read_raw_entry
+
+        def instrumented_read(p):
+            result = original_read(p)
+            if threading.current_thread().name == "older-writer":
+                time.sleep(0.2)
+            return result
+
+        craftflow_jev_session_cache._read_raw_entry = instrumented_read
+        try:
+            t_old = threading.Thread(
+                name="older-writer",
+                target=write_last_status,
+                args=(root, False, "stale"),
+                kwargs={"checked_at": 100.0},
+            )
+            t_old.start()
+            time.sleep(0.05)
+            t_new = threading.Thread(
+                name="newer-writer",
+                target=write_last_status,
+                args=(root, True, "fresh"),
+                kwargs={"checked_at": 200.0},
+            )
+            t_new.start()
+            t_old.join(timeout=5)
+            t_new.join(timeout=5)
+        finally:
+            craftflow_jev_session_cache._read_raw_entry = original_read
+
+        data = read_last_status(root)
+        if data.get("checked_at") == 200.0 and data.get("reason") == "fresh":
+            ok("write_last_status: concurrent writers do not race -- newer checked_at always wins")
+        else:
+            fail("write-last-status-concurrent-writers-do-not-race", f"data={data!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_session_cache: running")
     test_session_cache_path_is_stable_hash_of_session_id()
@@ -308,6 +417,8 @@ def main() -> int:
     test_write_session_status_noop_for_empty_or_none_session_id()
     test_read_session_status_returns_none_for_empty_session_id()
     test_write_session_status_survives_unwritable_directory()
+    test_write_session_status_concurrent_writers_do_not_race()
+    test_write_last_status_concurrent_writers_do_not_race()
 
     print()
     print("=" * 40)

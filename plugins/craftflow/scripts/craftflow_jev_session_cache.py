@@ -7,6 +7,8 @@ docs/plans/2026-09-23-jev-auto-detect-plan.md.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -56,6 +58,33 @@ def _atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
         raise
 
 
+@contextlib.contextmanager
+def _file_lock(target_path: Path):
+    """Exclusive advisory lock serializing the FULL read-decide-write
+    critical section for `target_path` against concurrent writers (e.g. two
+    SessionStart hooks racing). Without this, two writers can each read the
+    same `existing` state before either writes, both decide "I'm not
+    stale," and both write -- the physically-last write wins, not the
+    write with the newest `checked_at` (REM-FIX cycle 2: only the final
+    os.replace() step was atomic before this fix; the read-compare-write
+    sequence as a whole was not). Mirrors
+    craftflow_skill_ledger._ledger_file_lock's fcntl.flock() pattern
+    (available on macOS/Linux via Python's stdlib `fcntl`, even though the
+    `flock` shell command isn't). Lock file lives alongside the target as
+    `<name>.lock` and is never cleaned up (cheap, reused across calls). A
+    blocking acquire is fine here: this is a low-frequency, fast operation,
+    so no timeout/retry machinery is needed."""
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = target_path.with_suffix(target_path.suffix + ".lock")
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def _read_raw_entry(path: Path) -> Optional[Dict[str, Any]]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -81,29 +110,35 @@ def read_session_status(state_root: Path, session_id: str) -> Optional[Dict[str,
 
 def write_session_status(state_root: Path, session_id: str, **fields: Any) -> None:
     """Best-effort, never raises (matches craftflow_jev_client._write_cache
-    precedent -- failures are not logged, same established convention).
-    Atomic (temp file + os.replace()) and order-preserving: a write whose
-    `checked_at` is older than what is already on disk is skipped, so a
-    delayed/hung canary from an earlier SessionStart firing can never
-    clobber a fresher result already written by a later firing (stale-write
-    race). `checked_at` defaults to call-time but callers may pass an
-    explicit `checked_at` kwarg to order by a different clock (e.g.
-    check-start time instead of check-completion time)."""
+    precedent -- failures are not logged, same established convention). The
+    full read-decide-write section is locked per target file (see
+    `_file_lock`), so two concurrent writers can never both observe the
+    same stale `existing` state and race past each other -- the
+    `checked_at` comparison below is authoritative under concurrency, not
+    just advisory. Within that lock, the write is also atomic (temp file +
+    os.replace()). A write whose `checked_at` is older than what is already
+    on disk is skipped, so a delayed/hung canary from an earlier
+    SessionStart firing can never clobber a fresher result already written
+    by a later firing (stale-write race). `checked_at` defaults to
+    call-time but callers may pass an explicit `checked_at` kwarg to order
+    by a different clock (e.g. check-start time instead of
+    check-completion time)."""
     if not _is_valid_session_id(session_id):
         return
     try:
         path = session_cache_path(state_root, session_id)
         entry: Dict[str, Any] = {"session_id": session_id, "checked_at": time.time()}
         entry.update(fields)
-        existing = _read_raw_entry(path)
-        if (
-            existing is not None
-            and isinstance(existing.get("checked_at"), (int, float))
-            and isinstance(entry.get("checked_at"), (int, float))
-            and existing["checked_at"] > entry["checked_at"]
-        ):
-            return  # a fresher entry already landed -- do not clobber it
-        _atomic_write_json(path, entry)
+        with _file_lock(path):
+            existing = _read_raw_entry(path)
+            if (
+                existing is not None
+                and isinstance(existing.get("checked_at"), (int, float))
+                and isinstance(entry.get("checked_at"), (int, float))
+                and existing["checked_at"] > entry["checked_at"]
+            ):
+                return  # a fresher entry already landed -- do not clobber it
+            _atomic_write_json(path, entry)
     except Exception:
         pass  # best-effort cache write, matches craftflow_jev_client._write_cache()
 
@@ -122,9 +157,12 @@ def write_last_status(
     reason: Optional[str],
     checked_at: Optional[float] = None,
 ) -> None:
-    """Best-effort, never raises. Same atomic + order-preserving contract as
-    write_session_status (see there for rationale) applied to the
-    cross-session last-status.json file."""
+    """Best-effort, never raises. Same per-file-locked, atomic,
+    order-preserving contract as write_session_status (see there for
+    rationale) applied to the cross-session last-status.json file: the full
+    read-decide-write section is locked per target file, so two concurrent
+    writers can never both observe the same stale `existing` state and race
+    past each other."""
     try:
         path = last_status_path(state_root)
         entry: Dict[str, Any] = {
@@ -132,14 +170,15 @@ def write_last_status(
             "reason": reason,
             "checked_at": checked_at if checked_at is not None else time.time(),
         }
-        existing = _read_raw_entry(path)
-        if (
-            existing is not None
-            and isinstance(existing.get("checked_at"), (int, float))
-            and existing["checked_at"] > entry["checked_at"]
-        ):
-            return  # a fresher entry already landed -- do not clobber it
-        _atomic_write_json(path, entry)
+        with _file_lock(path):
+            existing = _read_raw_entry(path)
+            if (
+                existing is not None
+                and isinstance(existing.get("checked_at"), (int, float))
+                and existing["checked_at"] > entry["checked_at"]
+            ):
+                return  # a fresher entry already landed -- do not clobber it
+            _atomic_write_json(path, entry)
     except Exception:
         pass
 
