@@ -15,6 +15,7 @@ SCRIPTS = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from craftflow_jev_config import DEFAULTS, normalize, load_config, MODES  # noqa: E402
+from craftflow_jev_config import consent_status  # noqa: E402
 
 _passes = 0
 _errors: list[str] = []
@@ -87,6 +88,46 @@ def test_is_active_requires_enabled_and_key() -> None:
         fail("is-active-requires-enabled-and-key", f"checks={checks!r}")
 
 
+def test_consent_defaults_when_missing_file() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg, decisions = load_config(Path(tmp) / "jev.json")
+        if cfg.get("consent") == {"status": "unset", "ts": None} and decisions == []:
+            ok("consent defaults to unset/null when config file is missing")
+        else:
+            fail("consent-defaults-when-missing-file", f"cfg={cfg!r} decisions={decisions!r}")
+
+
+def test_unrecognized_consent_status_degrades_to_unset_with_distinct_decision() -> None:
+    cfg, decisions = normalize({"consent": {"status": "yes", "ts": "2026-01-01T00:00:00Z"}})
+    if (
+        cfg["consent"]["status"] == "unset"
+        and ("consent.status", "config_unparseable") in decisions
+    ):
+        ok("unrecognized consent.status degrades to unset with distinct decision")
+    else:
+        fail("unrecognized-consent-status", f"cfg={cfg!r} decisions={decisions!r}")
+
+
+def test_committed_config_now_carries_unset_consent_by_default() -> None:
+    raw = json.loads((PLUGIN_ROOT / "config" / "jev.json").read_text())
+    if raw.get("consent") == {"status": "unset", "ts": None}:
+        ok("committed config/jev.json carries unset consent by default")
+    else:
+        fail("committed-config-carries-unset-consent", f"raw={raw!r}")
+
+
+def test_consent_status_helper_reads_nested_field() -> None:
+    checks = (
+        consent_status(DEFAULTS) == "unset",
+        consent_status({**DEFAULTS, "consent": {"status": "granted", "ts": "x"}}) == "granted",
+        consent_status({}) == "unset",  # missing key degrades to unset, never raises
+    )
+    if all(checks):
+        ok("consent_status helper reads nested field with safe fallback")
+    else:
+        fail("consent-status-helper", f"checks={checks!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_config: running")
     print(f"  (MODES = {MODES})")
@@ -95,6 +136,10 @@ def main() -> int:
     test_non_dict_and_bad_thresholds_fall_back()
     test_committed_config_is_disabled_by_default()
     test_is_active_requires_enabled_and_key()
+    test_consent_defaults_when_missing_file()
+    test_unrecognized_consent_status_degrades_to_unset_with_distinct_decision()
+    test_committed_config_now_carries_unset_consent_by_default()
+    test_consent_status_helper_reads_nested_field()
 
     print()
     print("=" * 40)

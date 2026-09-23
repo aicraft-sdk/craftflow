@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 MODES = ("off", "audit", "advise")
+CONSENT_STATUSES = ("unset", "granted", "declined")
 DEFAULTS: Dict[str, Any] = {
     "enabled": False,
     "model": "jev-latest",
@@ -28,6 +29,7 @@ DEFAULTS: Dict[str, Any] = {
     "thresholds": {"routing": 0.85, "skill": 0.7},
     "maxStateChars": 4000,
     "timeoutSeconds": 2.5,
+    "consent": {"status": "unset", "ts": None},
 }
 Decision = Tuple[str, str]  # (key, decision-string)
 
@@ -61,6 +63,15 @@ def normalize(raw: Any) -> Tuple[Dict[str, Any], List[Decision]]:
             cfg[key] = value
         else:
             decisions.append((key, "config_unparseable"))
+    consent_raw = raw.get("consent") if isinstance(raw.get("consent"), dict) else {}
+    status = consent_raw.get("status", DEFAULTS["consent"]["status"])
+    if status in CONSENT_STATUSES:
+        cfg["consent"]["status"] = status
+    else:
+        cfg["consent"]["status"] = "unset"
+        decisions.append(("consent.status", "config_unparseable"))
+    ts = consent_raw.get("ts", DEFAULTS["consent"]["ts"])
+    cfg["consent"]["ts"] = ts if (ts is None or (isinstance(ts, str) and ts.strip())) else None
     return cfg, decisions
 
 
@@ -80,3 +91,9 @@ def api_key(env: Dict[str, str]) -> str:
 
 def is_active(cfg: Dict[str, Any], env: Dict[str, str]) -> bool:
     return bool(cfg.get("enabled")) and bool(api_key(env))
+
+
+def consent_status(cfg: Dict[str, Any]) -> str:
+    consent = cfg.get("consent") if isinstance(cfg.get("consent"), dict) else {}
+    status = consent.get("status")
+    return status if status in CONSENT_STATUSES else "unset"

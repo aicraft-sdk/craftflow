@@ -4,5 +4,6 @@
   "features": {"routingHint": "audit", "skillHint": "audit"},
   "thresholds": {"routing": 0.85, "skill": 0.7},
   "maxStateChars": 4000,
-  "timeoutSeconds": 2.5
+  "timeoutSeconds": 2.5,
+  "consent": {"status": "unset", "ts": null}
 }
