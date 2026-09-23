@@ -741,6 +741,167 @@ def test_hostile_log_callable_never_prevents_none_return() -> None:
         fail("hostile-log-callable", f"result={result!r}")
 
 
+def test_default_total_budget_matches_existing_4s_constant_baseline() -> None:
+    # Baseline: documents existing behavior under the unparameterized 4.0s
+    # constant -- a fast (1.0s) 429 failure leaves 3.0s remaining, well above
+    # the 1.3s needed for a retry to fire. Not the RED step; exists so the
+    # override test below has a same-timing baseline to diff against.
+    clock = _Clock()
+    calls: list = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(timeout)
+        if len(calls) == 1:
+            clock.advance(1.0)
+            raise _http_error(429, "Too Many Requests")
+        body = json.dumps({"answers": {}, "usage": {}, "model": "jev-1.12"}).encode()
+        return fake_response(200, body)
+
+    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen), mock.patch(
+        "craftflow_jev_client.time.monotonic", side_effect=clock.monotonic
+    ), mock.patch("craftflow_jev_client.time.sleep", return_value=None):
+        result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None)
+
+    if result is not None and len(calls) == 2:
+        ok("default total budget matches existing 4.0s constant baseline (retry fires)")
+    else:
+        fail("default-total-budget-baseline", f"result={result!r} calls={calls!r}")
+
+
+def test_total_budget_seconds_override_suppresses_retry_that_default_would_allow() -> None:
+    # Same mocked timing as the baseline above, but total_budget_seconds=2.0:
+    # remaining_after_failure = 2.0 - 1.0 = 1.0; 1.0 - 0.3 backoff = 0.7 < 1.0
+    # minimum -> no retry, unlike the 4.0s-default baseline.
+    clock = _Clock()
+    calls: list = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(timeout)
+        if len(calls) == 1:
+            clock.advance(1.0)
+            raise _http_error(429, "Too Many Requests")
+        body = json.dumps({"answers": {}, "usage": {}, "model": "jev-1.12"}).encode()
+        return fake_response(200, body)
+
+    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen), mock.patch(
+        "craftflow_jev_client.time.monotonic", side_effect=clock.monotonic
+    ), mock.patch("craftflow_jev_client.time.sleep", return_value=None):
+        result = call(
+            {},
+            {},
+            api_key=SENTINEL_KEY,
+            model="jev-1.12",
+            timeout=2.5,
+            cache_dir=None,
+            total_budget_seconds=2.0,
+        )
+
+    if result is None and len(calls) == 1:
+        ok("total_budget_seconds override suppresses retry that default would allow")
+    else:
+        fail("total-budget-override-suppresses-retry", f"result={result!r} calls={calls!r}")
+
+
+def test_failure_reason_out_populated_on_http_error() -> None:
+    def fake_urlopen(req, timeout=None):
+        raise _http_error(401, "Unauthorized")
+
+    reason: dict = {}
+    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+        result = call(
+            {},
+            {},
+            api_key=SENTINEL_KEY,
+            model="jev-1.12",
+            timeout=2.5,
+            cache_dir=None,
+            failure_reason_out=reason,
+        )
+
+    if result is None and reason == {"error": "HTTPError", "status": 401}:
+        ok("failure_reason_out populated on HTTPError")
+    else:
+        fail("failure-reason-out-http-error", f"result={result!r} reason={reason!r}")
+
+
+def test_failure_reason_out_populated_on_non_http_error() -> None:
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.URLError("boom")
+
+    reason: dict = {}
+    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+        result = call(
+            {},
+            {},
+            api_key=SENTINEL_KEY,
+            model="jev-1.12",
+            timeout=2.5,
+            cache_dir=None,
+            failure_reason_out=reason,
+        )
+
+    if result is None and reason == {"error": "URLError", "status": None}:
+        ok("failure_reason_out populated on non-HTTPError (status=None, not stale)")
+    else:
+        fail("failure-reason-out-non-http-error", f"result={result!r} reason={reason!r}")
+
+
+def test_failure_reason_out_untouched_on_success() -> None:
+    def fake_urlopen(req, timeout=None):
+        body = json.dumps({"answers": {}, "usage": {}, "model": "jev-1.12"}).encode()
+        return fake_response(200, body)
+
+    reason: dict = {}
+    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+        result = call(
+            {},
+            {},
+            api_key=SENTINEL_KEY,
+            model="jev-1.12",
+            timeout=2.5,
+            cache_dir=None,
+            failure_reason_out=reason,
+        )
+
+    if result is not None and reason == {}:
+        ok("failure_reason_out untouched on success")
+    else:
+        fail("failure-reason-out-untouched-on-success", f"result={result!r} reason={reason!r}")
+
+
+class _HostileFailureReasonOut:
+    def __setitem__(self, key: str, value: object) -> None:
+        raise RuntimeError("hostile failure_reason_out always raises")
+
+
+def test_hostile_failure_reason_out_never_prevents_none_return() -> None:
+    def fake_urlopen(req, timeout=None):
+        raise _http_error(401, "Unauthorized")
+
+    try:
+        with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = call(
+                {},
+                {},
+                api_key=SENTINEL_KEY,
+                model="jev-1.12",
+                timeout=2.5,
+                cache_dir=None,
+                failure_reason_out=_HostileFailureReasonOut(),
+            )
+    except Exception as exc:  # pragma: no cover - only raised pre-fix
+        fail(
+            "hostile-failure-reason-out",
+            f"call() raised {type(exc).__name__}: {exc} instead of returning None",
+        )
+        return
+
+    if result is None:
+        ok("hostile failure_reason_out never prevents None return")
+    else:
+        fail("hostile-failure-reason-out", f"result={result!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_client: running")
     print(f"  (ENDPOINT = {ENDPOINT}, RETRY_STATUSES = {RETRY_STATUSES})")
@@ -766,6 +927,12 @@ def main() -> int:
     test_non_numeric_timeout_returns_none()
     test_time_monotonic_failure_returns_none()
     test_hostile_log_callable_never_prevents_none_return()
+    test_default_total_budget_matches_existing_4s_constant_baseline()
+    test_total_budget_seconds_override_suppresses_retry_that_default_would_allow()
+    test_failure_reason_out_populated_on_http_error()
+    test_failure_reason_out_populated_on_non_http_error()
+    test_failure_reason_out_untouched_on_success()
+    test_hostile_failure_reason_out_never_prevents_none_return()
 
     print()
     print("=" * 40)

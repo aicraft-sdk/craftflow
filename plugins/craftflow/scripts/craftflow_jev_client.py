@@ -113,6 +113,8 @@ def call(
     cache_dir: Optional[Path],
     ttl_seconds: int = 86400,
     log=log_event,
+    total_budget_seconds: float = TOTAL_BUDGET_SECONDS,
+    failure_reason_out: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Call the Jev endpoint and return {"answers","usage","model","latency_ms","cache_hit"} or None.
 
@@ -127,6 +129,17 @@ def call(
     retry-vs-terminal; it never itself swallows an exception -- a
     non-retryable HTTPError is re-raised so the single outer except is the
     only place that ever logs+returns None.
+
+    `total_budget_seconds` (additive, default `TOTAL_BUDGET_SECONDS`)
+    overrides the wall-clock retry-eligibility budget for this call only --
+    callers that omit it get byte-identical behavior to before this
+    parameter existed. `failure_reason_out` (additive, default `None`) is an
+    optional caller-supplied dict that, on any failure, is populated with
+    `{"error": type(exc).__name__, "status": <HTTPError.code or None>}` --
+    never touched on success. The write is wrapped in its own `try/except
+    Exception`, separate from the `log()` call's, so a hostile
+    `failure_reason_out` can never prevent this function from returning
+    `None`, and vice versa.
     """
     attempt = 0
     try:
@@ -149,7 +162,7 @@ def call(
         start = time.monotonic()
         for attempt in (1, 2):
             try:
-                remaining = TOTAL_BUDGET_SECONDS - (time.monotonic() - start)
+                remaining = total_budget_seconds - (time.monotonic() - start)
                 attempt_timeout = min(timeout, remaining)
                 with urllib.request.urlopen(req, timeout=attempt_timeout) as resp:
                     body = resp.read()
@@ -173,7 +186,7 @@ def call(
                 # budget) is a terminal failure -- re-raise so the single
                 # outer except below is the only place that logs+returns.
                 status = exc.code
-                remaining_after_failure = TOTAL_BUDGET_SECONDS - (time.monotonic() - start)
+                remaining_after_failure = total_budget_seconds - (time.monotonic() - start)
                 if (
                     attempt == 1
                     and status in RETRY_STATUSES
@@ -208,4 +221,10 @@ def call(
             )
         except Exception:
             pass
+        if failure_reason_out is not None:
+            try:
+                failure_reason_out["error"] = type(exc).__name__
+                failure_reason_out["status"] = exc.code if isinstance(exc, urllib.error.HTTPError) else None
+            except Exception:
+                pass
         return None
