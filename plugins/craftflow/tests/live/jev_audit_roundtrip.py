@@ -40,7 +40,14 @@ PROMPT_TEXT = "fix the crash in the login form"
 def run_hook(payload: dict, env: dict) -> tuple[int, str, str]:
     """Same subprocess technique as craftflow_hook_unit_tests.py:57-67 and
     tests/fixtures/test_craftflow_jev_prompt_hint.py's run_hook() -- copied,
-    not imported, per the plan's "do not import the monolith" rule."""
+    not imported, per the plan's "do not import the monolith" rule.
+
+    `timeout=15` is comfortably above the client's 4s call budget plus
+    process startup, and well below the 900s live-harness ceiling -- a
+    hung hook (e.g. a bug in the client's retry/timeout logic) raises
+    `subprocess.TimeoutExpired` instead of blocking the driver
+    indefinitely. Callers must catch that specifically to give a distinct
+    diagnostic (see main())."""
     merged_env = {**os.environ, **env}
     result = subprocess.run(
         [sys.executable, str(SCRIPTS / "craftflow_jev_prompt_hint.py")],
@@ -48,81 +55,132 @@ def run_hook(payload: dict, env: dict) -> tuple[int, str, str]:
         capture_output=True,
         text=True,
         env=merged_env,
+        timeout=15,
     )
     return result.returncode, result.stdout.strip(), result.stderr
 
 
+def _read_jev_call_failures(project: Path) -> list[dict]:
+    """Reads the JSONL diagnostic craftflow_jev_client.call() actually logs
+    on a real API failure (auth error, rate limit, timeout, malformed
+    response) via craftflow_hooklib.log_event("plugin_jev_client", ...).
+
+    That log lands in `craftflow-hook-events.log` under logs_dir(), which is
+    state_root() i.e. `<project>/.craftflow/state/` (see
+    craftflow_hooklib.py's logs_dir()/log_event()) -- a DIFFERENT file from
+    the jev/events.jsonl telemetry this driver otherwise inspects, and one
+    that is never read by the assertions below without this helper. Returns
+    every row with `"decision": "jev_call_failed"` (each carries `status`
+    and `error` -- see craftflow_jev_client.py's failure log call); empty
+    list if the file is absent or has no such rows."""
+    log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log_path.exists():
+        return []
+    failures: list[dict] = []
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("decision") == "jev_call_failed":
+            failures.append(entry)
+    return failures
+
+
 def main() -> int:
-    api_key = os.environ.get("TYPESAFE_API_KEY")
-    if not api_key:
-        print("SKIP: TYPESAFE_API_KEY not set", file=sys.stderr)
-        return 1
-
-    with tempfile.TemporaryDirectory() as tmp_name:
-        root = Path(tmp_name)
-        project = root / "project"
-        plugin = root / "plugin"
-        project.mkdir(parents=True)
-        (plugin / "config").mkdir(parents=True)
-        (plugin / "skills").mkdir(parents=True)
-
-        cfg = json.loads((PLUGIN_ROOT / "config" / "jev.json").read_text())
-        cfg["enabled"] = True
-        cfg["features"] = {"routingHint": "audit", "skillHint": "audit"}
-        (plugin / "config" / "jev.json").write_text(json.dumps(cfg))
-
-        env = {
-            "CLAUDE_PROJECT_DIR": str(project),
-            "CLAUDE_PLUGIN_ROOT": str(plugin),
-            "TYPESAFE_API_KEY": api_key,
-        }
-        code, out, err = run_hook(
-            {"hook_event_name": "UserPromptSubmit", "prompt": PROMPT_TEXT, "cwd": str(project)},
-            env,
-        )
-
-        failures: list[str] = []
-        if code != 0:
-            failures.append(f"exit code {code} != 0 (stderr={err!r})")
-        if out != "":
-            failures.append(f"stdout not empty: {out!r}")
-
-        events_path = project / ".craftflow" / "state" / "jev" / "events.jsonl"
-        raw_text = events_path.read_text(encoding="utf-8") if events_path.exists() else ""
-        if PROMPT_TEXT in raw_text:
-            failures.append("events.jsonl contains prompt text")
-
-        rows: list[dict] = []
-        if raw_text:
-            for line in raw_text.splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    rows.append(json.loads(line))
-                except json.JSONDecodeError as exc:
-                    failures.append(f"malformed telemetry row: {exc}")
-
-        if len(rows) != 2:
-            failures.append(f"expected 2 telemetry rows, got {len(rows)}")
-
-        features = {row.get("feature") for row in rows}
-        if not features.issubset({"routing", "skill"}):
-            failures.append(f"unexpected feature values: {features!r}")
-
-        routing_rows = [row for row in rows if row.get("feature") == "routing"]
-        if routing_rows:
-            heuristic = routing_rows[0].get("heuristic_result") or {}
-            if heuristic.get("workflow") != "DEBUG":
-                failures.append(f"heuristic.workflow != DEBUG: {heuristic!r}")
-        else:
-            failures.append("no routing row to check heuristic.workflow")
-
-        if failures:
-            print("FAIL: " + "; ".join(failures), file=sys.stderr)
+    try:
+        api_key = os.environ.get("TYPESAFE_API_KEY")
+        if not api_key:
+            print("SKIP: TYPESAFE_API_KEY not set", file=sys.stderr)
             return 1
 
-        print(f"OK: audit round-trip against the real API ({len(rows)} telemetry rows, no prompt text)")
-        return 0
+        with tempfile.TemporaryDirectory() as tmp_name:
+            root = Path(tmp_name)
+            project = root / "project"
+            plugin = root / "plugin"
+            project.mkdir(parents=True)
+            (plugin / "config").mkdir(parents=True)
+            (plugin / "skills").mkdir(parents=True)
+
+            cfg = json.loads((PLUGIN_ROOT / "config" / "jev.json").read_text())
+            cfg["enabled"] = True
+            cfg["features"] = {"routingHint": "audit", "skillHint": "audit"}
+            (plugin / "config" / "jev.json").write_text(json.dumps(cfg))
+
+            env = {
+                "CLAUDE_PROJECT_DIR": str(project),
+                "CLAUDE_PLUGIN_ROOT": str(plugin),
+                "TYPESAFE_API_KEY": api_key,
+            }
+            try:
+                code, out, err = run_hook(
+                    {"hook_event_name": "UserPromptSubmit", "prompt": PROMPT_TEXT, "cwd": str(project)},
+                    env,
+                )
+            except subprocess.TimeoutExpired:
+                print(
+                    "FAIL: hook did not exit within 15s (possible hang in client retry/timeout logic)",
+                    file=sys.stderr,
+                )
+                return 1
+
+            failures: list[str] = []
+            if code != 0:
+                failures.append(f"exit code {code} != 0 (stderr={err!r})")
+            if out != "":
+                failures.append(f"stdout not empty: {out!r}")
+
+            events_path = project / ".craftflow" / "state" / "jev" / "events.jsonl"
+            raw_text = events_path.read_text(encoding="utf-8") if events_path.exists() else ""
+            if PROMPT_TEXT in raw_text:
+                failures.append("events.jsonl contains prompt text")
+
+            rows: list[dict] = []
+            if raw_text:
+                for line in raw_text.splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        rows.append(json.loads(line))
+                    except json.JSONDecodeError as exc:
+                        failures.append(f"malformed telemetry row: {exc}")
+
+            if len(rows) != 2:
+                jev_call_failures = _read_jev_call_failures(project)
+                if jev_call_failures:
+                    diag = "; ".join(
+                        f"error={entry.get('error')} status={entry.get('status')}"
+                        for entry in jev_call_failures
+                    )
+                    failures.append(
+                        f"expected 2 telemetry rows, got {len(rows)} (client reported: {diag})"
+                    )
+                else:
+                    failures.append(f"expected 2 telemetry rows, got {len(rows)}")
+
+            features = {row.get("feature") for row in rows}
+            if not features.issubset({"routing", "skill"}):
+                failures.append(f"unexpected feature values: {features!r}")
+
+            routing_rows = [row for row in rows if row.get("feature") == "routing"]
+            if routing_rows:
+                heuristic = routing_rows[0].get("heuristic_result") or {}
+                if heuristic.get("workflow") != "DEBUG":
+                    failures.append(f"heuristic.workflow != DEBUG: {heuristic!r}")
+            else:
+                failures.append("no routing row to check heuristic.workflow")
+
+            if failures:
+                print("FAIL: " + "; ".join(failures), file=sys.stderr)
+                return 1
+
+            print(f"OK: audit round-trip against the real API ({len(rows)} telemetry rows, no prompt text)")
+            return 0
+    except Exception as exc:
+        print(f"FAIL: unexpected error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
