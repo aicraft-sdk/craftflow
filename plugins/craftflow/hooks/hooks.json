@@ -91,6 +91,17 @@
             "statusMessage": "CRAFTFLOW hook import self-check"
           }
         ]
+      },
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_jev_session_check.py\"",
+            "timeout": 5,
+            "statusMessage": "CRAFTFLOW optional Jev auto-detect (inert unless TYPESAFE_API_KEY is set and config/jev.json's enabled flag is not true)"
+          }
+        ]
       }
     ],
     "PostToolUse": [
