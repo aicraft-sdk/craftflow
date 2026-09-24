@@ -206,12 +206,32 @@ def _run_canary(root: Path, session_id: str, cfg: Dict[str, Any], key: str) -> i
         },
     )
     if changed:
-        if active:
-            session_context("Jev routing hint: active this session (canary OK).")
-        else:
-            session_context(
+        message = (
+            "Jev routing hint: active this session (canary OK)."
+            if active
+            else (
                 f"Jev routing hint: inactive this session -- canary failed ({reason}). "
                 "Falling back to normal routing."
+            )
+        )
+        try:
+            session_context(message)
+        except Exception as exc:
+            # REM-FIX (doubt-verifier): write_session_status/write_last_status
+            # above already committed the new active/reason state -- that
+            # commit is correct and intentionally stays regardless of whether
+            # this notify succeeds (unlike _maybe_ask_consent's
+            # already_asked_consent flag, no "structural once-per-transition"
+            # guarantee is violated by the write itself, so there is nothing
+            # to roll back here). Just make the lost notification diagnosable
+            # via a distinct event, never crash, never retry.
+            log_event(
+                "plugin_jev_session_check",
+                {
+                    "event": "jev_session_check",
+                    "decision": "canary_notify_undelivered",
+                    "error": type(exc).__name__,
+                },
             )
     return 0
 

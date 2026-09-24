@@ -605,6 +605,107 @@ def test_canary_never_makes_a_second_network_call_if_session_cache_already_activ
 
 
 # ---------------------------------------------------------------------------
+# REM-FIX (doubt-verifier, wf-execute-plan-jev-auto-detect-20260923-221247-fed36ae9):
+# _run_canary()'s two session_context() notify calls had zero exception
+# handling -- the exact write-before-uncaught-notify pattern already fixed
+# once in _maybe_ask_consent (commits 34493d9/b889732/0ff101d). The
+# write_session_status/write_last_status state change is correct and stays
+# committed regardless of notify success (unlike the consent flag, there is
+# no "structural once-per-transition" guarantee being violated by the write
+# itself) -- so this fix is catch, log distinctly, return 0: no rollback, no
+# retry loop.
+# ---------------------------------------------------------------------------
+
+
+def test_canary_notify_delivery_failure_on_active_transition_logs_distinct_event() -> None:
+    tmp, project, plugin, sessions_dir = _setup(
+        cfg_overrides={"enabled": False, "consent": {"status": "granted", "ts": "2026-01-01T00:00:00Z"}}
+    )
+    logged_events = []
+
+    def _fake_log_event(name, payload):
+        logged_events.append((name, payload))
+
+    fake_result = {"answers": {"ok": True}, "usage": {}, "model": "jev-latest", "latency_ms": 5, "cache_hit": False}
+    with tmp:
+        with mock.patch("craftflow_jev_session_check.jev_call", return_value=fake_result):
+            with mock.patch("craftflow_jev_session_check.session_context", side_effect=BrokenPipeError("pipe closed")):
+                with mock.patch("craftflow_jev_session_check.log_event", side_effect=_fake_log_event):
+                    code, out = _run_main(
+                        {"hook_event_name": "SessionStart", "session_id": "s1", "source": "startup"},
+                        _granted_env(project, plugin),
+                    )
+        entry = read_session_status(project / ".craftflow" / "state", "s1")
+
+    undelivered = [p for (n, p) in logged_events if p.get("decision") == "canary_notify_undelivered"]
+    if (
+        code == 0
+        and out == ""
+        and entry is not None
+        and entry.get("active") is True
+        and undelivered
+        and undelivered[0].get("error") == "BrokenPipeError"
+    ):
+        ok(
+            "canary success (active:true) + session_context() raise: state stays committed, "
+            "no crash, code 0, distinct canary_notify_undelivered event logged"
+        )
+    else:
+        fail(
+            "canary-notify-undelivered-active",
+            f"code={code} out={out!r} entry={entry!r} undelivered={undelivered!r}",
+        )
+
+
+def test_canary_notify_delivery_failure_on_inactive_transition_logs_distinct_event() -> None:
+    import urllib.error
+
+    tmp, project, plugin, sessions_dir = _setup(
+        cfg_overrides={"enabled": False, "consent": {"status": "granted", "ts": "2026-01-01T00:00:00Z"}}
+    )
+    logged_events = []
+
+    def _fake_log_event(name, payload):
+        logged_events.append((name, payload))
+
+    def _fake_call(*args, failure_reason_out=None, **kwargs):
+        if failure_reason_out is not None:
+            failure_reason_out["error"] = "HTTPError"
+            failure_reason_out["status"] = 401
+        return None
+
+    with tmp:
+        with mock.patch("craftflow_jev_session_check.jev_call", side_effect=_fake_call):
+            with mock.patch("craftflow_jev_session_check.session_context", side_effect=BrokenPipeError("pipe closed")):
+                with mock.patch("craftflow_jev_session_check.log_event", side_effect=_fake_log_event):
+                    code, out = _run_main(
+                        {"hook_event_name": "SessionStart", "session_id": "s1", "source": "startup"},
+                        _granted_env(project, plugin),
+                    )
+        entry = read_session_status(project / ".craftflow" / "state", "s1")
+
+    undelivered = [p for (n, p) in logged_events if p.get("decision") == "canary_notify_undelivered"]
+    if (
+        code == 0
+        and out == ""
+        and entry is not None
+        and entry.get("active") is False
+        and entry.get("reason")
+        and undelivered
+        and undelivered[0].get("error") == "BrokenPipeError"
+    ):
+        ok(
+            "canary failure (active:false) + session_context() raise: state stays committed, "
+            "no crash, code 0, distinct canary_notify_undelivered event logged"
+        )
+    else:
+        fail(
+            "canary-notify-undelivered-inactive",
+            f"code={code} out={out!r} entry={entry!r} undelivered={undelivered!r}",
+        )
+
+
+# ---------------------------------------------------------------------------
 # Task 5.7: malformed-stdin resilience
 # ---------------------------------------------------------------------------
 
@@ -659,6 +760,8 @@ def main_tests() -> int:
     test_consent_granted_canary_failure_variants()
     test_canary_uses_own_short_budget_not_default_4s()
     test_canary_never_makes_a_second_network_call_if_session_cache_already_active_this_run()
+    test_canary_notify_delivery_failure_on_active_transition_logs_distinct_event()
+    test_canary_notify_delivery_failure_on_inactive_transition_logs_distinct_event()
     test_malformed_stdin_variants_exit_zero_silently()
 
     print()
