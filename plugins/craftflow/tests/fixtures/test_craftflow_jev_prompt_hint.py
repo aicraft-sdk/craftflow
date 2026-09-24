@@ -924,7 +924,10 @@ def test_session_active_false_when_session_cache_says_inactive() -> None:
     from craftflow_jev_prompt_hint import session_is_active
     from craftflow_jev_session_cache import write_session_status
 
-    cfg = {"enabled": False}
+    # consent granted so this test actually reaches (and is defeated by) the
+    # cache-says-inactive check, rather than being short-circuited by the
+    # consent check before ever reading the cache.
+    cfg = {"enabled": False, "consent": {"status": "granted", "ts": None}}
     with tempfile.TemporaryDirectory() as tmp:
         tmp_root = Path(tmp)
         write_session_status(tmp_root, "sess-2", active=False, reason="no_key")
@@ -957,7 +960,10 @@ def test_session_active_false_when_no_key_even_if_session_cache_says_active() ->
 def test_session_active_false_when_no_session_id() -> None:
     from craftflow_jev_prompt_hint import session_is_active
 
-    cfg = {"enabled": False}
+    # consent granted so this test actually reaches (and is defeated by) the
+    # no-session-id check, rather than being short-circuited by the consent
+    # check before ever reaching that code.
+    cfg = {"enabled": False, "consent": {"status": "granted", "ts": None}}
     with tempfile.TemporaryDirectory() as tmp:
         tmp_root = Path(tmp)
         with mock.patch("craftflow_jev_prompt_hint.state_root", return_value=tmp_root):
