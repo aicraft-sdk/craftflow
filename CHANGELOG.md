@@ -8,6 +8,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.8.0] - 2026-09-23
+
+### Features
+
+- add jev-setup CLI and guided setup skill
+- wire jev prompt hint audit telemetry and advise injection (fail-open)
+- add pure roster/state/question/gating/telemetry builders for jev hint
+- add stdlib jev client with 4s deadline and file cache
+- add deterministic keyword-table port for jev agreement telemetry
+- register inert UserPromptSubmit jev hint hook + event contract row
+- add jev.json config loader (off by default, fail-open normalize)
+
+### Fixes
+
+- actionable diagnostics, top-level try/except, subprocess timeout in jev live-canary driver
+- guard jev report mean/p95 latency against sum-overflow inf
+- guard aggregate() raw_line.strip() against MemoryError
+- catch MemoryError in _sanitize_json_value's utf-8 encode probe
+- catch MemoryError in jev report _read_lines()
+- structurally close jev report crash-bug class (OverflowError + UnicodeEncodeError)
+- guard jev report sanitizer against nested NaN/Infinity in disagreement fields
+- guard jev report aggregate against unhashable feature and non-finite disagreement fields
+- close prompt-injection breakout in jev routing-hint block
+- whitelist workflow.choice against WORKFLOWS before injection
+- consolidate jev client call() into single fail-open handler; stop stale status leak
+- guard jev client pre-loop setup against uncaught TypeError
+- catch MemoryError/RecursionError in jev client call()
+- widen jev client exception handling for mid-response body-read failures
+
+### Documentation
+
+- README + hook inventory docs for optional Jev routing hint
+- document jev hint precedence (ERROR keywords always win) in router protocol
+
+### Tests
+
+- jev live canary manifest + bootstrap proof scenarios
+- add regression tests for jev routing-hint injection breakout
+- add regression test for workflow.choice whitelist
+- add run_active wiring tests for jev prompt hint (audit/advise/fail-open)
+- add pure roster/state/question/gating/telemetry builder tests for jev hint
+- add jev client regression tests for clock failure, hostile log, and stale-status leak
+- add regression tests for jev client pre-loop TypeError gap
+- add resp.read()/json.loads() exception-gap regression tests
+- add mocked-urllib jev client tests (retry budget, secret hygiene, cache)
+- add jev heuristic port with markdown parity tests
+
 ## [1.7.0] - 2026-09-17
 
 ### Features
