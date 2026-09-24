@@ -891,7 +891,10 @@ def test_session_active_true_when_session_cache_says_active_even_though_enabled_
     from craftflow_jev_prompt_hint import session_is_active
     from craftflow_jev_session_cache import write_session_status
 
-    cfg = {"enabled": False}
+    # consent must be "granted" -- a cache entry can only legitimately say
+    # active:true when consent was granted (see the consent-status HIGH fix
+    # below), so this is the realistic precondition, not an unrelated detail.
+    cfg = {"enabled": False, "consent": {"status": "granted", "ts": None}}
     with tempfile.TemporaryDirectory() as tmp:
         tmp_root = Path(tmp)
         write_session_status(tmp_root, "sess-1", active=True)
@@ -937,7 +940,9 @@ def test_session_active_false_when_no_key_even_if_session_cache_says_active() ->
     from craftflow_jev_prompt_hint import session_is_active
     from craftflow_jev_session_cache import write_session_status
 
-    cfg = {"enabled": False}
+    # consent granted so this test actually reaches (and is defeated by) the
+    # no-key check, rather than being short-circuited by the consent check.
+    cfg = {"enabled": False, "consent": {"status": "granted", "ts": None}}
     with tempfile.TemporaryDirectory() as tmp:
         tmp_root = Path(tmp)
         write_session_status(tmp_root, "sess-3", active=True)
@@ -988,13 +993,41 @@ def test_session_active_false_when_consent_declined_even_with_stale_active_cache
             fail("session-active-consent-declined", f"expected False, got {result!r}")
 
 
+def test_session_active_false_when_consent_unset_even_with_stale_active_cache() -> None:
+    # HIGH (re-hunt, commit 0143ce6): the "declined" check alone is
+    # asymmetric -- craftflow_jev_config.normalize() fails a corrupt or
+    # missing consent block open to "unset", not "declined". Since the sole
+    # writer of active:true cache entries (_run_canary) only ever runs when
+    # status is exactly "granted", the gate must be `!= "granted"` (not
+    # `== "declined"`) to also close the config-corruption-to-unset path.
+    from craftflow_jev_prompt_hint import session_is_active
+    from craftflow_jev_session_cache import write_session_status
+
+    cfg = {"enabled": False, "consent": {"status": "unset", "ts": None}}
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_root = Path(tmp)
+        write_session_status(tmp_root, "sess-unset", active=True)
+        with mock.patch("craftflow_jev_prompt_hint.state_root", return_value=tmp_root):
+            result = session_is_active(cfg, {"TYPESAFE_API_KEY": "k"}, "sess-unset")
+        if result is False:
+            ok(
+                "session_is_active is False when consent is unset (e.g. after config "
+                "corruption), even with a stale active:true session cache entry"
+            )
+        else:
+            fail("session-active-consent-unset", f"expected False, got {result!r}")
+
+
 def test_session_active_false_when_state_root_raises() -> None:
     # MEDIUM (silent-failure-hunter): session_is_active()'s docstring claims
     # "never raises" but was only safe by caller convention (main()'s outer
     # try/except). It must be genuinely exception-safe on its own.
     from craftflow_jev_prompt_hint import session_is_active
 
-    cfg = {"enabled": False}
+    # consent granted so this test actually reaches (and is defeated by) the
+    # state_root()/read_session_status() exception path, rather than being
+    # short-circuited by the consent check before ever calling state_root().
+    cfg = {"enabled": False, "consent": {"status": "granted", "ts": None}}
 
     def _boom():
         raise OSError("unwritable directory")
@@ -1168,6 +1201,7 @@ def main() -> int:
     test_session_active_false_when_no_key_even_if_session_cache_says_active()
     test_session_active_false_when_no_session_id()
     test_session_active_false_when_consent_declined_even_with_stale_active_cache()
+    test_session_active_false_when_consent_unset_even_with_stale_active_cache()
     test_session_active_false_when_state_root_raises()
     test_session_active_never_makes_a_network_call()
 

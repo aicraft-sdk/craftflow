@@ -64,10 +64,19 @@ def session_is_active(cfg: Dict[str, Any], env: Dict[str, str], session_id: Opti
     since a stale `active: true` cache entry from before the revocation
     would keep satisfying the OR-gate. This check must run on every call,
     not be cached itself, so a mid-session revocation takes effect on the
-    very next prompt regardless of what is in the session cache."""
+    very next prompt regardless of what is in the session cache.
+
+    HIGH fix (re-hunt on commit 0143ce6): gate on `!= "granted"`, not
+    `== "declined"`. The sole writer of `active: True` cache entries
+    (`_run_canary`) only ever runs when status is exactly "granted" --
+    checking the inverse polarity is symmetric with that precondition and
+    closes both the explicit-decline case AND the case where a corrupted/
+    malformed config/jev.json makes craftflow_jev_config.normalize() fail
+    consent.status open to "unset" (not "declined") mid-session, which
+    would otherwise still let a stale cache entry through."""
     if is_active(cfg, env):
         return True
-    if consent_status(cfg) == "declined":
+    if consent_status(cfg) != "granted":
         return False
     key = api_key(env)
     if not key or not session_id:
