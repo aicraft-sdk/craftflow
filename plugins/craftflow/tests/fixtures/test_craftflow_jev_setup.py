@@ -255,6 +255,94 @@ def test_write_failure_exits_4() -> None:
         fail("write-failure-exit-4", f"code={code} out={out!r} err={err!r}")
 
 
+def test_write_failure_after_atomic_write_begins_leaves_original_content_unchanged() -> None:
+    """REM-FIX regression test (silent-failure-hunter HIGH finding, commit
+    1a172de): a mid-write failure must never truncate/destroy the existing
+    config -- only fail cleanly. test_write_failure_exits_4 above exercises a
+    failure BEFORE any write begins (path is a directory); this test
+    exercises the harder case -- the read + temp-file write both succeed,
+    and the failure happens at the final commit step (os.replace), which is
+    only reachable once the config is rewritten to use the atomic
+    temp-file + os.replace() pattern. Proves the ORIGINAL file content
+    survives byte-for-byte, not just that an error is reported."""
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = Path(tmp) / "jev.json"
+        cfg_data = default_config_dict()
+        cfg_data["enabled"] = True
+        cfg_data["customNote"] = "must survive a mid-write os.replace failure"
+        write_config(cfg_path, cfg_data)
+        before = cfg_path.read_text(encoding="utf-8")
+        with mock.patch("craftflow_jev_setup.os.replace", side_effect=OSError("disk full")):
+            code, out, err = run_cli(["--disable", "--config", str(cfg_path)], {})
+        after = cfg_path.read_text(encoding="utf-8")
+        leftover_tmp_files = [
+            p for p in cfg_path.parent.iterdir() if p.name != cfg_path.name
+        ]
+
+    if code == 4 and before == after and "ERROR" in err and leftover_tmp_files == []:
+        ok("a write failure at the atomic-commit step leaves the original config byte-for-byte unchanged")
+    else:
+        fail(
+            "write-failure-after-atomic-write-begins-preserves-original",
+            f"code={code} out={out!r} err={err!r} before={before!r} after={after!r} leftover={leftover_tmp_files!r}",
+        )
+
+
+def test_write_enabled_flag_rejects_invalid_consent_status() -> None:
+    """REM-FIX regression test (silent-failure-hunter MEDIUM finding):
+    _write_enabled_flag's consent_status param was previously unvalidated at
+    the write site -- only enforced later by normalize() on next load. A
+    future direct (non-CLI) caller could write an invalid value straight to
+    disk with no guard. This exercises that internal contract directly,
+    since the CLI itself never reaches this path (argparse `choices` already
+    restricts --record-consent, and --enable/--disable pass fixed literals)."""
+    from craftflow_jev_setup import _write_enabled_flag  # noqa: E402 (whitebox internal-contract test)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = Path(tmp) / "jev.json"
+        write_config(cfg_path, default_config_dict())
+        before = cfg_path.read_text(encoding="utf-8")
+        raised = False
+        try:
+            _write_enabled_flag(cfg_path, True, consent_status="yes-please")
+        except AssertionError:
+            raised = True
+        after = cfg_path.read_text(encoding="utf-8")
+
+    if raised and before == after:
+        ok("_write_enabled_flag rejects an invalid consent_status and never writes")
+    else:
+        fail(
+            "write-enabled-flag-rejects-invalid-consent-status",
+            f"raised={raised} before={before!r} after={after!r}",
+        )
+
+
+def test_write_consent_rejects_invalid_status() -> None:
+    """Same guard as above, for the sibling _write_consent helper used by
+    --record-consent."""
+    from craftflow_jev_setup import _write_consent  # noqa: E402 (whitebox internal-contract test)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = Path(tmp) / "jev.json"
+        write_config(cfg_path, default_config_dict())
+        before = cfg_path.read_text(encoding="utf-8")
+        raised = False
+        try:
+            _write_consent(cfg_path, "yes-please")
+        except AssertionError:
+            raised = True
+        after = cfg_path.read_text(encoding="utf-8")
+
+    if raised and before == after:
+        ok("_write_consent rejects an invalid status and never writes")
+    else:
+        fail(
+            "write-consent-rejects-invalid-status",
+            f"raised={raised} before={before!r} after={after!r}",
+        )
+
+
 # ---------------------------------------------------------------------------
 # --record-consent
 # ---------------------------------------------------------------------------
@@ -418,6 +506,9 @@ def main_tests() -> int:
     test_enable_skips_write_when_check_fails()
     test_disable_writes_enabled_false()
     test_write_failure_exits_4()
+    test_write_failure_after_atomic_write_begins_leaves_original_content_unchanged()
+    test_write_enabled_flag_rejects_invalid_consent_status()
+    test_write_consent_rejects_invalid_status()
     test_record_consent_granted_writes_consent_status_granted_exits_0()
     test_record_consent_declined_writes_consent_status_declined_exits_0()
     test_record_consent_preserves_other_keys_and_enabled_flag()

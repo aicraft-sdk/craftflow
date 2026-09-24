@@ -27,12 +27,13 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from craftflow_hooklib import now_iso, plugin_config_dir
 from craftflow_jev_client import call
-from craftflow_jev_config import DEFAULTS, api_key as get_api_key, load_config
+from craftflow_jev_config import CONSENT_STATUSES, DEFAULTS, api_key as get_api_key, load_config
 
 SETUP_URL = "https://console.typesafe.ai/keys"
 
@@ -87,28 +88,89 @@ def _read_raw_dict(path: Path) -> Dict[str, Any]:
     return json.loads(json.dumps(DEFAULTS))
 
 
-def _write_enabled_flag(path: Path, value: bool, consent_status: Optional[str] = None) -> bool:
+def _write_raw_json(path: Path, mutate: Callable[[Dict[str, Any]], None]) -> bool:
+    """Read-mutate-atomic-write `config/jev.json` in exactly ONE place, shared
+    by `_write_enabled_flag` (--enable/--disable) and `_write_consent`
+    (--record-consent). REM-FIX (silent-failure-hunter HIGH finding on
+    commit 1a172de): the prior implementation did
+    `path.write_text(json.dumps(raw, indent=2) + "\\n", ...)`, which opens
+    the file in truncating mode BEFORE any new content is written -- a
+    mid-write failure (disk full, permission revoked mid-call, etc.)
+    destroyed the existing config instead of just failing cleanly. This
+    mirrors `craftflow_jev_session_cache._atomic_write_json`'s (and
+    `craftflow_skill_ledger.save_ledger_atomic`'s) temp-file + os.replace()
+    pattern exactly: a temp file is written in the SAME directory (so
+    os.replace is a same-filesystem rename, atomic on POSIX) and only then
+    swapped into place. A failure at ANY point up to and including the
+    os.replace() call leaves the original file byte-for-byte untouched, and
+    the temp file is cleaned up.
+
+    `mutate` receives the raw (unnormalized) dict read from disk via
+    `_read_raw_dict` and mutates it in place -- the same preserve-other-keys
+    contract both callers already relied on. Returns True on success, False
+    on any failure (matches this file's existing best-effort convention --
+    callers already surface a user-facing "ERROR: failed to write config"
+    exit-4 message on False).
+
+    Locking: deliberately NOT wrapped in the fcntl.flock-based
+    read-decide-write lock used by craftflow_jev_session_cache.py's
+    write_session_status/write_last_status. That module is written by an
+    automatic SessionStart hook that can fire repeatedly and concurrently
+    across sessions with no human in the loop. This CLI, by contrast, is a
+    manually-invoked, sequential operator tool (jev-setup skill / assistant
+    running --record-consent once after AskUserQuestion) -- two concurrent
+    invocations racing to write the SAME config/jev.json at the SAME instant
+    is not a realistic failure mode here, and the atomic write above already
+    closes the HIGH-severity gap (truncation-on-failure). Adding
+    fcntl-based locking for a sequential CLI would be disproportionate
+    complexity for an unobserved risk; revisit only if this CLI ever becomes
+    concurrently invoked (e.g. driven by an automatic hook)."""
     try:
         raw = _read_raw_dict(path)
+        mutate(raw)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(prefix=".jev-config-", suffix=".tmp", dir=str(path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(json.dumps(raw, indent=2) + "\n")
+            os.replace(tmp_name, str(path))
+        except Exception:
+            try:
+                os.remove(tmp_name)
+            except OSError:
+                pass
+            raise
+        return True
+    except Exception:
+        return False
+
+
+def _write_enabled_flag(path: Path, value: bool, consent_status: Optional[str] = None) -> bool:
+    """consent_status is guarded here (not just later by
+    craftflow_jev_config.normalize() on next load) because this is an
+    internal function -- the CLI itself only ever reaches this with
+    consent_status in (None, "granted", "declined") (argparse `choices`
+    restricts --record-consent; --enable/--disable pass fixed literals), but
+    a future direct (non-CLI) caller must not be able to write an invalid
+    value straight to disk with no guard."""
+    assert consent_status in (None,) + CONSENT_STATUSES, f"invalid consent_status: {consent_status!r}"
+
+    def mutate(raw: Dict[str, Any]) -> None:
         raw["enabled"] = value
         if consent_status is not None:
             raw["consent"] = {"status": consent_status, "ts": now_iso()}
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
-        return True
-    except Exception:
-        return False
+
+    return _write_raw_json(path, mutate)
 
 
 def _write_consent(path: Path, status: str) -> bool:
-    try:
-        raw = _read_raw_dict(path)
+    """See _write_enabled_flag's docstring for why status is guarded here."""
+    assert status in CONSENT_STATUSES, f"invalid consent status: {status!r}"
+
+    def mutate(raw: Dict[str, Any]) -> None:
         raw["consent"] = {"status": status, "ts": now_iso()}
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
-        return True
-    except Exception:
-        return False
+
+    return _write_raw_json(path, mutate)
 
 
 def run_record_consent(config_path: Path, status: str) -> int:
