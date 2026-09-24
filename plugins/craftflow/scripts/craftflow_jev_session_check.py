@@ -220,11 +220,18 @@ def _run_canary(root: Path, session_id: str, cfg: Dict[str, Any], key: str) -> i
             # REM-FIX (doubt-verifier): write_session_status/write_last_status
             # above already committed the new active/reason state -- that
             # commit is correct and intentionally stays regardless of whether
-            # this notify succeeds (unlike _maybe_ask_consent's
-            # already_asked_consent flag, no "structural once-per-transition"
-            # guarantee is violated by the write itself, so there is nothing
-            # to roll back here). Just make the lost notification diagnosable
-            # via a distinct event, never crash, never retry.
+            # this notify succeeds. write_last_status/status_changed() does
+            # act as a once-per-transition notify gate (same shape as
+            # _maybe_ask_consent's already_asked_consent flag), so a lost
+            # notify here IS a permanently-missed one-time FYI, same as
+            # there. The difference is severity, not mechanism: the routing
+            # decision itself (write_session_status, consumed by
+            # craftflow_jev_prompt_hint.py) is always correct regardless of
+            # this notify's outcome, so there is nothing functionally
+            # incorrect to roll back -- only the diagnosability of the
+            # missed notification matters, which this distinct event covers.
+            # No retry/rollback here, unlike the consent-ask flag, because
+            # losing this notification has no functional consequence.
             log_event(
                 "plugin_jev_session_check",
                 {
