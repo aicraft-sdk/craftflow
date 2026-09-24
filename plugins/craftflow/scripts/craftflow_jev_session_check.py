@@ -22,6 +22,12 @@ Never raises -- the whole body runs under a single outer try/except
 
 See docs/plans/2026-09-23-jev-auto-detect-plan.md (Phase 5, DD-2/DD-3/DD-4/
 DD-5/DD-6/DD-8/DD-10) for the full design.
+
+Accepted residual risk (silent-failure-hunter re-hunt on commit 0ff101d,
+user-approved, not remediated): a `checked_at` ordering race between
+concurrent SessionStart firings for the same session_id, and a partial-write
+window inside `session_context()` itself, are both documented and accepted
+as out of scope for this feature's fail-open cache-write model.
 """
 from __future__ import annotations
 
@@ -111,7 +117,23 @@ def _maybe_ask_consent(root: Path, session_id: str, cfg: Dict[str, Any]) -> int:
     the very next firing cannot double-ask within one turn. The flag write
     is now undone (`already_asked_consent=False`) in the except branch
     before returning, so the next `SessionStart` firing for this
-    `session_id` retries the ask instead of staying silently suppressed."""
+    `session_id` retries the ask instead of staying silently suppressed.
+
+    Re-hunt fix (silent-failure-hunter, on commit 0ff101d, final cycle on
+    this bug): the rollback write above (`write_session_status(...,
+    already_asked_consent=False)`) is itself best-effort / never-raises
+    (see `craftflow_jev_session_cache.write_session_status`'s own
+    fail-silently contract) -- it can silently no-op, leaving the flag
+    stuck at `True` with no signal. That underlying write primitive is
+    deliberately fail-open throughout this feature and cannot be made to
+    "not fail." What CAN be added is a read-back: after the rollback write,
+    re-read the session cache and, if it still shows `already_asked_consent
+    is True` (rollback silently failed) or the read itself returns
+    None/unexpected (couldn't confirm either way), log a DISTINCT
+    `consent_ask_rollback_unconfirmed` event so this compound-failure state
+    is diagnosable in the hook-events log, separate from
+    `consent_ask_undelivered`. One read-back check, one distinct log line
+    if unconfirmed -- no retry loop, no additional write attempts."""
     cached = read_session_status(root, session_id)
     if cached and cached.get("already_asked_consent"):
         return 0
@@ -137,6 +159,15 @@ def _maybe_ask_consent(root: Path, session_id: str, cfg: Dict[str, Any]) -> int:
             },
         )
         write_session_status(root, session_id, already_asked_consent=False)
+        confirmed = read_session_status(root, session_id)
+        if confirmed is None or confirmed.get("already_asked_consent") is True:
+            log_event(
+                "plugin_jev_session_check",
+                {
+                    "event": "jev_session_check",
+                    "decision": "consent_ask_rollback_unconfirmed",
+                },
+            )
         return 0
     log_event(
         "plugin_jev_session_check",

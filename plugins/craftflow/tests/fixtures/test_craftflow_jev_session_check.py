@@ -381,6 +381,66 @@ def test_consent_ask_delivery_failure_rolls_back_flag_and_retries_next_firing() 
         )
 
 
+def test_consent_ask_delivery_failure_and_rollback_write_failure_logs_rollback_unconfirmed() -> None:
+    # Compound-failure path (re-hunt on commit 0ff101d): if session_context()
+    # raises AND the rollback write itself (write_session_status(...,
+    # already_asked_consent=False)) silently no-ops -- its own best-effort,
+    # never-raises contract, deliberately never made to "not fail" -- the
+    # flag stays stuck True on disk with no diagnostic signal distinguishing
+    # this from an ordinary, successfully-rolled-back undelivered ask. A
+    # read-back after the rollback write must detect this and log a
+    # DISTINCT consent_ask_rollback_unconfirmed event, separate from
+    # consent_ask_undelivered, so the two failure states are diagnosable.
+    tmp, project, plugin, sessions_dir = _setup(
+        cfg_overrides={"enabled": False, "consent": {"status": "unset", "ts": None}}
+    )
+    logged_events = []
+
+    def _fake_log_event(name, payload):
+        logged_events.append((name, payload))
+
+    real_write = craftflow_jev_session_cache.write_session_status
+    call_count = {"n": 0}
+
+    def _fake_write(root, session_id, **fields):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            real_write(root, session_id, **fields)
+        # second call (the rollback, already_asked_consent=False) silently
+        # no-ops, simulating the write's own best-effort/never-raises
+        # failure contract -- this is the compound-failure path
+
+    payload = {"hook_event_name": "SessionStart", "session_id": "s1", "source": "startup"}
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin), "TYPESAFE_API_KEY": SENTINEL_KEY}
+
+    with tmp:
+        with mock.patch("craftflow_jev_session_check.session_context", side_effect=BrokenPipeError("pipe closed")):
+            with mock.patch("craftflow_jev_session_check.write_session_status", side_effect=_fake_write):
+                with mock.patch("craftflow_jev_session_check.log_event", side_effect=_fake_log_event):
+                    code, out = _run_main(payload, env)
+        entry = read_session_status(project / ".craftflow" / "state", "s1")
+
+    undelivered = [p for (n, p) in logged_events if p.get("decision") == "consent_ask_undelivered"]
+    unconfirmed = [p for (n, p) in logged_events if p.get("decision") == "consent_ask_rollback_unconfirmed"]
+    if (
+        code == 0
+        and out == ""
+        and entry is not None
+        and entry.get("already_asked_consent") is True
+        and undelivered
+        and unconfirmed
+    ):
+        ok(
+            "compound failure (session_context raises + rollback write no-ops) logs a distinct "
+            "consent_ask_rollback_unconfirmed event in addition to consent_ask_undelivered"
+        )
+    else:
+        fail(
+            "consent-ask-rollback-unconfirmed",
+            f"code={code} out={out!r} entry={entry!r} undelivered={undelivered!r} unconfirmed={unconfirmed!r}",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Task 5.5/5.6: canary branch -- 5-way failure taxonomy + budget +
 # change-only notification (DD-8)
@@ -593,6 +653,7 @@ def main_tests() -> int:
     test_consent_unset_writes_already_asked_flag_before_any_response()
     test_consent_ask_privacy_note_failure_leaves_already_asked_flag_unset()
     test_consent_ask_delivery_failure_rolls_back_flag_and_retries_next_firing()
+    test_consent_ask_delivery_failure_and_rollback_write_failure_logs_rollback_unconfirmed()
     test_consent_granted_canary_success_first_run_writes_active_and_injects_note()
     test_consent_granted_canary_success_second_identical_run_stays_silent()
     test_consent_granted_canary_failure_variants()
