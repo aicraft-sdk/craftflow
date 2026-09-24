@@ -5,7 +5,9 @@ Run: python3 tests/fixtures/test_craftflow_jev_session_cache.py
 """
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -397,6 +399,82 @@ def test_write_last_status_concurrent_writers_do_not_race() -> None:
             fail("write-last-status-concurrent-writers-do-not-race", f"data={data!r}")
 
 
+def test_write_session_status_skips_when_lock_held_past_deadline() -> None:
+    # REM-FIX cycle 3 (doubt-verifier REFUTED on commit 813434d): the old
+    # _file_lock() did a blocking fcntl.flock(fd, LOCK_EX) with no timeout.
+    # A stuck-but-alive holder (e.g. D-state/uninterruptible I/O on a slow
+    # or unsynced iCloud/NFS path -- a risk craftflow_hook_selfcheck.py's
+    # discover_sibling_scripts already names and bounds for SessionStart
+    # hooks specifically) would hold the lock forever, hanging every future
+    # writer indefinitely. _file_lock now polls LOCK_EX|LOCK_NB against a
+    # bounded deadline and gives up instead of blocking forever. This test
+    # overrides the module-level deadline to a short value (dependency
+    # injection via module-attribute patch, matching this file's existing
+    # _read_raw_entry monkeypatch style) so the suite stays fast -- it must
+    # NOT sleep for the full production deadline.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        path = session_cache_path(root, "sess-locked")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        holder_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
+        fcntl.flock(holder_fd, fcntl.LOCK_EX)  # hold the lock for the whole test
+
+        original_timeout = craftflow_jev_session_cache._LOCK_ACQUIRE_TIMEOUT_SECONDS
+        craftflow_jev_session_cache._LOCK_ACQUIRE_TIMEOUT_SECONDS = 0.2
+        try:
+            start = time.monotonic()
+            write_session_status(root, "sess-locked", active=True, reason=None)
+            elapsed = time.monotonic() - start
+        finally:
+            craftflow_jev_session_cache._LOCK_ACQUIRE_TIMEOUT_SECONDS = original_timeout
+            fcntl.flock(holder_fd, fcntl.LOCK_UN)
+            os.close(holder_fd)
+
+        entry = read_session_status(root, "sess-locked")
+        if entry is None and elapsed < 2.0:
+            ok("write_session_status skips (not hangs) when the lock is held past the deadline")
+        else:
+            fail(
+                "write-session-status-skips-when-lock-held",
+                f"entry={entry!r} elapsed={elapsed!r}",
+            )
+
+
+def test_write_last_status_skips_when_lock_held_past_deadline() -> None:
+    # Same bounded-deadline contract as above, applied to write_last_status's
+    # PROJECT-GLOBAL lock file (last-status.json.lock) -- the higher-blast-
+    # radius case, since every session's write_last_status call shares this
+    # one lock file, not a per-session one.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        path = last_status_path(root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        holder_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
+        fcntl.flock(holder_fd, fcntl.LOCK_EX)
+
+        original_timeout = craftflow_jev_session_cache._LOCK_ACQUIRE_TIMEOUT_SECONDS
+        craftflow_jev_session_cache._LOCK_ACQUIRE_TIMEOUT_SECONDS = 0.2
+        try:
+            start = time.monotonic()
+            write_last_status(root, True, "reason-x")
+            elapsed = time.monotonic() - start
+        finally:
+            craftflow_jev_session_cache._LOCK_ACQUIRE_TIMEOUT_SECONDS = original_timeout
+            fcntl.flock(holder_fd, fcntl.LOCK_UN)
+            os.close(holder_fd)
+
+        data = read_last_status(root)
+        if data == {} and elapsed < 2.0:
+            ok("write_last_status skips (not hangs) when the lock is held past the deadline")
+        else:
+            fail(
+                "write-last-status-skips-when-lock-held",
+                f"data={data!r} elapsed={elapsed!r}",
+            )
+
+
 def main() -> int:
     print("test_craftflow_jev_session_cache: running")
     test_session_cache_path_is_stable_hash_of_session_id()
@@ -419,6 +497,8 @@ def main() -> int:
     test_write_session_status_survives_unwritable_directory()
     test_write_session_status_concurrent_writers_do_not_race()
     test_write_last_status_concurrent_writers_do_not_race()
+    test_write_session_status_skips_when_lock_held_past_deadline()
+    test_write_last_status_skips_when_lock_held_past_deadline()
 
     print()
     print("=" * 40)

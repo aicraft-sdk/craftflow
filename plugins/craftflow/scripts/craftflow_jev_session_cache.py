@@ -58,6 +58,42 @@ def _atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
         raise
 
 
+# Bounds _file_lock's exclusive-acquire wait. REM-FIX cycle 3 (doubt-verifier
+# REFUTED on commit 813434d): a blocking fcntl.flock(LOCK_EX) has no ceiling
+# on its own -- a stuck-but-alive holder (e.g. D-state/uninterruptible I/O on
+# a slow or unsynced iCloud/NFS path, a risk craftflow_hook_selfcheck.py's
+# discover_sibling_scripts already names and bounds for SessionStart hooks
+# specifically) would hold the lock forever, hanging every future writer
+# indefinitely. For write_last_status this is a SINGLE, PROJECT-GLOBAL lock
+# file (see write_last_status's docstring), so a hang there blocks every
+# session's writes, not just the stuck one -- a liveness regression worse
+# than the read/write race it replaced. 2.0s mirrors this feature's own
+# established SessionStart-adjacent budget precedent (DD-3's
+# SESSION_CHECK_TOTAL_BUDGET_SECONDS = 2.0 in
+# docs/plans/2026-09-23-jev-auto-detect-plan.md): these cache writes are a
+# low-frequency, normally-sub-millisecond operation, so 2.0s is generous
+# for the legitimate case while still bounding the pathological one. A
+# module-level constant (read at call time, not bound into a default
+# parameter value) so tests can override it via a module-attribute patch,
+# matching this file's existing test-file convention of monkeypatching
+# `_read_raw_entry` for deterministic interleaving.
+_LOCK_ACQUIRE_TIMEOUT_SECONDS = 2.0
+# Poll interval between non-blocking acquire attempts while waiting out the
+# deadline above. Small relative to the deadline so the worst-case
+# over-wait is negligible, not so small that it busy-spins.
+_LOCK_POLL_INTERVAL_SECONDS = 0.05
+
+
+class _LockTimeoutError(Exception):
+    """Raised by `_file_lock` when the exclusive lock could not be acquired
+    within `_LOCK_ACQUIRE_TIMEOUT_SECONDS`. Never escapes to callers of
+    `write_session_status`/`write_last_status`: both already wrap their
+    `with _file_lock(...):` block in a broad `except Exception: pass`
+    (best-effort, never-raises contract), so a lock-acquisition timeout is
+    treated identically to any other best-effort write failure -- the write
+    is silently skipped, not retried, not raised."""
+
+
 @contextlib.contextmanager
 def _file_lock(target_path: Path):
     """Exclusive advisory lock serializing the FULL read-decide-write
@@ -71,17 +107,38 @@ def _file_lock(target_path: Path):
     craftflow_skill_ledger._ledger_file_lock's fcntl.flock() pattern
     (available on macOS/Linux via Python's stdlib `fcntl`, even though the
     `flock` shell command isn't). Lock file lives alongside the target as
-    `<name>.lock` and is never cleaned up (cheap, reused across calls). A
-    blocking acquire is fine here: this is a low-frequency, fast operation,
-    so no timeout/retry machinery is needed."""
+    `<name>.lock` and is never cleaned up (cheap, reused across calls).
+
+    REM-FIX cycle 3: acquisition is now a bounded poll-with-deadline loop
+    (fcntl.flock(LOCK_EX | LOCK_NB) retried every
+    `_LOCK_POLL_INTERVAL_SECONDS` up to `_LOCK_ACQUIRE_TIMEOUT_SECONDS`
+    total), NOT a plain blocking `fcntl.flock(fd, LOCK_EX)`. On timeout,
+    raises `_LockTimeoutError` instead of blocking forever -- the fd is
+    still closed before the exception propagates (no partial state is
+    left open), and no lock is released via LOCK_UN since none was ever
+    acquired."""
     target_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = target_path.with_suffix(target_path.suffix + ".lock")
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
+    acquired = False
+    deadline = time.monotonic() + _LOCK_ACQUIRE_TIMEOUT_SECONDS
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise _LockTimeoutError(
+                        f"could not acquire lock on {lock_path} within "
+                        f"{_LOCK_ACQUIRE_TIMEOUT_SECONDS}s"
+                    )
+                time.sleep(_LOCK_POLL_INTERVAL_SECONDS)
         yield
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        if acquired:
+            fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
 
 
@@ -162,7 +219,25 @@ def write_last_status(
     rationale) applied to the cross-session last-status.json file: the full
     read-decide-write section is locked per target file, so two concurrent
     writers can never both observe the same stale `existing` state and race
-    past each other."""
+    past each other.
+
+    BLAST RADIUS (deliberately kept, not narrowed): unlike
+    write_session_status's per-`session_id`-hashed lock file, this
+    function's lock file (`last-status.json.lock`) is a SINGLE,
+    PROJECT-GLOBAL file shared by every session's `write_last_status` call
+    -- there is only ever one `last-status.json`, by DD-8's own design (see
+    `status_changed`'s docstring: the cross-session comparison is the
+    entire point, so it cannot be scoped per-session without defeating that
+    purpose). This means a lock-acquisition timeout here (see
+    `_LOCK_ACQUIRE_TIMEOUT_SECONDS`) has broader impact than
+    write_session_status's: a stuck holder blocks EVERY session's
+    write_last_status call project-wide, not just one session's cache, for
+    up to the bounded deadline. That bound (not blocking forever) is what
+    makes this an acceptable tradeoff rather than a per-session split: this
+    is an advisory, best-effort, low-frequency write (never a security
+    gate), so a bounded worst-case delay across all sessions is preferable
+    to the added complexity of a differently-scoped lock file for one
+    function only."""
     try:
         path = last_status_path(state_root)
         entry: Dict[str, Any] = {
