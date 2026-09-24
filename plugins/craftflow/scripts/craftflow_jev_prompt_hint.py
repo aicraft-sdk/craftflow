@@ -20,7 +20,7 @@ from craftflow_hooklib import (
     read_latest_workflow_state,
     state_root,
 )
-from craftflow_jev_config import api_key, is_active, load_config
+from craftflow_jev_config import api_key, consent_status, is_active, load_config
 from craftflow_jev_client import call as jev_call
 from craftflow_jev_heuristic import classify
 from craftflow_jev_session_cache import read_session_status
@@ -50,13 +50,36 @@ def main() -> int:
 def session_is_active(cfg: Dict[str, Any], env: Dict[str, str], session_id: Optional[str]) -> bool:
     """DD-2/DD-5 auto-detect OR-gate. `is_active()` (unchanged) is checked
     FIRST so the manual `enabled:true` path is fully preserved. Never raises
-    -- a missing/corrupt/mismatched session cache degrades to False."""
+    -- a missing/corrupt/mismatched session cache degrades to False.
+
+    CRITICAL fix (silent-failure-hunter on commit f85bccf): current consent
+    status is re-checked LIVE on every call (`cfg` is reloaded fresh per
+    prompt by `main()`), BEFORE the session cache is even consulted. A
+    session-cache entry can only ever be written `active: True` while
+    consent was `granted` (see `craftflow_jev_session_check.py`'s
+    precedence order), but that cached value is never re-validated against
+    the CURRENT consent status on its own -- without this check, revoking
+    consent mid-session (`--record-consent declined`) would not stop
+    prompts from still being sent to Jev for the rest of that session,
+    since a stale `active: true` cache entry from before the revocation
+    would keep satisfying the OR-gate. This check must run on every call,
+    not be cached itself, so a mid-session revocation takes effect on the
+    very next prompt regardless of what is in the session cache."""
     if is_active(cfg, env):
         return True
+    if consent_status(cfg) == "declined":
+        return False
     key = api_key(env)
     if not key or not session_id:
         return False
-    cached = read_session_status(state_root(), session_id)
+    try:
+        cached = read_session_status(state_root(), session_id)
+    except Exception:
+        # MEDIUM fix (silent-failure-hunter): state_root()/read_session_status()
+        # can raise (e.g. OSError on an unwritable directory) -- this function
+        # is documented as "never raises" and must be genuinely exception-safe
+        # on its own, not merely safe by virtue of main()'s outer try/except.
+        return False
     return bool(cached and cached.get("active") is True)
 
 

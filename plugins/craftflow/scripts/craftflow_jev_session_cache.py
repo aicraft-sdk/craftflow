@@ -83,6 +83,17 @@ _LOCK_ACQUIRE_TIMEOUT_SECONDS = 2.0
 # over-wait is negligible, not so small that it busy-spins.
 _LOCK_POLL_INTERVAL_SECONDS = 0.05
 
+# MEDIUM fix (silent-failure-hunter, defense-in-depth, not the primary bug):
+# read_session_status() previously had no staleness bound at all -- an
+# arbitrarily old cached entry (e.g. from a session that never cleanly
+# ended) would be trusted forever. 24h is a generous bound on a single
+# Claude Code session's own expected lifetime (deliberately not tied to any
+# other feature's budget constant, which govern individual network calls,
+# not session duration) -- long enough that no legitimate same-session read
+# is ever rejected, short enough to bound how long a stale decision can
+# keep being trusted.
+_SESSION_CACHE_MAX_AGE_SECONDS = 24 * 60 * 60
+
 
 class _LockTimeoutError(Exception):
     """Raised by `_file_lock` when the exclusive lock could not be acquired
@@ -160,6 +171,9 @@ def read_session_status(state_root: Path, session_id: str) -> Optional[Dict[str,
         entry = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(entry, dict) or entry.get("session_id") != session_id:
             return None
+        checked_at = entry.get("checked_at")
+        if isinstance(checked_at, (int, float)) and time.time() - checked_at > _SESSION_CACHE_MAX_AGE_SECONDS:
+            return None  # stale -- older than a single session's generous expected lifetime
         return entry
     except Exception:
         return None

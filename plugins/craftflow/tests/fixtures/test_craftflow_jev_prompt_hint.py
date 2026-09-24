@@ -963,6 +963,54 @@ def test_session_active_false_when_no_session_id() -> None:
             fail("session-active-no-session-id", f"expected False, got {result!r}")
 
 
+def test_session_active_false_when_consent_declined_even_with_stale_active_cache() -> None:
+    # CRITICAL (silent-failure-hunter, commit f85bccf): the OR-gate used to
+    # trust a cached active:true session-cache entry without re-checking
+    # current consent status. Revoking consent mid-session
+    # (--record-consent declined) must stop prompts from being sent to Jev
+    # for the rest of that session, starting on the very next prompt --
+    # regardless of what a still-active, now-stale session cache entry says.
+    from craftflow_jev_prompt_hint import session_is_active
+    from craftflow_jev_session_cache import write_session_status
+
+    cfg = {"enabled": False, "consent": {"status": "declined", "ts": None}}
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_root = Path(tmp)
+        write_session_status(tmp_root, "sess-declined", active=True)
+        with mock.patch("craftflow_jev_prompt_hint.state_root", return_value=tmp_root):
+            result = session_is_active(cfg, {"TYPESAFE_API_KEY": "k"}, "sess-declined")
+        if result is False:
+            ok(
+                "session_is_active is False when consent is declined, even with a stale "
+                "active:true session cache entry"
+            )
+        else:
+            fail("session-active-consent-declined", f"expected False, got {result!r}")
+
+
+def test_session_active_false_when_state_root_raises() -> None:
+    # MEDIUM (silent-failure-hunter): session_is_active()'s docstring claims
+    # "never raises" but was only safe by caller convention (main()'s outer
+    # try/except). It must be genuinely exception-safe on its own.
+    from craftflow_jev_prompt_hint import session_is_active
+
+    cfg = {"enabled": False}
+
+    def _boom():
+        raise OSError("unwritable directory")
+
+    with mock.patch("craftflow_jev_prompt_hint.state_root", side_effect=_boom):
+        try:
+            result = session_is_active(cfg, {"TYPESAFE_API_KEY": "k"}, "sess-raise")
+        except Exception as exc:
+            fail("session-active-state-root-raises", f"expected no exception, got {exc!r}")
+            return
+    if result is False:
+        ok("session_is_active returns False (not raise) when state_root()/read_session_status() raises")
+    else:
+        fail("session-active-state-root-raises", f"expected False, got {result!r}")
+
+
 def test_session_active_never_makes_a_network_call() -> None:
     from craftflow_jev_prompt_hint import session_is_active
 
@@ -1119,6 +1167,8 @@ def main() -> int:
     test_session_active_false_when_session_cache_says_inactive()
     test_session_active_false_when_no_key_even_if_session_cache_says_active()
     test_session_active_false_when_no_session_id()
+    test_session_active_false_when_consent_declined_even_with_stale_active_cache()
+    test_session_active_false_when_state_root_raises()
     test_session_active_never_makes_a_network_call()
 
     test_router_docs_carry_jev_precedence_rules()

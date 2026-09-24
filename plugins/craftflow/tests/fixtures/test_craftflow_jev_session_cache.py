@@ -193,16 +193,21 @@ def test_write_session_status_skips_stale_write_with_older_checked_at() -> None:
     # SessionStart firing must never clobber a fresher result that already
     # landed. Compare-and-skip on checked_at (caller-overridable via
     # **fields) enforces last-newest-checked_at-wins ordering.
+    # NOTE: checked_at values are near-now real-clock offsets (not
+    # arbitrary small numbers like 100.0/200.0) so they stay within
+    # read_session_status()'s _SESSION_CACHE_MAX_AGE_SECONDS bound -- this
+    # test verifies write-ordering, not staleness rejection.
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        write_session_status(root, "sess-a", active=False, reason="timeout", checked_at=200.0)
-        write_session_status(root, "sess-a", active=True, reason=None, checked_at=100.0)  # stale, arrives late
+        now = time.time()
+        write_session_status(root, "sess-a", active=False, reason="timeout", checked_at=now)
+        write_session_status(root, "sess-a", active=True, reason=None, checked_at=now - 100)  # stale, arrives late
         entry = read_session_status(root, "sess-a")
         if (
             entry is not None
             and entry.get("active") is False
             and entry.get("reason") == "timeout"
-            and entry.get("checked_at") == 200.0
+            and entry.get("checked_at") == now
         ):
             ok("write_session_status skips a stale write with an older checked_at")
         else:
@@ -282,6 +287,33 @@ def test_read_session_status_returns_none_for_empty_session_id() -> None:
             fail("read-none-for-empty-session-id", f"result={result!r}")
 
 
+def test_read_session_status_returns_none_for_entry_past_max_age() -> None:
+    # MEDIUM (silent-failure-hunter, defense-in-depth): no TTL/staleness
+    # bound existed on session cache reads. Reject entries whose checked_at
+    # is older than a generous bound (the session's own expected lifetime)
+    # instead of trusting an arbitrarily old cached decision forever.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        stale_checked_at = time.time() - craftflow_jev_session_cache._SESSION_CACHE_MAX_AGE_SECONDS - 1
+        write_session_status(root, "sess-stale", active=True, checked_at=stale_checked_at)
+        result = read_session_status(root, "sess-stale")
+        if result is None:
+            ok("read_session_status returns None for an entry past the max-age bound")
+        else:
+            fail("read-none-for-entry-past-max-age", f"result={result!r}")
+
+
+def test_read_session_status_returns_entry_within_max_age() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_session_status(root, "sess-fresh", active=True)
+        result = read_session_status(root, "sess-fresh")
+        if result is not None and result.get("active") is True:
+            ok("read_session_status still returns a freshly-written entry (within max age)")
+        else:
+            fail("read-entry-within-max-age", f"result={result!r}")
+
+
 def test_write_session_status_survives_unwritable_directory() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         unwritable_root = Path(tmp) / "not-a-directory"
@@ -324,12 +356,18 @@ def test_write_session_status_concurrent_writers_do_not_race() -> None:
             return result
 
         craftflow_jev_session_cache._read_raw_entry = instrumented_read
+        # Near-now real-clock offsets (not arbitrary small numbers like
+        # 100.0/200.0) so the resulting entry stays within
+        # read_session_status()'s _SESSION_CACHE_MAX_AGE_SECONDS bound --
+        # this test verifies write-ordering under concurrency, not
+        # staleness rejection.
+        now = time.time()
         try:
             t_old = threading.Thread(
                 name="older-writer",
                 target=write_session_status,
                 args=(root, "sess-race"),
-                kwargs={"active": False, "reason": "stale", "checked_at": 100.0},
+                kwargs={"active": False, "reason": "stale", "checked_at": now - 100},
             )
             t_old.start()
             time.sleep(0.05)  # let older-writer read first, before it stalls
@@ -337,7 +375,7 @@ def test_write_session_status_concurrent_writers_do_not_race() -> None:
                 name="newer-writer",
                 target=write_session_status,
                 args=(root, "sess-race"),
-                kwargs={"active": True, "reason": "fresh", "checked_at": 200.0},
+                kwargs={"active": True, "reason": "fresh", "checked_at": now},
             )
             t_new.start()
             t_old.join(timeout=5)
@@ -348,7 +386,7 @@ def test_write_session_status_concurrent_writers_do_not_race() -> None:
         entry = read_session_status(root, "sess-race")
         if (
             entry is not None
-            and entry.get("checked_at") == 200.0
+            and entry.get("checked_at") == now
             and entry.get("reason") == "fresh"
         ):
             ok("write_session_status: concurrent writers do not race -- newer checked_at always wins")
@@ -541,6 +579,8 @@ def main() -> int:
     test_status_changed_true_when_reason_changes()
     test_status_changed_true_on_corrupt_last_status_file()
     test_write_last_status_then_read_roundtrips()
+    test_read_session_status_returns_none_for_entry_past_max_age()
+    test_read_session_status_returns_entry_within_max_age()
     test_read_session_status_returns_none_for_non_string_session_id()
     test_write_session_status_skips_stale_write_with_older_checked_at()
     test_write_last_status_skips_stale_write_with_older_checked_at()
