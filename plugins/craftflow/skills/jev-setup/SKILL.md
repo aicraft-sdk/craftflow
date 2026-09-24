@@ -11,6 +11,12 @@ feature: check the current state, run a canary call, confirm the privacy note, a
 `config/jev.json`'s `enabled` flag. This skill never edits `config/jev.json` itself — it only
 runs `scripts/craftflow_jev_setup.py`, which owns every read/write of that file.
 
+## Auto-Detect Onboarding (Coexistence Note)
+
+Most users are now onboarded to Jev automatically via the optional SessionStart consent-ask + canary-check flow (`craftflow_jev_session_check.py`). When `TYPESAFE_API_KEY` is set and the `--enable` flag has not been run, users are asked once per session to opt in. The `--record-consent` flag is invoked automatically by the assistant (not a manual operator step) to record that choice.
+
+This manual skill remains a fully valid override path at any time: `--enable`, `--disable`, `--check`, and `--status` all work unchanged and take precedence over the auto-detect path (once `--enable`d, auto-detect is no-op).
+
 ## Step 0 — Resolve `PLUGIN_ROOT`
 
 Use `${CLAUDE_PLUGIN_ROOT}` if set; otherwise resolve the repo path to

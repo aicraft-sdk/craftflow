@@ -741,6 +741,62 @@ def test_malformed_stdin_variants_exit_zero_silently() -> None:
         fail("malformed-stdin-variants", f"failures={failures!r}")
 
 
+# ---------------------------------------------------------------------------
+# Task 7: Documentation coverage (Phase 7)
+# ---------------------------------------------------------------------------
+
+
+def test_router_docs_carry_jev_consent_request_contract() -> None:
+    router_protocol = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md").read_text(encoding="utf-8")
+    router_skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    failures = []
+    if "<craftflow_jev_consent_request>" not in router_protocol:
+        failures.append("router-protocol.md missing the consent-request tag contract")
+    if "AskUserQuestion" not in router_protocol:
+        failures.append("router-protocol.md missing the AskUserQuestion instruction")
+    if "--record-consent" not in router_protocol:
+        failures.append("router-protocol.md missing the --record-consent recorder-command contract")
+    # pointer-only in SKILL.md, no full-tag duplication (mirrors the existing jev routing-hint precedent)
+    if "<craftflow_jev_consent_request>" in router_skill:
+        failures.append("craftflow-router/SKILL.md duplicates the full consent-request contract (should be pointer-only)")
+    if "craftflow_jev_session_check.py" not in router_skill and "auto-detect" not in router_skill.lower():
+        failures.append("craftflow-router/SKILL.md missing a pointer sentence to the auto-detect consent contract")
+    if not failures:
+        ok("router-protocol.md and craftflow-router/SKILL.md document consent-request contract")
+    else:
+        fail("router-docs-consent-contract", f"failures={failures!r}")
+
+
+def test_readme_and_hook_inventory_docs_document_session_check() -> None:
+    readme = (PLUGIN_ROOT / "README.md").read_text(encoding="utf-8")
+    hooks_readme = (PLUGIN_ROOT / "hooks" / "README.md").read_text(encoding="utf-8")
+    policy_doc = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "workflow-artifact-and-hook-policy.md").read_text(encoding="utf-8")
+    failures = []
+    if "auto-detect" not in readme.lower():
+        failures.append("README.md jev section not updated to describe auto-detect")
+    if "craftflow_jev_session_check.py" not in hooks_readme:
+        failures.append("hooks/README.md missing the new SessionStart entry")
+    if "SessionStart" not in policy_doc or "jev" not in policy_doc.lower():
+        failures.append("workflow-artifact-and-hook-policy.md missing the new SessionStart jev bullet")
+    if not failures:
+        ok("README.md, hooks/README.md, and policy doc document session-check hook")
+    else:
+        fail("readme-hook-docs-session-check", f"failures={failures!r}")
+
+
+def test_jev_setup_skill_documents_auto_detect_coexistence() -> None:
+    content = (PLUGIN_ROOT / "skills" / "jev-setup" / "SKILL.md").read_text(encoding="utf-8")
+    failures = []
+    if "auto" not in content.lower():
+        failures.append("jev-setup/SKILL.md missing reference to auto-detect")
+    if "--record-consent" not in content:
+        failures.append("jev-setup/SKILL.md missing reference to --record-consent flag")
+    if not failures:
+        ok("jev-setup/SKILL.md documents auto-detect coexistence")
+    else:
+        fail("jev-setup-skill-auto-detect", f"failures={failures!r}")
+
+
 def main_tests() -> int:
     print("test_craftflow_jev_session_check: running")
     test_no_key_is_silent_noop()
@@ -763,6 +819,9 @@ def main_tests() -> int:
     test_canary_notify_delivery_failure_on_active_transition_logs_distinct_event()
     test_canary_notify_delivery_failure_on_inactive_transition_logs_distinct_event()
     test_malformed_stdin_variants_exit_zero_silently()
+    test_router_docs_carry_jev_consent_request_contract()
+    test_readme_and_hook_inventory_docs_document_session_check()
+    test_jev_setup_skill_documents_auto_detect_coexistence()
 
     print()
     print("=" * 40)

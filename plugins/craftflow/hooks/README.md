@@ -4,7 +4,7 @@ This directory now serves two different purposes:
 
 1. **Plugin runtime hooks** via `hooks.json`
    - `PreToolUse` — protected writes guard (Edit, Write, and Bash matchers) — the Bash matcher inspects write-shaped commands (redirects, `tee`, python `open()`/`write_text()`/`os.system`/`subprocess`/`shutil`/`os.rename` writes) for protected-path targets, closing a prior bypass where Bash-only agents could overwrite memory files undetected; destructive-command guard (Bash matcher — denies destructive commands whose resolved target is in-cwd (e.g. `rm -rf packages/agent-cli`, `rm -rf .`) as well as ones that escape the session's own cwd/worktree, e.g. a worktree relative-path escape; covers `rm`, `rmdir`, `mv`, `shred`, `truncate`, `dd`, `chmod`, `find -exec`/`-execdir`/`-ok`/`-okdir`/`-delete`, `git clean`/`reset --hard`/`push --force`, with fail-closed handling of dynamic ($/backtick) targets; see `docs/incidents/2026-07-25-phase3-verifier-rm-attempt.md`); catastrophic-command guard (Bash matcher — `craftflow_safe_shell_guard.py`, an absolute denylist for `rm -rf /`, `mkfs`, and fork-bomb patterns regardless of path, plus an opt-in recursive-grep-against-a-broad-path advisory; concept ported from `xai-org/grok-build`, see this plugin's `NOTICE`); state-read compaction guard (Read matcher — denies a Read of an oversized `.craftflow/state/**` file and redirects the agent to `craftflow_state_query.py`, never mutating the target file; block mode, `stateReadCompaction`)
-   - `SessionStart` — workflow resume context; hook import self-check
+   - `SessionStart` — workflow resume context; hook import self-check; optional Jev auto-detect (`craftflow_jev_session_check.py`) consent-ask + session-scoped canary gating
    - `PostToolUse` — workflow artifact integrity audit and memory placeholder restore (defensive, fires on Edit/Write)
    - `TaskCompleted` — task metadata validation (enforced: block mode)
    - `PostCompact` — compaction event capture
@@ -91,6 +91,7 @@ The shipped runtime hooks are intentionally minimal. Most hooks operate in audit
 - deny a Read of an oversized `.craftflow/state/**` file and redirect the agent to `craftflow_state_query.py` (never mutating the target file's bytes; block mode, `stateReadCompaction`)
 - inject workflow resume context
 - self-check that every sibling hook script still imports cleanly under python3, warning (not blocking) on failure
+- optionally run Jev auto-detect consent-ask + session-canary via `SessionStart` — inert unless `TYPESAFE_API_KEY` is set and `config/jev.json` has neither `enabled:true` (manual path) nor `consent.status="declined"`; when active, asks the user once per session to opt in, then gates activation to a short-budget canary call (off by default)
 - audit workflow artifact integrity after writes
 - validate and enforce CRAFTFLOW task metadata on completion (block mode)
 - restore memory placeholders after Edit/Write and on SubagentStop and Stop

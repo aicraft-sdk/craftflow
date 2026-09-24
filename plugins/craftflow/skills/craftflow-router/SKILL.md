@@ -34,6 +34,8 @@ chain. An optional Jev hint block (Claude Code only; produced by the opt-in
 `UserPromptSubmit` hook gated by `config/jev.json`, off by default), when present, is
 consulted per the shared doc's hint-precedence rule (ERROR keywords always win).
 
+**Jev auto-detect consent contract:** When a consent-request block appears in `additionalContext` during the optional auto-detect SessionStart hook, execute the embedded `AskUserQuestion` contract before your first substantive reply and run the matching `--record-consent` command. See `router-protocol.md` "## Jev Auto-Detect Consent Request Contract" for the full contract and tag format.
+
 ## 0. Resolve Project Root
 
 **Shared with Cursor — canonical text lives in

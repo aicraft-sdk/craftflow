@@ -256,6 +256,18 @@ see its own binding doc for exactly when in its execution order this step runs, 
 differs by host (Claude Code: once at session start, before `## 1.`; Cursor: inline at the
 start of `## 4a. Worktree Isolation`), a sequencing detail, not a content difference.)
 
+## Jev Auto-Detect Consent Request Contract
+
+When `<craftflow_jev_consent_request>` appears in `additionalContext` (injected by the optional SessionStart consent-ask hook):
+- The assistant MUST call `AskUserQuestion` with the embedded question, options, and privacy note BEFORE its first substantive reply this turn.
+- Then run the embedded `--record-consent {granted|declined}` command matching the user's answer.
+- Never re-ask in the same session (structural idempotency enforced by the hook via an `already_asked_consent` flag).
+- Granting consent activates Jev starting at the next automatic session check (next `SessionStart` firing), not immediately within the current turn/session — this latency is disclosed to the user at ask-time.
+
+See `docs/ai/decisions/0038-craftflow-jev-auto-detect-consent.md` for the full design.
+
+(Host-specific note: this tag and its contract are Claude-Code-only, as the optional SessionStart Jev auto-detect hook is not registered in Cursor's hooks.json.)
+
 ## Intent Routing
 
 Route using the first matching signal:

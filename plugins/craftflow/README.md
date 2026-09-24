@@ -254,18 +254,31 @@ Workflow state lives at `.craftflow/state/` in the project root:
 
 ## Optional: Jev routing hint (TypeSafe AI)
 
-An opt-in `UserPromptSubmit` hook (`craftflow_jev_prompt_hint.py`) can ask TypeSafe AI's
-Jev classifier for a routing/skill hint before each prompt. It is **`enabled: false` by
-default** in the committed `config/jev.json` — off by default means zero behavior change,
-zero network calls, and zero cost until an operator explicitly opts in.
+An opt-in hook system can ask TypeSafe AI's Jev classifier for a routing/skill hint before
+each prompt. It is **`enabled: false` by default** in the committed `config/jev.json` —
+off by default means zero behavior change, zero network calls, and zero cost until the user
+explicitly opts in.
 
-**Setup:** run the `jev-setup` skill, or the three underlying commands directly:
+**Two onboarding paths exist:**
+
+1. **Automatic (default, if `TYPESAFE_API_KEY` is set):** When you submit a prompt and haven't
+yet consented to Jev, an `AskUserQuestion` gate appears asking "Enable the optional Jev
+(TypeSafe AI) routing hint?" Once you grant consent, a session-scoped canary call runs and
+Jev activates for that session (and will re-check at every `SessionStart` firing thereafter).
+The assistant invokes `craftflow_jev_setup.py --record-consent granted` to record your
+choice durably. This auto-detect flow requires zero manual setup.
+
+2. **Manual override (`jev-setup` skill or direct CLI):** Run the `jev-setup` skill at any
+time, or the commands directly:
 
 ```bash
 python3 scripts/craftflow_jev_setup.py --check    # canary call + prints the privacy note; writes nothing
 python3 scripts/craftflow_jev_setup.py --enable    # re-runs --check, then flips enabled:true on success
 python3 scripts/craftflow_jev_setup.py --disable   # flips enabled:false
 ```
+
+Once `--enable`d (manual path active), auto-detect is a no-op — the manual path takes
+precedence and Jev stays on across all sessions until you run `--disable`.
 
 **Privacy** (verbatim from `craftflow_jev_setup.py`'s printed privacy note):
 
