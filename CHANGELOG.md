@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.9.0] - 2026-09-24
+
+### Features
+
+- jev prompt hint consults the session-scoped auto-detect cache
+- add jev auto-detect SessionStart hook (consent ask + session canary)
+- add jev-setup --record-consent, --enable/--disable now stamp consent
+- add jev session-scoped + cross-session status cache module
+- add consent sub-object to jev config schema
+- additive budget/failure-reason kwargs on jev client.call()
+
+### Fixes
+
+- gate jev session-cache OR-gate on consent==granted, not declined
+- re-check consent live in jev session_is_active OR-gate
+- catch and log jev canary notify-delivery failures distinctly
+- detect and log jev consent-rollback write that silently no-ops
+- roll back jev consent-ask flag when session_context() delivery fails
+- close jev consent-ask silent-suppression + timeout margin + cache-merge gaps
+- replace assert with checked ValueError for jev consent-status guard
+- make jev config writes atomic + validate consent_status at write site
+- bound jev session-cache _file_lock() acquisition with a deadline
+- serialize jev session-cache read-decide-write per file
+- harden jev session cache per silent-failure-hunter findings
+
+### Documentation
+
+- document jev auto-detect consent flow across router/README/skills
+- correct comment on canary notify no-rollback rationale
+
+### Tests
+
+- live proof scenario for jev auto-detect consent + session canary
+- fix 2 more jev prompt-hint fixtures short-circuited by consent gate
+
 ## [1.8.0] - 2026-09-23
 
 ### Features
