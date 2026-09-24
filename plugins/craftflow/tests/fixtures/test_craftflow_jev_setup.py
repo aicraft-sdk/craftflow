@@ -305,7 +305,7 @@ def test_write_enabled_flag_rejects_invalid_consent_status() -> None:
         raised = False
         try:
             _write_enabled_flag(cfg_path, True, consent_status="yes-please")
-        except AssertionError:
+        except ValueError:
             raised = True
         after = cfg_path.read_text(encoding="utf-8")
 
@@ -330,7 +330,7 @@ def test_write_consent_rejects_invalid_status() -> None:
         raised = False
         try:
             _write_consent(cfg_path, "yes-please")
-        except AssertionError:
+        except ValueError:
             raised = True
         after = cfg_path.read_text(encoding="utf-8")
 

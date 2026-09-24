@@ -152,8 +152,11 @@ def _write_enabled_flag(path: Path, value: bool, consent_status: Optional[str] =
     consent_status in (None, "granted", "declined") (argparse `choices`
     restricts --record-consent; --enable/--disable pass fixed literals), but
     a future direct (non-CLI) caller must not be able to write an invalid
-    value straight to disk with no guard."""
-    assert consent_status in (None,) + CONSENT_STATUSES, f"invalid consent_status: {consent_status!r}"
+    value straight to disk with no guard. A checked exception (not assert)
+    is used deliberately -- assert is stripped under python -O/PYTHONOPTIMIZE,
+    which would silently defeat this guard."""
+    if consent_status not in (None,) + CONSENT_STATUSES:
+        raise ValueError(f"invalid consent_status: {consent_status!r}")
 
     def mutate(raw: Dict[str, Any]) -> None:
         raw["enabled"] = value
@@ -164,8 +167,10 @@ def _write_enabled_flag(path: Path, value: bool, consent_status: Optional[str] =
 
 
 def _write_consent(path: Path, status: str) -> bool:
-    """See _write_enabled_flag's docstring for why status is guarded here."""
-    assert status in CONSENT_STATUSES, f"invalid consent status: {status!r}"
+    """See _write_enabled_flag's docstring for why status is guarded here
+    with a checked exception rather than assert."""
+    if status not in CONSENT_STATUSES:
+        raise ValueError(f"invalid consent status: {status!r}")
 
     def mutate(raw: Dict[str, Any]) -> None:
         raw["consent"] = {"status": status, "ts": now_iso()}
