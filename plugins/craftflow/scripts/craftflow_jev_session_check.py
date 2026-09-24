@@ -79,13 +79,32 @@ CONSENT_REQUEST_TEMPLATE = (
 
 def _maybe_ask_consent(root: Path, session_id: str, cfg: Dict[str, Any]) -> int:
     """DD-4/DD-6: inject the consent-request context exactly once per
-    session_id. The `already_asked_consent` flag is written BEFORE the
-    assistant has even responded -- structural suppression, not an
-    instruction the assistant merely follows (DD-4)."""
+    session_id.
+
+    CRITICAL fix (silent-failure-hunter, reproduced live, on commit
+    34493d9): the message is now fully built (lazy import + privacy_note()
+    + .format()) BEFORE the `already_asked_consent` flag is persisted. The
+    old order wrote the flag FIRST -- if anything between that write and
+    delivery raised (lazy import failure, privacy_note() raising,
+    .format() raising, or session_context()'s own print raising, e.g.
+    BrokenPipeError), main()'s outer try/except swallowed it silently and
+    the flag was already on disk: the user would permanently and silently
+    never be asked again for that session_id, every future SessionStart
+    firing (including a later compact) seeing the flag and no-opping. Now,
+    if message-building fails, it raises before any write happens, so
+    `consent.status` stays effectively un-asked on disk and the very next
+    SessionStart firing (even within the same session) tries again.
+
+    The one remaining fallible step after the flag write is the
+    unavoidable `session_context()` print itself (DD-4 still requires the
+    flag to be written before the assistant responds, structurally, not by
+    instruction). If THAT fails, a distinct `consent_ask_undelivered` event
+    is logged (not just the generic `hook_error`), so this degradation is
+    diagnosable instead of indistinguishable from a normal ask."""
     cached = read_session_status(root, session_id)
     if cached and cached.get("already_asked_consent"):
         return 0
-    write_session_status(root, session_id, already_asked_consent=True)
+
     from craftflow_jev_setup import privacy_note
 
     note = privacy_note(cfg.get("maxStateChars", 4000))
@@ -93,11 +112,24 @@ def _maybe_ask_consent(root: Path, session_id: str, cfg: Dict[str, Any]) -> int:
         privacy_note=note,
         setup_script=str(plugin_root() / "scripts" / "craftflow_jev_setup.py"),
     )
+
+    write_session_status(root, session_id, already_asked_consent=True)
+    try:
+        session_context(message)
+    except Exception as exc:
+        log_event(
+            "plugin_jev_session_check",
+            {
+                "event": "jev_session_check",
+                "decision": "consent_ask_undelivered",
+                "error": type(exc).__name__,
+            },
+        )
+        return 0
     log_event(
         "plugin_jev_session_check",
         {"event": "jev_session_check", "decision": "consent_ask_injected"},
     )
-    session_context(message)
     return 0
 
 

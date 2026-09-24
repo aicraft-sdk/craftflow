@@ -179,22 +179,35 @@ def write_session_status(state_root: Path, session_id: str, **fields: Any) -> No
     by a later firing (stale-write race). `checked_at` defaults to
     call-time but callers may pass an explicit `checked_at` kwarg to order
     by a different clock (e.g. check-start time instead of
-    check-completion time)."""
+    check-completion time).
+
+    MERGES with whatever entry is already on disk (read inside the same
+    lock as the staleness check) rather than overwriting it wholesale --
+    matches the "preserve other keys" convention
+    craftflow_jev_setup._write_enabled_flag() already uses. Currently inert
+    in practice (the consent-ask and canary branches are mutually exclusive
+    per SessionStart invocation today), but without this a future caller
+    needing both `already_asked_consent` and `active`/`reason` to coexist
+    for the same session_id would silently drop whichever field the
+    previous call wrote."""
     if not _is_valid_session_id(session_id):
         return
     try:
         path = session_cache_path(state_root, session_id)
-        entry: Dict[str, Any] = {"session_id": session_id, "checked_at": time.time()}
-        entry.update(fields)
+        checked_at = fields.pop("checked_at", None)
+        if checked_at is None:
+            checked_at = time.time()
+        base_fields: Dict[str, Any] = {"session_id": session_id, "checked_at": checked_at}
         with _file_lock(path):
             existing = _read_raw_entry(path)
             if (
                 existing is not None
                 and isinstance(existing.get("checked_at"), (int, float))
-                and isinstance(entry.get("checked_at"), (int, float))
-                and existing["checked_at"] > entry["checked_at"]
+                and isinstance(checked_at, (int, float))
+                and existing["checked_at"] > checked_at
             ):
                 return  # a fresher entry already landed -- do not clobber it
+            entry: Dict[str, Any] = {**(existing or {}), **base_fields, **fields}
             _atomic_write_json(path, entry)
     except Exception:
         pass  # best-effort cache write, matches craftflow_jev_client._write_cache()
@@ -237,22 +250,31 @@ def write_last_status(
     is an advisory, best-effort, low-frequency write (never a security
     gate), so a bounded worst-case delay across all sessions is preferable
     to the added complexity of a differently-scoped lock file for one
-    function only."""
+    function only.
+
+    MERGES with whatever entry is already on disk (read inside the same
+    lock as the staleness check) rather than overwriting it wholesale --
+    same rationale/convention as write_session_status above. This function
+    does not itself accept arbitrary **fields today, but any field a future
+    caller (or a hand-authored on-disk entry) adds to this file must not be
+    silently dropped by an unrelated active/reason update."""
     try:
         path = last_status_path(state_root)
-        entry: Dict[str, Any] = {
+        resolved_checked_at = checked_at if checked_at is not None else time.time()
+        base_fields: Dict[str, Any] = {
             "active": active,
             "reason": reason,
-            "checked_at": checked_at if checked_at is not None else time.time(),
+            "checked_at": resolved_checked_at,
         }
         with _file_lock(path):
             existing = _read_raw_entry(path)
             if (
                 existing is not None
                 and isinstance(existing.get("checked_at"), (int, float))
-                and existing["checked_at"] > entry["checked_at"]
+                and existing["checked_at"] > resolved_checked_at
             ):
                 return  # a fresher entry already landed -- do not clobber it
+            entry: Dict[str, Any] = {**(existing or {}), **base_fields}
             _atomic_write_json(path, entry)
     except Exception:
         pass

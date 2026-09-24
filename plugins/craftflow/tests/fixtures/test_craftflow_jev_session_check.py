@@ -18,7 +18,9 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import craftflow_jev_session_check  # noqa: E402
 from craftflow_jev_session_check import main, CONSENT_REQUEST_TEMPLATE  # noqa: E402
+import craftflow_jev_session_cache  # noqa: E402
 from craftflow_jev_session_cache import read_session_status  # noqa: E402
 from craftflow_jev_setup import privacy_note  # noqa: E402
 from craftflow_jev_config import DEFAULTS  # noqa: E402
@@ -152,13 +154,21 @@ def test_no_session_id_is_silent_noop() -> None:
         fail("no-session-id-noop", f"code={code} out={out!r} sessions_dir_exists={sessions_dir.exists()}")
 
 
-def test_hooks_json_registers_sessionstart_jev_session_check_with_timeout_5() -> None:
+def test_hooks_json_registers_sessionstart_jev_session_check_with_timeout_10() -> None:
+    # HIGH remediation (silent-failure-hunter on commit 34493d9): worst-case
+    # wall-clock stacking -- jev_call() (~2.0-2.3s) + write_session_status's
+    # lock wait (up to 2.0s) + write_last_status's lock wait (up to 2.0s) can
+    # sum to ~6.3s, exceeding the previous 5s hook timeout. Raised to 10s to
+    # match every sibling SessionStart hook's timeout margin (e.g.
+    # craftflow_sessionstart_context.py, craftflow_hook_selfcheck.py's own
+    # DISCOVERY_TIMEOUT_SECONDS/PER_SCRIPT_TIMEOUT_SECONDS margin-proving
+    # convention).
     hooks = json.loads((PLUGIN_ROOT / "hooks" / "hooks.json").read_text())
     entries = hooks["hooks"].get("SessionStart", [])
     cmds = [h for e in entries for h in e.get("hooks", [])]
     matches = [
         h for h in cmds
-        if "craftflow_jev_session_check.py" in h.get("command", "") and h.get("timeout") == 5
+        if "craftflow_jev_session_check.py" in h.get("command", "") and h.get("timeout") == 10
     ]
     matcher_ok = any(
         "craftflow_jev_session_check.py" in h.get("command", "")
@@ -166,9 +176,50 @@ def test_hooks_json_registers_sessionstart_jev_session_check_with_timeout_5() ->
         for h in e.get("hooks", [])
     )
     if matches and matcher_ok:
-        ok("hooks.json registers a SessionStart entry for craftflow_jev_session_check.py, timeout=5, matcher startup|resume|compact")
+        ok("hooks.json registers a SessionStart entry for craftflow_jev_session_check.py, timeout=10, matcher startup|resume|compact")
     else:
         fail("hooks-json-registration", f"entries={entries!r}")
+
+
+def test_session_check_worst_case_budget_stays_under_registered_hook_timeout() -> None:
+    # Ties the canary's own worst-case wall-clock budget
+    # (SESSION_CHECK_TOTAL_BUDGET_SECONDS, for the jev_call() itself) plus
+    # BOTH session-cache lock-acquire waits it can incur
+    # (write_session_status + write_last_status, each up to
+    # craftflow_jev_session_cache._LOCK_ACQUIRE_TIMEOUT_SECONDS) to the REAL
+    # registered SessionStart timeout in hooks/hooks.json, so a future,
+    # independent edit to any one of these three constants can't silently
+    # regress this invariant without a test catching it (mirrors
+    # craftflow_hook_selfcheck.py's own
+    # test_selfcheck_internal_budget_stays_under_registered_hook_timeout
+    # pattern).
+    hooks = json.loads((PLUGIN_ROOT / "hooks" / "hooks.json").read_text())
+    entries = hooks["hooks"].get("SessionStart", [])
+    registered_timeout = None
+    for entry in entries:
+        for h in entry.get("hooks", []):
+            if "craftflow_jev_session_check.py" in h.get("command", ""):
+                registered_timeout = h.get("timeout")
+    if registered_timeout is None:
+        fail("session-check-worst-case-budget", "could not find registered SessionStart timeout for craftflow_jev_session_check.py")
+        return
+    worst_case = (
+        craftflow_jev_session_check.SESSION_CHECK_TOTAL_BUDGET_SECONDS
+        + 2 * craftflow_jev_session_cache._LOCK_ACQUIRE_TIMEOUT_SECONDS
+    )
+    min_margin_seconds = 1
+    if worst_case + min_margin_seconds <= registered_timeout:
+        ok(
+            "SESSION_CHECK_TOTAL_BUDGET_SECONDS + 2*_LOCK_ACQUIRE_TIMEOUT_SECONDS "
+            f"({worst_case}s) leaves >= {min_margin_seconds}s margin under the registered "
+            f"hooks.json timeout ({registered_timeout}s)"
+        )
+    else:
+        fail(
+            "session-check-worst-case-budget",
+            f"worst_case={worst_case}s leaves less than {min_margin_seconds}s margin under "
+            f"registered_timeout={registered_timeout}s",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +294,66 @@ def test_consent_unset_writes_already_asked_flag_before_any_response() -> None:
         ok("consent-ask writes already_asked_consent:true structurally (DD-4)")
     else:
         fail("consent-unset-writes-already-asked-flag", f"code={code} out={out!r} entry={entry!r}")
+
+
+def test_consent_ask_privacy_note_failure_leaves_already_asked_flag_unset() -> None:
+    # CRITICAL remediation (silent-failure-hunter, reproduced live, on commit
+    # 34493d9): _maybe_ask_consent() used to write already_asked_consent:true
+    # BEFORE the message was fully built (lazy import + privacy_note() +
+    # .format()). If any of those steps raised, the outer try/except in
+    # main() swallowed it silently and the flag was ALREADY persisted -- the
+    # user would permanently and silently never be asked again for that
+    # session_id. The message must now be fully built before the flag write,
+    # so a privacy_note() failure leaves no trace of an ask ever having
+    # happened, and the very next SessionStart firing (even within the same
+    # session, since no already_asked_consent flag was written) tries again.
+    tmp, project, plugin, sessions_dir = _setup(
+        cfg_overrides={"enabled": False, "consent": {"status": "unset", "ts": None}}
+    )
+    with tmp:
+        with mock.patch("craftflow_jev_setup.privacy_note", side_effect=RuntimeError("boom")):
+            code, out = _run_main(
+                {"hook_event_name": "SessionStart", "session_id": "s1", "source": "startup"},
+                {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin), "TYPESAFE_API_KEY": SENTINEL_KEY},
+            )
+        entry = read_session_status(project / ".craftflow" / "state", "s1")
+    if code == 0 and entry is None:
+        ok("privacy_note() failure while building the consent-ask message leaves already_asked_consent unset (never persisted before delivery is guaranteed)")
+    else:
+        fail("consent-ask-privacy-note-failure-leaves-flag-unset", f"code={code} out={out!r} entry={entry!r}")
+
+
+def test_consent_ask_delivery_failure_logs_distinct_undelivered_event() -> None:
+    # CRITICAL remediation, second half: session_context()'s own print is the
+    # one unavoidable fallible step that must remain AFTER the flag write
+    # (DD-4's structural once-per-session guarantee still requires this).
+    # If it raises (e.g. BrokenPipeError), this must be diagnosable as a
+    # distinct "consent_ask_undelivered" event, not indistinguishable from
+    # the generic hook_error catch-all.
+    tmp, project, plugin, sessions_dir = _setup(
+        cfg_overrides={"enabled": False, "consent": {"status": "unset", "ts": None}}
+    )
+    logged_events = []
+
+    def _fake_log_event(name, payload):
+        logged_events.append((name, payload))
+
+    with tmp:
+        with mock.patch("craftflow_jev_session_check.session_context", side_effect=BrokenPipeError("pipe closed")):
+            with mock.patch("craftflow_jev_session_check.log_event", side_effect=_fake_log_event):
+                code, out = _run_main(
+                    {"hook_event_name": "SessionStart", "session_id": "s1", "source": "startup"},
+                    {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin), "TYPESAFE_API_KEY": SENTINEL_KEY},
+                )
+        entry = read_session_status(project / ".craftflow" / "state", "s1")
+    undelivered = [p for (n, p) in logged_events if p.get("decision") == "consent_ask_undelivered"]
+    if code == 0 and entry is not None and entry.get("already_asked_consent") is True and undelivered:
+        ok("session_context() delivery failure logs a distinct consent_ask_undelivered event (not just generic hook_error)")
+    else:
+        fail(
+            "consent-ask-delivery-failure-logs-distinct-event",
+            f"code={code} entry={entry!r} logged_events={logged_events!r}",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -450,10 +561,13 @@ def main_tests() -> int:
     test_enabled_true_is_silent_noop_manual_path_untouched()
     test_consent_declined_is_silent_noop()
     test_no_session_id_is_silent_noop()
-    test_hooks_json_registers_sessionstart_jev_session_check_with_timeout_5()
+    test_hooks_json_registers_sessionstart_jev_session_check_with_timeout_10()
+    test_session_check_worst_case_budget_stays_under_registered_hook_timeout()
     test_consent_unset_first_time_injects_consent_request_with_exact_recorder_commands()
     test_consent_unset_second_sessionstart_same_session_does_not_reask()
     test_consent_unset_writes_already_asked_flag_before_any_response()
+    test_consent_ask_privacy_note_failure_leaves_already_asked_flag_unset()
+    test_consent_ask_delivery_failure_logs_distinct_undelivered_event()
     test_consent_granted_canary_success_first_run_writes_active_and_injects_note()
     test_consent_granted_canary_success_second_identical_run_stays_silent()
     test_consent_granted_canary_failure_variants()

@@ -475,6 +475,59 @@ def test_write_last_status_skips_when_lock_held_past_deadline() -> None:
             )
 
 
+def test_write_session_status_merges_with_previously_persisted_fields() -> None:
+    # REM-FIX (MEDIUM, silent-failure-hunter on commit 34493d9): the old
+    # write_session_status did a full-dict overwrite
+    # (`entry = {"session_id":..., "checked_at":...}; entry.update(fields)`),
+    # not a merge with what was already on disk. Currently inert because the
+    # ask/canary branches are mutually exclusive per invocation today, but a
+    # field written by one call (e.g. already_asked_consent from the consent-
+    # ask branch) must survive a LATER call for the SAME session_id that only
+    # passes a different set of fields (e.g. the canary branch's active/
+    # reason), the moment a future caller needs both to coexist.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_session_status(root, "sess-merge", already_asked_consent=True)
+        write_session_status(root, "sess-merge", active=True, reason=None)
+        entry = read_session_status(root, "sess-merge")
+        if (
+            entry is not None
+            and entry.get("already_asked_consent") is True
+            and entry.get("active") is True
+            and entry.get("reason") is None
+        ):
+            ok("write_session_status merges new fields with previously persisted ones (not overwrite)")
+        else:
+            fail("write-session-status-merges-with-previous-fields", f"entry={entry!r}")
+
+
+def test_write_last_status_preserves_unknown_existing_fields_across_calls() -> None:
+    # Same full-dict-overwrite risk, applied to write_last_status. It does
+    # not accept arbitrary **fields today (only active/reason/checked_at),
+    # so this proves the merge directly against a hand-written extra field
+    # already on disk, matching the "preserve other keys" convention
+    # craftflow_jev_setup._write_enabled_flag() already uses.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        path = last_status_path(root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"active": True, "reason": None, "checked_at": 100.0, "future_field": "keep-me"}),
+            encoding="utf-8",
+        )
+        write_last_status(root, False, "canary_failed", checked_at=200.0)
+        data = read_last_status(root)
+        if (
+            data.get("future_field") == "keep-me"
+            and data.get("active") is False
+            and data.get("reason") == "canary_failed"
+            and data.get("checked_at") == 200.0
+        ):
+            ok("write_last_status preserves unknown previously-persisted fields across calls")
+        else:
+            fail("write-last-status-preserves-unknown-fields", f"data={data!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_session_cache: running")
     test_session_cache_path_is_stable_hash_of_session_id()
@@ -499,6 +552,8 @@ def main() -> int:
     test_write_last_status_concurrent_writers_do_not_race()
     test_write_session_status_skips_when_lock_held_past_deadline()
     test_write_last_status_skips_when_lock_held_past_deadline()
+    test_write_session_status_merges_with_previously_persisted_fields()
+    test_write_last_status_preserves_unknown_existing_fields_across_calls()
 
     print()
     print("=" * 40)
