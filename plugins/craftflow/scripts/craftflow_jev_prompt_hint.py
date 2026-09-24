@@ -23,6 +23,7 @@ from craftflow_hooklib import (
 from craftflow_jev_config import api_key, is_active, load_config
 from craftflow_jev_client import call as jev_call
 from craftflow_jev_heuristic import classify
+from craftflow_jev_session_cache import read_session_status
 from craftflow_skill_promote import parse_frontmatter
 
 
@@ -34,7 +35,8 @@ def main() -> int:
         cfg, decisions = load_config(plugin_config_dir() / "jev.json")
         if ("config", "config_unparseable") in decisions:      # file exists but is corrupt: greppable even when off
             log_event("plugin_jev_prompt_hint", {"event": "jev_config", "key": "config", "decision": "config_unparseable"})
-        if not is_active(cfg, os.environ):
+        session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
+        if not session_is_active(cfg, os.environ, session_id):
             return 0                      # design: no call, no output, no log
         for key, decision in decisions:   # per-key decisions logged once we know the feature is on
             if (key, decision) != ("config", "config_unparseable"):
@@ -43,6 +45,19 @@ def main() -> int:
     except Exception as exc:              # never stall the session
         log_event("plugin_jev_prompt_hint", {"event": "jev_hook", "decision": "hook_error", "error": type(exc).__name__})
         return 0
+
+
+def session_is_active(cfg: Dict[str, Any], env: Dict[str, str], session_id: Optional[str]) -> bool:
+    """DD-2/DD-5 auto-detect OR-gate. `is_active()` (unchanged) is checked
+    FIRST so the manual `enabled:true` path is fully preserved. Never raises
+    -- a missing/corrupt/mismatched session cache degrades to False."""
+    if is_active(cfg, env):
+        return True
+    key = api_key(env)
+    if not key or not session_id:
+        return False
+    cached = read_session_status(state_root(), session_id)
+    return bool(cached and cached.get("active") is True)
 
 
 # ---------------------------------------------------------------------------

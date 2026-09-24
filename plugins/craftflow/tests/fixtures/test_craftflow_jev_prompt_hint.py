@@ -868,6 +868,116 @@ def test_stdout_never_contains_decision_or_blockreason() -> None:
             fail("stdout-no-decision-blockreason", f"failures={failures!r}")
 
 
+# ---------------------------------------------------------------------------
+# Phase 6: session_is_active() -- DD-2/DD-5 auto-detect OR-gate around the
+# existing, unmodified is_active(). Manual enabled:true is checked FIRST
+# (preserved exactly); the session cache is only consulted as a fallback,
+# never over the network.
+# ---------------------------------------------------------------------------
+
+
+def test_session_active_true_when_manual_enabled_true_regardless_of_session_cache() -> None:
+    from craftflow_jev_prompt_hint import session_is_active
+
+    cfg = {"enabled": True}
+    # no session cache file written at all -- must still be True
+    if session_is_active(cfg, {"TYPESAFE_API_KEY": "k"}, "any-session") is True:
+        ok("session_is_active is True when manually enabled, regardless of session cache")
+    else:
+        fail("session-active-manual-enabled", "expected True for enabled:true regardless of cache")
+
+
+def test_session_active_true_when_session_cache_says_active_even_though_enabled_false() -> None:
+    from craftflow_jev_prompt_hint import session_is_active
+    from craftflow_jev_session_cache import write_session_status
+
+    cfg = {"enabled": False}
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_root = Path(tmp)
+        write_session_status(tmp_root, "sess-1", active=True)
+        with mock.patch("craftflow_jev_prompt_hint.state_root", return_value=tmp_root):
+            result = session_is_active(cfg, {"TYPESAFE_API_KEY": "k"}, "sess-1")
+        if result is True:
+            ok("session_is_active is True when session cache says active, even though enabled:false")
+        else:
+            fail("session-active-cache-active", f"expected True, got {result!r}")
+
+
+def test_session_active_false_when_no_session_cache_and_enabled_false() -> None:
+    from craftflow_jev_prompt_hint import session_is_active
+
+    cfg = {"enabled": False}
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_root = Path(tmp)
+        with mock.patch("craftflow_jev_prompt_hint.state_root", return_value=tmp_root):
+            result = session_is_active(cfg, {"TYPESAFE_API_KEY": "k"}, "sess-no-cache")
+        if result is False:
+            ok("session_is_active is False when no session cache exists and enabled:false")
+        else:
+            fail("session-active-no-cache", f"expected False, got {result!r}")
+
+
+def test_session_active_false_when_session_cache_says_inactive() -> None:
+    from craftflow_jev_prompt_hint import session_is_active
+    from craftflow_jev_session_cache import write_session_status
+
+    cfg = {"enabled": False}
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_root = Path(tmp)
+        write_session_status(tmp_root, "sess-2", active=False, reason="no_key")
+        with mock.patch("craftflow_jev_prompt_hint.state_root", return_value=tmp_root):
+            result = session_is_active(cfg, {"TYPESAFE_API_KEY": "k"}, "sess-2")
+        if result is False:
+            ok("session_is_active is False when session cache says inactive")
+        else:
+            fail("session-active-cache-inactive", f"expected False, got {result!r}")
+
+
+def test_session_active_false_when_no_key_even_if_session_cache_says_active() -> None:
+    from craftflow_jev_prompt_hint import session_is_active
+    from craftflow_jev_session_cache import write_session_status
+
+    cfg = {"enabled": False}
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_root = Path(tmp)
+        write_session_status(tmp_root, "sess-3", active=True)
+        with mock.patch("craftflow_jev_prompt_hint.state_root", return_value=tmp_root):
+            result = session_is_active(cfg, {"TYPESAFE_API_KEY": ""}, "sess-3")
+        if result is False:
+            ok("session_is_active is False with no key, even if session cache says active")
+        else:
+            fail("session-active-no-key", f"expected False, got {result!r}")
+
+
+def test_session_active_false_when_no_session_id() -> None:
+    from craftflow_jev_prompt_hint import session_is_active
+
+    cfg = {"enabled": False}
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_root = Path(tmp)
+        with mock.patch("craftflow_jev_prompt_hint.state_root", return_value=tmp_root):
+            result = session_is_active(cfg, {"TYPESAFE_API_KEY": "k"}, None)
+        if result is False:
+            ok("session_is_active is False when session_id is None")
+        else:
+            fail("session-active-no-session-id", f"expected False, got {result!r}")
+
+
+def test_session_active_never_makes_a_network_call() -> None:
+    from craftflow_jev_prompt_hint import session_is_active
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("session_is_active must never call jev_call directly")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_root = Path(tmp)
+        with mock.patch("craftflow_jev_prompt_hint.jev_call", side_effect=_boom):
+            with mock.patch("craftflow_jev_prompt_hint.state_root", return_value=tmp_root):
+                session_is_active({"enabled": False}, {"TYPESAFE_API_KEY": "k"}, "sess-network")
+                session_is_active({"enabled": True}, {"TYPESAFE_API_KEY": "k"}, "sess-network")
+    ok("session_is_active never calls jev_call (no network access)")
+
+
 def test_router_docs_carry_jev_precedence_rules() -> None:
     router_protocol = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md").read_text(
         encoding="utf-8"
@@ -1002,6 +1112,14 @@ def main() -> int:
     test_subprocess_connection_refused_fails_open()
     test_eight_malformed_stdin_variants_exit_zero_silently()
     test_stdout_never_contains_decision_or_blockreason()
+
+    test_session_active_true_when_manual_enabled_true_regardless_of_session_cache()
+    test_session_active_true_when_session_cache_says_active_even_though_enabled_false()
+    test_session_active_false_when_no_session_cache_and_enabled_false()
+    test_session_active_false_when_session_cache_says_inactive()
+    test_session_active_false_when_no_key_even_if_session_cache_says_active()
+    test_session_active_false_when_no_session_id()
+    test_session_active_never_makes_a_network_call()
 
     test_router_docs_carry_jev_precedence_rules()
     test_readme_and_hook_inventory_docs_document_jev()
