@@ -19,6 +19,15 @@
       "then": "the hook exits 0 with empty stdout and events.jsonl gains exactly 2 telemetry rows (feature in {routing, skill}) containing no prompt text",
       "command": "python3 plugins/craftflow/tests/live/jev_audit_roundtrip.py",
       "expected": "exit 0; 2 telemetry rows; no prompt text"
+    },
+    {
+      "name": "Session-check round-trip: consent request -> granted -> canary activation -> silent repeat -> canary failure",
+      "mode": "proof",
+      "given": "a temp project + plugin root, config/jev.json starting at enabled:false/consent.status:unset, a real TYPESAFE_API_KEY in env, and a synthetic session_id",
+      "when": "the real craftflow_jev_session_check.py SessionStart hook fires four times (with one craftflow_jev_setup.py --record-consent call in between) across two session_ids, the fourth firing using a garbage API key",
+      "then": "firing 1 injects the consent-request tag + exact recorder commands and records already_asked_consent:true; --record-consent granted sets consent.status=granted on disk; firing 2 runs a real canary call and writes active:true with an activation note; firing 3 (same session_id) is silent per DD-8; firing 4 (new session_id, garbage key) writes active:false with a non-empty reason and a failure warning",
+      "command": "python3 plugins/craftflow/tests/live/jev_session_check_roundtrip.py",
+      "expected": "exit 0; consent-request tag + recorder commands on firing 1; consent.status==granted after CLI; active:true + activation note on firing 2; empty additionalContext on firing 3; active:false + failure warning on firing 4"
     }
   ]
 }
