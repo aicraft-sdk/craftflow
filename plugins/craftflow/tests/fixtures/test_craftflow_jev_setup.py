@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -180,17 +181,24 @@ def test_enable_runs_check_then_writes_enabled_true_preserving_keys_and_indent()
                 ["--enable", "--config", str(cfg_path)], {"TYPESAFE_API_KEY": SENTINEL_KEY}
             )
         written = cfg_path.read_text(encoding="utf-8")
+        parsed = json.loads(written)
 
-    expected_dict = dict(cfg_data)
-    expected_dict["enabled"] = True
-    expected_text = json.dumps(expected_dict, indent=2) + "\n"
-
-    if code == 0 and written == expected_text and SENTINEL_KEY not in written and SENTINEL_KEY not in out:
-        ok("--enable checks then writes enabled:true, preserving other keys + 2-space indent")
+    if (
+        code == 0
+        and parsed.get("enabled") is True
+        and parsed.get("customNote") == "keep me"
+        and parsed.get("consent", {}).get("status") == "granted"
+        and isinstance(parsed.get("consent", {}).get("ts"), str)
+        and parsed["consent"]["ts"]
+        and written.startswith("{\n  ")
+        and SENTINEL_KEY not in written
+        and SENTINEL_KEY not in out
+    ):
+        ok("--enable checks then writes enabled:true + consent:granted, preserving other keys + 2-space indent")
     else:
         fail(
             "enable-writes-preserving-keys",
-            f"code={code} out={out!r} err={err!r} written={written!r} expected_text={expected_text!r}",
+            f"code={code} out={out!r} err={err!r} written={written!r} parsed={parsed!r}",
         )
 
 
@@ -221,8 +229,14 @@ def test_disable_writes_enabled_false() -> None:
         code, out, err = run_cli(["--disable", "--config", str(cfg_path)], {})
         written = json.loads(cfg_path.read_text(encoding="utf-8"))
 
-    if code == 0 and written["enabled"] is False:
-        ok("--disable sets enabled:false")
+    if (
+        code == 0
+        and written["enabled"] is False
+        and written.get("consent", {}).get("status") == "declined"
+        and isinstance(written.get("consent", {}).get("ts"), str)
+        and written["consent"]["ts"]
+    ):
+        ok("--disable sets enabled:false + consent:declined")
     else:
         fail("disable-sets-enabled-false", f"code={code} out={out!r} err={err!r} written={written!r}")
 
@@ -239,6 +253,110 @@ def test_write_failure_exits_4() -> None:
         ok("config write failure (unwritable path) exits 4")
     else:
         fail("write-failure-exit-4", f"code={code} out={out!r} err={err!r}")
+
+
+# ---------------------------------------------------------------------------
+# --record-consent
+# ---------------------------------------------------------------------------
+
+
+def test_record_consent_granted_writes_consent_status_granted_exits_0() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = Path(tmp) / "jev.json"
+        write_config(cfg_path, default_config_dict())
+        code, out, err = run_cli(["--record-consent", "granted", "--config", str(cfg_path)], {})
+        written = json.loads(cfg_path.read_text(encoding="utf-8"))
+
+    if (
+        code == 0
+        and written["consent"]["status"] == "granted"
+        and isinstance(written["consent"]["ts"], str)
+        and written["consent"]["ts"]
+        and "consent: granted" in out
+    ):
+        ok("--record-consent granted writes consent.status=granted and exits 0")
+    else:
+        fail("record-consent-granted", f"code={code} out={out!r} err={err!r} written={written!r}")
+
+
+def test_record_consent_declined_writes_consent_status_declined_exits_0() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = Path(tmp) / "jev.json"
+        write_config(cfg_path, default_config_dict())
+        code, out, err = run_cli(["--record-consent", "declined", "--config", str(cfg_path)], {})
+        written = json.loads(cfg_path.read_text(encoding="utf-8"))
+
+    if (
+        code == 0
+        and written["consent"]["status"] == "declined"
+        and isinstance(written["consent"]["ts"], str)
+        and written["consent"]["ts"]
+        and "consent: declined" in out
+    ):
+        ok("--record-consent declined writes consent.status=declined and exits 0")
+    else:
+        fail("record-consent-declined", f"code={code} out={out!r} err={err!r} written={written!r}")
+
+
+def test_record_consent_preserves_other_keys_and_enabled_flag() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = Path(tmp) / "jev.json"
+        cfg_data = default_config_dict()
+        cfg_data["enabled"] = True
+        cfg_data["customNote"] = "keep me too"
+        write_config(cfg_path, cfg_data)
+        code, out, err = run_cli(["--record-consent", "declined", "--config", str(cfg_path)], {})
+        written = json.loads(cfg_path.read_text(encoding="utf-8"))
+
+    if (
+        code == 0
+        and written["enabled"] is True
+        and written["customNote"] == "keep me too"
+        and written["consent"]["status"] == "declined"
+    ):
+        ok("--record-consent never touches enabled or other unrelated keys")
+    else:
+        fail("record-consent-preserves-keys", f"code={code} out={out!r} err={err!r} written={written!r}")
+
+
+def test_record_consent_write_failure_exits_4() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = Path(tmp) / "a-directory-not-a-file"
+        cfg_path.mkdir()
+        code, out, err = run_cli(["--record-consent", "granted", "--config", str(cfg_path)], {})
+
+    if code == 4 and "ERROR" in err:
+        ok("--record-consent write failure (unwritable path) exits 4")
+    else:
+        fail("record-consent-write-failure-exit-4", f"code={code} out={out!r} err={err!r}")
+
+
+def test_record_consent_granted_never_triggers_network_or_session_cache_write() -> None:
+    with tempfile.TemporaryDirectory() as project_root_str:
+        project_root = Path(project_root_str)
+        cfg_path = project_root / "jev.json"
+        write_config(cfg_path, default_config_dict())
+        cwd_before = os.getcwd()
+        os.chdir(project_root)
+        try:
+            with mock.patch(
+                "craftflow_jev_setup.call",
+                side_effect=AssertionError("--record-consent must never trigger a network call"),
+            ):
+                code, out, err = run_cli(
+                    ["--record-consent", "granted", "--config", str(cfg_path)], {}
+                )
+        finally:
+            os.chdir(cwd_before)
+        sessions_dir = project_root / ".craftflow" / "state" / "jev" / "sessions"
+
+    if code == 0 and not sessions_dir.exists():
+        ok("--record-consent granted never calls the network and never writes a session-cache entry")
+    else:
+        fail(
+            "record-consent-no-network-or-session-cache",
+            f"code={code} out={out!r} err={err!r} sessions_dir_exists={sessions_dir.exists()}",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +418,11 @@ def main_tests() -> int:
     test_enable_skips_write_when_check_fails()
     test_disable_writes_enabled_false()
     test_write_failure_exits_4()
+    test_record_consent_granted_writes_consent_status_granted_exits_0()
+    test_record_consent_declined_writes_consent_status_declined_exits_0()
+    test_record_consent_preserves_other_keys_and_enabled_flag()
+    test_record_consent_write_failure_exits_4()
+    test_record_consent_granted_never_triggers_network_or_session_cache_write()
     test_config_override_never_touches_committed_file()
     test_jev_setup_skill_frontmatter_and_steps()
 

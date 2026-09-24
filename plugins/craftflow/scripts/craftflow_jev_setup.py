@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from craftflow_hooklib import plugin_config_dir
+from craftflow_hooklib import now_iso, plugin_config_dir
 from craftflow_jev_client import call
 from craftflow_jev_config import DEFAULTS, api_key as get_api_key, load_config
 
@@ -87,15 +87,39 @@ def _read_raw_dict(path: Path) -> Dict[str, Any]:
     return json.loads(json.dumps(DEFAULTS))
 
 
-def _write_enabled_flag(path: Path, value: bool) -> bool:
+def _write_enabled_flag(path: Path, value: bool, consent_status: Optional[str] = None) -> bool:
     try:
         raw = _read_raw_dict(path)
         raw["enabled"] = value
+        if consent_status is not None:
+            raw["consent"] = {"status": consent_status, "ts": now_iso()}
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
         return True
     except Exception:
         return False
+
+
+def _write_consent(path: Path, status: str) -> bool:
+    try:
+        raw = _read_raw_dict(path)
+        raw["consent"] = {"status": status, "ts": now_iso()}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+def run_record_consent(config_path: Path, status: str) -> int:
+    """Record the user's one-time consent decision. Never runs a canary and
+    never writes a session-cache entry (DD-10/Option B) -- activation begins
+    only at the next SessionStart firing (Phase 5), never immediately here."""
+    if _write_consent(config_path, status):
+        print(f"consent: {status}")
+        return 0
+    print("ERROR: failed to write consent record", file=sys.stderr)
+    return 4
 
 
 def run_check(cfg: Dict[str, Any], env: Dict[str, str]) -> int:
@@ -134,6 +158,12 @@ def build_parser() -> argparse.ArgumentParser:
     group.add_argument("--enable", action="store_true", help="run --check, then set enabled:true on success")
     group.add_argument("--disable", action="store_true", help="set enabled:false")
     group.add_argument("--status", action="store_true", help="print the effective config (never the key value)")
+    group.add_argument(
+        "--record-consent",
+        choices=["granted", "declined"],
+        default=None,
+        help="record the user's one-time consent decision for the auto-detect path; internal -- invoked by the assistant after AskUserQuestion, not a manual operator step",
+    )
     parser.add_argument("--config", default=None, help="override the config file path (default: plugin config dir)")
     return parser
 
@@ -148,6 +178,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(format_status(cfg, config_path, env))
         return 0
 
+    if args.record_consent:
+        return run_record_consent(config_path, args.record_consent)
+
     if args.check:
         return run_check(cfg, env)
 
@@ -155,14 +188,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         exit_code = run_check(cfg, env)
         if exit_code != 0:
             return exit_code
-        if _write_enabled_flag(config_path, True):
+        if _write_enabled_flag(config_path, True, consent_status="granted"):
             print("enabled: true")
             return 0
         print("ERROR: failed to write config", file=sys.stderr)
         return 4
 
     if args.disable:
-        if _write_enabled_flag(config_path, False):
+        if _write_enabled_flag(config_path, False, consent_status="declined"):
             print("enabled: false")
             return 0
         print("ERROR: failed to write config", file=sys.stderr)
