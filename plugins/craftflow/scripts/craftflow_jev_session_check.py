@@ -100,7 +100,18 @@ def _maybe_ask_consent(root: Path, session_id: str, cfg: Dict[str, Any]) -> int:
     flag to be written before the assistant responds, structurally, not by
     instruction). If THAT fails, a distinct `consent_ask_undelivered` event
     is logged (not just the generic `hook_error`), so this degradation is
-    diagnosable instead of indistinguishable from a normal ask."""
+    diagnosable instead of indistinguishable from a normal ask.
+
+    Re-hunt fix (silent-failure-hunter, reproduced live, on commit
+    b889732): a `session_context()` failure used to leave the flag
+    permanently `True` on disk -- the assistant received nothing that turn
+    (the print itself failed), yet every future `SessionStart` firing for
+    this `session_id` would see the flag and silently never ask again. That
+    is safe to roll back: no assistant turn observed the ask, so retrying on
+    the very next firing cannot double-ask within one turn. The flag write
+    is now undone (`already_asked_consent=False`) in the except branch
+    before returning, so the next `SessionStart` firing for this
+    `session_id` retries the ask instead of staying silently suppressed."""
     cached = read_session_status(root, session_id)
     if cached and cached.get("already_asked_consent"):
         return 0
@@ -125,6 +136,7 @@ def _maybe_ask_consent(root: Path, session_id: str, cfg: Dict[str, Any]) -> int:
                 "error": type(exc).__name__,
             },
         )
+        write_session_status(root, session_id, already_asked_consent=False)
         return 0
     log_event(
         "plugin_jev_session_check",

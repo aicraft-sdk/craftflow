@@ -323,13 +323,20 @@ def test_consent_ask_privacy_note_failure_leaves_already_asked_flag_unset() -> N
         fail("consent-ask-privacy-note-failure-leaves-flag-unset", f"code={code} out={out!r} entry={entry!r}")
 
 
-def test_consent_ask_delivery_failure_logs_distinct_undelivered_event() -> None:
-    # CRITICAL remediation, second half: session_context()'s own print is the
-    # one unavoidable fallible step that must remain AFTER the flag write
-    # (DD-4's structural once-per-session guarantee still requires this).
-    # If it raises (e.g. BrokenPipeError), this must be diagnosable as a
-    # distinct "consent_ask_undelivered" event, not indistinguishable from
-    # the generic hook_error catch-all.
+def test_consent_ask_delivery_failure_rolls_back_flag_and_retries_next_firing() -> None:
+    # CRITICAL remediation (re-hunt on commit b889732): session_context()'s
+    # own print is the one unavoidable fallible step that must remain AFTER
+    # the already_asked_consent flag write (DD-4's structural
+    # once-per-session guarantee still requires the flag written before the
+    # assistant can respond). If it raises (e.g. BrokenPipeError), this must
+    # be diagnosable as a distinct "consent_ask_undelivered" event (not just
+    # the generic hook_error catch-all) -- AND the flag write must be rolled
+    # back, because a session_context() raise means the assistant received
+    # nothing that turn: leaving the flag stuck at True would permanently
+    # and silently suppress the ask for the rest of the session (the original
+    # CRITICAL). A rollback-then-retry on the very next SessionStart firing
+    # for the SAME session_id is safe (no double-ask-within-one-turn risk)
+    # and must actually deliver the ask.
     tmp, project, plugin, sessions_dir = _setup(
         cfg_overrides={"enabled": False, "consent": {"status": "unset", "ts": None}}
     )
@@ -338,21 +345,39 @@ def test_consent_ask_delivery_failure_logs_distinct_undelivered_event() -> None:
     def _fake_log_event(name, payload):
         logged_events.append((name, payload))
 
+    payload = {"hook_event_name": "SessionStart", "session_id": "s1", "source": "startup"}
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin), "TYPESAFE_API_KEY": SENTINEL_KEY}
+
     with tmp:
+        # Firing 1: session_context() raises -- ask is undelivered.
         with mock.patch("craftflow_jev_session_check.session_context", side_effect=BrokenPipeError("pipe closed")):
             with mock.patch("craftflow_jev_session_check.log_event", side_effect=_fake_log_event):
-                code, out = _run_main(
-                    {"hook_event_name": "SessionStart", "session_id": "s1", "source": "startup"},
-                    {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin), "TYPESAFE_API_KEY": SENTINEL_KEY},
-                )
-        entry = read_session_status(project / ".craftflow" / "state", "s1")
+                code1, out1 = _run_main(payload, env)
+        entry_after_failure = read_session_status(project / ".craftflow" / "state", "s1")
+
+        # Firing 2 (same session_id): session_context() now succeeds.
+        code2, out2 = _run_main(payload, env)
+        entry_after_retry = read_session_status(project / ".craftflow" / "state", "s1")
+
     undelivered = [p for (n, p) in logged_events if p.get("decision") == "consent_ask_undelivered"]
-    if code == 0 and entry is not None and entry.get("already_asked_consent") is True and undelivered:
-        ok("session_context() delivery failure logs a distinct consent_ask_undelivered event (not just generic hook_error)")
+    not_stuck_true = entry_after_failure is None or entry_after_failure.get("already_asked_consent") is not True
+    retried_and_delivered = (
+        code2 == 0
+        and "<craftflow_jev_consent_request>" in out2
+        and entry_after_retry is not None
+        and entry_after_retry.get("already_asked_consent") is True
+    )
+    if code1 == 0 and undelivered and not_stuck_true and retried_and_delivered:
+        ok(
+            "session_context() delivery failure logs a distinct consent_ask_undelivered event, "
+            "rolls back already_asked_consent, and the next SessionStart firing retries and "
+            "successfully delivers the ask"
+        )
     else:
         fail(
-            "consent-ask-delivery-failure-logs-distinct-event",
-            f"code={code} entry={entry!r} logged_events={logged_events!r}",
+            "consent-ask-delivery-failure-rolls-back-and-retries",
+            f"code1={code1} entry_after_failure={entry_after_failure!r} undelivered={undelivered!r} "
+            f"code2={code2} out2={out2!r} entry_after_retry={entry_after_retry!r}",
         )
 
 
@@ -567,7 +592,7 @@ def main_tests() -> int:
     test_consent_unset_second_sessionstart_same_session_does_not_reask()
     test_consent_unset_writes_already_asked_flag_before_any_response()
     test_consent_ask_privacy_note_failure_leaves_already_asked_flag_unset()
-    test_consent_ask_delivery_failure_logs_distinct_undelivered_event()
+    test_consent_ask_delivery_failure_rolls_back_flag_and_retries_next_firing()
     test_consent_granted_canary_success_first_run_writes_active_and_injects_note()
     test_consent_granted_canary_success_second_identical_run_stays_silent()
     test_consent_granted_canary_failure_variants()
