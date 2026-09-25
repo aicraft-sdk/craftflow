@@ -18,7 +18,16 @@ SCRIPTS = PLUGIN_ROOT / "scripts"
 REPORT_SCRIPT = SCRIPTS / "craftflow_jev_report.py"
 sys.path.insert(0, str(SCRIPTS))
 
-from craftflow_jev_report import FEATURES, _read_lines, _sanitize_json_value, aggregate, build_arg_parser, verdict  # noqa: E402
+from craftflow_jev_report import (
+    FEATURES,
+    _heuristic_choice,
+    _jev_choice,
+    _read_lines,
+    _sanitize_json_value,
+    aggregate,
+    build_arg_parser,
+    verdict,
+)  # noqa: E402
 
 _passes = 0
 _errors: list[str] = []
@@ -180,6 +189,150 @@ def test_aggregate_skill_feature_never_has_agree_risk_key() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Dual-gate accuracy (ground_truth_by_call_id) -- _summarize_feature() / aggregate()
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_feature_routing_computes_accuracy_with_manifest() -> None:
+    """3 routing rows, 2/3 Jev-correct, 1/3 heuristic-correct against a
+    supplied ground-truth lookup -- mirrors craftflow_jev_ab_report.py's own
+    test_aggregate_ab_computes_routing_accuracy_and_agreement fixture shape."""
+    rows = [
+        _routing_row(call_id="c1", answers={"choice": "DEBUG", "confidence": 0.9},
+                     heuristic_result={"workflow": "BUILD", "risk_signals": []}, agree=False),
+        _routing_row(call_id="c2", answers={"choice": "PLAN", "confidence": 0.9},
+                     heuristic_result={"workflow": "DEBUG", "risk_signals": []}, agree=False),
+        _routing_row(call_id="c3", answers={"choice": "BUILD", "confidence": 0.9},
+                     heuristic_result={"workflow": "REVIEW", "risk_signals": []}, agree=False),
+    ]
+    ground_truth = {"c1": "DEBUG", "c2": "PLAN", "c3": "REVIEW"}
+    lines = [json.dumps(row) for row in rows]
+    feat = aggregate(lines, [{"call_id": k, "workflow_type": v} for k, v in ground_truth.items()])["features"]["routing"]
+    checks = (
+        feat["n"] == 3,
+        feat["n_ground_truth"] == 3,
+        abs(feat["jev_accuracy"] - (2 / 3)) < 1e-9,
+        abs(feat["heuristic_accuracy"] - (1 / 3)) < 1e-9,
+        abs(feat["accuracy_improvement"] - (1 / 3)) < 1e-9,
+    )
+    if all(checks):
+        ok("aggregate()/_summarize_feature() compute routing jev_accuracy=2/3, heuristic_accuracy=1/3 with a manifest")
+    else:
+        fail("summarize-routing-accuracy", f"feat={feat!r} checks={checks!r}")
+
+
+def test_summarize_feature_routing_no_manifest_omits_accuracy_keys() -> None:
+    """No manifest at all (aggregate(lines) 1-arg call) -- byte-identical to
+    pre-dual-gate output, no accuracy keys present at all."""
+    rows = [_routing_row(call_id="c1")]
+    lines = [json.dumps(r) for r in rows]
+    feat = aggregate(lines)["features"]["routing"]
+    keys = ("n_ground_truth", "jev_accuracy", "heuristic_accuracy", "accuracy_improvement")
+    if all(k not in feat for k in keys):
+        ok("aggregate(lines) with no manifest arg omits all 4 accuracy keys from routing summary")
+    else:
+        fail("summarize-routing-no-manifest", f"feat={feat!r}")
+
+
+def test_summarize_feature_routing_empty_manifest_omits_accuracy_keys() -> None:
+    """--manifest given but the file parsed to zero rows -- same fallback as
+    no manifest at all (design's Error Handling section)."""
+    rows = [_routing_row(call_id="c1")]
+    lines = [json.dumps(r) for r in rows]
+    feat = aggregate(lines, [])["features"]["routing"]
+    keys = ("n_ground_truth", "jev_accuracy", "heuristic_accuracy", "accuracy_improvement")
+    if all(k not in feat for k in keys):
+        ok("aggregate(lines, []) (empty manifest) omits all 4 accuracy keys from routing summary")
+    else:
+        fail("summarize-routing-empty-manifest", f"feat={feat!r}")
+
+
+def test_summarize_feature_routing_non_matching_manifest_omits_accuracy_keys() -> None:
+    """Manifest has real rows, but none match this run's routing call_ids --
+    same fallback as empty/no manifest (design's Error Handling section)."""
+    rows = [_routing_row(call_id="orphan1"), _routing_row(call_id="orphan2")]
+    lines = [json.dumps(r) for r in rows]
+    manifest_rows = [{"call_id": "unrelated-1", "workflow_type": "DEBUG"}]
+    feat = aggregate(lines, manifest_rows)["features"]["routing"]
+    keys = ("n_ground_truth", "jev_accuracy", "heuristic_accuracy", "accuracy_improvement")
+    if all(k not in feat for k in keys):
+        ok("aggregate() with a non-matching manifest omits all 4 accuracy keys from routing summary")
+    else:
+        fail("summarize-routing-non-matching-manifest", f"feat={feat!r}")
+
+
+def test_summarize_feature_routing_null_workflow_type_excluded_from_ground_truth() -> None:
+    """A manifest row matched by call_id but with workflow_type: null must
+    not count toward n_ground_truth (design's Error Handling section)."""
+    rows = [
+        _routing_row(call_id="c1", answers={"choice": "DEBUG", "confidence": 0.9},
+                     heuristic_result={"workflow": "DEBUG", "risk_signals": []}, agree=True),
+        _routing_row(call_id="c2", answers={"choice": "BUILD", "confidence": 0.9},
+                     heuristic_result={"workflow": "BUILD", "risk_signals": []}, agree=True),
+    ]
+    manifest_rows = [
+        {"call_id": "c1", "workflow_type": "DEBUG"},
+        {"call_id": "c2", "workflow_type": None},
+    ]
+    lines = [json.dumps(r) for r in rows]
+    feat = aggregate(lines, manifest_rows)["features"]["routing"]
+    checks = (
+        feat["n"] == 2,
+        feat["n_ground_truth"] == 1,
+        feat["jev_accuracy"] == 1.0,
+    )
+    if all(checks):
+        ok("aggregate() excludes null-workflow_type manifest matches from n_ground_truth")
+    else:
+        fail("summarize-routing-null-ground-truth", f"feat={feat!r} checks={checks!r}")
+
+
+def test_jev_choice_and_heuristic_choice_match_ab_reports_routing_only_helpers() -> None:
+    """Guards Durable Decision D2: craftflow_jev_report.py deliberately
+    reuses its own local _jev_choice/_heuristic_choice("routing") instead
+    of importing craftflow_jev_ab_report.py's AB-only
+    _routing_jev_choice/_routing_heuristic_choice. This test proves the two
+    pairs stay semantically identical -- if either file's helper is ever
+    edited to diverge, this fails loudly instead of silently computing
+    wrong routing accuracy numbers."""
+    import craftflow_jev_ab_report
+
+    rows = [
+        _routing_row(call_id="c1", answers={"choice": "DEBUG", "confidence": 0.9},
+                     heuristic_result={"workflow": "BUILD", "risk_signals": []}),
+        _routing_row(call_id="c2", answers={"choice": None, "confidence": 0.9},
+                     heuristic_result={"workflow": None, "risk_signals": []}),
+    ]
+    all_match = all(
+        _jev_choice(r) == craftflow_jev_ab_report._routing_jev_choice(r)
+        and _heuristic_choice(r, "routing") == craftflow_jev_ab_report._routing_heuristic_choice(r)
+        for r in rows
+    )
+    if all_match:
+        ok("_jev_choice/_heuristic_choice('routing') stay semantically identical to the AB-only equivalents")
+    else:
+        fail("jev-choice-equivalence", f"rows={rows!r}")
+
+
+def test_summarize_feature_skill_and_remfix_scope_never_get_accuracy_keys_even_with_manifest() -> None:
+    """skill/remfix_scope have no ground-truth join defined -- accuracy keys
+    must stay absent even when a real, matching manifest is supplied
+    (proves the "only routing" rule, not just "no manifest given")."""
+    skill_rows = [_skill_row(call_id="s1")]
+    remfix_rows = [{"feature": "remfix_scope", "call_id": "s1", "agree": True,
+                     "answers": {"choice": "critical_only"}, "heuristic_result": "critical_only",
+                     "latency_ms": 100, "usage": {}, "cache_hit": False, "injected": False}]
+    lines = [json.dumps(r) for r in skill_rows + remfix_rows]
+    manifest_rows = [{"call_id": "s1", "workflow_type": "BUILD"}]
+    summary = aggregate(lines, manifest_rows)["features"]
+    keys = ("n_ground_truth", "jev_accuracy", "heuristic_accuracy", "accuracy_improvement")
+    if all(k not in summary["skill"] for k in keys) and all(k not in summary["remfix_scope"] for k in keys):
+        ok("skill/remfix_scope never get accuracy keys, even with a real matching manifest supplied")
+    else:
+        fail("summarize-skill-remfix-no-accuracy", f"skill={summary['skill']!r} remfix={summary['remfix_scope']!r}")
+
+
+# ---------------------------------------------------------------------------
 # remfix_scope feature (Phase 4: FEATURES tuple + CLI flag + _min_agreement_for)
 # ---------------------------------------------------------------------------
 
@@ -257,6 +410,93 @@ def test_verdict_hold_no_data_when_n_zero() -> None:
         ok("verdict() HOLDs with reason 'no data' when n == 0")
     else:
         fail("verdict-hold-no-data", f"result={result!r} reason={reason!r}")
+
+
+# ---------------------------------------------------------------------------
+# verdict() dual-gate (accuracy OR agreement)
+# ---------------------------------------------------------------------------
+
+
+def test_verdict_backward_compatible_3arg_call_unchanged() -> None:
+    """Old 3-positional-arg call sites (no min_accuracy_margin) must behave
+    byte-identically to before this change -- min_accuracy_margin defaults."""
+    result, reason = verdict({"n": 150, "agreement": 0.85}, min_n=100, min_agreement=0.8)
+    if result == "PROMOTE" and reason == "n=150, agreement=0.85":
+        ok("verdict() 3-arg backward-compat call is byte-identical to pre-dual-gate behavior")
+    else:
+        fail("verdict-backward-compat", f"result={result!r} reason={reason!r}")
+
+
+def test_verdict_dual_gate_agreement_passes_accuracy_fails_promotes() -> None:
+    feat = {
+        "n": 150, "agreement": 0.85,
+        "n_ground_truth": 150, "jev_accuracy": 0.60, "heuristic_accuracy": 0.58,
+        "accuracy_improvement": 0.02,
+    }
+    result, reason = verdict(feat, min_n=100, min_agreement=0.8, min_accuracy_margin=0.10)
+    if result == "PROMOTE" and "agreement=0.85>=0.80" in reason and "accuracy:" in reason:
+        ok("verdict() dual-gate: agreement passes, accuracy fails margin -> PROMOTE, both gates named")
+    else:
+        fail("verdict-dual-agreement-only", f"result={result!r} reason={reason!r}")
+
+
+def test_verdict_dual_gate_accuracy_passes_agreement_fails_promotes() -> None:
+    feat = {
+        "n": 150, "agreement": 0.50,
+        "n_ground_truth": 150, "jev_accuracy": 0.74, "heuristic_accuracy": 0.55,
+        "accuracy_improvement": 0.19,
+    }
+    result, reason = verdict(feat, min_n=100, min_agreement=0.8, min_accuracy_margin=0.10)
+    if (
+        result == "PROMOTE"
+        and "agreement=0.50<0.80" in reason
+        and "jev=0.74" in reason and "heuristic=0.55" in reason and "+0.19>=0.10" in reason
+    ):
+        ok("verdict() dual-gate: accuracy passes margin, agreement fails -> PROMOTE, both gates named")
+    else:
+        fail("verdict-dual-accuracy-only", f"result={result!r} reason={reason!r}")
+
+
+def test_verdict_dual_gate_both_fail_holds() -> None:
+    feat = {
+        "n": 150, "agreement": 0.50,
+        "n_ground_truth": 150, "jev_accuracy": 0.60, "heuristic_accuracy": 0.58,
+        "accuracy_improvement": 0.02,
+    }
+    result, reason = verdict(feat, min_n=100, min_agreement=0.8, min_accuracy_margin=0.10)
+    if result == "HOLD" and "agreement=0.50<0.80" in reason and "+0.02<0.10" in reason:
+        ok("verdict() dual-gate: both gates fail -> HOLD, both gates named")
+    else:
+        fail("verdict-dual-both-fail", f"result={result!r} reason={reason!r}")
+
+
+def test_verdict_dual_gate_both_pass_promotes() -> None:
+    feat = {
+        "n": 150, "agreement": 0.85,
+        "n_ground_truth": 150, "jev_accuracy": 0.74, "heuristic_accuracy": 0.55,
+        "accuracy_improvement": 0.19,
+    }
+    result, reason = verdict(feat, min_n=100, min_agreement=0.8, min_accuracy_margin=0.10)
+    if result == "PROMOTE" and "agreement=0.85>=0.80" in reason and "+0.19>=0.10" in reason:
+        ok("verdict() dual-gate: both gates pass -> PROMOTE, both gates named")
+    else:
+        fail("verdict-dual-both-pass", f"result={result!r} reason={reason!r}")
+
+
+def test_verdict_accuracy_gate_own_floor_not_met_falls_back_to_agreement_alone() -> None:
+    """n_ground_truth (5) is below min_n (100) even though the raw accuracy
+    improvement (0.40) would clear the margin easily -- the accuracy gate
+    must not fire; only the agreement gate decides."""
+    feat = {
+        "n": 150, "agreement": 0.50,
+        "n_ground_truth": 5, "jev_accuracy": 0.80, "heuristic_accuracy": 0.40,
+        "accuracy_improvement": 0.40,
+    }
+    result, reason = verdict(feat, min_n=100, min_agreement=0.8, min_accuracy_margin=0.10)
+    if result == "HOLD" and "n_ground_truth=5<100" in reason and "insufficient sample" in reason:
+        ok("verdict() accuracy gate's own n_ground_truth floor blocks a large accuracy_improvement from firing")
+    else:
+        fail("verdict-accuracy-floor-not-met", f"result={result!r} reason={reason!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -802,6 +1042,119 @@ def _run_cli(args, cwd) -> "subprocess.CompletedProcess[str]":
     )
 
 
+def test_cli_manifest_flag_defaults_to_none() -> None:
+    args = build_arg_parser().parse_args([])
+    if args.manifest is None:
+        ok("--manifest defaults to None (optional, unlike craftflow_jev_ab_report.py's required flag)")
+    else:
+        fail("cli-manifest-default", f"args.manifest={args.manifest!r}")
+
+
+def test_cli_min_accuracy_margin_flag_defaults_to_010() -> None:
+    args = build_arg_parser().parse_args([])
+    if args.min_accuracy_margin == 0.10:
+        ok("--min-accuracy-margin defaults to 0.10")
+    else:
+        fail("cli-min-accuracy-margin-default", f"args={args!r}")
+
+
+def _write_manifest_fixture(tmp: str):
+    events_rows = [
+        _routing_row(call_id="c1", agree=False, answers={"choice": "DEBUG", "confidence": 0.9},
+                     heuristic_result={"workflow": "BUILD", "risk_signals": []}),
+        _routing_row(call_id="c2", agree=False, answers={"choice": "PLAN", "confidence": 0.9},
+                     heuristic_result={"workflow": "DEBUG", "risk_signals": []}),
+        _routing_row(call_id="c3", agree=False, answers={"choice": "BUILD", "confidence": 0.9},
+                     heuristic_result={"workflow": "REVIEW", "risk_signals": []}),
+    ]
+    manifest_rows = [
+        {"call_id": "c1", "workflow_type": "DEBUG"},
+        {"call_id": "c2", "workflow_type": "PLAN"},
+        {"call_id": "c3", "workflow_type": "REVIEW"},
+    ]
+    events_path = Path(tmp) / "events.jsonl"
+    manifest_path = Path(tmp) / "replay_manifest.jsonl"
+    events_path.write_text("\n".join(json.dumps(r) for r in events_rows) + "\n")
+    manifest_path.write_text("\n".join(json.dumps(r) for r in manifest_rows) + "\n")
+    return events_path, manifest_path
+
+
+def test_cli_manifest_flag_wires_through_to_accuracy_gate_promote() -> None:
+    """End-to-end: agreement=0.0 (all 3 disagree) would HOLD alone, but
+    jev_accuracy=2/3 vs heuristic_accuracy=1/3 (+33pp, >= default 10pp
+    margin) fires the accuracy gate -- n_ground_truth=3 is below the
+    default min_n=100, so use --min-n 3 to exercise a realistic PROMOTE."""
+    with tempfile.TemporaryDirectory() as tmp:
+        events_path, manifest_path = _write_manifest_fixture(tmp)
+        proc = _run_cli(
+            ["--events", str(events_path), "--manifest", str(manifest_path), "--min-n", "3", "--json"],
+            cwd=tmp,
+        )
+        payload = json.loads(proc.stdout)
+        routing = payload["features"]["routing"]
+        if (
+            proc.returncode == 0
+            and routing["n_ground_truth"] == 3
+            and abs(routing["jev_accuracy"] - (2 / 3)) < 1e-9
+            and abs(routing["heuristic_accuracy"] - (1 / 3)) < 1e-9
+            and routing["agreement"] == 0.0
+            and routing["verdict"] == "PROMOTE"
+            and "accuracy:" in routing["reason"]
+        ):
+            ok("CLI --manifest wires through end-to-end: accuracy gate alone PROMOTEs despite 0% agreement")
+        else:
+            fail("cli-manifest-wiring", f"payload={payload!r}")
+
+
+def test_cli_manifest_omitted_routing_has_no_accuracy_keys() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        events_path, _manifest_path = _write_manifest_fixture(tmp)
+        proc = _run_cli(["--events", str(events_path), "--json"], cwd=tmp)
+        payload = json.loads(proc.stdout)
+        routing = payload["features"]["routing"]
+        keys = ("n_ground_truth", "jev_accuracy", "heuristic_accuracy", "accuracy_improvement")
+        if proc.returncode == 0 and all(k not in routing for k in keys):
+            ok("CLI without --manifest: routing has no accuracy keys, byte-identical to pre-dual-gate JSON shape")
+        else:
+            fail("cli-manifest-omitted", f"payload={payload!r}")
+
+
+def test_cli_nonexistent_manifest_path_errors_loudly() -> None:
+    """Mirrors craftflow_jev_ab_report.py's existing precedent for its own
+    required --manifest flag: an explicitly-supplied bad path must fail
+    loudly, not silently degrade to "no ground truth"."""
+    with tempfile.TemporaryDirectory() as tmp:
+        events_path, _manifest_path = _write_manifest_fixture(tmp)
+        missing_manifest = Path(tmp) / "does-not-exist.jsonl"
+        proc = _run_cli(["--events", str(events_path), "--manifest", str(missing_manifest)], cwd=tmp)
+        if proc.returncode != 0 and proc.stdout == "" and str(missing_manifest) in proc.stderr:
+            ok("CLI exits non-zero with a stderr message naming the path when --manifest does not exist")
+        else:
+            fail("cli-manifest-missing-path", f"code={proc.returncode} out={proc.stdout!r} err={proc.stderr!r}")
+
+
+def test_cli_text_mode_shows_accuracy_lines_only_when_manifest_supplied() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        events_path, manifest_path = _write_manifest_fixture(tmp)
+        with_manifest = _run_cli(
+            ["--events", str(events_path), "--manifest", str(manifest_path), "--min-n", "3"], cwd=tmp
+        )
+        without_manifest = _run_cli(["--events", str(events_path)], cwd=tmp)
+        if (
+            with_manifest.returncode == 0
+            and "n_ground_truth:" in with_manifest.stdout
+            and "jev_accuracy:" in with_manifest.stdout
+            and without_manifest.returncode == 0
+            and "n_ground_truth:" not in without_manifest.stdout
+        ):
+            ok("CLI text mode shows accuracy lines only when --manifest is supplied")
+        else:
+            fail(
+                "cli-text-accuracy-lines",
+                f"with={with_manifest.stdout!r} without={without_manifest.stdout!r}",
+            )
+
+
 def test_cli_missing_events_file_prints_hold_no_data_and_exits_zero() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         missing = Path(tmp) / "does-not-exist" / "events.jsonl"
@@ -885,6 +1238,13 @@ def main() -> int:
     test_aggregate_skips_and_counts_malformed_lines()
     test_aggregate_agreement_latency_tokens_injected_cache_hits_and_disagreements()
     test_aggregate_skill_feature_never_has_agree_risk_key()
+    test_summarize_feature_routing_computes_accuracy_with_manifest()
+    test_summarize_feature_routing_no_manifest_omits_accuracy_keys()
+    test_summarize_feature_routing_empty_manifest_omits_accuracy_keys()
+    test_summarize_feature_routing_non_matching_manifest_omits_accuracy_keys()
+    test_summarize_feature_routing_null_workflow_type_excluded_from_ground_truth()
+    test_summarize_feature_skill_and_remfix_scope_never_get_accuracy_keys_even_with_manifest()
+    test_jev_choice_and_heuristic_choice_match_ab_reports_routing_only_helpers()
     test_features_tuple_includes_remfix_scope()
     test_cli_min_agreement_remfix_scope_flag_defaults_to_080()
     test_aggregate_and_verdict_promote_remfix_scope_rows()
@@ -893,6 +1253,12 @@ def main() -> int:
     test_verdict_hold_when_n_below_minimum()
     test_verdict_hold_when_agreement_below_minimum()
     test_verdict_hold_no_data_when_n_zero()
+    test_verdict_backward_compatible_3arg_call_unchanged()
+    test_verdict_dual_gate_agreement_passes_accuracy_fails_promotes()
+    test_verdict_dual_gate_accuracy_passes_agreement_fails_promotes()
+    test_verdict_dual_gate_both_fail_holds()
+    test_verdict_dual_gate_both_pass_promotes()
+    test_verdict_accuracy_gate_own_floor_not_met_falls_back_to_agreement_alone()
     test_aggregate_excludes_nan_and_negative_latency_from_stats()
     test_aggregate_excludes_infinity_latency_from_stats()
     test_aggregate_does_not_crash_on_nan_or_infinity_usage_tokens()
@@ -908,6 +1274,12 @@ def main() -> int:
     test_aggregate_counts_memory_error_from_line_strip_as_malformed()
     test_cli_lone_surrogate_strings_do_not_crash_json_or_text_mode()
     test_cli_never_crashes_on_any_hostile_value_in_any_scalar_field()
+    test_cli_manifest_flag_defaults_to_none()
+    test_cli_min_accuracy_margin_flag_defaults_to_010()
+    test_cli_manifest_flag_wires_through_to_accuracy_gate_promote()
+    test_cli_manifest_omitted_routing_has_no_accuracy_keys()
+    test_cli_nonexistent_manifest_path_errors_loudly()
+    test_cli_text_mode_shows_accuracy_lines_only_when_manifest_supplied()
     test_cli_missing_events_file_prints_hold_no_data_and_exits_zero()
     test_cli_empty_events_file_prints_hold_no_data_and_exits_zero()
     test_cli_json_flag_outputs_valid_json_with_verdict_and_reason()
