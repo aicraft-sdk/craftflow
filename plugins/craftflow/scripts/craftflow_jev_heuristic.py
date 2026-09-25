@@ -168,3 +168,19 @@ def classify(text: str) -> Dict[str, Any]:
         skill = "none"
 
     return {"workflow": workflow, "matched": matched, "risk_signals": risk_signals, "skill": skill}
+
+
+# Ports remediation-and-research.md's `1a-SCOPE` scope-resolution step's literal text
+# ("ask exactly: `Fix critical only (Recommended)` or `Fix all issues`") -- the ONLY
+# deterministic, non-Jev baseline this feature has, used solely for the `agree`
+# telemetry field (never for the actual applied/below_threshold decision -- see
+# craftflow_jev_remfix_scope.decide()). test_craftflow_jev_heuristic.py asserts the
+# source phrase is still present so a future change to the human-facing recommendation
+# fails loudly here instead of silently drifting.
+REMFIX_SCOPE_RECOMMENDED = "critical_only"
+
+
+def classify_remfix_scope() -> str:
+    """Deterministic, input-independent heuristic baseline for the remfix_scope
+    agreement telemetry -- never raises."""
+    return REMFIX_SCOPE_RECOMMENDED

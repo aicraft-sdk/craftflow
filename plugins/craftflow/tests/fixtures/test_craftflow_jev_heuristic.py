@@ -102,6 +102,18 @@ def test_skill_rule_source_lines_still_present() -> None:
         fail("skill-rule-source-lines", f"checks={checks!r}")
 
 
+def test_remfix_scope_heuristic_matches_documented_recommendation() -> None:
+    from craftflow_jev_heuristic import classify_remfix_scope, REMFIX_SCOPE_RECOMMENDED
+    doc = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "remediation-and-research.md").read_text()
+    if (
+        classify_remfix_scope() == "critical_only" == REMFIX_SCOPE_RECOMMENDED
+        and "Fix critical only (Recommended)" in doc
+    ):
+        ok("classify_remfix_scope() matches the literal, still-documented recommendation")
+    else:
+        fail("remfix-scope-heuristic-drift", f"classify={classify_remfix_scope()!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_heuristic: running")
     test_parity_with_router_protocol_markdown()
@@ -110,6 +122,7 @@ def main() -> int:
     test_default_is_build_and_word_boundaries()
     test_risk_signals_and_skill_rule()
     test_skill_rule_source_lines_still_present()
+    test_remfix_scope_heuristic_matches_documented_recommendation()
 
     print()
     print("=" * 40)
