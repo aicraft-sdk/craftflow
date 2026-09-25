@@ -16,7 +16,7 @@ SCRIPTS = PLUGIN_ROOT / "scripts"
 AB_REPORT_SCRIPT = SCRIPTS / "craftflow_jev_ab_report.py"
 sys.path.insert(0, str(SCRIPTS))
 
-from craftflow_jev_ab_report import aggregate_ab, build_arg_parser  # noqa: E402
+from craftflow_jev_ab_report import _NO_GROUND_TRUTH, aggregate_ab, build_arg_parser  # noqa: E402
 
 _passes = 0
 _errors: list[str] = []
@@ -293,6 +293,167 @@ def test_cli_manifest_flag_is_required() -> None:
         fail("cli-manifest-required", "parse_args() did not exit when --manifest was omitted")
 
 
+def test_cli_nonexistent_manifest_path_errors_loudly() -> None:
+    """A typo'd or wrong --manifest path must not be silently treated as an
+    empty (zero-row) manifest -- that fabricates a full-looking report for a
+    file that was never read. Distinct from test_cli_manifest_flag_is_required,
+    which only tests the flag being omitted entirely."""
+    with tempfile.TemporaryDirectory() as tmp:
+        events_path, _manifest_path = _write_fixture(tmp)
+        missing_manifest = Path(tmp) / "does-not-exist.jsonl"
+        proc = _run_cli(["--events", str(events_path), "--manifest", str(missing_manifest)], cwd=tmp)
+        if (
+            proc.returncode != 0
+            and proc.stdout == ""
+            and str(missing_manifest) in proc.stderr
+        ):
+            ok("CLI exits non-zero with a stderr message naming the path when --manifest does not exist")
+        else:
+            fail("cli-manifest-missing-path", f"code={proc.returncode} out={proc.stdout!r} err={proc.stderr!r}")
+
+
+def test_cli_nonexistent_events_path_errors_loudly() -> None:
+    """Same silent-fabrication risk when --events is explicitly given and
+    points at a missing file."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _events_path, manifest_path = _write_fixture(tmp)
+        missing_events = Path(tmp) / "does-not-exist-events.jsonl"
+        proc = _run_cli(["--events", str(missing_events), "--manifest", str(manifest_path)], cwd=tmp)
+        if (
+            proc.returncode != 0
+            and proc.stdout == ""
+            and str(missing_events) in proc.stderr
+        ):
+            ok("CLI exits non-zero with a stderr message naming the path when explicit --events does not exist")
+        else:
+            fail("cli-events-missing-path", f"code={proc.returncode} out={proc.stdout!r} err={proc.stderr!r}")
+
+
+# ---------------------------------------------------------------------------
+# aggregate_ab() -- routing 0/0 accuracy disambiguation (CRITICAL 2)
+# ---------------------------------------------------------------------------
+
+
+def test_aggregate_ab_routing_zero_rows_reports_sentinel_not_zero() -> None:
+    """0 routing rows must not render as 0.0 (indistinguishable from '100%
+    wrong')."""
+    events_rows = [
+        _skill_row(call_id="s1", agree=True, heuristic_result="craftflow:frontend-patterns",
+                   answers={"choice": "craftflow:frontend-patterns", "confidence": 0.8}),
+    ]
+    manifest_rows = [{"call_id": "s1", "source_workflow_uuid": "wf1", "workflow_type": "BUILD"}]
+    summary = aggregate_ab(events_rows, manifest_rows)
+    routing = summary["features"]["routing"]
+    checks = (
+        routing["n"] == 0,
+        routing["jev_accuracy"] == _NO_GROUND_TRUTH,
+        routing["heuristic_accuracy"] == _NO_GROUND_TRUTH,
+        routing["jev_accuracy"] != 0.0,
+        routing["n_null_ground_truth"] == 0,
+        routing["n_ground_truth"] == 0,
+    )
+    if all(checks):
+        ok("aggregate_ab() reports sentinel (not 0.0) for routing accuracy when there are 0 routing rows")
+    else:
+        fail("aggregate-ab-routing-zero-rows", f"routing={routing!r} checks={checks!r}")
+
+
+def test_aggregate_ab_routing_all_unmatched_reports_sentinel_not_zero() -> None:
+    """Routing rows exist but none match a manifest call_id -- n_ground_truth
+    stays 0, so accuracy must be the sentinel, not 0.0."""
+    events_rows = [
+        _routing_row(call_id="orphan1", answers={"choice": "DEBUG", "confidence": 0.9},
+                     heuristic_result={"workflow": "DEBUG", "risk_signals": []}, agree=True),
+        _routing_row(call_id="orphan2", answers={"choice": "BUILD", "confidence": 0.9},
+                     heuristic_result={"workflow": "BUILD", "risk_signals": []}, agree=True),
+    ]
+    manifest_rows: list = []
+    summary = aggregate_ab(events_rows, manifest_rows)
+    routing = summary["features"]["routing"]
+    checks = (
+        routing["n"] == 2,
+        routing["n_unmatched"] == 2,
+        routing["n_ground_truth"] == 0,
+        routing["n_null_ground_truth"] == 0,
+        routing["jev_accuracy"] == _NO_GROUND_TRUTH,
+        routing["heuristic_accuracy"] == _NO_GROUND_TRUTH,
+        routing["n"] == routing["n_unmatched"] + routing["n_ground_truth"] + routing["n_null_ground_truth"],
+    )
+    if all(checks):
+        ok("aggregate_ab() reports sentinel (not 0.0) when all routing rows are unmatched to the manifest")
+    else:
+        fail("aggregate-ab-routing-all-unmatched", f"routing={routing!r} checks={checks!r}")
+
+
+def test_aggregate_ab_routing_null_ground_truth_reports_sentinel_and_is_counted() -> None:
+    """Rows matched to a manifest entry whose workflow_type is null must not
+    silently vanish -- they must be counted in n_null_ground_truth (not
+    n_ground_truth, not n_unmatched) and accuracy must be the sentinel."""
+    events_rows = [
+        _routing_row(call_id="c1", answers={"choice": "DEBUG", "confidence": 0.9},
+                     heuristic_result={"workflow": "DEBUG", "risk_signals": []}, agree=True),
+        _routing_row(call_id="c2", answers={"choice": "BUILD", "confidence": 0.9},
+                     heuristic_result={"workflow": "BUILD", "risk_signals": []}, agree=True),
+    ]
+    manifest_rows = [
+        {"call_id": "c1", "source_workflow_uuid": "wf1", "workflow_type": None},
+        {"call_id": "c2", "source_workflow_uuid": "wf2", "workflow_type": None},
+    ]
+    summary = aggregate_ab(events_rows, manifest_rows)
+    routing = summary["features"]["routing"]
+    checks = (
+        routing["n"] == 2,
+        routing["n_unmatched"] == 0,
+        routing["n_ground_truth"] == 0,
+        routing["n_null_ground_truth"] == 2,
+        routing["jev_accuracy"] == _NO_GROUND_TRUTH,
+        routing["heuristic_accuracy"] == _NO_GROUND_TRUTH,
+        routing["n"] == routing["n_unmatched"] + routing["n_ground_truth"] + routing["n_null_ground_truth"],
+    )
+    if all(checks):
+        ok("aggregate_ab() counts matched-but-null-ground-truth rows separately and reports sentinel accuracy")
+    else:
+        fail("aggregate-ab-routing-null-ground-truth", f"routing={routing!r} checks={checks!r}")
+
+
+# ---------------------------------------------------------------------------
+# _added_latency_ms() -- invalid_latency counter (HIGH)
+# ---------------------------------------------------------------------------
+
+
+def test_aggregate_ab_added_latency_tracks_invalid_latency_and_excludes_from_mean() -> None:
+    """NaN and negative latency_ms values must be counted in invalid_latency
+    and excluded from mean/p95 -- not silently dropped (which would make
+    'zero added latency' and 'no valid latency data' look identical)."""
+    events_rows = [
+        _routing_row(call_id="c1", latency_ms=100, answers={"choice": "DEBUG", "confidence": 0.9},
+                     heuristic_result={"workflow": "DEBUG", "risk_signals": []}, agree=True),
+        _routing_row(call_id="c2", latency_ms=float("nan"), answers={"choice": "DEBUG", "confidence": 0.9},
+                     heuristic_result={"workflow": "DEBUG", "risk_signals": []}, agree=True),
+        _routing_row(call_id="c3", latency_ms=-5, answers={"choice": "DEBUG", "confidence": 0.9},
+                     heuristic_result={"workflow": "DEBUG", "risk_signals": []}, agree=True),
+        _routing_row(call_id="c4", latency_ms=300, answers={"choice": "DEBUG", "confidence": 0.9},
+                     heuristic_result={"workflow": "DEBUG", "risk_signals": []}, agree=True),
+    ]
+    manifest_rows = [
+        {"call_id": "c1", "source_workflow_uuid": "wf1", "workflow_type": "DEBUG"},
+        {"call_id": "c2", "source_workflow_uuid": "wf2", "workflow_type": "DEBUG"},
+        {"call_id": "c3", "source_workflow_uuid": "wf3", "workflow_type": "DEBUG"},
+        {"call_id": "c4", "source_workflow_uuid": "wf4", "workflow_type": "DEBUG"},
+    ]
+    summary = aggregate_ab(events_rows, manifest_rows)
+    latency = summary["features"]["routing"]["jev_added_latency_ms"]
+    checks = (
+        latency["invalid_latency"] == 2,
+        latency["mean"] == 200.0,
+        abs(latency["p95"] - 290.0) < 1e-9,
+    )
+    if all(checks):
+        ok("aggregate_ab() jev_added_latency_ms tracks invalid_latency and computes mean/p95 over valid subset only")
+    else:
+        fail("aggregate-ab-invalid-latency", f"latency={latency!r} checks={checks!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_ab_report: running")
     test_aggregate_ab_computes_routing_accuracy_and_agreement()
@@ -301,6 +462,12 @@ def main() -> int:
     test_cli_json_flag_outputs_routing_accuracy_and_skill_sentinel()
     test_cli_text_mode_does_not_crash_and_prints_both_features()
     test_cli_manifest_flag_is_required()
+    test_cli_nonexistent_manifest_path_errors_loudly()
+    test_cli_nonexistent_events_path_errors_loudly()
+    test_aggregate_ab_routing_zero_rows_reports_sentinel_not_zero()
+    test_aggregate_ab_routing_all_unmatched_reports_sentinel_not_zero()
+    test_aggregate_ab_routing_null_ground_truth_reports_sentinel_and_is_counted()
+    test_aggregate_ab_added_latency_tracks_invalid_latency_and_excludes_from_mean()
 
     print()
     print("=" * 40)

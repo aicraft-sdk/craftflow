@@ -66,20 +66,31 @@ def _manifest_by_call_id(manifest_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     return lookup
 
 
-def _added_latency_ms(rows: List[Dict[str, Any]]) -> Dict[str, Optional[float]]:
+def _added_latency_ms(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     valid_latencies: List[float] = []
+    invalid_latency = 0
     for r in rows:
         value = r.get("latency_ms")
-        if _is_number(value) and _is_finite(value) and value >= 0:
+        if not _is_number(value):
+            continue
+        # NaN, +/-Infinity, and negative values are rejected rather than
+        # silently averaged in -- they poison mean/p95 otherwise. Tracked via
+        # invalid_latency so "0ms added latency" and "no valid latency data"
+        # never render identically. Mirrors craftflow_jev_report.py's
+        # _summarize_feature() invalid_latency pattern.
+        if _is_finite(value) and value >= 0:
             valid_latencies.append(value)
+        else:
+            invalid_latency += 1
     latencies = sorted(valid_latencies)
     if not latencies:
-        return {"mean": 0.0, "p95": 0.0}
+        return {"mean": 0.0, "p95": 0.0, "invalid_latency": invalid_latency}
     mean_latency = sum(latencies) / len(latencies)
     p95_latency = _percentile(latencies, 95.0)
     return {
         "mean": mean_latency if _is_finite(mean_latency) else None,
         "p95": p95_latency if _is_finite(p95_latency) else None,
+        "invalid_latency": invalid_latency,
     }
 
 
@@ -93,14 +104,22 @@ def _summarize_feature_ab(rows: List[Dict[str, Any]], feature: str, manifest_by_
         "n": n,
         "n_unmatched": 0,
         "agreement": 0.0,
-        "jev_added_latency_ms": {"mean": 0.0, "p95": 0.0},
+        "jev_added_latency_ms": {"mean": 0.0, "p95": 0.0, "invalid_latency": 0},
         "jev_added_tokens": 0,
         "heuristic_added_latency_ms": 0,
         "heuristic_added_tokens": 0,
     }
     if feature == "routing":
-        result["jev_accuracy"] = 0.0
-        result["heuristic_accuracy"] = 0.0
+        # 0/0 must never render as the literal 0.0 -- that is
+        # indistinguishable from "Jev got every routing decision wrong".
+        # Use the same _NO_GROUND_TRUTH sentinel the skill feature already
+        # uses whenever n_ground_truth ends up 0 (reachable via: zero
+        # routing rows; all rows unmatched to the manifest; or rows matched
+        # but with workflow_type: null).
+        result["jev_accuracy"] = _NO_GROUND_TRUTH
+        result["heuristic_accuracy"] = _NO_GROUND_TRUTH
+        result["n_ground_truth"] = 0
+        result["n_null_ground_truth"] = 0
     else:
         result["accuracy"] = _NO_GROUND_TRUTH
     if n == 0:
@@ -113,6 +132,7 @@ def _summarize_feature_ab(rows: List[Dict[str, Any]], feature: str, manifest_by_
     n_unmatched = 0
     if feature == "routing":
         n_ground_truth = 0
+        n_null_ground_truth = 0
         jev_correct = 0
         heuristic_correct = 0
         for r in rows:
@@ -122,14 +142,21 @@ def _summarize_feature_ab(rows: List[Dict[str, Any]], feature: str, manifest_by_
                 continue
             workflow_type = manifest_by_call_id[call_id]
             if workflow_type is None:
+                # Matched to a manifest row, but that row carries no ground
+                # truth -- do not let it vanish uncounted: it is neither
+                # unmatched nor a ground-truth row. n == n_unmatched +
+                # n_ground_truth + n_null_ground_truth always holds.
+                n_null_ground_truth += 1
                 continue
             n_ground_truth += 1
             if _routing_jev_choice(r) == workflow_type:
                 jev_correct += 1
             if _routing_heuristic_choice(r) == workflow_type:
                 heuristic_correct += 1
-        result["jev_accuracy"] = (jev_correct / n_ground_truth) if n_ground_truth else 0.0
-        result["heuristic_accuracy"] = (heuristic_correct / n_ground_truth) if n_ground_truth else 0.0
+        result["jev_accuracy"] = (jev_correct / n_ground_truth) if n_ground_truth else _NO_GROUND_TRUTH
+        result["heuristic_accuracy"] = (heuristic_correct / n_ground_truth) if n_ground_truth else _NO_GROUND_TRUTH
+        result["n_ground_truth"] = n_ground_truth
+        result["n_null_ground_truth"] = n_null_ground_truth
     else:
         for r in rows:
             call_id = r.get("call_id")
@@ -226,11 +253,14 @@ def _format_ab_report_text(events_path: Path, manifest_path: Path, summary: Dict
         if "jev_accuracy" in feat:
             lines.append(f"  jev_accuracy: {_fmt_accuracy(feat, 'jev_accuracy')}")
             lines.append(f"  heuristic_accuracy: {_fmt_accuracy(feat, 'heuristic_accuracy')}")
+            lines.append(f"  n_ground_truth: {feat['n_ground_truth']}")
+            lines.append(f"  n_null_ground_truth: {feat['n_null_ground_truth']}")
         else:
             lines.append(f"  accuracy: {feat['accuracy']}")
         jev_latency = feat["jev_added_latency_ms"]
         lines.append(
-            f"  jev_added_latency_ms: mean={_fmt_latency(jev_latency['mean'])} p95={_fmt_latency(jev_latency['p95'])}"
+            f"  jev_added_latency_ms: mean={_fmt_latency(jev_latency['mean'])} p95={_fmt_latency(jev_latency['p95'])} "
+            f"invalid_latency={jev_latency['invalid_latency']}"
         )
         lines.append(f"  jev_added_tokens: {feat['jev_added_tokens']}")
         lines.append(f"  heuristic_added_latency_ms: {feat['heuristic_added_latency_ms']}")
@@ -243,6 +273,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
     events_path = Path(args.events) if args.events else (state_root() / "jev" / "events.jsonl")
     manifest_path = Path(args.manifest)
+    # _read_lines() catches OSError (which FileNotFoundError subclasses) and
+    # returns [] -- proceeding with an empty manifest/events file would
+    # silently produce a full-looking report and exit 0, indistinguishable
+    # from "this file genuinely has zero rows". Fail loudly instead. Only
+    # --events is checked conditionally: it defaults to state_root()/jev/
+    # events.jsonl, which legitimately may not exist yet on a fresh install.
+    if not manifest_path.is_file():
+        sys.stderr.write(f"error: --manifest path does not exist: {manifest_path}\n")
+        return 1
+    if args.events is not None and not events_path.is_file():
+        sys.stderr.write(f"error: --events path does not exist: {events_path}\n")
+        return 1
     events_rows = _parse_jsonl_rows(_read_lines(events_path))
     manifest_rows = _parse_jsonl_rows(_read_lines(manifest_path))
     summary = aggregate_ab(events_rows, manifest_rows)
