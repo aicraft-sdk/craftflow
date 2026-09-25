@@ -305,7 +305,7 @@ whole budget on the first attempt.
 **Promotion:** `python3 scripts/craftflow_jev_report.py` summarizes agreement rate, latency,
 and token stats per feature from the telemetry log, ending in a DD-11 `PROMOTE`/`HOLD`
 verdict (`PROMOTE` requires `n >= 100` and per-feature minimum agreement — `0.80` routing,
-`0.60` skill). Only a `PROMOTE` verdict justifies manually flipping a feature from `audit` to
+`0.60` skill, `0.80` remfix_scope). Only a `PROMOTE` verdict justifies manually flipping a feature from `audit` to
 `advise` in `config/jev.json`.
 
 **Config reset on update:** a plugin update resets `config/jev.json` to the shipped
