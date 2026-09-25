@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from craftflow_hooklib import state_root
 
-FEATURES = ("routing", "skill")
+FEATURES = ("routing", "skill", "remfix_scope")
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +249,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-n", type=int, default=100)
     parser.add_argument("--min-agreement-routing", type=float, default=0.80)
     parser.add_argument("--min-agreement-skill", type=float, default=0.60)
+    parser.add_argument("--min-agreement-remfix-scope", type=float, default=0.80)
     parser.add_argument("--json", action="store_true", help="Print a JSON payload instead of a text table")
     return parser
 
@@ -261,7 +262,11 @@ def _read_lines(path: Path) -> List[str]:
 
 
 def _min_agreement_for(feature: str, args: argparse.Namespace) -> float:
-    return args.min_agreement_routing if feature == "routing" else args.min_agreement_skill
+    if feature == "routing":
+        return args.min_agreement_routing
+    if feature == "remfix_scope":
+        return args.min_agreement_remfix_scope
+    return args.min_agreement_skill
 
 
 def _json_payload(events_path: Path, summary: Dict[str, Any], verdicts: Dict[str, Tuple[str, str]]) -> Dict[str, Any]:

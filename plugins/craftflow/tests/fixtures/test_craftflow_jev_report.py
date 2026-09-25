@@ -18,7 +18,7 @@ SCRIPTS = PLUGIN_ROOT / "scripts"
 REPORT_SCRIPT = SCRIPTS / "craftflow_jev_report.py"
 sys.path.insert(0, str(SCRIPTS))
 
-from craftflow_jev_report import _read_lines, _sanitize_json_value, aggregate, verdict  # noqa: E402
+from craftflow_jev_report import FEATURES, _read_lines, _sanitize_json_value, aggregate, build_arg_parser, verdict  # noqa: E402
 
 _passes = 0
 _errors: list[str] = []
@@ -177,6 +177,49 @@ def test_aggregate_skill_feature_never_has_agree_risk_key() -> None:
         ok("aggregate() skill feature has no agree_risk key; heuristic_result is a bare string")
     else:
         fail("aggregate-skill-no-agree-risk", f"feat={feat!r}")
+
+
+# ---------------------------------------------------------------------------
+# remfix_scope feature (Phase 4: FEATURES tuple + CLI flag + _min_agreement_for)
+# ---------------------------------------------------------------------------
+
+
+def test_features_tuple_includes_remfix_scope() -> None:
+    if "remfix_scope" in FEATURES and len(FEATURES) == 3:
+        ok("FEATURES tuple includes remfix_scope")
+    else:
+        fail("features-tuple", f"FEATURES={FEATURES!r}")
+
+
+def test_cli_min_agreement_remfix_scope_flag_defaults_to_080() -> None:
+    args = build_arg_parser().parse_args([])
+    if args.min_agreement_remfix_scope == 0.80:
+        ok("--min-agreement-remfix-scope defaults to 0.80")
+    else:
+        fail("min-agreement-remfix-scope-default", f"args={args!r}")
+
+
+def test_aggregate_and_verdict_promote_remfix_scope_rows() -> None:
+    rows = [
+        {"feature": "remfix_scope", "agree": True, "answers": {"choice": "critical_only"}, "heuristic_result": "critical_only", "latency_ms": 100, "usage": {}, "cache_hit": False, "injected": False}
+        for _ in range(100)
+    ]
+    summary = aggregate([json.dumps(r) for r in rows])
+    feat = summary["features"]["remfix_scope"]
+    result, _reason = verdict(feat, min_n=100, min_agreement=0.80)
+    if feat["n"] == 100 and feat["agreement"] == 1.0 and result == "PROMOTE" and "agree_risk" not in feat:
+        ok("remfix_scope rows aggregate and PROMOTE exactly like routing/skill (no agree_risk key)")
+    else:
+        fail("remfix-scope-promote", f"feat={feat!r} result={result!r}")
+
+
+def test_routing_and_skill_verdicts_unchanged_by_third_feature() -> None:
+    # Regression guard: adding remfix_scope must not change routing/skill's own bars.
+    args = build_arg_parser().parse_args([])
+    if args.min_agreement_routing == 0.80 and args.min_agreement_skill == 0.60:
+        ok("routing/skill CLI defaults unchanged by remfix_scope addition")
+    else:
+        fail("routing-skill-defaults-unchanged", f"args={args!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -765,10 +808,10 @@ def test_cli_missing_events_file_prints_hold_no_data_and_exits_zero() -> None:
         proc = _run_cli(["--events", str(missing)], cwd=tmp)
         if (
             proc.returncode == 0
-            and proc.stdout.count("HOLD (no data)") == 2
+            and proc.stdout.count("HOLD (no data)") == len(FEATURES)
             and "n: 0" in proc.stdout
         ):
-            ok("CLI: missing events file -> n=0, HOLD (no data), exit 0 for both features")
+            ok("CLI: missing events file -> n=0, HOLD (no data), exit 0 for all features")
         else:
             fail("cli-missing-file", f"code={proc.returncode} out={proc.stdout!r} err={proc.stderr!r}")
 
@@ -778,7 +821,7 @@ def test_cli_empty_events_file_prints_hold_no_data_and_exits_zero() -> None:
         events = Path(tmp) / "events.jsonl"
         events.write_text("")
         proc = _run_cli(["--events", str(events)], cwd=tmp)
-        if proc.returncode == 0 and proc.stdout.count("HOLD (no data)") == 2:
+        if proc.returncode == 0 and proc.stdout.count("HOLD (no data)") == len(FEATURES):
             ok("CLI: empty events file -> n=0, HOLD (no data), exit 0")
         else:
             fail("cli-empty-file", f"code={proc.returncode} out={proc.stdout!r} err={proc.stderr!r}")
@@ -842,6 +885,10 @@ def main() -> int:
     test_aggregate_skips_and_counts_malformed_lines()
     test_aggregate_agreement_latency_tokens_injected_cache_hits_and_disagreements()
     test_aggregate_skill_feature_never_has_agree_risk_key()
+    test_features_tuple_includes_remfix_scope()
+    test_cli_min_agreement_remfix_scope_flag_defaults_to_080()
+    test_aggregate_and_verdict_promote_remfix_scope_rows()
+    test_routing_and_skill_verdicts_unchanged_by_third_feature()
     test_verdict_promote_when_n_and_agreement_meet_thresholds()
     test_verdict_hold_when_n_below_minimum()
     test_verdict_hold_when_agreement_below_minimum()
