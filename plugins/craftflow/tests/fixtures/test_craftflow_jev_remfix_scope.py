@@ -408,6 +408,13 @@ def test_build_workflow_escalated_path_delegates_instead_of_duplicating() -> Non
         "1a-SCOPE" in build_doc,  # the escalated-path rule itself still exists
         "Scope resolution" in build_doc,  # ...and it now references the real procedure
         "Fix critical only (Recommended)" in remediation_doc,  # the off-mode byte-identical marker text is untouched
+        # MEDIUM finding (silent-failure-hunter): the checks above never assert step 8's actual
+        # conditional-creation text is present -- a future edit reverting step 8 back to an
+        # unconditional REM-FIX create (reintroducing the duplicate-task/double-increment bug)
+        # would still pass every check above. Assert the load-bearing phrase directly, the same
+        # way the JUST_GO/circuit_breaker guard-text check was added for Scope resolution.
+        "reuse it as `remfix_task_id`" in build_doc,
+        "do NOT create a second REM-FIX task for the same finding" in build_doc,
     )
     if all(checks):
         ok("build-workflow.md's escalated 1a-SCOPE path delegates to Scope resolution rather than duplicating the Jev call")

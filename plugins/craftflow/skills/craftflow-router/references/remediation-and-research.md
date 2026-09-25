@@ -95,7 +95,14 @@ The router is authoritative for BUILD remediation scope.
          `[jev-auto-decided: wf:{workflow_uuid} choice:{choice} confidence:{confidence}]` in
          `activeContext.md ## Decisions`, create the REM-FIX immediately with
          `scope:{ALL_ISSUES if choice == "all_issues" else CRITICAL_ONLY}` through the normal
-         Circuit breaker and rule `1a` procedure, and **skip steps 3-4** (no `AskUserQuestion`).
+         Circuit breaker and rule `1a` procedure, then rewrite that same marker line one more
+         time to append `consumed:true` —
+         `[jev-auto-decided: wf:{workflow_uuid} choice:{choice} confidence:{confidence}
+         consumed:true]` — so a future resume can tell *this exact marker's* REM-FIX was
+         actually created, rather than inferring it from whether *any* `kind:remfix` task
+         happens to exist anywhere in the workflow (see `SKILL.md`'s "Interrupted
+         jev-auto-decide" resume rule, which reads this tag). **Skip steps 3-4** (no
+         `AskUserQuestion`).
   3. ask exactly: `Fix critical only (Recommended)` or `Fix all issues`
   4. do not create a REM-FIX until the next user reply resolves the scope
 - If no reliable HIGH count/signal can be extracted, default to normal rule `1a` without pretending scope selection happened.
