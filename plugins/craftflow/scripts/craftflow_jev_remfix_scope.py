@@ -139,3 +139,70 @@ def _append_event(path: Path, row: Dict[str, Any]) -> bool:
         return True
     except Exception:
         return False
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="craftflow_jev_remfix_scope.py",
+        description="Jev-assisted decision for the router's 1a-SCOPE REM-FIX scope gate.",
+    )
+    parser.add_argument("--critical", action="append", default=[], help="One CRITICAL finding summary line; repeatable.")
+    parser.add_argument("--high", action="append", default=[], help="One HIGH finding summary line; repeatable.")
+    parser.add_argument("--workflow-uuid", default=None, help="Workflow correlation id for the telemetry row.")
+    parser.add_argument("--config", default=None, help="Override config/jev.json path (default: plugin config dir).")
+    parser.add_argument("--state-dir", default=None, help="Override state dir for events.jsonl (default: state_root()).")
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    try:
+        args = build_arg_parser().parse_args(argv)
+        config_path = Path(args.config) if args.config else plugin_config_dir() / "jev.json"
+        state_dir = Path(args.state_dir) if args.state_dir else state_root()
+        cfg, _decisions = load_config(config_path)
+        env = os.environ
+        mode = (cfg.get("features") or {}).get("remediationScope", "off")
+
+        if mode == "off" or not is_active(cfg, env):
+            print(json.dumps({"decision": "off", "choice": None, "confidence": None}))
+            return 0
+
+        if not args.critical and not args.high:
+            print(json.dumps({"decision": "no_decision", "choice": None, "confidence": None}))
+            return 0
+
+        state = build_state(args.critical, args.high, max_chars=cfg["maxStateChars"])
+        questions = build_questions()
+        result = jev_call(
+            state, questions,
+            api_key=api_key(env), model=cfg["model"], timeout=cfg["timeoutSeconds"], cache_dir=None,
+        )
+        answer = None
+        if isinstance(result, dict) and isinstance(result.get("answers"), dict):
+            answer = result["answers"].get("scope")
+        threshold = (cfg.get("thresholds") or {}).get("remediationScope", 0.85)
+        decision, choice, confidence = decide(mode, answer, threshold)
+
+        row = telemetry_row(
+            decision=decision, choice=choice, confidence=confidence, result=result,
+            mode=mode, model=cfg["model"], workflow_uuid=args.workflow_uuid,
+            critical_count=len(args.critical), high_count=len(args.high),
+        )
+        persisted = _append_event(state_dir / "jev" / "events.jsonl", row)
+
+        # P1/P6: "applied" is only ever printed to the router if the audit row
+        # backing it actually landed on disk. A confidence-qualifying answer
+        # whose telemetry write failed is reported as below_threshold instead
+        # -- never silently promoted to applied with no evidence behind it.
+        if decision == "applied" and not persisted:
+            decision = "below_threshold"
+
+        print(json.dumps({"decision": decision, "choice": choice, "confidence": confidence}))
+        return 0
+    except Exception:
+        print(json.dumps({"decision": "no_decision", "choice": None, "confidence": None}))
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

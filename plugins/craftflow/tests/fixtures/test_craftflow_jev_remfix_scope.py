@@ -5,16 +5,27 @@ Run: python3 tests/fixtures/test_craftflow_jev_remfix_scope.py
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from craftflow_jev_remfix_scope import build_state, build_questions, decide, telemetry_row, _append_event  # noqa: E402
+from craftflow_jev_remfix_scope import (  # noqa: E402
+    build_state,
+    build_questions,
+    decide,
+    telemetry_row,
+    _append_event,
+    main,
+    build_arg_parser,
+)
 
 _passes = 0
 _errors: list[str] = []
@@ -130,7 +141,141 @@ def test_append_event_returns_true_on_success_and_false_on_failure() -> None:
             fail("append-event-bool", f"succeeded={succeeded!r} failed={failed!r}")
 
 
-def main() -> int:
+def run_cli(argv: list, env: dict) -> tuple:
+    out, err = io.StringIO(), io.StringIO()
+    with mock.patch.dict("os.environ", env, clear=True), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = main(argv)
+    return code, out.getvalue(), err.getvalue()
+
+
+def test_off_mode_makes_zero_calls_and_writes_zero_telemetry() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "jev.json"
+        config_path.write_text(json.dumps({"enabled": True, "features": {"remediationScope": "off"}}))
+        events_path = Path(tmp) / "state" / "jev" / "events.jsonl"
+        with mock.patch("craftflow_jev_remfix_scope.jev_call") as mocked:
+            code, out, _err = run_cli(
+                ["--critical", "c1", "--high", "h1", "--config", str(config_path), "--state-dir", str(Path(tmp) / "state")],
+                {"TYPESAFE_API_KEY": "k"},
+            )
+        payload = json.loads(out.strip())
+        if code == 0 and payload == {"decision": "off", "choice": None, "confidence": None} and not mocked.called and not events_path.exists():
+            ok("off mode: zero jev_call invocations, zero telemetry, decision=off")
+        else:
+            fail("off-mode-zero-calls", f"code={code} out={out!r} mocked.called={mocked.called} events_exists={events_path.exists()}")
+
+
+def test_missing_api_key_treated_as_off_even_when_mode_is_advise() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "jev.json"
+        config_path.write_text(json.dumps({"enabled": True, "features": {"remediationScope": "advise"}}))
+        with mock.patch("craftflow_jev_remfix_scope.jev_call") as mocked:
+            code, out, _err = run_cli(
+                ["--critical", "c1", "--high", "h1", "--config", str(config_path), "--state-dir", str(Path(tmp) / "state")],
+                {},  # no TYPESAFE_API_KEY
+            )
+        payload = json.loads(out.strip())
+        if payload["decision"] == "off" and not mocked.called:
+            ok("missing API key falls open to off even when mode=advise")
+        else:
+            fail("missing-key-off", f"out={out!r} mocked.called={mocked.called}")
+
+
+def test_advise_mode_applies_above_threshold_and_writes_one_row() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "jev.json"
+        config_path.write_text(json.dumps({
+            "enabled": True, "features": {"remediationScope": "advise"},
+            "thresholds": {"remediationScope": 0.8},
+        }))
+        events_path = Path(tmp) / "state" / "jev" / "events.jsonl"
+        fake_result = {"answers": {"scope": {"choice": "critical_only", "confidence": 0.95}}, "model": "jev-latest", "latency_ms": 50, "cache_hit": False, "usage": {}}
+        with mock.patch("craftflow_jev_remfix_scope.jev_call", return_value=fake_result) as mocked:
+            code, out, _err = run_cli(
+                ["--critical", "c1", "--high", "h1", "--workflow-uuid", "wf-9", "--config", str(config_path), "--state-dir", str(events_path.parent.parent)],
+                {"TYPESAFE_API_KEY": "k"},
+            )
+        payload = json.loads(out.strip())
+        rows = [json.loads(l) for l in events_path.read_text().splitlines()] if events_path.exists() else []
+        if code == 0 and payload == {"decision": "applied", "choice": "critical_only", "confidence": 0.95} and mocked.called and len(rows) == 1 and rows[0]["workflow_uuid"] == "wf-9":
+            ok("advise mode applies above threshold, writes exactly 1 telemetry row")
+        else:
+            fail("advise-applies", f"payload={payload!r} rows={rows!r}")
+
+
+def test_advise_mode_write_failure_forces_below_threshold_not_applied() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "jev.json"
+        config_path.write_text(json.dumps({
+            "enabled": True, "features": {"remediationScope": "advise"},
+            "thresholds": {"remediationScope": 0.8},
+        }))
+        state_dir = Path(tmp) / "state"
+        # make events.jsonl's parent unavailable: pre-create "jev" as a FILE, not a dir,
+        # so _append_event's mkdir(parents=True, exist_ok=True) raises internally and
+        # returns False.
+        (state_dir).mkdir(parents=True)
+        (state_dir / "jev").write_text("blocking file, not a directory")
+        fake_result = {"answers": {"scope": {"choice": "critical_only", "confidence": 0.95}}, "model": "jev-latest", "latency_ms": 50, "cache_hit": False, "usage": {}}
+        with mock.patch("craftflow_jev_remfix_scope.jev_call", return_value=fake_result):
+            code, out, _err = run_cli(
+                ["--critical", "c1", "--high", "h1", "--config", str(config_path), "--state-dir", str(state_dir)],
+                {"TYPESAFE_API_KEY": "k"},
+            )
+        payload = json.loads(out.strip())
+        if code == 0 and payload["decision"] == "below_threshold" and payload["choice"] == "critical_only":
+            ok("advise mode: qualifying confidence but failed persist downgrades to below_threshold, never applied")
+        else:
+            fail("advise-persist-failure-forces-fallback", f"payload={payload!r}")
+
+
+def test_jev_call_failure_falls_back_to_no_decision_but_still_logs() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "jev.json"
+        config_path.write_text(json.dumps({"enabled": True, "features": {"remediationScope": "audit"}}))
+        events_path = Path(tmp) / "state" / "jev" / "events.jsonl"
+        with mock.patch("craftflow_jev_remfix_scope.jev_call", return_value=None):
+            code, out, _err = run_cli(
+                ["--critical", "c1", "--config", str(config_path), "--state-dir", str(events_path.parent.parent)],
+                {"TYPESAFE_API_KEY": "k"},
+            )
+        payload = json.loads(out.strip())
+        rows = [json.loads(l) for l in events_path.read_text().splitlines()] if events_path.exists() else []
+        if code == 0 and payload == {"decision": "no_decision", "choice": None, "confidence": None} and len(rows) == 1:
+            ok("jev_call failure falls back to no_decision, still logs 1 row")
+        else:
+            fail("jev-call-failure", f"payload={payload!r} rows={rows!r}")
+
+
+def test_no_critical_or_high_args_short_circuits_without_calling_jev() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "jev.json"
+        config_path.write_text(json.dumps({"enabled": True, "features": {"remediationScope": "audit"}}))
+        with mock.patch("craftflow_jev_remfix_scope.jev_call") as mocked:
+            code, out, _err = run_cli(
+                ["--config", str(config_path), "--state-dir", str(Path(tmp) / "state")],
+                {"TYPESAFE_API_KEY": "k"},
+            )
+        payload = json.loads(out.strip())
+        if payload["decision"] == "no_decision" and not mocked.called:
+            ok("no --critical/--high args short-circuits before ever calling jev")
+        else:
+            fail("no-args-short-circuit", f"out={out!r} mocked.called={mocked.called}")
+
+
+def test_main_never_raises_on_unexpected_exception() -> None:
+    with mock.patch("craftflow_jev_remfix_scope.load_config", side_effect=RuntimeError("boom")):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = main(["--critical", "c1"])
+        payload = json.loads(out.getvalue().strip())
+    if code == 0 and payload["decision"] == "no_decision":
+        ok("main() never raises -- unexpected exceptions fail open to no_decision")
+    else:
+        fail("main-never-raises", f"code={code} out={out.getvalue()!r}")
+
+
+def main_tests() -> int:
     print("test_craftflow_jev_remfix_scope: running")
     test_build_state_caps_combined_text_and_counts()
     test_build_questions_shape()
@@ -141,6 +286,14 @@ def main() -> int:
     test_telemetry_row_shape_and_never_carries_raw_finding_text()
     test_telemetry_row_no_decision_disagrees_with_heuristic()
     test_append_event_returns_true_on_success_and_false_on_failure()
+
+    test_off_mode_makes_zero_calls_and_writes_zero_telemetry()
+    test_missing_api_key_treated_as_off_even_when_mode_is_advise()
+    test_advise_mode_applies_above_threshold_and_writes_one_row()
+    test_advise_mode_write_failure_forces_below_threshold_not_applied()
+    test_jev_call_failure_falls_back_to_no_decision_but_still_logs()
+    test_no_critical_or_high_args_short_circuits_without_calling_jev()
+    test_main_never_raises_on_unexpected_exception()
 
     print()
     print("=" * 40)
@@ -156,4 +309,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main_tests())
