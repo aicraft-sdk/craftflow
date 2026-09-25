@@ -61,8 +61,43 @@ The router is authoritative for BUILD remediation scope.
   - or a `### Findings` bullet clearly labeled `HIGH`
 - When `1a-SCOPE` fires:
   1. write `[SCOPE-DECISION-PENDING: wf:{workflow_task_id} reason:{top remediation reason}]` into `activeContext.md ## Decisions`
-  2. ask exactly: `Fix critical only (Recommended)` or `Fix all issues`
-  3. do not create a REM-FIX until the next user reply resolves the scope
+  2. Jev-assisted scope call (self-gates to a zero-cost no-op when
+     `config/jev.json → features.remediationScope` is `off`, the key is missing, or
+     `enabled` is `false` — byte-identical to today's behavior on that path):
+     - **If `JUST_GO=true`, skip this step entirely** and continue at step 3. `JUST_GO`
+       already auto-defaults this (and every other non-REVERT) `AskUserQuestion` gate to
+       its recommended option (`SKILL.md`'s JUST_GO rule) — the human ask this step exists
+       to assist never fires under `JUST_GO`, so there is no ask to skip and no human
+       ground truth to eventually compare against. Do not spend a network call or a
+       telemetry row on a decision that was never going to reach a real ask.
+     - Otherwise:
+       ```bash
+       python3 {plugin_root}/scripts/craftflow_jev_remfix_scope.py \
+         --critical "{one critical finding summary}" [--critical "..." for each additional CRITICAL] \
+         --high "{one high finding summary}" [--high "..." for each additional HIGH] \
+         --workflow-uuid {workflow_uuid} \
+         --state-dir .craftflow/state
+       ```
+       Parse the single-line stdout JSON. If it fails to parse as JSON, or has no `decision`
+       key, treat it identically to `decision: "logged"` below (fall through to step 3 — never
+       skip the human ask on unparseable output):
+       - `decision` is anything other than the literal string `"applied"` (this covers `off`,
+         `logged`, `no_decision`, `below_threshold`, and any parse failure) → proceed to step 3
+         exactly as today.
+       - `decision == "applied"` → before applying, re-check the workflow artifact's top-level
+         `circuit_breaker.broken` field (the same field the "Circuit breaker" section above
+         tracks). **If `circuit_breaker.broken == true`, treat this identically to any other
+         non-`"applied"` decision and proceed to step 3** — circuit-breaker checkpoints stay
+         permanently human-only regardless of what Jev decided (matches this design's
+         Constraint that circuit-breaker/REVERT gates are never Jev-eligible). Otherwise,
+         apply `choice` automatically: replace the `[SCOPE-DECISION-PENDING: ...]` marker
+         written in step 1 with
+         `[jev-auto-decided: wf:{workflow_uuid} choice:{choice} confidence:{confidence}]` in
+         `activeContext.md ## Decisions`, create the REM-FIX immediately with
+         `scope:{ALL_ISSUES if choice == "all_issues" else CRITICAL_ONLY}` through the normal
+         Circuit breaker and rule `1a` procedure, and **skip steps 3-4** (no `AskUserQuestion`).
+  3. ask exactly: `Fix critical only (Recommended)` or `Fix all issues`
+  4. do not create a REM-FIX until the next user reply resolves the scope
 - If no reliable HIGH count/signal can be extracted, default to normal rule `1a` without pretending scope selection happened.
 
 ### REVIEW-to-BUILD
