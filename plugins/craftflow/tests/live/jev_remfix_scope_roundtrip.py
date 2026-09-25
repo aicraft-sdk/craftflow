@@ -37,6 +37,8 @@ def main() -> int:
 
         with tempfile.TemporaryDirectory() as tmp_name:
             root = Path(tmp_name)
+            project = root / "project"
+            project.mkdir(parents=True)
             state_dir = root / "state"
             config_path = root / "jev.json"
 
@@ -53,7 +55,11 @@ def main() -> int:
                     ["--critical", critical_text, "--high", high_text,
                      "--workflow-uuid", "wf-live-canary",
                      "--config", str(config_path), "--state-dir", str(state_dir)],
-                    {"TYPESAFE_API_KEY": api_key},
+                    {
+                        "TYPESAFE_API_KEY": api_key,
+                        "CLAUDE_PROJECT_DIR": str(project),
+                        "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
+                    },
                 )
             except subprocess.TimeoutExpired:
                 print("FAIL: script did not exit within 15s", file=sys.stderr)
