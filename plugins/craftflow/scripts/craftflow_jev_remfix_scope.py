@@ -90,3 +90,52 @@ def decide(mode: str, answer: Optional[Dict[str, Any]], threshold: float) -> Tup
     if confidence >= threshold:
         return "applied", choice, confidence
     return "below_threshold", choice, confidence
+
+
+def telemetry_row(
+    *, decision: str, choice: Optional[str], confidence: Optional[float],
+    result: Optional[Dict[str, Any]], mode: str, model: str,
+    workflow_uuid: Optional[str], critical_count: int, high_count: int,
+) -> Dict[str, Any]:
+    """Pure. One row per script invocation that actually attempted a call
+    (mode != "off" and active). Never includes raw finding text -- matches
+    the "never includes prompt text" privacy rule craftflow_jev_prompt_hint.py
+    already applies to routing/skill rows. `decision` here reflects the
+    *attempted* decision (from decide()); main() may still print a
+    downgraded decision to stdout if this row itself fails to persist --
+    see Task 3.3."""
+    result = result if isinstance(result, dict) else {}
+    heuristic = classify_remfix_scope()
+    return {
+        "ts": now_iso(),
+        "call_id": uuid.uuid4().hex,
+        "workflow_uuid": workflow_uuid,
+        "feature": "remfix_scope",
+        "mode": mode,
+        "model": result.get("model", model),
+        "latency_ms": result.get("latency_ms"),
+        "cache_hit": result.get("cache_hit", False),
+        "usage": result.get("usage"),
+        "answers": {"choice": choice, "confidence": confidence},
+        "confidence": confidence if confidence is not None else 0.0,
+        "heuristic_result": heuristic,
+        "agree": choice == heuristic,
+        "decision": decision,
+        "critical_count": critical_count,
+        "high_count": high_count,
+    }
+
+
+def _append_event(path: Path, row: Dict[str, Any]) -> bool:
+    """Never raises. Returns True only if the row was actually written --
+    the caller (main()) uses this to decide whether an "applied" decision
+    may be printed at all (P1/P6: no auto-apply without a persisted audit
+    row). A write failure here must not crash the script, but it must not
+    be silently reported as success either."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=True) + "\n")
+        return True
+    except Exception:
+        return False

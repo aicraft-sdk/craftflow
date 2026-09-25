@@ -14,7 +14,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from craftflow_jev_remfix_scope import build_state, build_questions, decide  # noqa: E402
+from craftflow_jev_remfix_scope import build_state, build_questions, decide, telemetry_row, _append_event  # noqa: E402
 
 _passes = 0
 _errors: list[str] = []
@@ -80,6 +80,56 @@ def test_decide_rejects_malformed_answer_as_no_decision() -> None:
         fail("decide-rejects-malformed", f"cases={cases!r}")
 
 
+def test_telemetry_row_shape_and_never_carries_raw_finding_text() -> None:
+    row = telemetry_row(
+        decision="logged", choice="critical_only", confidence=0.9,
+        result={"model": "jev-latest", "latency_ms": 120, "cache_hit": False, "usage": {"input_tokens": 5}},
+        mode="audit", model="jev-latest", workflow_uuid="wf-test-1",
+        critical_count=1, high_count=1,
+    )
+    checks = (
+        row["feature"] == "remfix_scope",
+        row["heuristic_result"] == "critical_only",
+        row["agree"] is True,
+        row["answers"] == {"choice": "critical_only", "confidence": 0.9},
+        row["decision"] == "logged",
+        row["workflow_uuid"] == "wf-test-1",
+        "critical_issues" not in json.dumps(row),  # no raw finding text ever included
+        "high_issues" not in json.dumps(row),
+    )
+    if all(checks):
+        ok("telemetry_row has the right shape and never carries raw finding text")
+    else:
+        fail("telemetry-row-shape", f"row={row!r} checks={checks!r}")
+
+
+def test_telemetry_row_no_decision_disagrees_with_heuristic() -> None:
+    row = telemetry_row(
+        decision="no_decision", choice=None, confidence=None, result=None,
+        mode="audit", model="jev-latest", workflow_uuid=None, critical_count=1, high_count=1,
+    )
+    if row["agree"] is False and row["answers"] == {"choice": None, "confidence": None}:
+        ok("no_decision rows never count as agreement")
+    else:
+        fail("telemetry-row-no-decision", f"row={row!r}")
+
+
+def test_append_event_returns_true_on_success_and_false_on_failure() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        ok_path = Path(tmp) / "events.jsonl"
+        succeeded = _append_event(ok_path, {"a": 1})
+        # a path whose parent is actually a file makes mkdir fail
+        blocked_parent = Path(tmp) / "not_a_dir"
+        blocked_parent.write_text("x")
+        failed = _append_event(blocked_parent / "events.jsonl", {"a": 1})
+        # cf:shortcut: read must happen before the TemporaryDirectory context
+        # exits (plan's original assertion read after teardown -> FileNotFoundError)
+        if succeeded is True and ok_path.read_text().strip() and failed is False:
+            ok("_append_event returns True on success, False on failure, never raises")
+        else:
+            fail("append-event-bool", f"succeeded={succeeded!r} failed={failed!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_remfix_scope: running")
     test_build_state_caps_combined_text_and_counts()
@@ -87,6 +137,10 @@ def main() -> int:
     test_decide_audit_mode_always_logged_never_applied()
     test_decide_advise_applies_at_or_above_threshold()
     test_decide_rejects_malformed_answer_as_no_decision()
+
+    test_telemetry_row_shape_and_never_carries_raw_finding_text()
+    test_telemetry_row_no_decision_disagrees_with_heuristic()
+    test_append_event_returns_true_on_success_and_false_on_failure()
 
     print()
     print("=" * 40)
