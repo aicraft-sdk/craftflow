@@ -59,6 +59,17 @@ def _read_new_lines(path: Path, start_line: int) -> List[str]:
     return lines[start_line:]
 
 
+def _count_lines(path: Path) -> int:
+    """Return the total non-empty line count of `path`. Never raises -- a
+    missing file returns 0. Used to resync the replay cursor to ground
+    truth after every row (success or failure), since a partial write
+    before a mid-row failure can leave orphan lines that a naive
+    success-only cursor advance would miss."""
+    if not path.exists():
+        return 0
+    return len([line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()])
+
+
 def replay_corpus(
     corpus_rows: List[Dict[str, Any]],
     *,
@@ -123,78 +134,93 @@ def replay_corpus(
                 }
 
                 try:
-                    code, _out, err = run_hook(
-                        {
-                            "hook_event_name": "UserPromptSubmit",
-                            "prompt": user_request,
-                            "cwd": str(project),
-                            "session_id": f"jev-ab-bench-{workflow_uuid}",
-                        },
-                        env,
-                    )
-                except Exception as exc:
-                    print(
-                        f"WARNING: replay row {workflow_uuid!r} raised {type(exc).__name__}: {exc}",
-                        file=sys.stderr,
-                    )
-                    n_failed += 1
-                    continue
-
-                if code != 0:
-                    print(
-                        f"WARNING: replay row {workflow_uuid!r} hook exited {code} (stderr={err!r})",
-                        file=sys.stderr,
-                    )
-                    n_failed += 1
-                    continue
-
-                new_lines = _read_new_lines(internal_events_path, cursor)
-                cursor += len(new_lines)
-
-                if len(new_lines) != 2:
-                    print(
-                        f"WARNING: replay row {workflow_uuid!r} produced {len(new_lines)} telemetry "
-                        "rows, expected 2 -- skipping manifest entry",
-                        file=sys.stderr,
-                    )
-                    n_failed += 1
-                    continue
-
-                call_ids: set = set()
-                parsed_rows = []
-                for line in new_lines:
                     try:
-                        parsed = json.loads(line)
-                    except json.JSONDecodeError:
+                        code, _out, err = run_hook(
+                            {
+                                "hook_event_name": "UserPromptSubmit",
+                                "prompt": user_request,
+                                "cwd": str(project),
+                                "session_id": f"jev-ab-bench-{workflow_uuid}",
+                            },
+                            env,
+                        )
+                    except Exception as exc:
+                        print(
+                            f"WARNING: replay row {workflow_uuid!r} raised {type(exc).__name__}: {exc}",
+                            file=sys.stderr,
+                        )
+                        n_failed += 1
                         continue
-                    if isinstance(parsed, dict):
-                        parsed_rows.append(line)
-                        call_id = parsed.get("call_id")
-                        if call_id:
-                            call_ids.add(call_id)
 
-                if len(call_ids) != 1:
-                    print(
-                        f"WARNING: replay row {workflow_uuid!r} produced {len(call_ids)} distinct "
-                        "call_ids, expected 1 -- skipping manifest entry",
-                        file=sys.stderr,
-                    )
-                    n_failed += 1
-                    continue
+                    if code != 0:
+                        print(
+                            f"WARNING: replay row {workflow_uuid!r} hook exited {code} (stderr={err!r})",
+                            file=sys.stderr,
+                        )
+                        n_failed += 1
+                        continue
 
-                for line in parsed_rows:
-                    events_fh.write(line + "\n")
-                    n_events += 1
+                    new_lines = _read_new_lines(internal_events_path, cursor)
 
-                manifest_row = {
-                    "call_id": next(iter(call_ids)),
-                    "source_workflow_uuid": workflow_uuid,
-                    "workflow_type": workflow_type,
-                }
-                manifest_fh.write(json.dumps(manifest_row, ensure_ascii=True) + "\n")
-                n_manifest += 1
-                events_fh.flush()
-                manifest_fh.flush()
+                    if len(new_lines) != 2:
+                        print(
+                            f"WARNING: replay row {workflow_uuid!r} produced {len(new_lines)} telemetry "
+                            "rows, expected 2 -- skipping manifest entry",
+                            file=sys.stderr,
+                        )
+                        n_failed += 1
+                        continue
+
+                    call_ids: set = set()
+                    parsed_rows = []
+                    for line in new_lines:
+                        try:
+                            parsed = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(parsed, dict):
+                            parsed_rows.append(line)
+                            call_id = parsed.get("call_id")
+                            if call_id:
+                                call_ids.add(call_id)
+
+                    if len(parsed_rows) != len(new_lines):
+                        print(
+                            f"WARNING: replay row {workflow_uuid!r} had "
+                            f"{len(new_lines) - len(parsed_rows)} malformed/non-dict telemetry "
+                            "line(s) out of 2 -- skipping manifest entry",
+                            file=sys.stderr,
+                        )
+                        n_failed += 1
+                        continue
+
+                    if len(call_ids) != 1:
+                        print(
+                            f"WARNING: replay row {workflow_uuid!r} produced {len(call_ids)} distinct "
+                            "call_ids, expected 1 -- skipping manifest entry",
+                            file=sys.stderr,
+                        )
+                        n_failed += 1
+                        continue
+
+                    for line in parsed_rows:
+                        events_fh.write(line + "\n")
+                        n_events += 1
+
+                    manifest_row = {
+                        "call_id": next(iter(call_ids)),
+                        "source_workflow_uuid": workflow_uuid,
+                        "workflow_type": workflow_type,
+                    }
+                    manifest_fh.write(json.dumps(manifest_row, ensure_ascii=True) + "\n")
+                    n_manifest += 1
+                    events_fh.flush()
+                    manifest_fh.flush()
+                finally:
+                    # Resync unconditionally -- success or failure -- so a
+                    # partial write before a mid-row exception/non-zero exit
+                    # never leaves an orphan line to bleed into the next row.
+                    cursor = _count_lines(internal_events_path)
 
     return {
         "n_rows": len(corpus_rows),

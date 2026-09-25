@@ -265,6 +265,160 @@ def test_replay_continues_on_simulated_hook_failure() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Remediation finding [CRITICAL]: cursor must resync to the file's actual
+# line count after EVERY row (success or failure), not just the success
+# path -- otherwise a partial write before a mid-row failure leaves an
+# orphan line that bleeds into the next row's window.
+# ---------------------------------------------------------------------------
+
+
+def _fake_run_hook_partial_write_then_raise(payload: dict, env: dict):
+    """Simulates a hook that writes exactly 1 line to events.jsonl and then
+    fails (e.g. killed mid-write, or errors after its first append) --
+    distinct from test_replay_continues_on_simulated_hook_failure's fake,
+    which raises BEFORE any write occurs."""
+    project_dir = Path(env["CLAUDE_PROJECT_DIR"])
+    events_path = project_dir / ".craftflow" / "state" / "jev" / "events.jsonl"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    call_id = uuid.uuid4().hex
+    orphan_row = {"call_id": call_id, "session_id": payload.get("session_id"), "feature": "routing"}
+    with events_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(orphan_row) + "\n")
+    raise RuntimeError("simulated partial-write failure mid-hook")
+
+
+def test_replay_resyncs_cursor_after_partial_write_failure() -> None:
+    call_count = {"n": 0}
+
+    def sequenced_run_hook(payload: dict, env: dict):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return _fake_run_hook_partial_write_then_raise(payload, env)
+        return _fake_run_hook_writes_two_rows(payload, env)
+
+    original_run_hook = craftflow_jev_replay.run_hook
+    craftflow_jev_replay.run_hook = sequenced_run_hook
+    try:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            root = Path(tmp_name)
+            plugin_root = _make_fake_plugin_root(root)
+            events_out = root / "out" / "events.jsonl"
+            manifest_out = root / "out" / "replay_manifest.jsonl"
+            corpus_rows = _make_corpus_rows(2)
+
+            stats = replay_corpus(
+                corpus_rows,
+                real_plugin_root=plugin_root,
+                events_out=events_out,
+                manifest_out=manifest_out,
+                api_key="fake-key-never-real",
+            )
+
+            event_lines = (
+                [l for l in events_out.read_text(encoding="utf-8").splitlines() if l.strip()]
+                if events_out.exists()
+                else []
+            )
+            manifest_lines = (
+                [l for l in manifest_out.read_text(encoding="utf-8").splitlines() if l.strip()]
+                if manifest_out.exists()
+                else []
+            )
+
+            if len(manifest_lines) == 1:
+                ok("row 2 (genuine success) still produces a manifest entry despite row 1's partial write")
+            else:
+                fail("cursor-resync-manifest", f"expected 1 manifest row, got {len(manifest_lines)}")
+
+            if len(event_lines) == 2:
+                ok("events_out gets exactly 2 lines for row 2 -- row 1's orphan line did not bleed in")
+            else:
+                fail("cursor-resync-events", f"expected 2 event lines, got {len(event_lines)}: {event_lines!r}")
+
+            if stats.get("n_failed") == 1 and stats.get("n_manifest") == 1:
+                ok("stats reflect 1 failed row (partial write) and 1 successful manifest row")
+            else:
+                fail("cursor-resync-stats", f"unexpected stats {stats!r}")
+    finally:
+        craftflow_jev_replay.run_hook = original_run_hook
+
+
+# ---------------------------------------------------------------------------
+# Remediation finding [HIGH]: a row where one of the 2 telemetry lines is
+# malformed JSON (or parses to a non-dict) must be treated as a failure --
+# no manifest row, no events written -- with a WARNING logged, instead of
+# silently proceeding on the 1 surviving line.
+# ---------------------------------------------------------------------------
+
+
+def _fake_run_hook_writes_one_malformed_line(payload: dict, env: dict):
+    project_dir = Path(env["CLAUDE_PROJECT_DIR"])
+    events_path = project_dir / ".craftflow" / "state" / "jev" / "events.jsonl"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    call_id = uuid.uuid4().hex
+    routing_row = {"call_id": call_id, "session_id": payload.get("session_id"), "feature": "routing"}
+    with events_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(routing_row) + "\n")
+        fh.write("{not valid json,,,\n")
+    return (0, "", "")
+
+
+def test_replay_rejects_row_with_malformed_telemetry_line() -> None:
+    original_run_hook = craftflow_jev_replay.run_hook
+    craftflow_jev_replay.run_hook = _fake_run_hook_writes_one_malformed_line
+    try:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            root = Path(tmp_name)
+            plugin_root = _make_fake_plugin_root(root)
+            events_out = root / "out" / "events.jsonl"
+            manifest_out = root / "out" / "replay_manifest.jsonl"
+            corpus_rows = _make_corpus_rows(1)
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                stats = replay_corpus(
+                    corpus_rows,
+                    real_plugin_root=plugin_root,
+                    events_out=events_out,
+                    manifest_out=manifest_out,
+                    api_key="fake-key-never-real",
+                )
+
+            manifest_lines = (
+                [l for l in manifest_out.read_text(encoding="utf-8").splitlines() if l.strip()]
+                if manifest_out.exists()
+                else []
+            )
+            event_lines = (
+                [l for l in events_out.read_text(encoding="utf-8").splitlines() if l.strip()]
+                if events_out.exists()
+                else []
+            )
+
+            if len(manifest_lines) == 0:
+                ok("no manifest row written when one telemetry line is malformed")
+            else:
+                fail("malformed-line-manifest", f"expected 0 manifest rows, got {len(manifest_lines)}")
+
+            if len(event_lines) == 0:
+                ok("events_out gets 0 lines when one telemetry line is malformed")
+            else:
+                fail("malformed-line-events", f"expected 0 event lines, got {len(event_lines)}: {event_lines!r}")
+
+            if "WARNING" in stderr.getvalue():
+                ok("a WARNING is logged for the malformed-telemetry row")
+            else:
+                fail("malformed-line-warning", f"expected WARNING in stderr, got {stderr.getvalue()!r}")
+
+            if stats.get("n_failed") == 1:
+                ok("stats report exactly 1 failed row for the malformed-telemetry case")
+            else:
+                fail("malformed-line-stats", f"expected n_failed=1, got {stats!r}")
+    finally:
+        craftflow_jev_replay.run_hook = original_run_hook
+
+
+# ---------------------------------------------------------------------------
 # Task 2.4 -- CLI main()
 # ---------------------------------------------------------------------------
 
@@ -365,6 +519,8 @@ def main() -> int:
     test_replay_writes_isolated_events_and_manifest()
     test_replay_never_touches_real_project_dir()
     test_replay_continues_on_simulated_hook_failure()
+    test_replay_resyncs_cursor_after_partial_write_failure()
+    test_replay_rejects_row_with_malformed_telemetry_line()
     test_cli_exits_1_without_api_key()
     test_cli_main_success_with_mocked_run_hook()
 
