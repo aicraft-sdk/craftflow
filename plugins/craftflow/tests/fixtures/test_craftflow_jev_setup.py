@@ -104,6 +104,23 @@ def test_status_prints_key_present_but_never_the_value() -> None:
         fail("status-key-present-no-value", f"code={code} out={out!r} err={err!r}")
 
 
+def test_status_output_includes_remediation_scope() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = Path(tmp) / "jev.json"
+        write_config(cfg_path, default_config_dict())
+        code, out, err = run_cli(["--status", "--config", str(cfg_path)], {})
+
+    if (
+        code == 0
+        and "features.remediationScope: off" in out
+        and "thresholds.remediationScope: 0.85" in out
+        and err == ""
+    ):
+        ok("--status output includes remediationScope feature+threshold")
+    else:
+        fail("status-remediation-scope", f"code={code} out={out!r} err={err!r}")
+
+
 # ---------------------------------------------------------------------------
 # --check
 # ---------------------------------------------------------------------------
@@ -499,6 +516,7 @@ def main_tests() -> int:
     print("test_craftflow_jev_setup: running")
     test_status_prints_effective_config_and_key_absent()
     test_status_prints_key_present_but_never_the_value()
+    test_status_output_includes_remediation_scope()
     test_check_no_key_exits_2_names_env_var_and_setup_url()
     test_check_success_prints_privacy_note_and_exits_0()
     test_check_canary_failure_exits_3_and_leaves_config_unchanged()
