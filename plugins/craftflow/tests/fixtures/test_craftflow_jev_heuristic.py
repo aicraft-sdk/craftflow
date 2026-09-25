@@ -104,7 +104,7 @@ def test_skill_rule_source_lines_still_present() -> None:
 
 def test_remfix_scope_heuristic_matches_documented_recommendation() -> None:
     from craftflow_jev_heuristic import classify_remfix_scope, REMFIX_SCOPE_RECOMMENDED
-    doc = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "remediation-and-research.md").read_text()
+    doc = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "remediation-and-research.md").read_text(encoding="utf-8")
     if (
         classify_remfix_scope() == "critical_only" == REMFIX_SCOPE_RECOMMENDED
         and "Fix critical only (Recommended)" in doc
