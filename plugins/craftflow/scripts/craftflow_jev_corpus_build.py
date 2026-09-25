@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -24,13 +25,12 @@ from craftflow_hooklib import state_root
 # ---------------------------------------------------------------------------
 
 
-def build_corpus(records: List[Tuple[str, "str | None", str]], limit: int) -> List[Dict[str, str]]:
-    """Pure: drop rows where workflow_type is None, dedup by exact
+def _dedup_typed_records(
+    records: List[Tuple[str, "str | None", str]]
+) -> List[Tuple[str, str, str]]:
+    """Pure: drop rows where workflow_type is None, then dedup by exact
     user_request string (keep the first occurrence sorted by workflow_uuid
-    ascending), bucket the remaining rows by workflow_type, then
-    round-robin across buckets (buckets visited in sorted workflow_type
-    order, each bucket walked in workflow_uuid ascending order) until
-    `limit` is reached or every bucket is exhausted."""
+    ascending)."""
     typed = [row for row in records if row[1] is not None]
     typed.sort(key=lambda row: row[0])
 
@@ -41,7 +41,16 @@ def build_corpus(records: List[Tuple[str, "str | None", str]], limit: int) -> Li
             continue
         seen_requests.add(user_request)
         deduped.append((workflow_uuid, workflow_type, user_request))
+    return deduped
 
+
+def _cap_round_robin(
+    deduped: List[Tuple[str, str, str]], limit: int
+) -> List[Dict[str, str]]:
+    """Pure: bucket already-deduped rows by workflow_type, then round-robin
+    across buckets (buckets visited in sorted workflow_type order, each
+    bucket walked in workflow_uuid ascending order) until `limit` is reached
+    or every bucket is exhausted."""
     buckets: Dict[str, List[Tuple[str, str, str]]] = {}
     for row in deduped:
         buckets.setdefault(row[1], []).append(row)
@@ -70,6 +79,16 @@ def build_corpus(records: List[Tuple[str, "str | None", str]], limit: int) -> Li
             cursors[key] = idx + 1
             progressed = True
     return result
+
+
+def build_corpus(records: List[Tuple[str, "str | None", str]], limit: int) -> List[Dict[str, str]]:
+    """Pure: drop rows where workflow_type is None, dedup by exact
+    user_request string (keep the first occurrence sorted by workflow_uuid
+    ascending), bucket the remaining rows by workflow_type, then
+    round-robin across buckets (buckets visited in sorted workflow_type
+    order, each bucket walked in workflow_uuid ascending order) until
+    `limit` is reached or every bucket is exhausted."""
+    return _cap_round_robin(_dedup_typed_records(records), limit)
 
 
 # ---------------------------------------------------------------------------
@@ -125,14 +144,36 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
+
+    if args.limit <= 0:
+        print(
+            f"error: --limit must be a positive integer, got {args.limit}",
+            file=sys.stderr,
+        )
+        return 1
+
     workflows_dir = Path(args.workflows_dir) if args.workflows_dir else (state_root() / "workflows")
+    if not workflows_dir.is_dir():
+        print(
+            f"error: --workflows-dir does not exist or is not a directory: {workflows_dir}",
+            file=sys.stderr,
+        )
+        return 1
+
     records = _read_workflow_artifacts(workflows_dir)
-    corpus = build_corpus(records, args.limit)
+    n_read = len(records)
+    deduped = _dedup_typed_records(records)
+    n_deduped = len(deduped)
+    corpus = _cap_round_robin(deduped, args.limit)
+    n_written = len(corpus)
+
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as fh:
         for row in corpus:
             fh.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+    print(f"read={n_read} deduped={n_deduped} written={n_written}")
     return 0
 
 

@@ -5,6 +5,8 @@ Run: python3 tests/fixtures/test_craftflow_jev_corpus_build.py
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -14,7 +16,11 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from craftflow_jev_corpus_build import build_corpus, _read_workflow_artifacts  # noqa: E402
+from craftflow_jev_corpus_build import (  # noqa: E402
+    build_corpus,
+    _read_workflow_artifacts,
+    main as cli_main,
+)
 
 _passes = 0
 _errors: list[str] = []
@@ -116,10 +122,105 @@ def test_read_workflow_artifacts_skips_malformed() -> None:
         fail("read-workflow-artifacts-skips-malformed", f"records={records!r}")
 
 
+# ---------------------------------------------------------------------------
+# main() -- CLI error handling and observability
+# ---------------------------------------------------------------------------
+
+
+def test_main_rejects_nonexistent_workflows_dir() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = Path(tmp) / "corpus.jsonl"
+        missing_dir = Path(tmp) / "does-not-exist"
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            exit_code = cli_main(["--out", str(out_path), "--workflows-dir", str(missing_dir)])
+        out_written = out_path.exists()
+    stderr_text = stderr.getvalue()
+    if exit_code != 0 and "does-not-exist" in stderr_text and not out_written:
+        ok(
+            "main() rejects a nonexistent --workflows-dir with non-zero exit, a stderr "
+            "message naming the path, and writes no output file"
+        )
+    else:
+        fail(
+            "main-nonexistent-workflows-dir",
+            f"exit_code={exit_code!r} stderr={stderr_text!r} out_exists={out_written}",
+        )
+
+
+def test_main_rejects_nonpositive_limit() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        workflows_dir = Path(tmp) / "workflows"
+        workflows_dir.mkdir()
+        out_path = Path(tmp) / "corpus.jsonl"
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            exit_code = cli_main(
+                ["--out", str(out_path), "--workflows-dir", str(workflows_dir), "--limit", "0"]
+            )
+        out_written = out_path.exists()
+    stderr_text = stderr.getvalue()
+    if exit_code != 0 and "limit" in stderr_text.lower() and not out_written:
+        ok(
+            "main() rejects --limit 0 with non-zero exit, a stderr message mentioning "
+            "'limit', and writes no output file"
+        )
+    else:
+        fail(
+            "main-nonpositive-limit",
+            f"exit_code={exit_code!r} stderr={stderr_text!r} out_exists={out_written}",
+        )
+
+
+def test_main_prints_summary_counts_on_success() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        workflows_dir = Path(tmp) / "workflows"
+        workflows_dir.mkdir()
+        (workflows_dir / "wf-a.json").write_text(
+            json.dumps(
+                {
+                    "workflow_uuid": "wf-a",
+                    "workflow_type": "BUILD",
+                    "user_request": "do the thing",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (workflows_dir / "wf-b.json").write_text(
+            json.dumps(
+                {
+                    "workflow_uuid": "wf-b",
+                    "workflow_type": "BUILD",
+                    "user_request": "do the thing",  # exact duplicate -- deduped away
+                }
+            ),
+            encoding="utf-8",
+        )
+        out_path = Path(tmp) / "corpus.jsonl"
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = cli_main(
+                ["--out", str(out_path), "--workflows-dir", str(workflows_dir), "--limit", "150"]
+            )
+    stdout_text = stdout.getvalue()
+    if (
+        exit_code == 0
+        and "read=2" in stdout_text
+        and "deduped=1" in stdout_text
+        and "written=1" in stdout_text
+    ):
+        ok("main() prints read/deduped/written summary counts to stdout on success")
+    else:
+        fail("main-summary-counts", f"exit_code={exit_code!r} stdout={stdout_text!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_corpus_build: running")
     test_build_corpus_dedups_and_caps()
     test_read_workflow_artifacts_skips_malformed()
+    test_main_rejects_nonexistent_workflows_dir()
+    test_main_rejects_nonpositive_limit()
+    test_main_prints_summary_counts_on_success()
 
     print()
     print("=" * 40)
