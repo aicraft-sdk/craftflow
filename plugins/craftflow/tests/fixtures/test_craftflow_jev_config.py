@@ -67,7 +67,10 @@ def test_non_dict_and_bad_thresholds_fall_back() -> None:
 
 def test_committed_config_is_disabled_by_default() -> None:
     raw = json.loads((PLUGIN_ROOT / "config" / "jev.json").read_text())
-    if raw["enabled"] is False and raw["features"] == {"routingHint": "audit", "skillHint": "audit"}:
+    if (
+        raw["enabled"] is False
+        and raw["features"] == {"routingHint": "audit", "skillHint": "audit", "remediationScope": "off"}
+    ):
         ok("committed config/jev.json is disabled by default")
     else:
         fail("committed-config-disabled", f"raw={raw!r}")
