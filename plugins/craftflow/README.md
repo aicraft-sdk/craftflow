@@ -287,14 +287,14 @@ precedence and Jev stays on across all sessions until you run `--disable`.
 > Nothing else is sent; no prompt text is stored locally; telemetry rows contain only answers/latency/usage.
 > Disable at any time: `python3 scripts/craftflow_jev_setup.py --disable`
 
-**Modes:** each feature (`features.routingHint`, `features.skillHint`) is independently one
+**Modes:** each feature (`features.routingHint`, `features.skillHint`, `features.remediationScope`) is independently one
 of `off` / `audit` / `advise`. `audit` logs telemetry only and injects nothing. `advise`
 additionally injects a `<craftflow_routing_hint source="jev">` block via
 `hookSpecificOutput.additionalContext` when the answer's confidence is at/above the
 configured threshold.
 
-**Thresholds:** `thresholds.routing` (default `0.85`) and `thresholds.skill` (default
-`0.7`) gate `advise`-mode injection per feature; below threshold, nothing is injected even
+**Thresholds:** `thresholds.routing` (default `0.85`), `thresholds.skill` (default
+`0.7`), and `thresholds.remediationScope` (default `0.85`) gate `advise`-mode injection per feature; below threshold, nothing is injected even
 in `advise` mode.
 
 **Timeout:** `timeoutSeconds` caps the client's total deadline (default `2.5`, max `4.0`).
@@ -305,7 +305,7 @@ whole budget on the first attempt.
 **Promotion:** `python3 scripts/craftflow_jev_report.py` summarizes agreement rate, latency,
 and token stats per feature from the telemetry log, ending in a DD-11 `PROMOTE`/`HOLD`
 verdict (`PROMOTE` requires `n >= 100` and per-feature minimum agreement — `0.80` routing,
-`0.60` skill, `0.80` remfix_scope). Only a `PROMOTE` verdict justifies manually flipping a feature from `audit` to
+`0.60` skill, `0.80` remediationScope). Only a `PROMOTE` verdict justifies manually flipping a feature from `audit` to
 `advise` in `config/jev.json`.
 
 **Config reset on update:** a plugin update resets `config/jev.json` to the shipped
