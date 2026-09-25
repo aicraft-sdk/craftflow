@@ -1,0 +1,24 @@
+{
+  "name": "jev-ab-benchmark",
+  "workdir": ".",
+  "required_env": ["TYPESAFE_API_KEY"],
+  "environment": {
+    "CI": "true"
+  },
+  "healthcheck": {
+    "name": "Jev canary key validation",
+    "command": "python3 plugins/craftflow/scripts/craftflow_jev_setup.py --check --config /tmp/craftflow-jev-canary.json",
+    "expected": "exit 0, privacy note printed"
+  },
+  "scenarios": [
+    {
+      "name": "A/B replay smoke round-trip against the real API",
+      "mode": "proof",
+      "given": "an isolated temp plugin root with config/jev.json forced enabled:true / both features audit, and a fixed 5-prompt corpus (2 DEBUG-shaped, 1 PLAN-shaped, 1 REVIEW-shaped, 1 BUILD-shaped, chosen to exercise every workflow_type bucket)",
+      "when": "the real replay driver (craftflow_jev_replay.py) runs all 5 prompts through the real hook and then craftflow_jev_ab_report.py runs over the resulting isolated events.jsonl + replay_manifest.jsonl",
+      "then": "replay produces exactly 10 telemetry rows (5 routing + 5 skill, no prompt text), the manifest has exactly 5 rows (no prompt text), and the A/B report exits 0 with routing.n == 5 and every routing row's heuristic_result.workflow deterministic (re-derivable from craftflow_jev_heuristic.classify() on the same 5 fixed prompt strings)",
+      "command": "python3 plugins/craftflow/tests/live/jev_ab_benchmark_roundtrip.py",
+      "expected": "exit 0; 10 telemetry rows (5 routing + 5 skill); 5 manifest rows; no prompt text; routing.n == 5; heuristic determinism verified"
+    }
+  ]
+}
