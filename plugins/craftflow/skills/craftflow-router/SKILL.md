@@ -264,9 +264,17 @@ Scope-decision resume:
     marker's* REM-FIX is confirmed created — that tag, not a task-list search, is the
     correlation signal.
   - do not ask the user — the marker already records a resolved Jev decision
-  - create the REM-FIX now using the `scope`/`choice` already recorded in the marker
-    (`scope:ALL_ISSUES` if `choice:all_issues`, else `scope:CRITICAL_ONLY`) through the normal
-    Circuit breaker and rule `1a` procedure
+  - **Existence check before create (closes the remaining interruption window):** the
+    create-then-tag sequence below is itself two separate, non-atomic steps — a session
+    interrupted between "create the REM-FIX" and "rewrite the marker to append `consumed:true`"
+    would otherwise cause this branch to create a *second* REM-FIX for the same already-created
+    one on resume. Before creating, check for an existing `kind:remfix` task in this `wf:` whose
+    description's `reason:` line references this exact marker's `choice`/`confidence` values and
+    was created after this marker was written. If found, reuse that task as the REM-FIX (skip
+    creation, go straight to the `consumed:true` rewrite below) instead of creating a duplicate.
+  - create the REM-FIX now (only if no matching task was found above) using the `scope`/`choice`
+    already recorded in the marker (`scope:ALL_ISSUES` if `choice:all_issues`, else
+    `scope:CRITICAL_ONLY`) through the normal Circuit breaker and rule `1a` procedure
   - immediately rewrite the marker to append `consumed:true`, exactly as the happy path in
     `### Scope resolution` does, so a later resume does not re-process the same marker again
   - block downstream re-review / re-hunt / verifier tasks as normal

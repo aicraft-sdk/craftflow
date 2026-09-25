@@ -422,6 +422,25 @@ def test_build_workflow_escalated_path_delegates_instead_of_duplicating() -> Non
         fail("build-workflow-delegates", f"checks={checks!r}")
 
 
+def test_skill_md_interrupted_jev_resume_checks_existence_before_create() -> None:
+    skill_doc = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text()
+    # HIGH finding (silent-failure-hunter, final Phase 5 re-hunt): the interrupted-jev-auto-decide
+    # resume branch is itself a non-atomic "create REM-FIX, then tag consumed:true" sequence -- a
+    # session interrupted between those two steps would otherwise cause this branch to create a
+    # SECOND REM-FIX for the same marker on resume. Assert the existence-check-before-create text
+    # is present, so a future edit that drops it back to an unconditional create would fail here.
+    checks = (
+        "Interrupted jev-auto-decide" in skill_doc,
+        "Existence check before create" in skill_doc,
+        "check for an existing `kind:remfix` task" in skill_doc,
+        "reuse that task as the REM-FIX" in skill_doc,
+    )
+    if all(checks):
+        ok("SKILL.md's interrupted jev-auto-decide resume rule checks for an existing matching REM-FIX before creating a new one")
+    else:
+        fail("skill-md-existence-check-before-create", f"checks={checks!r}")
+
+
 def test_remfix_scope_script_appears_in_exactly_one_router_doc_file() -> None:
     router_root = PLUGIN_ROOT / "skills" / "craftflow-router"
     hits = [p for p in router_root.rglob("*.md") if "craftflow_jev_remfix_scope.py" in p.read_text()]
@@ -456,6 +475,7 @@ def main_tests() -> int:
 
     test_remfix_scope_call_site_is_structurally_isolated_to_1a_scope()
     test_build_workflow_escalated_path_delegates_instead_of_duplicating()
+    test_skill_md_interrupted_jev_resume_checks_existence_before_create()
     test_remfix_scope_script_appears_in_exactly_one_router_doc_file()
 
     print()
