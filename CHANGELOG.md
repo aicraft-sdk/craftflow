@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.11.0] - 2026-09-25
+
+### Features
+
+- add jev-on-vs-jev-off A/B comparison report
+- add isolated jev replay driver for A/B benchmark corpus
+- add jev corpus builder for real-request A/B benchmark
+
+### Fixes
+
+- make default --events path self-documenting when missing in A/B report
+- error loudly on missing manifest, disambiguate 0/0 accuracy and invalid-latency from real zeros in A/B report
+- resync replay cursor on hook failure, reject partial-parse telemetry rows
+- error loudly on missing workflows-dir/invalid limit, add corpus-build summary output
+
+### Tests
+
+- live smoke proof for jev A/B benchmark replay path
+
 ## [1.10.0] - 2026-09-25
 
 ### Features
