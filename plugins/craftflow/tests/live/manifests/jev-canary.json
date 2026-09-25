@@ -28,6 +28,15 @@
       "then": "firing 1 injects the consent-request tag + exact recorder commands and records already_asked_consent:true; --record-consent granted sets consent.status=granted on disk; firing 2 runs a real canary call and writes active:true with an activation note; firing 3 (same session_id) is silent per DD-8; firing 4 (new session_id, garbage key) writes active:false with a non-empty reason and a failure warning",
       "command": "python3 plugins/craftflow/tests/live/jev_session_check_roundtrip.py",
       "expected": "exit 0; consent-request tag + recorder commands on firing 1; consent.status==granted after CLI; active:true + activation note on firing 2; empty additionalContext on firing 3; active:false + failure warning on firing 4"
+    },
+    {
+      "name": "REM-FIX scope audit round-trip against the real API",
+      "mode": "proof",
+      "given": "config/jev.json enabled:true with features.remediationScope:audit in a temp plugin root, and a real TYPESAFE_API_KEY in env",
+      "when": "the real craftflow_jev_remfix_scope.py script is invoked with one --critical and one --high finding summary",
+      "then": "the script exits 0 with decision=logged, choice in {critical_only, all_issues}, and events.jsonl gains exactly 1 telemetry row (feature=remfix_scope) containing no raw finding text",
+      "command": "python3 plugins/craftflow/tests/live/jev_remfix_scope_roundtrip.py",
+      "expected": "exit 0; decision=logged; 1 telemetry row; no raw finding text"
     }
   ]
 }
