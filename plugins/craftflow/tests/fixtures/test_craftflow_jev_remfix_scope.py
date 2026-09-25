@@ -384,6 +384,21 @@ def test_remfix_scope_call_site_is_structurally_isolated_to_1a_scope() -> None:
             f"revert=[{revert_start},{revert_end}) scope_resolution=[{scope_resolution_start},{scope_resolution_end})",
         )
 
+    # HIGH finding (silent-failure-hunter): the assertions above only prove WHERE
+    # craftflow_jev_remfix_scope.py appears -- they never proved the JUST_GO skip
+    # guard or the circuit-breaker re-check guard are still present. A future edit
+    # that deleted either guard's literal text would still pass every check above.
+    scope_resolution_text = "\n".join(lines[scope_resolution_start:scope_resolution_end])
+    has_just_go_guard = "JUST_GO=true" in scope_resolution_text
+    has_circuit_breaker_guard = "circuit_breaker.broken" in scope_resolution_text
+    if has_just_go_guard and has_circuit_breaker_guard:
+        ok("Scope resolution section still contains both the JUST_GO=true skip guard and the circuit_breaker.broken re-check guard")
+    else:
+        fail(
+            "scope-resolution-guards-present",
+            f"has_just_go_guard={has_just_go_guard!r} has_circuit_breaker_guard={has_circuit_breaker_guard!r}",
+        )
+
 
 def test_build_workflow_escalated_path_delegates_instead_of_duplicating() -> None:
     build_doc = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "build-workflow.md").read_text()

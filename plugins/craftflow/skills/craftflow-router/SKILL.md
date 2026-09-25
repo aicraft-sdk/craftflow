@@ -248,6 +248,20 @@ Scope-decision resume:
   - block downstream re-review / re-hunt / verifier tasks as normal
   - stop after task creation so the next turn resumes from task state, not from repeated prose parsing
   - [EASY TO MISS: When persisting user decisions, use the user's exact words. Paraphrasing introduces drift that compounds across resume cycles.]
+- Interrupted jev-auto-decide: if `## Decisions` instead contains a
+  `[jev-auto-decided: wf:{workflow_uuid} choice:{choice} confidence:{confidence}]` marker (the
+  `### Scope resolution` procedure's Jev auto-decide branch writes this marker, then creates the
+  REM-FIX — a session interrupted between those two steps leaves the marker with no matching task)
+  with no corresponding `kind:remfix` task in the same `wf:`, treat it as an interrupted
+  auto-decide, not a pending human ask:
+  - do not ask the user — the marker already records a resolved Jev decision
+  - create the REM-FIX now using the `scope`/`choice` already recorded in the marker
+    (`scope:ALL_ISSUES` if `choice:all_issues`, else `scope:CRITICAL_ONLY`) through the normal
+    Circuit breaker and rule `1a` procedure
+  - block downstream re-review / re-hunt / verifier tasks as normal
+  - leave the `[jev-auto-decided: ...]` marker in place (it is not a pending-ask marker — it is
+    already-consumed history, matching how a normal `[SCOPE-DECISION-PENDING: ...]` marker is only
+    removed once its own REM-FIX exists)
 
 Safety rules:
 - If a task list is shared across sessions, always scope by `wf:` before resuming.

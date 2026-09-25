@@ -221,7 +221,7 @@ TaskCreate({
    - If totalCritical ≥ 1 AND totalHigh ≥ 1 (from escalated reviewer+hunter output) → run the "When `1a-SCOPE` fires" procedure from `references/remediation-and-research.md` `### Scope resolution` (including its Jev-assisted step 2), then stop. Wait for reply before creating REM-FIX unless step 2 auto-decided.
    - Otherwise → auto-proceed with ALL_ISSUES (standard rule 1a applies)
    - If totalCritical ≥ 1 AND totalHigh == 0: auto-proceed with ALL_ISSUES (no user scope gate) — this matches the canonical 1a-SCOPE rule: the gate fires only when BOTH signals are present.
-8. Create REM-FIX task if needed (standard remediation-and-research.md rules).
+8. Create REM-FIX task if needed — conditional on step 7 not already having created one: if step 7's delegated `### Scope resolution` procedure auto-decided via its Jev-assisted step 2 (`decision == "applied"`, which creates the REM-FIX immediately and skips steps 3-4), that task IS the REM-FIX for this cycle — reuse it as `remfix_task_id` below; do NOT create a second REM-FIX task for the same finding (this would double-increment `circuit_breaker.remfix_count`). Otherwise (step 7 stopped at its step 3/4 human ask and a reply resolved the scope, or step 7 fell through to standard rule 1a), create the REM-FIX task now per the standard `remediation-and-research.md` rules, and that new task becomes `remfix_task_id`.
 9. Re-verify with merged findings. Create a new re-verify task:
 
 TaskCreate({
