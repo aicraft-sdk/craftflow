@@ -88,6 +88,20 @@ def _skill_row(**overrides):
 # ---------------------------------------------------------------------------
 
 
+def test_manifest_by_call_id_is_reused_from_shared_lib_not_duplicated() -> None:
+    """Guards Durable Decision D1: craftflow_jev_ab_report.py must import
+    _manifest_by_call_id from the new craftflow_jev_report_lib module, not
+    define its own local copy -- proves genuine reuse, not accidental
+    re-duplication after the extraction."""
+    import craftflow_jev_ab_report
+    import craftflow_jev_report_lib
+
+    if craftflow_jev_ab_report._manifest_by_call_id is craftflow_jev_report_lib._manifest_by_call_id:
+        ok("craftflow_jev_ab_report._manifest_by_call_id is the same object as the shared lib's (genuine reuse)")
+    else:
+        fail("manifest-by-call-id-reuse", "craftflow_jev_ab_report._manifest_by_call_id is a distinct object -- reuse broken")
+
+
 def test_aggregate_ab_computes_routing_accuracy_and_agreement() -> None:
     """3 routing rows, matching manifest rows: 2/3 have workflow_type matching
     Jev's answers.choice; the remaining 1/3 matches the heuristic instead."""
@@ -505,6 +519,7 @@ def test_aggregate_ab_added_latency_tracks_invalid_latency_and_excludes_from_mea
 
 def main() -> int:
     print("test_craftflow_jev_ab_report: running")
+    test_manifest_by_call_id_is_reused_from_shared_lib_not_duplicated()
     test_aggregate_ab_computes_routing_accuracy_and_agreement()
     test_aggregate_ab_handles_missing_manifest_row()
     test_aggregate_ab_skill_feature_reports_accuracy_sentinel_not_omitted()

@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 
 from craftflow_hooklib import state_root
 from craftflow_jev_report import _is_number, _percentile, _usage_tokens
+from craftflow_jev_report_lib import _manifest_by_call_id
 
 FEATURES = ("routing", "skill")
 
@@ -55,15 +56,6 @@ def _routing_jev_choice(row: Dict[str, Any]) -> Optional[str]:
 def _routing_heuristic_choice(row: Dict[str, Any]) -> Optional[str]:
     heuristic_result = row.get("heuristic_result")
     return heuristic_result.get("workflow") if isinstance(heuristic_result, dict) else None
-
-
-def _manifest_by_call_id(manifest_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    lookup: Dict[str, Any] = {}
-    for row in manifest_rows:
-        call_id = row.get("call_id")
-        if isinstance(call_id, str) and call_id:
-            lookup[call_id] = row.get("workflow_type")
-    return lookup
 
 
 def _added_latency_ms(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
