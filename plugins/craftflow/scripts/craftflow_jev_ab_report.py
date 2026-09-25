@@ -222,8 +222,15 @@ def _parse_jsonl_rows(lines: List[str]) -> List[Dict[str, Any]]:
     return rows
 
 
-def _json_payload(events_path: Path, manifest_path: Path, summary: Dict[str, Any]) -> Dict[str, Any]:
-    return {"events": str(events_path), "manifest": str(manifest_path), **summary}
+def _json_payload(
+    events_path: Path, manifest_path: Path, summary: Dict[str, Any], events_file_found: bool
+) -> Dict[str, Any]:
+    return {
+        "events": str(events_path),
+        "events_file_found": events_file_found,
+        "manifest": str(manifest_path),
+        **summary,
+    }
 
 
 def _fmt_latency(value: Optional[float]) -> str:
@@ -237,13 +244,20 @@ def _fmt_accuracy(feat: Dict[str, Any], key: str) -> str:
     return _NO_GROUND_TRUTH if isinstance(value, str) else f"{value * 100:.2f}%"
 
 
-def _format_ab_report_text(events_path: Path, manifest_path: Path, summary: Dict[str, Any]) -> str:
+def _format_ab_report_text(
+    events_path: Path, manifest_path: Path, summary: Dict[str, Any], events_file_found: bool
+) -> str:
     lines = [
         "Jev A/B comparison report",
         f"  events: {events_path}",
         f"  manifest: {manifest_path}",
-        "",
     ]
+    if not events_file_found:
+        lines.append(
+            "  WARNING: events file does not exist at the default path -- the report below "
+            "reflects zero telemetry, not a genuine empty-corpus result."
+        )
+    lines.append("")
     for feature in FEATURES:
         feat = summary["features"][feature]
         lines.append(f"{feature}:")
@@ -285,13 +299,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.events is not None and not events_path.is_file():
         sys.stderr.write(f"error: --events path does not exist: {events_path}\n")
         return 1
+    # args.events is None (default path) and events_path may legitimately not
+    # exist yet on a fresh install -- that's not a hard failure, but the
+    # resulting report must say so explicitly rather than looking identical
+    # to a genuine zero-row result.
+    events_file_found = events_path.is_file()
     events_rows = _parse_jsonl_rows(_read_lines(events_path))
     manifest_rows = _parse_jsonl_rows(_read_lines(manifest_path))
     summary = aggregate_ab(events_rows, manifest_rows)
     if args.json:
-        print(json.dumps(_json_payload(events_path, manifest_path, summary), indent=2, ensure_ascii=True, allow_nan=False))
+        print(
+            json.dumps(
+                _json_payload(events_path, manifest_path, summary, events_file_found),
+                indent=2,
+                ensure_ascii=True,
+                allow_nan=False,
+            )
+        )
     else:
-        sys.stdout.write(_format_ab_report_text(events_path, manifest_path, summary))
+        sys.stdout.write(_format_ab_report_text(events_path, manifest_path, summary, events_file_found))
     return 0
 
 

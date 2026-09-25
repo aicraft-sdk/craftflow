@@ -6,6 +6,7 @@ Run: python3 tests/fixtures/test_craftflow_jev_ab_report.py
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -329,6 +330,54 @@ def test_cli_nonexistent_events_path_errors_loudly() -> None:
             fail("cli-events-missing-path", f"code={proc.returncode} out={proc.stdout!r} err={proc.stderr!r}")
 
 
+def test_cli_default_events_path_missing_is_self_documenting() -> None:
+    """The default --events path (state_root()/jev/events.jsonl) may
+    legitimately not exist on a fresh install, so it is not a hard failure
+    -- but the resulting report must say so explicitly (events_file_found in
+    JSON, a WARNING line in text) rather than looking identical to a genuine
+    zero-row report, which was the exact ambiguity re-hunt found for this
+    flag after the --manifest fix closed it for that flag."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _events_path, manifest_path = _write_fixture(tmp)
+        env = dict(os.environ)
+        env.pop("CLAUDE_PROJECT_DIR", None)
+        proc_json = subprocess.run(
+            [sys.executable, str(AB_REPORT_SCRIPT), "--manifest", str(manifest_path), "--json"],
+            cwd=str(tmp),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        try:
+            payload = json.loads(proc_json.stdout)
+        except json.JSONDecodeError as exc:
+            fail("cli-default-events-missing-json", f"invalid JSON: {exc}; stdout={proc_json.stdout!r} err={proc_json.stderr!r}")
+            return
+        if proc_json.returncode == 0 and payload.get("events_file_found") is False:
+            ok("JSON output sets events_file_found=false when the default events path is missing")
+        else:
+            fail(
+                "cli-default-events-missing-json",
+                f"code={proc_json.returncode} events_file_found={payload.get('events_file_found')!r}",
+            )
+
+        proc_text = subprocess.run(
+            [sys.executable, str(AB_REPORT_SCRIPT), "--manifest", str(manifest_path)],
+            cwd=str(tmp),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if proc_text.returncode == 0 and "WARNING" in proc_text.stdout and "events file does not exist" in proc_text.stdout:
+            ok("Text output prints a WARNING line when the default events path is missing")
+        else:
+            fail("cli-default-events-missing-text", f"code={proc_text.returncode} stdout={proc_text.stdout!r}")
+
+
 # ---------------------------------------------------------------------------
 # aggregate_ab() -- routing 0/0 accuracy disambiguation (CRITICAL 2)
 # ---------------------------------------------------------------------------
@@ -464,6 +513,7 @@ def main() -> int:
     test_cli_manifest_flag_is_required()
     test_cli_nonexistent_manifest_path_errors_loudly()
     test_cli_nonexistent_events_path_errors_loudly()
+    test_cli_default_events_path_missing_is_self_documenting()
     test_aggregate_ab_routing_zero_rows_reports_sentinel_not_zero()
     test_aggregate_ab_routing_all_unmatched_reports_sentinel_not_zero()
     test_aggregate_ab_routing_null_ground_truth_reports_sentinel_and_is_counted()
