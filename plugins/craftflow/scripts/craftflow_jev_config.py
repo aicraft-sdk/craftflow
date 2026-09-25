@@ -25,8 +25,8 @@ CONSENT_STATUSES = ("unset", "granted", "declined")
 DEFAULTS: Dict[str, Any] = {
     "enabled": False,
     "model": "jev-latest",
-    "features": {"routingHint": "audit", "skillHint": "audit"},
-    "thresholds": {"routing": 0.85, "skill": 0.7},
+    "features": {"routingHint": "audit", "skillHint": "audit", "remediationScope": "off"},
+    "thresholds": {"routing": 0.85, "skill": 0.7, "remediationScope": 0.85},
     "maxStateChars": 4000,
     "timeoutSeconds": 2.5,
     "consent": {"status": "unset", "ts": None},
@@ -43,7 +43,7 @@ def normalize(raw: Any) -> Tuple[Dict[str, Any], List[Decision]]:
     if isinstance(raw.get("model"), str) and raw["model"].strip():
         cfg["model"] = raw["model"].strip()
     feats = raw.get("features") if isinstance(raw.get("features"), dict) else {}
-    for key in ("routingHint", "skillHint"):
+    for key in ("routingHint", "skillHint", "remediationScope"):
         value = feats.get(key, DEFAULTS["features"][key])
         if value in MODES:
             cfg["features"][key] = value
@@ -51,7 +51,7 @@ def normalize(raw: Any) -> Tuple[Dict[str, Any], List[Decision]]:
             cfg["features"][key] = "off"
             decisions.append((key, "off-unrecognized-config-value"))
     th = raw.get("thresholds") if isinstance(raw.get("thresholds"), dict) else {}
-    for key in ("routing", "skill"):
+    for key in ("routing", "skill", "remediationScope"):
         value = th.get(key, DEFAULTS["thresholds"][key])
         if isinstance(value, (int, float)) and not isinstance(value, bool) and 0.0 <= value <= 1.0:
             cfg["thresholds"][key] = float(value)

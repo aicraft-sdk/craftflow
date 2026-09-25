@@ -128,6 +128,30 @@ def test_consent_status_helper_reads_nested_field() -> None:
         fail("consent-status-helper", f"checks={checks!r}")
 
 
+def test_remediation_scope_defaults_off_with_085_threshold() -> None:
+    cfg, decisions = load_config(Path("/nonexistent/jev.json"))
+    if cfg["features"]["remediationScope"] == "off" and cfg["thresholds"]["remediationScope"] == 0.85 and decisions == []:
+        ok("remediationScope defaults to off with 0.85 threshold")
+    else:
+        fail("remediation-scope-defaults", f"cfg={cfg!r}")
+
+
+def test_unrecognized_remediation_scope_mode_degrades_to_off_with_distinct_decision() -> None:
+    cfg, decisions = normalize({"features": {"remediationScope": "Advise"}})
+    if cfg["features"]["remediationScope"] == "off" and ("remediationScope", "off-unrecognized-config-value") in decisions:
+        ok("unrecognized remediationScope mode degrades to off with distinct decision")
+    else:
+        fail("unrecognized-remediation-scope-mode", f"cfg={cfg!r} decisions={decisions!r}")
+
+
+def test_bad_remediation_scope_threshold_falls_back_to_default() -> None:
+    cfg, decisions = normalize({"thresholds": {"remediationScope": "high"}})
+    if cfg["thresholds"]["remediationScope"] == 0.85 and ("thresholds.remediationScope", "config_unparseable") in decisions:
+        ok("bad remediationScope threshold falls back to 0.85 default")
+    else:
+        fail("bad-remediation-scope-threshold", f"cfg={cfg!r} decisions={decisions!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_config: running")
     print(f"  (MODES = {MODES})")
@@ -140,6 +164,9 @@ def main() -> int:
     test_unrecognized_consent_status_degrades_to_unset_with_distinct_decision()
     test_committed_config_now_carries_unset_consent_by_default()
     test_consent_status_helper_reads_nested_field()
+    test_remediation_scope_defaults_off_with_085_threshold()
+    test_unrecognized_remediation_scope_mode_degrades_to_off_with_distinct_decision()
+    test_bad_remediation_scope_threshold_falls_back_to_default()
 
     print()
     print("=" * 40)
