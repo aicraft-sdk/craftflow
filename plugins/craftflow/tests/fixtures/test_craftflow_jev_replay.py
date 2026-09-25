@@ -514,6 +514,247 @@ def test_cli_main_success_with_mocked_run_hook() -> None:
         os.environ.update(original_environ)
 
 
+def _call_cli_main(argv: list[str]) -> int:
+    """Invoke cli_main(), converting an argparse usage-error SystemExit into
+    a plain int return so callers can assert on it like any other exit code
+    (argparse.parse_args() calls sys.exit(2) directly on unknown flags,
+    bypassing main()'s own `return` path)."""
+    try:
+        return cli_main(argv)
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else 1
+
+
+# ---------------------------------------------------------------------------
+# Data-integrity fix: --events-out/--manifest-out append-mode-with-no-guard
+# bug (real Phase 4 replay corruption, 2026-09-25). Default must fail fast
+# on pre-existing output; --fresh truncates; --append opts into the old
+# silent-append behavior; --fresh + --append together is a usage error.
+# ---------------------------------------------------------------------------
+
+
+def test_cli_default_fails_fast_on_preexisting_output() -> None:
+    original_environ = dict(os.environ)
+    try:
+        os.environ["TYPESAFE_API_KEY"] = "fake-key-never-real"
+        with tempfile.TemporaryDirectory() as tmp_name:
+            root = Path(tmp_name)
+            plugin_root = _make_fake_plugin_root(root)
+            corpus_path = root / "corpus.jsonl"
+            with corpus_path.open("w", encoding="utf-8") as fh:
+                for row in _make_corpus_rows(1):
+                    fh.write(json.dumps(row) + "\n")
+            events_out = root / "out" / "events.jsonl"
+            manifest_out = root / "out" / "replay_manifest.jsonl"
+            events_out.parent.mkdir(parents=True)
+            events_out.write_text("STALE_EVENT_ROW\n", encoding="utf-8")
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                exit_code = _call_cli_main(
+                    [
+                        "--corpus",
+                        str(corpus_path),
+                        "--plugin-root",
+                        str(plugin_root),
+                        "--events-out",
+                        str(events_out),
+                        "--manifest-out",
+                        str(manifest_out),
+                    ]
+                )
+            err = stderr.getvalue()
+
+            if exit_code == 1:
+                ok("default invocation against pre-existing output exits 1")
+            else:
+                fail("preexisting-exit-code", f"expected 1, got {exit_code!r}")
+
+            if "--events-out" in err and "--manifest-out" in err:
+                ok("error message names both --events-out and --manifest-out flags")
+            else:
+                fail("preexisting-names-flags", f"stderr={err!r}")
+
+            if str(events_out) in err:
+                ok("error message names the specific path that already existed")
+            else:
+                fail("preexisting-names-path", f"stderr={err!r}")
+
+            if events_out.read_text(encoding="utf-8") == "STALE_EVENT_ROW\n":
+                ok("pre-existing events_out content is untouched (no write occurred)")
+            else:
+                fail(
+                    "preexisting-no-write",
+                    f"events_out content changed: {events_out.read_text(encoding='utf-8')!r}",
+                )
+
+            if not manifest_out.exists():
+                ok("manifest_out was never created")
+            else:
+                fail("preexisting-no-manifest", "manifest_out unexpectedly created")
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environ)
+
+
+def test_cli_fresh_truncates_and_produces_clean_dataset() -> None:
+    original_run_hook = craftflow_jev_replay.run_hook
+    craftflow_jev_replay.run_hook = _fake_run_hook_writes_two_rows
+    original_environ = dict(os.environ)
+    try:
+        os.environ["TYPESAFE_API_KEY"] = "fake-key-never-real"
+        with tempfile.TemporaryDirectory() as tmp_name:
+            root = Path(tmp_name)
+            plugin_root = _make_fake_plugin_root(root)
+            corpus_path = root / "corpus.jsonl"
+            with corpus_path.open("w", encoding="utf-8") as fh:
+                for row in _make_corpus_rows(1):
+                    fh.write(json.dumps(row) + "\n")
+            events_out = root / "out" / "events.jsonl"
+            manifest_out = root / "out" / "replay_manifest.jsonl"
+            events_out.parent.mkdir(parents=True)
+            events_out.write_text("STALE_EVENT_ROW\n", encoding="utf-8")
+            manifest_out.write_text("STALE_MANIFEST_ROW\n", encoding="utf-8")
+
+            exit_code = _call_cli_main(
+                [
+                    "--corpus",
+                    str(corpus_path),
+                    "--plugin-root",
+                    str(plugin_root),
+                    "--events-out",
+                    str(events_out),
+                    "--manifest-out",
+                    str(manifest_out),
+                    "--fresh",
+                ]
+            )
+
+            event_lines = [l for l in events_out.read_text(encoding="utf-8").splitlines() if l.strip()]
+            manifest_lines = [l for l in manifest_out.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+            if exit_code == 0:
+                ok("--fresh invocation exits 0")
+            else:
+                fail("fresh-exit-code", f"expected 0, got {exit_code!r}")
+
+            if "STALE_EVENT_ROW" not in event_lines and len(event_lines) == 2:
+                ok("--fresh truncates events_out: stale row gone, only this run's 2 rows remain")
+            else:
+                fail("fresh-events-clean", f"event_lines={event_lines!r}")
+
+            if "STALE_MANIFEST_ROW" not in manifest_lines and len(manifest_lines) == 1:
+                ok("--fresh truncates manifest_out: stale row gone, only this run's 1 row remains")
+            else:
+                fail("fresh-manifest-clean", f"manifest_lines={manifest_lines!r}")
+    finally:
+        craftflow_jev_replay.run_hook = original_run_hook
+        os.environ.clear()
+        os.environ.update(original_environ)
+
+
+def test_cli_append_preserves_old_silent_append_behavior() -> None:
+    original_run_hook = craftflow_jev_replay.run_hook
+    craftflow_jev_replay.run_hook = _fake_run_hook_writes_two_rows
+    original_environ = dict(os.environ)
+    try:
+        os.environ["TYPESAFE_API_KEY"] = "fake-key-never-real"
+        with tempfile.TemporaryDirectory() as tmp_name:
+            root = Path(tmp_name)
+            plugin_root = _make_fake_plugin_root(root)
+            corpus_path = root / "corpus.jsonl"
+            with corpus_path.open("w", encoding="utf-8") as fh:
+                for row in _make_corpus_rows(1):
+                    fh.write(json.dumps(row) + "\n")
+            events_out = root / "out" / "events.jsonl"
+            manifest_out = root / "out" / "replay_manifest.jsonl"
+            events_out.parent.mkdir(parents=True)
+            events_out.write_text("PRIOR_EVENT_ROW\n", encoding="utf-8")
+            manifest_out.write_text("PRIOR_MANIFEST_ROW\n", encoding="utf-8")
+
+            exit_code = _call_cli_main(
+                [
+                    "--corpus",
+                    str(corpus_path),
+                    "--plugin-root",
+                    str(plugin_root),
+                    "--events-out",
+                    str(events_out),
+                    "--manifest-out",
+                    str(manifest_out),
+                    "--append",
+                ]
+            )
+
+            event_lines = [l for l in events_out.read_text(encoding="utf-8").splitlines() if l.strip()]
+            manifest_lines = [l for l in manifest_out.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+            if exit_code == 0:
+                ok("--append invocation exits 0")
+            else:
+                fail("append-exit-code", f"expected 0, got {exit_code!r}")
+
+            if event_lines == ["PRIOR_EVENT_ROW"] + event_lines[1:] and len(event_lines) == 3:
+                ok("--append preserves prior events_out row and appends this run's 2 new rows")
+            else:
+                fail("append-events-preserved", f"event_lines={event_lines!r}")
+
+            if manifest_lines == ["PRIOR_MANIFEST_ROW"] + manifest_lines[1:] and len(manifest_lines) == 2:
+                ok("--append preserves prior manifest_out row and appends this run's 1 new row")
+            else:
+                fail("append-manifest-preserved", f"manifest_lines={manifest_lines!r}")
+    finally:
+        craftflow_jev_replay.run_hook = original_run_hook
+        os.environ.clear()
+        os.environ.update(original_environ)
+
+
+def test_cli_fresh_and_append_together_is_usage_error() -> None:
+    original_environ = dict(os.environ)
+    try:
+        os.environ["TYPESAFE_API_KEY"] = "fake-key-never-real"
+        with tempfile.TemporaryDirectory() as tmp_name:
+            root = Path(tmp_name)
+            corpus_path = root / "corpus.jsonl"
+            corpus_path.write_text(
+                json.dumps({"workflow_uuid": "wf-1", "workflow_type": "BUILD", "user_request": "x"}) + "\n",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                exit_code = _call_cli_main(
+                    [
+                        "--corpus",
+                        str(corpus_path),
+                        "--events-out",
+                        str(root / "events.jsonl"),
+                        "--manifest-out",
+                        str(root / "manifest.jsonl"),
+                        "--fresh",
+                        "--append",
+                    ]
+                )
+            err = stderr.getvalue()
+
+            if exit_code != 0:
+                ok("--fresh and --append together exits non-zero")
+            else:
+                fail("mutex-exit-code", f"expected non-zero, got {exit_code!r}")
+
+            if "--fresh" in err and "--append" in err:
+                ok("usage-error message names both --fresh and --append")
+            else:
+                fail("mutex-names-flags", f"stderr={err!r}")
+
+            if not (root / "events.jsonl").exists() and not (root / "manifest.jsonl").exists():
+                ok("no output files created when --fresh and --append are both passed")
+            else:
+                fail("mutex-no-write", "output files unexpectedly created")
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environ)
+
+
 def main() -> int:
     print("test_craftflow_jev_replay: running")
     test_replay_writes_isolated_events_and_manifest()
@@ -523,6 +764,10 @@ def main() -> int:
     test_replay_rejects_row_with_malformed_telemetry_line()
     test_cli_exits_1_without_api_key()
     test_cli_main_success_with_mocked_run_hook()
+    test_cli_default_fails_fast_on_preexisting_output()
+    test_cli_fresh_truncates_and_produces_clean_dataset()
+    test_cli_append_preserves_old_silent_append_behavior()
+    test_cli_fresh_and_append_together_is_usage_error()
 
     print()
     print("=" * 40)

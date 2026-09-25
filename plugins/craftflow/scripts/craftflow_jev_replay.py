@@ -12,8 +12,14 @@ of os.environ is inside run_hook()'s subprocess env merge, where the
 caller-supplied env dict always overrides it for CLAUDE_PROJECT_DIR /
 CLAUDE_PLUGIN_ROOT / TYPESAFE_API_KEY.
 
+By default, main() fails fast (exit 1, no write) if --events-out or
+--manifest-out already exist on disk -- this guards against silently mixing
+stale rows from an interrupted prior attempt into a new run. Pass --fresh to
+truncate and start clean, or --append to explicitly opt into the old
+silent-append behavior. --fresh and --append are mutually exclusive.
+
 Run: python3 scripts/craftflow_jev_replay.py --corpus <path> \
-    --events-out <path> --manifest-out <path>
+    --events-out <path> --manifest-out <path> [--fresh | --append]
 """
 from __future__ import annotations
 
@@ -267,11 +273,44 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--events-out", type=str, required=True)
     parser.add_argument("--manifest-out", type=str, required=True)
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Overwrite --events-out/--manifest-out if they already exist, starting from empty files.",
+    )
+    parser.add_argument(
+        "--append",
+        action="store_true",
+        help="Append to existing --events-out/--manifest-out without complaint (old default behavior). "
+        "Mutually exclusive with --fresh.",
+    )
     return parser
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
+
+    if args.fresh and args.append:
+        print("error: --fresh and --append are mutually exclusive", file=sys.stderr)
+        return 1
+
+    events_out = Path(args.events_out)
+    manifest_out = Path(args.manifest_out)
+
+    if args.fresh:
+        for out_path in (events_out, manifest_out):
+            if out_path.exists():
+                out_path.unlink()
+    elif not args.append:
+        existing = [str(p) for p in (events_out, manifest_out) if p.exists()]
+        if existing:
+            print(
+                "error: --events-out/--manifest-out already exist: "
+                f"{', '.join(existing)} -- pass --fresh to overwrite or --append to "
+                "continue appending to them explicitly",
+                file=sys.stderr,
+            )
+            return 1
 
     api_key = os.environ.get("TYPESAFE_API_KEY")
     if not api_key:
