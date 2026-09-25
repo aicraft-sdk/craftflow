@@ -359,6 +359,56 @@ def test_audit_mode_logs_well_formed_answer_via_main_and_writes_one_row() -> Non
             fail("audit-mode-logged-integration", f"payload={payload!r} rows={rows!r}")
 
 
+def test_remfix_scope_call_site_is_structurally_isolated_to_1a_scope() -> None:
+    doc = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "remediation-and-research.md").read_text()
+    lines = doc.splitlines()
+    hit_lines = [i for i, line in enumerate(lines) if "craftflow_jev_remfix_scope.py" in line]
+
+    circuit_breaker_start = next(i for i, l in enumerate(lines) if l.strip() == "### Circuit breaker")
+    circuit_breaker_end = next(i for i, l in enumerate(lines[circuit_breaker_start + 1:], start=circuit_breaker_start + 1) if l.startswith("### "))
+    revert_start = next(i for i, l in enumerate(lines) if l.strip() == "### Verifier REVERT gate")
+    revert_end = next((i for i, l in enumerate(lines[revert_start + 1:], start=revert_start + 1) if l.startswith("## ")), len(lines))
+    scope_resolution_start = next(i for i, l in enumerate(lines) if l.strip() == "### Scope resolution")
+    scope_resolution_end = next(i for i, l in enumerate(lines[scope_resolution_start + 1:], start=scope_resolution_start + 1) if l.startswith("### "))
+
+    in_circuit_breaker = [i for i in hit_lines if circuit_breaker_start <= i < circuit_breaker_end]
+    in_revert = [i for i in hit_lines if revert_start <= i < revert_end]
+    in_scope_resolution = [i for i in hit_lines if scope_resolution_start <= i < scope_resolution_end]
+
+    if len(hit_lines) == 1 and in_circuit_breaker == [] and in_revert == [] and in_scope_resolution == hit_lines:
+        ok("craftflow_jev_remfix_scope.py appears exactly once, only inside Scope resolution, never near circuit-breaker/REVERT text")
+    else:
+        fail(
+            "structural-isolation",
+            f"hit_lines={hit_lines!r} circuit_breaker=[{circuit_breaker_start},{circuit_breaker_end}) "
+            f"revert=[{revert_start},{revert_end}) scope_resolution=[{scope_resolution_start},{scope_resolution_end})",
+        )
+
+
+def test_build_workflow_escalated_path_delegates_instead_of_duplicating() -> None:
+    build_doc = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "build-workflow.md").read_text()
+    remediation_doc = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "remediation-and-research.md").read_text()
+    checks = (
+        "craftflow_jev_remfix_scope.py" not in build_doc,  # never duplicated here
+        "1a-SCOPE" in build_doc,  # the escalated-path rule itself still exists
+        "Scope resolution" in build_doc,  # ...and it now references the real procedure
+        "Fix critical only (Recommended)" in remediation_doc,  # the off-mode byte-identical marker text is untouched
+    )
+    if all(checks):
+        ok("build-workflow.md's escalated 1a-SCOPE path delegates to Scope resolution rather than duplicating the Jev call")
+    else:
+        fail("build-workflow-delegates", f"checks={checks!r}")
+
+
+def test_remfix_scope_script_appears_in_exactly_one_router_doc_file() -> None:
+    router_root = PLUGIN_ROOT / "skills" / "craftflow-router"
+    hits = [p for p in router_root.rglob("*.md") if "craftflow_jev_remfix_scope.py" in p.read_text()]
+    if len(hits) == 1 and hits[0].name == "remediation-and-research.md":
+        ok("craftflow_jev_remfix_scope.py appears in exactly one router doc file, total, across the whole skill tree")
+    else:
+        fail("single-file-hit", f"hits={[str(h) for h in hits]!r}")
+
+
 def main_tests() -> int:
     print("test_craftflow_jev_remfix_scope: running")
     test_build_state_caps_combined_text_and_counts()
@@ -381,6 +431,10 @@ def main_tests() -> int:
     test_main_never_raises_systemexit_on_malformed_argv()
     test_main_help_flag_prints_exactly_one_json_line_and_exits_0()
     test_audit_mode_logs_well_formed_answer_via_main_and_writes_one_row()
+
+    test_remfix_scope_call_site_is_structurally_isolated_to_1a_scope()
+    test_build_workflow_escalated_path_delegates_instead_of_duplicating()
+    test_remfix_scope_script_appears_in_exactly_one_router_doc_file()
 
     print()
     print("=" * 40)
