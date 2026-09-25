@@ -8,6 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.10.0] - 2026-09-25
+
+### Features
+
+- show remediationScope feature+threshold in jev-setup --status
+- wire jev-assisted scope call into the 1a-SCOPE router gate (JUST_GO + circuit-breaker guarded)
+- report agreement/PROMOTE-HOLD verdict for the remfix_scope jev feature
+- add main() CLI shell for jev remfix-scope gate script, fail-closed on persist failure
+- add telemetry_row + events.jsonl append (bool-returning) for jev remfix-scope gate
+- add pure builders (build_state/build_questions/decide) for jev remfix-scope gate
+- add doc-sourced remfix_scope heuristic baseline for jev agreement telemetry
+- ship remediationScope:off by default, extend disabled-by-default guard
+- add remediationScope feature+threshold to jev config schema
+
+### Fixes
+
+- isolate jev_remfix_scope_roundtrip.py diagnostic log writes to tempdir
+- check for an existing matching REM-FIX before creating one in the interrupted jev-auto-decide resume branch
+- correlate interrupted jev-auto-decide marker by consumed:true tag, not workflow-wide remfix existence
+- avoid duplicate REM-FIX on jev auto-decide, harden structural test, add interrupted-auto-decide resume rule
+- escalated-path 1a-SCOPE delegates to Scope resolution instead of duplicating the ask
+- catch SystemExit from argparse in jev remfix-scope main(), close audit-mode coverage gap
+- pass encoding=utf-8 to remfix_scope drift-guard read_text (matches sibling reads in same file)
+
+### Documentation
+
+- document remediationScope as a shipped Jev feature in README
+- document remfix_scope PROMOTE threshold in jev README (Phase 4)
+
+### Tests
+
+- live proof scenario for jev remfix-scope audit round-trip
+- structural guard -- jev remfix-scope call site stays isolated to 1a-SCOPE, single file
+
 ## [1.9.0] - 2026-09-24
 
 ### Features
