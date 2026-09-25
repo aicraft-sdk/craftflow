@@ -275,6 +275,90 @@ def test_main_never_raises_on_unexpected_exception() -> None:
         fail("main-never-raises", f"code={code} out={out.getvalue()!r}")
 
 
+def test_main_never_raises_systemexit_on_malformed_argv() -> None:
+    # argparse's own ArgumentParser.error() raises SystemExit (a BaseException,
+    # not an Exception) on any parse failure -- and also on -h/--help. main()'s
+    # documented contract is "never raises, always exits 0, always prints exactly
+    # one line of JSON" for ANY argv, not just well-formed ones.
+    cases = [
+        ["--critical", "-h"],  # -h consumed as --critical's (invalid-looking) value
+        ["--critical"],  # missing required value
+        ["--critical", "--high"],  # value looks like another flag
+    ]
+    for argv in cases:
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = main(argv)
+        except SystemExit as exc:
+            fail("main-malformed-argv", f"argv={argv!r} raised SystemExit({exc.code!r}) -- contract violated")
+            continue
+        payload_text = out.getvalue().strip()
+        try:
+            payload = json.loads(payload_text)
+        except ValueError:
+            fail("main-malformed-argv", f"argv={argv!r} stdout not valid JSON: {payload_text!r}")
+            continue
+        if code == 0 and payload == {"decision": "no_decision", "choice": None, "confidence": None}:
+            ok(f"main() never raises SystemExit for malformed argv {argv!r}")
+        else:
+            fail("main-malformed-argv", f"argv={argv!r} code={code} payload={payload!r}")
+
+
+def test_main_help_flag_prints_exactly_one_json_line_and_exits_0() -> None:
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main(["-h"])
+    except SystemExit as exc:
+        fail("main-help-flag", f"-h raised SystemExit({exc.code!r}) instead of returning 0")
+        return
+    stdout_text = out.getvalue()
+    lines = stdout_text.splitlines()
+    try:
+        payload = json.loads(stdout_text.strip())
+    except ValueError:
+        fail("main-help-flag", f"stdout not valid JSON (argparse help text leaked?): {stdout_text!r}")
+        return
+    if code == 0 and len(lines) == 1 and payload == {"decision": "no_decision", "choice": None, "confidence": None}:
+        ok("main() -h/--help prints exactly one JSON line to stdout and exits 0")
+    else:
+        fail("main-help-flag", f"code={code} stdout={stdout_text!r}")
+
+
+def test_audit_mode_logs_well_formed_answer_via_main_and_writes_one_row() -> None:
+    # MEDIUM finding: only decide()/telemetry_row() were unit-tested for this
+    # case in isolation -- no main()/run_cli() integration test closed the loop
+    # proving mode="audit" + a well-formed Jev answer -> {"decision":"logged",...}
+    # + exactly 1 telemetry row through the real CLI shell.
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "jev.json"
+        config_path.write_text(json.dumps({"enabled": True, "features": {"remediationScope": "audit"}}))
+        events_path = Path(tmp) / "state" / "jev" / "events.jsonl"
+        fake_result = {
+            "answers": {"scope": {"choice": "all_issues", "confidence": 0.6}},
+            "model": "jev-latest", "latency_ms": 42, "cache_hit": False, "usage": {},
+        }
+        with mock.patch("craftflow_jev_remfix_scope.jev_call", return_value=fake_result) as mocked:
+            code, out, _err = run_cli(
+                ["--critical", "c1", "--high", "h1", "--workflow-uuid", "wf-audit-1", "--config", str(config_path), "--state-dir", str(events_path.parent.parent)],
+                {"TYPESAFE_API_KEY": "k"},
+            )
+        payload = json.loads(out.strip())
+        rows = [json.loads(l) for l in events_path.read_text().splitlines()] if events_path.exists() else []
+        if (
+            code == 0
+            and payload == {"decision": "logged", "choice": "all_issues", "confidence": 0.6}
+            and mocked.called
+            and len(rows) == 1
+            and rows[0]["decision"] == "logged"
+            and rows[0]["workflow_uuid"] == "wf-audit-1"
+        ):
+            ok("audit mode logs well-formed answer via main(), writes exactly 1 telemetry row")
+        else:
+            fail("audit-mode-logged-integration", f"payload={payload!r} rows={rows!r}")
+
+
 def main_tests() -> int:
     print("test_craftflow_jev_remfix_scope: running")
     test_build_state_caps_combined_text_and_counts()
@@ -294,6 +378,9 @@ def main_tests() -> int:
     test_jev_call_failure_falls_back_to_no_decision_but_still_logs()
     test_no_critical_or_high_args_short_circuits_without_calling_jev()
     test_main_never_raises_on_unexpected_exception()
+    test_main_never_raises_systemexit_on_malformed_argv()
+    test_main_help_flag_prints_exactly_one_json_line_and_exits_0()
+    test_audit_mode_logs_well_formed_answer_via_main_and_writes_one_row()
 
     print()
     print("=" * 40)

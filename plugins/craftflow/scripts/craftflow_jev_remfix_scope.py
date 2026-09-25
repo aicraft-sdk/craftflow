@@ -11,6 +11,8 @@ docs/plans/2026-09-24-jev-assisted-rem-scope-decision-plan.md.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import uuid
@@ -156,7 +158,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     try:
-        args = build_arg_parser().parse_args(argv)
+        # argparse's own ArgumentParser.error() -- triggered by any parse
+        # failure, and also by -h/--help -- raises SystemExit, which is a
+        # BaseException, not an Exception, so the outer `except Exception`
+        # below does NOT catch it. Handle it here, at the parse_args() call
+        # site itself, before any other code runs. Also swallow whatever
+        # argparse already printed (usage/help/error text) via its own
+        # stdout/stderr writes so main()'s "prints exactly one line of JSON"
+        # contract holds even for -h/--help.
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                args = build_arg_parser().parse_args(argv)
+        except SystemExit:
+            print(json.dumps({"decision": "no_decision", "choice": None, "confidence": None}))
+            return 0
+
         config_path = Path(args.config) if args.config else plugin_config_dir() / "jev.json"
         state_dir = Path(args.state_dir) if args.state_dir else state_root()
         cfg, _decisions = load_config(config_path)
