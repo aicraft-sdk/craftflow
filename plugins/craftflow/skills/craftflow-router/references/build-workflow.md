@@ -218,7 +218,7 @@ TaskCreate({
 5. Wait for BOTH reviewer + hunter to complete.
 6. Build merged findings summary (standard BUILD §5 + §6 pattern from build-workflow.md).
 7. Apply 1a-SCOPE rule (RESTORED on escalated path — same threshold as standard parallel review phase):
-   - If totalCritical ≥ 1 AND totalHigh ≥ 1 (from escalated reviewer+hunter output) → write `[SCOPE-DECISION-PENDING: wf:{workflow_uuid} reason:{top reason}]` to activeContext.md ## Decisions, ask user, stop. Wait for reply before creating REM-FIX.
+   - If totalCritical ≥ 1 AND totalHigh ≥ 1 (from escalated reviewer+hunter output) → run the "When `1a-SCOPE` fires" procedure from `references/remediation-and-research.md` `### Scope resolution` (including its Jev-assisted step 2), then stop. Wait for reply before creating REM-FIX unless step 2 auto-decided.
    - Otherwise → auto-proceed with ALL_ISSUES (standard rule 1a applies)
    - If totalCritical ≥ 1 AND totalHigh == 0: auto-proceed with ALL_ISSUES (no user scope gate) — this matches the canonical 1a-SCOPE rule: the gate fires only when BOTH signals are present.
 8. Create REM-FIX task if needed (standard remediation-and-research.md rules).
