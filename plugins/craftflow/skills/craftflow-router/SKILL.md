@@ -317,6 +317,7 @@ Router-owned interface fields:
 - Before any BUILD-specific readiness decision or child-task creation, immediately read `references/build-workflow.md`.
 - Use the `### BUILD preparation` and `### BUILD task graph` blocks in that file as the canonical BUILD law.
 - Before fast-path routing (performed during BUILD preparation), read `references/fast-path.md` for the canonical keyword table, agent dispatch table, gate table, and escalation protocol.
+- Before any `code-reviewer` dispatch (BUILD or REVIEW), read `references/harness-self-checks.md` for the arch-lint wiring; the detail lives there, not here, to keep this file from growing further.
 
 ### Fast Path Detection
 

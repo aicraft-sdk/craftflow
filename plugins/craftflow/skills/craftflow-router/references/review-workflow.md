@@ -7,6 +7,8 @@
 ### REVIEW task graph
 
 ```text
+**Arch Lint (advisory):** before dispatching code-reviewer, run the check per `references/harness-self-checks.md § Arch Lint` and fold any findings into its dispatch prompt.
+
 TaskCreate({
   subject: "CRAFTFLOW code-reviewer: Review {target}",
   description: "wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:review-audit\nplan:N/A\nscope:N/A\nreason:Advisory review\n\nRun a scoped code review.",

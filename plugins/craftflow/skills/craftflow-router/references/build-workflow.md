@@ -56,6 +56,8 @@ TaskCreate({
   activeForm: "Building components"
 }) -> builder_task_id
 
+**Arch Lint (advisory):** before dispatching code-reviewer, run the check per `references/harness-self-checks.md § Arch Lint` and fold any findings into its dispatch prompt.
+
 TaskCreate({
   subject: "CRAFTFLOW code-reviewer: Review implementation",
   description: "wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:build-review\nplan:{plan_file or 'N/A'}\nscope:N/A\nreason:Review current phase quality\n\nReview only the files and scope of the current phase.",
@@ -202,6 +204,8 @@ When `build_mode == "fast_path"` AND integration-verifier returns FAIL:
 2. Append event: {"event":"fast_path_escalated","reason":"verifier FAIL on fast path","ts":"{iso_now}"}
 3. Announce: "-> FAST-PATH BUILD [ESCALATED] (verifier FAIL — reviewer + hunter spawned)"
 4. Spawn reviewer + hunter in parallel (identical to standard BUILD §5 pattern):
+
+**Arch Lint (advisory):** before dispatching code-reviewer, run the check per `references/harness-self-checks.md § Arch Lint` and fold any findings into its dispatch prompt.
 
 TaskCreate({
   subject: "CRAFTFLOW code-reviewer: Review implementation (escalated)",
