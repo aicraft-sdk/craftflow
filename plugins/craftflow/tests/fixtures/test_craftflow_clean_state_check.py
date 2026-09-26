@@ -200,6 +200,38 @@ def test_todo_with_unrelated_hash_number_is_still_flagged() -> None:
             fail("todo_with_unrelated_hash_number_is_still_flagged", f"got {data}")
 
 
+def test_todo_with_colon_hash_ticket_is_not_flagged() -> None:
+    # Regression: _TODO_TICKET_RE has no tolerance for a colon between TODO
+    # and the ticket ref, so the common "TODO: #123" style was wrongly
+    # treated as ticketless.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "app.ts").write_text("// TODO: #123 fix this\nfunction f() { return 1; }\n")
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "todo-without-ticket"]
+        if hits == []:
+            ok("todo_with_colon_hash_ticket_is_not_flagged")
+        else:
+            fail("todo_with_colon_hash_ticket_is_not_flagged", f"expected no todo findings, got {hits}")
+
+
+def test_todo_with_colon_jira_ticket_is_not_flagged() -> None:
+    # Regression: same colon-tolerance gap for the JIRA-style ticket anchor.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "app.ts").write_text("// TODO: JIRA-456 revisit\nfunction f() { return 1; }\n")
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "todo-without-ticket"]
+        if hits == []:
+            ok("todo_with_colon_jira_ticket_is_not_flagged")
+        else:
+            fail("todo_with_colon_jira_ticket_is_not_flagged", f"expected no todo findings, got {hits}")
+
+
 def test_commented_code_block_detected() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -341,6 +373,8 @@ def main() -> int:
     test_todo_without_ticket_detected()
     test_todo_with_ticket_is_not_flagged()
     test_todo_with_unrelated_hash_number_is_still_flagged()
+    test_todo_with_colon_hash_ticket_is_not_flagged()
+    test_todo_with_colon_jira_ticket_is_not_flagged()
     test_commented_code_block_detected()
     test_block_comment_code_detected()
     test_unclosed_block_comment_does_not_bleed_into_next_file()

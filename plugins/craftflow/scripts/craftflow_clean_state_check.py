@@ -26,11 +26,14 @@ _CONSOLE_LOG_RE = re.compile(r"console\.log\(")
 _DEBUGGER_RE = re.compile(r"\bdebugger\b")
 _TODO_RE = re.compile(r"\bTODO\b")
 # Anchored to TODO itself -- requires the ticket ref to appear immediately
-# after TODO (optionally inside parens), e.g. "TODO(#123)" or "TODO #123".
-# A bare match anywhere on the line (the old _TICKET_RE) wrongly treated an
-# unrelated hash-number elsewhere in the comment (e.g. "ref line #42") as a
-# ticket reference.
-_TODO_TICKET_RE = re.compile(r"TODO\(?\s*(?:#\d+|[A-Z]{2,}-\d+)")
+# after TODO (optionally inside parens and/or after a colon), e.g.
+# "TODO(#123)", "TODO #123", "TODO: #123", or "TODO: JIRA-456". A bare match
+# anywhere on the line (the old _TICKET_RE) wrongly treated an unrelated
+# hash-number elsewhere in the comment (e.g. "ref line #42") as a ticket
+# reference; the colon tolerance was added after "TODO: #123"/"TODO: JIRA-456"
+# (the common colon-separated ticket style) were found still being wrongly
+# flagged as ticketless.
+_TODO_TICKET_RE = re.compile(r"TODO\(?:?\s*(?:#\d+|[A-Z]{2,}-\d+)")
 _COMMENT_LINE_RE = re.compile(r"^\s*(//|#)\s*(.*)$")
 _CODE_TOKEN_RE = re.compile(r"[=(){};]")
 _DISABLE_COMMENT_RE = re.compile(
