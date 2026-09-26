@@ -1,0 +1,58 @@
+{
+  "date": "2026-09-26",
+  "rubric": "tiered",
+  "notes": [
+    "Tier S uses a skill-authoring rubric, not the harness rubric.",
+    "Structural leads do not automatically imply product superiority."
+  ],
+  "claim_scoreboard": {
+    "stronger_by_evidence": [],
+    "tied_or_not_differentiated": [],
+    "unproven": [
+      "anthropics-skills"
+    ]
+  },
+  "rows": [
+    {
+      "repo": "craftflow-current",
+      "tier": "A",
+      "kind": "harness",
+      "head": "53ac77fc10c6",
+      "score": 33,
+      "max_score": 33,
+      "signals": {
+        "router_orchestrator": true,
+        "specialist_agents": true,
+        "skills_layer": true,
+        "plugin_hooks": true,
+        "workflow_artifacts": true,
+        "versioned_state": true,
+        "stable_workflow_identity": true,
+        "plan_trust_gate": true,
+        "phase_gating": true,
+        "failure_stop": true,
+        "skill_precedence": true,
+        "debug_generalization": true,
+        "fail_closed_verification": true,
+        "replay_harness": true,
+        "test_suite": true
+      }
+    },
+    {
+      "repo": "anthropics-skills",
+      "tier": "S",
+      "kind": "skill-library",
+      "head": "33375500bcea",
+      "score": 15,
+      "max_score": 15,
+      "signals": {
+        "intent_capture": true,
+        "trigger_design": true,
+        "eval_loop": true,
+        "quant_qual_review": true,
+        "benchmark_outputs": true,
+        "skill_packaging": true
+      }
+    }
+  ]
+}

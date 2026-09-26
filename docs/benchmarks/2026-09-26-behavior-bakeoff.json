@@ -1,0 +1,115 @@
+{
+  "date": "2026-09-26",
+  "repos": [
+    {
+      "repo": "craftflow-current",
+      "tier": "A",
+      "scenarios": [
+        {
+          "scenario": "Planner does not silently diverge from agreed requirements",
+          "expected": "The planning layer explicitly surfaces unresolved decisions or spec-compliance checks instead of silently choosing.",
+          "observed": "DIFFERENCES_FROM_AGREEMENT: [\"difference 1\"] | []",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/agents/plan-bakeoff-judge.md:95",
+          "evidence": {
+            "file": "plugins/craftflow/agents/plan-bakeoff-judge.md",
+            "line": 95,
+            "needle": "differences_from_agreement",
+            "snippet": "DIFFERENCES_FROM_AGREEMENT: [\"difference 1\"] | []"
+          }
+        },
+        {
+          "scenario": "Unresolved plan decisions block execution",
+          "expected": "Execution should not start when high-impact planning decisions are unresolved.",
+          "observed": "| `COMPLETE` | All applicable layers evaluated; all triggered writes succeeded; no blocking failures |",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/agents/doc-syncer.md:131",
+          "evidence": {
+            "file": "plugins/craftflow/agents/doc-syncer.md",
+            "line": 131,
+            "needle": "blocking fail",
+            "snippet": "| `COMPLETE` | All applicable layers evaluated; all triggered writes succeeded; no blocking failures |"
+          }
+        },
+        {
+          "scenario": "Builder does not skip planned order",
+          "expected": "Execution runs the current approved phase only and does not opportunistically reorder work.",
+          "observed": "\"phase_cursor\",",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/scripts/craftflow_harness_audit.py:443",
+          "evidence": {
+            "file": "plugins/craftflow/scripts/craftflow_harness_audit.py",
+            "line": 443,
+            "needle": "phase_cursor",
+            "snippet": "\"phase_cursor\","
+          }
+        },
+        {
+          "scenario": "Failed phase does not continue silently",
+          "expected": "When proof is missing or a phase fails, the system blocks or stops instead of apologizing later.",
+          "observed": "| `COMPLETE` | All applicable layers evaluated; all triggered writes succeeded; no blocking failures |",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/agents/doc-syncer.md:131",
+          "evidence": {
+            "file": "plugins/craftflow/agents/doc-syncer.md",
+            "line": 131,
+            "needle": "blocking fail",
+            "snippet": "| `COMPLETE` | All applicable layers evaluated; all triggered writes succeeded; no blocking failures |"
+          }
+        },
+        {
+          "scenario": "Memory persists on blocking exit",
+          "expected": "Workflow state and memory should remain recoverable after interruption or blocking stops.",
+          "observed": "- Use `MEMORY_NOTES` for all learnings and deferred items. The router persists them into the workflow artifact and final memory update.",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/agents/bug-investigator.md:158",
+          "evidence": {
+            "file": "plugins/craftflow/agents/bug-investigator.md",
+            "line": 158,
+            "needle": "workflow artifact",
+            "snippet": "- Use `MEMORY_NOTES` for all learnings and deferred items. The router persists them into the workflow artifact and final memory update."
+          }
+        },
+        {
+          "scenario": "Internal pattern guidance does not override explicit user/project standards",
+          "expected": "Project or user standards must outrank reusable pattern packs or defaults.",
+          "observed": "\"Repos are scored against trust-critical harness properties: orchestration ownership, durable state, plan/build trust gates, skill precedence, debug generalization, fail-closed verification, and deterministic replay coverage.\"",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/scripts/craftflow_reference_benchmark.py:249",
+          "evidence": {
+            "file": "plugins/craftflow/scripts/craftflow_reference_benchmark.py",
+            "line": 249,
+            "needle": "skill precedence",
+            "snippet": "\"Repos are scored against trust-critical harness properties: orchestration ownership, durable state, plan/build trust gates, skill precedence, debug generalization, fail-closed verification, and deterministic replay coverage.\""
+          }
+        },
+        {
+          "scenario": "Debug fixes generalize beyond the reproducing case",
+          "expected": "The debug workflow searches for nearby duplicates or variants instead of stopping at a one-off patch.",
+          "observed": "| \"I fixed the repro — adjacent duplicates are deferred\" | Deferred duplicates must be named in BLAST_RADIUS_SCAN.result and MEMORY_NOTES.deferred. Silent omission is a false FIXED. |",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/agents/bug-investigator.md:227",
+          "evidence": {
+            "file": "plugins/craftflow/agents/bug-investigator.md",
+            "line": 227,
+            "needle": "blast_radius_scan",
+            "snippet": "| \"I fixed the repro — adjacent duplicates are deferred\" | Deferred duplicates must be named in BLAST_RADIUS_SCAN.result and MEMORY_NOTES.deferred. Silent omission is a false FIXED. |"
+          }
+        },
+        {
+          "scenario": "Verification fails closed on missing or contradictory evidence",
+          "expected": "Success claims require concrete evidence, and contradictory verification is rejected.",
+          "observed": "1. **Understand** - Expected vs actual behavior, when did it start?",
+          "verdict": "pass",
+          "evidence_source": "plugins/craftflow/agents/bug-investigator.md:124",
+          "evidence": {
+            "file": "plugins/craftflow/agents/bug-investigator.md",
+            "line": 124,
+            "needle": "expected vs actual",
+            "snippet": "1. **Understand** - Expected vs actual behavior, when did it start?"
+          }
+        }
+      ]
+    }
+  ]
+}
