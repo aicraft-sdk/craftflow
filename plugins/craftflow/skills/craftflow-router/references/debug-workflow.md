@@ -33,7 +33,7 @@ DEBUG has no doc-sync step, so `chain_tail_task_id` starts as `verifier_task_id`
 - `references/fast-path.md`'s own Learn-Distill Gate section already states `learn-distill` is dispatched "at the end of BUILD (standard and fast-path) and DEBUG workflows" — DEBUG was already in scope for that gate by design, it simply had no `TaskCreate` to back it, exactly like BUILD's dead-wiring gap.
 - The Skill-Distill Gate's eligibility check (`craftflow_skill_ledger.py --query`) is workflow-type agnostic — it reads a project-wide ledger, not anything DEBUG-specific — so there is no reason to exclude DEBUG from it once BUILD has it.
 
-**Clean-State Check (advisory):** before creating the Memory Update task below, run the check per `references/harness-self-checks.md § Clean-State Check` and fold any findings into this task's own deferred memory notes.
+**Clean-State Check (advisory):** before creating the Memory Update task below, run the check per `references/harness-self-checks.md § Clean-State Check` and fold any findings AND any skipped (unscannable) entries into this task's own deferred memory notes.
 
 ```text
 TaskCreate({

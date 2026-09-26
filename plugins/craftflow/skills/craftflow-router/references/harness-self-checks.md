@@ -46,12 +46,16 @@ exists. DEBUG — immediately before creating the DEBUG Memory Update task
 python3 {plugin_root}/scripts/craftflow_clean_state_check.py --project-root . --format json
 ```
 
-Parse stdout `{"findings": [...]}`.
-- `findings == []` → nothing to add.
+Parse stdout `{"findings": [...], "skipped": [...]}`.
+- `findings == []` and `skipped == []` → nothing to add.
 - `findings != []` → add one `[Deferred]: clean-state-check: {pattern} at {file}:{line}` line
   per finding directly into the SAME workflow-scoped `activeContext.md` write that this
   memory-finalize task already performs (via the `deferred` `MEMORY_NOTES` routing in
   `SKILL.md` § 13) — never a separate write, never a blocking gate.
+- `skipped != []` → fold skipped entries into that SAME deferred-note write, one
+  `[Deferred]: clean-state-check: could not scan {file} ({error})` line per skipped entry.
+  This is the one signal that distinguishes "clean" from "couldn't tell" — never silently
+  discard it just because `findings` is empty.
 
 Non-zero exit or unparseable stdout: log `{"event":"clean_state_check_failed","error":"..."}`
 and proceed to memory-finalize without a deferred note — never block or retry.

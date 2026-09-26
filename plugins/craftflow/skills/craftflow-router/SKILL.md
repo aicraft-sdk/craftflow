@@ -391,7 +391,7 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
    up running a real `git merge` or falling back to the copy script (4e) — never skip it because a
    fallback path is expected. If `worktree_mode != "auto_created"`, skip this entire step (nothing
    to merge).
-   Immediately before this step (and immediately before memory-finalize when no worktree exists), run the clean-state check per `references/harness-self-checks.md § Clean-State Check`.
+   Immediately before this step (and immediately before memory-finalize when no worktree exists), run the clean-state check per `references/harness-self-checks.md § Clean-State Check` and fold any findings AND any skipped (unscannable) entries into the deferred memory notes.
 
    a. **Resolve project root, the plugin install path, and this workflow's own identity:**
       **Guard first, before anything else in this step:** read `worktree_path` from the current
