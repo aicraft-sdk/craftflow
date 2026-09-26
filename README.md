@@ -2,7 +2,7 @@
 
 Router-first AI development orchestration for Claude Code. Every build, debug, review, and plan task routes through `craftflow:craftflow-router`, which dispatches the right agent chain and tracks workflow state in `.craftflow/state/`.
 
-**Current version:** 1.11.0
+**Current version:** 1.12.0
 
 **Hard rules, scannable:** see [`AGENT_CRITICAL_GUARDRAILS.md`](AGENT_CRITICAL_GUARDRAILS.md) before touching this plugin.
 
