@@ -2,6 +2,7 @@
 
 1. Read `- Plan:` from `activeContext.md ## References`.
 2. If plan path is not `N/A`, `Read(...)` the plan file before creating tasks.
+2a. Run the feature-backlog activate call per `references/harness-self-checks.md § Feature Backlog` when the workflow artifact's `plan_file` matches a `not_started` backlog entry.
 3. Run `plan_trust_gate` before BUILD:
    - `Open Decisions` must be empty or explicitly marked approved.
    - `Differences from agreement` must be present, even if empty.
@@ -142,6 +143,10 @@ Set `chain_tail_task_id = skill_distill_task_id`. After `skill-author` returns:
 - `STATUS: SKIPPED` → passing state — proceed straight to Memory Update, no `AskUserQuestion`.
 - `STATUS: FAIL` or no return (stuck/timeout) → `skill-author` is NOT a `kind:remfix` origin; do not create a REM-FIX task and do not block the chain. Log an event describing the failure, leave the candidate's ledger status unchanged (flagged for retry next time the gate fires), and proceed straight to Memory Update.
 
+**Feature Backlog (advisory):** before creating the Memory Update task below, when `integration-verifier` returned PASS on the final phase, run the complete + VCR calls per `references/harness-self-checks.md § Feature Backlog`.
+
+**Clean-State Check (advisory):** when `worktree_mode != "auto_created"` (no worktree exists — `SKILL.md`'s Worktree Isolation step already covers the worktree-exists case) and `integration-verifier` returned PASS on the final phase, also run the clean-state check per `references/harness-self-checks.md § Clean-State Check` before creating the Memory Update task below.
+
 ```text
 TaskCreate({
   subject: "CRAFTFLOW Memory Update: Persist workflow learnings",
@@ -181,6 +186,10 @@ TaskUpdate({ taskId: verifier_task_id, addBlockedBy: [builder_task_id] })
 ```
 
 Track `chain_tail_task_id` starting as `verifier_task_id` (no doc-sync on fast path). Apply the SAME Learn-Distill Gate and Skill-Distill Gate described above in the standard BUILD task graph — identical gate checks, identical `phase:learn-distill` / `phase:skill-distill` `TaskCreate` shape, identical `chain_tail_task_id` update rule — the only difference is the starting chain tail (`verifier_task_id` here vs `doc_sync_task_id` in standard BUILD). On a clean fast-path pass, `remediation_history` is empty so the Learn-Distill Gate never fires (see `fast-path.md`'s own Learn-Distill Gate note); the Skill-Distill Gate is independent of `remediation_history` and can still fire on a clean fast-path pass if the ledger has an eligible candidate. On an escalated fast path (verifier FAIL → reviewer/hunter/REM-FIX → re-verify), `remediation_history` is populated and `learn-distill` runs exactly like standard BUILD.
+
+**Feature Backlog (advisory):** before creating the Memory Update task below, when `integration-verifier` returned PASS on the final phase, run the complete + VCR calls per `references/harness-self-checks.md § Feature Backlog`.
+
+**Clean-State Check (advisory):** when `worktree_mode != "auto_created"` (no worktree exists — `SKILL.md`'s Worktree Isolation step already covers the worktree-exists case) and `integration-verifier` returned PASS on the final phase, also run the clean-state check per `references/harness-self-checks.md § Clean-State Check` before creating the Memory Update task below.
 
 ```text
 TaskCreate({

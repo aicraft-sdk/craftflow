@@ -1548,6 +1548,7 @@ exists only for the narrower "was `true`, then broke" transition.
 ## 13. Memory Finalization
 
 The memory task executes inline only. Never spawn it as a sub-agent.
+For PLAN and BUILD memory-finalize specifically, also run the feature-backlog register/activate/complete/VCR calls per `references/harness-self-checks.md § Feature Backlog` — the detail lives there, not here.
 
 Memory is written to two tiers. Route each `MEMORY_NOTES` field as follows:
 

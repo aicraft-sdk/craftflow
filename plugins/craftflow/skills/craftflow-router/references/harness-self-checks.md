@@ -62,4 +62,53 @@ and proceed to memory-finalize without a deferred note — never block or retry.
 
 ## Feature Backlog
 
-*(added in Phase 3 — see below)*
+**Register** — PLAN memory-finalize (`plan-workflow.md` § `### PLAN task graph`, the
+"CRAFTFLOW Memory Update: Index plan in memory" task), only when the planner returned
+`STATUS: PLAN_CREATED` or `STATUS: DECISION_RFC_CREATED` this round (a plan file actually
+exists):
+
+```bash
+python3 {plugin_root}/scripts/craftflow_feature_backlog.py --state-dir .craftflow/state \
+  --register '{"id":"{plan_file_stem}","title":"{planner SUMMARY}","plan_file":"{plan_file}"}'
+```
+
+**Activate** — BUILD preparation (`build-workflow.md` § `### BUILD preparation` step 2, right
+after the plan file is read), when the workflow artifact's `plan_file` matches a
+`not_started` backlog entry's `plan_file`:
+
+```bash
+python3 {plugin_root}/scripts/craftflow_feature_backlog.py --state-dir .craftflow/state \
+  --activate {matching_id}
+```
+
+**Complete** — BUILD memory-finalize (`build-workflow.md`, both the standard and fast-path
+"CRAFTFLOW Memory Update: Persist workflow learnings" tasks), only when `integration-verifier`
+returned `PASS` on the final phase (the workflow is actually finishing, not stopping partial or
+blocked):
+
+```bash
+python3 {plugin_root}/scripts/craftflow_feature_backlog.py --state-dir .craftflow/state \
+  --complete {matching_id}
+```
+
+**VCR surfacing** — at the SAME PLAN and BUILD memory-finalize points above, immediately after
+any register/complete call:
+
+```bash
+python3 {plugin_root}/scripts/craftflow_feature_backlog.py --state-dir .craftflow/state --report json
+```
+
+Parse stdout `{"features":[...], "vcr":{"passing":N,"activated":N,"ratio":float|null,"display":"N/M"|"N/A (no activated features yet)"}}`
+and set `activeContext.md ## Current Focus`'s trailing line to
+`VCR: {display}` (append/replace only that single trailing line — never touch the rest of
+`## Current Focus`'s existing content).
+
+Any non-zero exit or unparseable stdout from any of the 4 subcommands above: log
+`{"event":"feature_backlog_update_failed","subcommand":"...","error":"..."}` and continue the
+workflow without that update — never block or retry. Exit 1 from `--complete`/`--activate` on
+an unknown id is expected/designed script behavior (see its docstring), not a crash — still
+non-blocking for the workflow.
+
+**On-demand report:** a maintainer may run
+`python3 {plugin_root}/scripts/craftflow_feature_backlog.py --state-dir .craftflow/state --report text`
+directly at any time; this is never part of an automatic router chain.
