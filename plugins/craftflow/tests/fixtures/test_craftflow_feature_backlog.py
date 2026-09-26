@@ -6,6 +6,7 @@ Run: python3 tests/fixtures/test_craftflow_feature_backlog.py
 from __future__ import annotations
 
 import json
+import stat
 import subprocess
 import sys
 import tempfile
@@ -256,6 +257,22 @@ def test_multiple_subcommands_given_produces_clear_error() -> None:
             )
 
 
+def test_saved_backlog_file_has_group_other_read_permissions() -> None:
+    # tempfile.mkstemp defaults to 0600 (owner-only), so os.replace would
+    # persist the backlog owner-only-readable -- unreadable by, e.g., a CI
+    # runner under a different UID. The final file must have normal read
+    # permissions for other processes/users.
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        run_cli(["--register", json.dumps({"id": "feat-perm"})], state_dir)
+        backlog_path = state_dir / "project" / "feature-backlog.json"
+        mode = stat.S_IMODE(backlog_path.stat().st_mode)
+        if mode & 0o044 == 0o044:
+            ok("saved_backlog_file_has_group_other_read_permissions")
+        else:
+            fail("saved_backlog_file_has_group_other_read_permissions", f"mode={oct(mode)}")
+
+
 def main() -> int:
     print("test_craftflow_feature_backlog: running")
     test_register_creates_not_started_entry()
@@ -269,6 +286,7 @@ def main() -> int:
     test_activate_unknown_id_exits_1()
     test_activate_empty_string_produces_clear_error_not_help_dump()
     test_multiple_subcommands_given_produces_clear_error()
+    test_saved_backlog_file_has_group_other_read_permissions()
     print()
     print("=" * 40)
     if _errors:

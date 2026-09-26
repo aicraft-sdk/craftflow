@@ -114,6 +114,10 @@ def save_backlog_atomic(path: Path, data: dict) -> None:
             json.dump(data, f, indent=2)
             f.write("\n")
         os.replace(tmp_name, str(path))
+        # tempfile.mkstemp defaults to 0600 (owner-only) -- normalize to a
+        # typical 0644 so other processes/users (e.g. a CI runner under a
+        # different UID) can read the persisted backlog.
+        os.chmod(str(path), 0o644)
     except Exception:
         try:
             os.remove(tmp_name)
