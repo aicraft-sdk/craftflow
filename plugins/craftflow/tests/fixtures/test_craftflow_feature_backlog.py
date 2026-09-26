@@ -162,6 +162,44 @@ def test_corrupted_backlog_fails_closed_and_preserves_existing_entries() -> None
             )
 
 
+def test_report_skips_malformed_list_entries_and_computes_valid_vcr() -> None:
+    # One bad record anywhere in the list must never take down --report for
+    # every OTHER valid entry. Mirrors find_feature()'s existing
+    # isinstance(feat, dict) skip-guard, applied consistently at every other
+    # site that iterates the same shared "features" list.
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        backlog_path = state_dir / "project" / "feature-backlog.json"
+        backlog_path.parent.mkdir(parents=True)
+        backlog_path.write_text(json.dumps({
+            "schema_version": 1,
+            "features": [
+                {"id": "feat-ok", "title": "Good Feature", "status": "passing"},
+                "not-a-dict-entry",
+                {"title": "Missing id field", "status": "active"},
+            ],
+        }))
+
+        json_result = run_cli(["--report", "json"], state_dir)
+        if json_result.returncode != 0:
+            fail("report_skips_malformed_json", f"exit {json_result.returncode}: {json_result.stderr}")
+        else:
+            data = json.loads(json_result.stdout)
+            vcr = data["vcr"]
+            if vcr["passing"] == 1 and vcr["activated"] == 1 and vcr["display"] == "1/1":
+                ok("report_skips_malformed_json")
+            else:
+                fail("report_skips_malformed_json", f"got {vcr}")
+
+        text_result = run_cli(["--report", "text"], state_dir)
+        if text_result.returncode != 0:
+            fail("report_skips_malformed_text", f"exit {text_result.returncode}: {text_result.stderr}")
+        elif "feat-ok" in text_result.stdout and "VCR: 1/1" in text_result.stdout:
+            ok("report_skips_malformed_text")
+        else:
+            fail("report_skips_malformed_text", f"got stdout={text_result.stdout!r}")
+
+
 def test_complete_unknown_id_exits_1() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         state_dir = Path(tmp) / ".craftflow" / "state"
@@ -190,6 +228,7 @@ def main() -> int:
     test_vcr_mixed_statuses_computes_correct_ratio()
     test_report_on_corrupted_backlog_fails_closed()
     test_corrupted_backlog_fails_closed_and_preserves_existing_entries()
+    test_report_skips_malformed_list_entries_and_computes_valid_vcr()
     test_complete_unknown_id_exits_1()
     test_activate_unknown_id_exits_1()
     print()

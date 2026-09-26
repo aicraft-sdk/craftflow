@@ -188,9 +188,19 @@ def cmd_complete(args) -> int:
     return 0
 
 
+def _valid_features(features: list) -> list:
+    """Skip malformed list entries (non-dict, or dict missing "id") so one
+    bad record anywhere in the backlog never crashes VCR computation or the
+    report loop -- mirrors find_feature()'s existing isinstance(feat, dict)
+    skip-guard, applied consistently at every other site that iterates the
+    same shared "features" list."""
+    return [f for f in features if isinstance(f, dict) and "id" in f]
+
+
 def _compute_vcr(features: list) -> dict:
-    passing = sum(1 for f in features if f.get("status") == "passing")
-    activated = sum(1 for f in features if f.get("status") in ("active", "passing"))
+    valid = _valid_features(features)
+    passing = sum(1 for f in valid if f.get("status") == "passing")
+    activated = sum(1 for f in valid if f.get("status") in ("active", "passing"))
     if activated == 0:
         return {"passing": passing, "activated": activated, "ratio": None, "display": "N/A (no activated features yet)"}
     ratio = passing / activated
@@ -204,8 +214,8 @@ def cmd_report(args) -> int:
     if args.report == "json":
         print(json.dumps({"features": features, "vcr": vcr}, indent=2))
     else:
-        for f in features:
-            print(f"{f['id']}: {f['status']} -- {f.get('title', '')}")
+        for f in _valid_features(features):
+            print(f"{f['id']}: {f.get('status', '?')} -- {f.get('title', '')}")
         print(f"VCR: {vcr['display']}")
     return 0
 
