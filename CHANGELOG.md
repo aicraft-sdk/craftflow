@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.12.0] - 2026-09-26
+
+### Features
+
+- add dual-gate (agreement OR accuracy) promotion to craftflow_jev_report.py
+
+### Fixes
+
+- guard jev replay driver against append-mode data contamination
+
+### Refactoring
+
+- extract _manifest_by_call_id into shared craftflow_jev_report_lib.py
+
 ## [1.11.0] - 2026-09-25
 
 ### Features
