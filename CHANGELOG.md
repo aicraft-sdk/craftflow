@@ -8,6 +8,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.13.0] - 2026-09-26
+
+### Features
+
+- add before/after impact benchmark for 3 harness capabilities
+- wire feature-backlog register/activate/complete/VCR into PLAN and BUILD
+- add feature-backlog register/activate/complete lifecycle script
+- wire clean-state-check into BUILD pre-merge and DEBUG memory-finalize
+- add clean-state-check script (console.log/debugger + diff plumbing)
+- wire arch-lint into BUILD/REVIEW code-reviewer dispatch
+- add advisory arch-rules linter (craftflow_arch_lint.py)
+- nest planner Router Contract into verdict/rationale
+- nest component-builder Router Contract into verdict/rationale
+- add schema-validated verdict/rationale contract validator (pilot)
+- add per-agent verdict/rationale schema tables for component-builder, planner
+
+### Fixes
+
+- raise specific error for backlog entry missing status field
+- reject empty/null id on --register, correct exit-code docstring
+- normalize persisted feature-backlog file to 0644 permissions
+- reject multiple subcommand flags instead of silently collapsing
+- dispatch on is-not-None instead of truthiness, reject empty ids
+- guard _compute_vcr and text-report loop against malformed list entries
+- fail-closed on corrupted feature-backlog instead of silent data loss
+- surface special/broken-symlink untracked files, wrap missing git binary as clean GitError
+- flush block-comment and line-comment scanners at every file boundary, anchor TODO-ticket regex
+- surface nested git repos as skipped, not silently dropped
+- tolerate colon-separated TODO ticket style
+- flush unterminated block comment at end of scan
+- reset block-comment scan state at file boundaries
+- harden clean-state-check detection (untracked dirs, debugger ASI, block comments, TODO ticket anchor, py suppression, root-proof test)
+
+### Documentation
+
+- document clean-state-check skipped field, fold into deferred notes
+- add harness-self-checks reference file, Arch Lint section
+- add before/after impact report for contract schema-validation pilot
+- refresh worldclass benchmark snapshot post schema-validation-pilot
+- wire pilot contract validator into router post-agent validation
+
+### Tests
+
+- cover feature-backlog VCR N/A case, malformed-JSON recovery, unknown-id exits
+- cover clean-state-check TODO/commented-block/eslint-disable cases
+
 ## [1.12.0] - 2026-09-26
 
 ### Features
