@@ -105,21 +105,61 @@ def test_vcr_mixed_statuses_computes_correct_ratio() -> None:
             fail("vcr_mixed_statuses_computes_correct_ratio", f"got {data['vcr']}")
 
 
-def test_malformed_backlog_json_auto_recovers() -> None:
+def test_report_on_corrupted_backlog_fails_closed() -> None:
+    # A backlog file that EXISTS but fails to parse must fail closed (exit 1,
+    # clear stderr error) -- never silently treated as an empty store. This
+    # mirrors craftflow_reliability_gates.py's real LedgerCorruptError
+    # behavior, which the module docstring claims to mirror.
     with tempfile.TemporaryDirectory() as tmp:
         state_dir = Path(tmp) / ".craftflow" / "state"
         backlog_path = state_dir / "project" / "feature-backlog.json"
         backlog_path.parent.mkdir(parents=True)
         backlog_path.write_text("{not valid json")
         report = run_cli(["--report", "json"], state_dir)
-        if report.returncode == 0:
-            data = json.loads(report.stdout)
-            if data["features"] == []:
-                ok("malformed_backlog_json_auto_recovers")
-            else:
-                fail("malformed_backlog_json_auto_recovers", f"got {data}")
+        if report.returncode == 1 and report.stdout == "" and report.stderr.strip():
+            ok("report_on_corrupted_backlog_fails_closed")
         else:
-            fail("malformed_backlog_json_auto_recovers", f"exit {report.returncode}: {report.stderr}")
+            fail(
+                "report_on_corrupted_backlog_fails_closed",
+                f"exit={report.returncode} stdout={report.stdout!r} stderr={report.stderr!r}",
+            )
+
+
+def test_corrupted_backlog_fails_closed_and_preserves_existing_entries() -> None:
+    # Regression for the live-reproduced data-loss bug: seed real entries
+    # (including one already passing), corrupt the file, then attempt a
+    # write op. The pre-existing entries must NOT be silently destroyed by
+    # the next write persisting an empty store over the corrupted file.
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        backlog_path = state_dir / "project" / "feature-backlog.json"
+
+        run_cli(["--register", json.dumps({"id": "feat-real", "title": "Real Feature"})], state_dir)
+        run_cli(["--activate", "feat-real"], state_dir)
+        run_cli(["--complete", "feat-real"], state_dir)
+        pre_report = run_cli(["--report", "json"], state_dir)
+        pre_data = json.loads(pre_report.stdout)
+        pre_entry = next((f for f in pre_data["features"] if f["id"] == "feat-real"), None)
+        if not (pre_entry and pre_entry["status"] == "passing"):
+            fail(
+                "corrupted_backlog_fails_closed_and_preserves_existing_entries",
+                f"seed setup failed: {pre_data}",
+            )
+            return
+
+        corrupted_bytes = "{not valid json"
+        backlog_path.write_text(corrupted_bytes)
+
+        write_result = run_cli(["--register", json.dumps({"id": "feat-new"})], state_dir)
+        on_disk = backlog_path.read_text()
+
+        if write_result.returncode == 1 and on_disk == corrupted_bytes:
+            ok("corrupted_backlog_fails_closed_and_preserves_existing_entries")
+        else:
+            fail(
+                "corrupted_backlog_fails_closed_and_preserves_existing_entries",
+                f"write exit={write_result.returncode} stderr={write_result.stderr!r} on_disk={on_disk!r}",
+            )
 
 
 def test_complete_unknown_id_exits_1() -> None:
@@ -148,7 +188,8 @@ def main() -> int:
     test_activate_then_complete_lifecycle()
     test_vcr_zero_activated_is_explicit_na_not_silent_zero()
     test_vcr_mixed_statuses_computes_correct_ratio()
-    test_malformed_backlog_json_auto_recovers()
+    test_report_on_corrupted_backlog_fails_closed()
+    test_corrupted_backlog_fails_closed_and_preserves_existing_entries()
     test_complete_unknown_id_exits_1()
     test_activate_unknown_id_exits_1()
     print()

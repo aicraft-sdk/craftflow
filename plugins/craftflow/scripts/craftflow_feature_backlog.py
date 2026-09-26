@@ -29,9 +29,14 @@ Subcommands:
 
 Backlog file default: .craftflow/state/project/feature-backlog.json
 Exit 0 on success (including idempotent no-ops). Exit 1 on usage error,
-unknown id for --activate/--complete, or fail-closed corruption that cannot
-be auto-recovered (malformed JSON auto-recovers to an empty store instead of
-failing, mirroring craftflow_reliability_gates.py's ledger auto-init).
+multiple subcommands given at once, unknown id for --activate/--complete, or
+fail-closed corruption -- a backlog file that EXISTS but fails to parse or
+has an invalid schema shape raises FeatureBacklogCorruptError and is reported
+as a stderr JSON error, mirroring craftflow_reliability_gates.py's actual
+LedgerCorruptError fail-closed behavior (that sibling module raises on
+identical corruption rather than silently discarding data). A missing file
+is the only benign case: it auto-inits to an empty store, since nothing has
+ever been written there yet.
 """
 from __future__ import annotations
 
@@ -59,19 +64,32 @@ def _empty_backlog() -> dict:
     return {"schema_version": SCHEMA_VERSION, "features": []}
 
 
+class FeatureBacklogCorruptError(Exception):
+    """Backlog file EXISTS but content cannot be trusted (parse failure or
+    invalid top-level shape) -- mirrors craftflow_reliability_gates.py's
+    LedgerCorruptError. Distinguished from "file does not exist" (benign,
+    auto-inits to an empty store instead, since there is nothing to lose)."""
+
+
 def load_backlog(path: Path) -> dict:
     if not path.exists():
         return _empty_backlog()
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, ValueError):
-        # Malformed JSON auto-recovers to an empty store rather than failing --
-        # mirrors craftflow_reliability_gates.py's own auto-init behavior for
-        # its JSON store (per this feature's own design's Error Handling section).
-        return _empty_backlog()
+    except (OSError, ValueError) as exc:
+        # Fail closed on corruption -- mirrors craftflow_reliability_gates.py's
+        # real LedgerCorruptError behavior. A file that EXISTS but cannot be
+        # trusted must never be silently treated as empty: the next write
+        # would persist that empty store over the corrupted file, permanently
+        # destroying any pre-existing real entries.
+        raise FeatureBacklogCorruptError(
+            f"backlog file at {path} exists but failed to parse: {exc}"
+        ) from exc
     if not isinstance(data, dict) or not isinstance(data.get("features"), list):
-        return _empty_backlog()
+        raise FeatureBacklogCorruptError(
+            f"backlog file at {path} exists but has an invalid schema shape"
+        )
     return data
 
 
@@ -223,7 +241,15 @@ def main() -> int:
             return cmd_complete(args)
         if args.report:
             return cmd_report(args)
-    except (OSError, UnicodeDecodeError, AttributeError, TypeError, KeyError, json.JSONDecodeError) as exc:
+    except (
+        OSError,
+        UnicodeDecodeError,
+        AttributeError,
+        TypeError,
+        KeyError,
+        json.JSONDecodeError,
+        FeatureBacklogCorruptError,
+    ) as exc:
         print(json.dumps({"error": f"unexpected error: {exc}"}), file=sys.stderr)
         return 1
 
