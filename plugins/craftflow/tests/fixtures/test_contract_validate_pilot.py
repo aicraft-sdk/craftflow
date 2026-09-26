@@ -312,6 +312,57 @@ check("CLI exit code 0 for valid planner contract", rc, 0)
 check("CLI reports valid=true for valid planner contract", result["valid"], True)
 
 # ---------------------------------------------------------------------------
+# 9. Real-template-shaped fixture (component-builder) parses and validates
+# ---------------------------------------------------------------------------
+print("\n[real component-builder template shape validates]")
+REAL_SHAPE_BUILDER_YAML = """\
+verdict:
+  STATUS: PASS
+  CONFIDENCE: 95
+  PHASE_ID: "phase-2-restructure"
+  PHASE_STATUS: completed
+  PHASE_EXIT_READY: true
+  CHECKPOINT_TYPE: none
+  PROOF_STATUS: passed
+  TDD_RED_EXIT: 1
+  TDD_GREEN_EXIT: 0
+  CRITICAL_ISSUES: 0
+  BLOCKING: false
+  NEXT_ACTION: review
+  REMEDIATION_NEEDED: false
+  REQUIRES_REMEDIATION: false
+  REMEDIATION_SCOPE_REQUESTED: N/A
+rationale:
+  SUMMARY: "restructured component-builder contract into verdict/rationale"
+  INPUTS: []
+  EXPECTED_ARTIFACTS: ["agents/component-builder.md"]
+  SCENARIOS:
+    - name: "harness audit still passes after nesting"
+      given: "component-builder.md has the new nested YAML block"
+      when: "craftflow_harness_audit.py runs"
+      then: "exits 0"
+      command: "python3 scripts/craftflow_harness_audit.py"
+      expected: "craftflow_harness_audit: OK"
+      actual: "craftflow_harness_audit: OK"
+      exit_code: 0
+      status: PASS
+  ASSUMPTIONS: []
+  DECISIONS: ["nest fields under verdict/rationale without renaming any field"]
+  BLOCKED_ITEMS: []
+  SKIPPED_ITEMS: []
+  SCOPE_INCREASES: []
+  REMEDIATION_REASON: null
+  MEMORY_NOTES:
+    learnings: ["field-name substring checks are indentation-insensitive"]
+    patterns: []
+    verification: ["harness_audit: OK", "worldclass_benchmark: OK"]
+    deferred: []
+"""
+result = validate_contract(parse_block_yaml(REAL_SHAPE_BUILDER_YAML), BUILDER_SCHEMA)
+check("real-shape component-builder fixture passes", result["valid"], True)
+check("real-shape component-builder fixture has zero violations", result["violations"], [])
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 print(f"\n{PASS} PASS, {FAIL} FAIL")

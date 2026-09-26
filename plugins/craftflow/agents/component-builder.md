@@ -283,45 +283,48 @@ not.
 
 ### Router Contract (MACHINE-READABLE)
 ```yaml
-STATUS: PASS | FAIL
-SUMMARY: "[one-sentence human-readable handoff: what was built/fixed this round]"
-CONFIDENCE: [0-100]
-PHASE_ID: "[phase id]"
-PHASE_STATUS: "completed" | "partial" | "blocked"
-PHASE_EXIT_READY: [true only when phase exit criteria are satisfied]
-CHECKPOINT_TYPE: "none" | "human_verify" | "decision" | "human_action"
-PROOF_STATUS: "passed" | "gaps_found" | "human_needed"
-INPUTS: ["input 1", "input 2"] | []
-EXPECTED_ARTIFACTS: ["artifact 1", "artifact 2"] | []
-TDD_RED_EXIT: [1 if red phase ran, null if missing]
-TDD_GREEN_EXIT: [0 if green phase ran, null if missing]
-SCENARIOS:
-  - name: "[scenario name]"
-    given: "[state]"
-    when: "[action]"
-    then: "[result]"
-    command: "[exact command]"
-    expected: "[expected result]"
-    actual: "[actual result]"
-    exit_code: 0
-    status: PASS
-ASSUMPTIONS: ["assumption 1", "assumption 2"]
-DECISIONS: ["decision 1", "decision 2"]
-BLOCKED_ITEMS: ["step not completed"] | []
-SKIPPED_ITEMS: ["step intentionally deferred"] | []
-SCOPE_INCREASES: ["new scope discovered"] | []
-CRITICAL_ISSUES: 0
-BLOCKING: [true if STATUS=FAIL]
-NEXT_ACTION: "review" | "remediation" | "abort"
-REMEDIATION_NEEDED: [true if router should create remediation]
-REQUIRES_REMEDIATION: [true if TDD evidence missing]
-REMEDIATION_REASON: null | "Missing TDD evidence - need RED exit=1 and GREEN exit=0"
-# Memory durability: describe behaviors and patterns, not line numbers. Reference stable module boundaries.
-MEMORY_NOTES:
-  learnings: ["What was built and key patterns used"]
-  patterns: ["Any new conventions discovered"]
-  verification: ["TDD evidence: RED exit={X}, GREEN exit={Y}"]
-  deferred: ["Non-blocking findings for patterns.md — from Findings section"]
+verdict:
+  STATUS: PASS | FAIL
+  CONFIDENCE: [0-100]
+  PHASE_ID: "[phase id]"
+  PHASE_STATUS: "completed" | "partial" | "blocked"
+  PHASE_EXIT_READY: [true only when phase exit criteria are satisfied]
+  CHECKPOINT_TYPE: "none" | "human_verify" | "decision" | "human_action"
+  PROOF_STATUS: "passed" | "gaps_found" | "human_needed"
+  TDD_RED_EXIT: [1 if red phase ran, null if missing]
+  TDD_GREEN_EXIT: [0 if green phase ran, null if missing]
+  CRITICAL_ISSUES: 0
+  BLOCKING: [true if STATUS=FAIL]
+  NEXT_ACTION: "review" | "remediation" | "abort"
+  REMEDIATION_NEEDED: [true if router should create remediation]
+  REQUIRES_REMEDIATION: [true if TDD evidence missing]
+  REMEDIATION_SCOPE_REQUESTED: "N/A"  # component-builder does not drive BUILD's 1a-SCOPE decision (see SKILL.md remediation-and-research.md Scope resolution) — always emit N/A
+rationale:
+  SUMMARY: "[one-sentence human-readable handoff: what was built/fixed this round]"
+  INPUTS: ["input 1", "input 2"] | []
+  EXPECTED_ARTIFACTS: ["artifact 1", "artifact 2"] | []
+  SCENARIOS:
+    - name: "[scenario name]"
+      given: "[state]"
+      when: "[action]"
+      then: "[result]"
+      command: "[exact command]"
+      expected: "[expected result]"
+      actual: "[actual result]"
+      exit_code: 0
+      status: PASS
+  ASSUMPTIONS: ["assumption 1", "assumption 2"]
+  DECISIONS: ["decision 1", "decision 2"]
+  BLOCKED_ITEMS: ["step not completed"] | []
+  SKIPPED_ITEMS: ["step intentionally deferred"] | []
+  SCOPE_INCREASES: ["new scope discovered"] | []
+  REMEDIATION_REASON: null | "Missing TDD evidence - need RED exit=1 and GREEN exit=0"
+  # Memory durability: describe behaviors and patterns, not line numbers. Reference stable module boundaries.
+  MEMORY_NOTES:
+    learnings: ["What was built and key patterns used"]
+    patterns: ["Any new conventions discovered"]
+    verification: ["TDD evidence: RED exit={X}, GREEN exit={Y}"]
+    deferred: ["Non-blocking findings for patterns.md — from Findings section"]
 ```
 **CONTRACT RULE:** STATUS=PASS requires PHASE_STATUS=`completed`, PHASE_EXIT_READY=true, `PROOF_STATUS=passed`, TDD_RED_EXIT=1, TDD_GREEN_EXIT=0, `BLOCKED_ITEMS=[]`, and at least one passing scenario in `SCENARIOS`. That passing scenario must include non-empty `name`, `command`, `expected`, `actual`, and `exit_code`. `CHECKPOINT_TYPE` must be `none` unless the phase is intentionally paused for human action. **Exception:** If no `package.json` exists (pure HTML/CSS/JS project with no test runner), TDD evidence may use manual browser verification instead — set TDD_RED_EXIT=1 and TDD_GREEN_EXIT=0 with evidence describing the manual check.
 ```
