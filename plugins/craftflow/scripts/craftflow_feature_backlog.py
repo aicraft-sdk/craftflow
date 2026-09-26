@@ -153,6 +153,9 @@ def cmd_register(args) -> int:
 
 
 def cmd_activate(args) -> int:
+    if not args.activate:
+        print(json.dumps({"error": "--activate requires a non-empty feature id"}), file=sys.stderr)
+        return 1
     backlog_path = Path(args.backlog)
     with _backlog_file_lock(backlog_path):
         backlog = load_backlog(backlog_path)
@@ -171,6 +174,9 @@ def cmd_activate(args) -> int:
 
 
 def cmd_complete(args) -> int:
+    if not args.complete:
+        print(json.dumps({"error": "--complete requires a non-empty feature id"}), file=sys.stderr)
+        return 1
     backlog_path = Path(args.backlog)
     with _backlog_file_lock(backlog_path):
         backlog = load_backlog(backlog_path)
@@ -243,13 +249,13 @@ def main() -> int:
     args.backlog = _resolve_backlog_path(args)
 
     try:
-        if args.register:
+        if args.register is not None:
             return cmd_register(args)
-        if args.activate:
+        if args.activate is not None:
             return cmd_activate(args)
-        if args.complete:
+        if args.complete is not None:
             return cmd_complete(args)
-        if args.report:
+        if args.report is not None:
             return cmd_report(args)
     except (
         OSError,

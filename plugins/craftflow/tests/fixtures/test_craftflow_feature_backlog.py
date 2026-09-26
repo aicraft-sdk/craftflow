@@ -210,6 +210,25 @@ def test_complete_unknown_id_exits_1() -> None:
             fail("complete_unknown_id_exits_1", f"expected exit 1, got {result.returncode}")
 
 
+def test_activate_empty_string_produces_clear_error_not_help_dump() -> None:
+    # argparse leaves unset string options as None; an explicitly-given empty
+    # string ("") is falsy but IS a value. Dispatch must be precise
+    # (`is not None`), not truthiness -- otherwise this falls through every
+    # branch to a generic parser.print_help() usage dump with zero indication
+    # the real problem is an empty id.
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        result = run_cli(["--activate", ""], state_dir)
+        stderr_lower = result.stderr.lower()
+        if result.returncode == 1 and "non-empty" in stderr_lower and "usage:" not in stderr_lower:
+            ok("activate_empty_string_produces_clear_error_not_help_dump")
+        else:
+            fail(
+                "activate_empty_string_produces_clear_error_not_help_dump",
+                f"exit={result.returncode} stderr={result.stderr!r}",
+            )
+
+
 def test_activate_unknown_id_exits_1() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         state_dir = Path(tmp) / ".craftflow" / "state"
@@ -231,6 +250,7 @@ def main() -> int:
     test_report_skips_malformed_list_entries_and_computes_valid_vcr()
     test_complete_unknown_id_exits_1()
     test_activate_unknown_id_exits_1()
+    test_activate_empty_string_produces_clear_error_not_help_dump()
     print()
     print("=" * 40)
     if _errors:
