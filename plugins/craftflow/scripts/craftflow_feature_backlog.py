@@ -74,6 +74,14 @@ class FeatureBacklogCorruptError(Exception):
     auto-inits to an empty store instead, since there is nothing to lose)."""
 
 
+class MalformedFeatureEntryError(Exception):
+    """A backlog entry was found by id but is missing or has an invalid
+    "status" field (e.g. manual file corruption or a partial write). Raised
+    instead of letting a raw KeyError propagate from direct feat["status"]
+    access -- a bare KeyError repr ("'status'") names neither the offending
+    entry nor gives any actionable detail."""
+
+
 def load_backlog(path: Path) -> dict:
     if not path.exists():
         return _empty_backlog()
@@ -143,9 +151,22 @@ def _require_nonempty_id(value, flag_name: str):
 
 def find_feature(backlog: dict, feature_id: str):
     for feat in backlog.get("features", []):
-        if isinstance(feat, dict) and feat.get("id") == feature_id:
+        if isinstance(feat, dict) and "id" in feat and feat.get("id") == feature_id:
             return feat
     return None
+
+
+def _require_status_field(feat: dict, feature_id: str) -> str:
+    """Returns the entry's status, or raises MalformedFeatureEntryError
+    naming the entry id and the missing/invalid field -- shared by
+    cmd_activate/cmd_complete so neither one ever lets a raw KeyError from
+    direct feat["status"] access reach the generic catch-all in main()."""
+    status = feat.get("status")
+    if status not in _STATUSES:
+        raise MalformedFeatureEntryError(
+            f"malformed backlog entry {feature_id!r}: missing or invalid 'status' field"
+        )
+    return status
 
 
 def cmd_register(args) -> int:
@@ -187,8 +208,9 @@ def cmd_activate(args) -> int:
         if feat is None:
             print(json.dumps({"error": f"unknown feature id: {args.activate!r} -- never registered"}), file=sys.stderr)
             return 1
-        if feat["status"] in ("active", "passing"):
-            print(json.dumps({"activated": False, "reason": f"already {feat['status']}"}, indent=2))
+        status = _require_status_field(feat, args.activate)
+        if status in ("active", "passing"):
+            print(json.dumps({"activated": False, "reason": f"already {status}"}, indent=2))
             return 0
         feat["status"] = "active"
         feat["activated_at"] = now_iso()
@@ -209,7 +231,8 @@ def cmd_complete(args) -> int:
         if feat is None:
             print(json.dumps({"error": f"unknown feature id: {args.complete!r} -- never registered or activated"}), file=sys.stderr)
             return 1
-        if feat["status"] == "passing":
+        status = _require_status_field(feat, args.complete)
+        if status == "passing":
             print(json.dumps({"completed": False, "reason": "already passing"}, indent=2))
             return 0
         feat["status"] = "passing"
@@ -306,6 +329,7 @@ def main() -> int:
         KeyError,
         json.JSONDecodeError,
         FeatureBacklogCorruptError,
+        MalformedFeatureEntryError,
     ) as exc:
         print(json.dumps({"error": f"unexpected error: {exc}"}), file=sys.stderr)
         return 1

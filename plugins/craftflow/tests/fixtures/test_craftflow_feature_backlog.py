@@ -322,6 +322,56 @@ def test_saved_backlog_file_has_group_other_read_permissions() -> None:
             fail("saved_backlog_file_has_group_other_read_permissions", f"mode={oct(mode)}")
 
 
+def test_activate_and_complete_on_entry_missing_status_field_produce_clear_error() -> None:
+    # Simulates manual file corruption / a partial write: an entry with an
+    # "id" but no "status" key. find_feature() only requires isinstance(dict)
+    # + id match (unlike _valid_features()'s "id" in f completeness guard),
+    # so cmd_activate/cmd_complete's direct feat["status"] access used to
+    # raise a bare KeyError ("unexpected error: 'status'") that named neither
+    # the offending entry nor gave any actionable detail. Must now be a
+    # specific, clear error naming the entry id and the missing field.
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        backlog_path = state_dir / "project" / "feature-backlog.json"
+        backlog_path.parent.mkdir(parents=True)
+        # Bypass the CLI's own --register validation entirely -- write the
+        # malformed entry directly, as manual file corruption would.
+        backlog_path.write_text(json.dumps({
+            "schema_version": 1,
+            "features": [{"id": "feat-partial"}],
+        }))
+
+        activate_result = run_cli(["--activate", "feat-partial"], state_dir)
+        activate_stderr_lower = activate_result.stderr.lower()
+        if (
+            activate_result.returncode == 1
+            and "feat-partial" in activate_result.stderr
+            and "status" in activate_stderr_lower
+            and activate_result.stderr.strip() != "unexpected error: 'status'"
+        ):
+            ok("activate_on_entry_missing_status_field_produces_clear_error")
+        else:
+            fail(
+                "activate_on_entry_missing_status_field_produces_clear_error",
+                f"exit={activate_result.returncode} stderr={activate_result.stderr!r}",
+            )
+
+        complete_result = run_cli(["--complete", "feat-partial"], state_dir)
+        complete_stderr_lower = complete_result.stderr.lower()
+        if (
+            complete_result.returncode == 1
+            and "feat-partial" in complete_result.stderr
+            and "status" in complete_stderr_lower
+            and complete_result.stderr.strip() != "unexpected error: 'status'"
+        ):
+            ok("complete_on_entry_missing_status_field_produces_clear_error")
+        else:
+            fail(
+                "complete_on_entry_missing_status_field_produces_clear_error",
+                f"exit={complete_result.returncode} stderr={complete_result.stderr!r}",
+            )
+
+
 def main() -> int:
     print("test_craftflow_feature_backlog: running")
     test_register_creates_not_started_entry()
@@ -338,6 +388,7 @@ def main() -> int:
     test_activate_empty_string_produces_clear_error_not_help_dump()
     test_multiple_subcommands_given_produces_clear_error()
     test_saved_backlog_file_has_group_other_read_permissions()
+    test_activate_and_complete_on_entry_missing_status_field_produce_clear_error()
     print()
     print("=" * 40)
     if _errors:
