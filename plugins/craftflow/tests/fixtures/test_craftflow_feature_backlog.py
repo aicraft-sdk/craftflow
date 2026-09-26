@@ -230,6 +230,55 @@ def test_activate_empty_string_produces_clear_error_not_help_dump() -> None:
             )
 
 
+def test_register_empty_string_id_produces_clear_error_and_does_not_persist() -> None:
+    # --activate/--complete already reject an empty-string id BEFORE lookup;
+    # if --register didn't reject it too, a registered entry with an empty
+    # id could never be activated or completed via the CLI -- a permanently
+    # orphaned, dead record with no error at write time and no way to unstick
+    # it short of manually editing the JSON file.
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        result = run_cli(["--register", json.dumps({"id": "", "title": "Bad"})], state_dir)
+        stderr_lower = result.stderr.lower()
+        if result.returncode == 1 and "non-empty" in stderr_lower:
+            report = run_cli(["--report", "json"], state_dir)
+            data = json.loads(report.stdout)
+            if data["features"] == []:
+                ok("register_empty_string_id_produces_clear_error_and_does_not_persist")
+            else:
+                fail(
+                    "register_empty_string_id_produces_clear_error_and_does_not_persist",
+                    f"entry persisted despite error: {data}",
+                )
+        else:
+            fail(
+                "register_empty_string_id_produces_clear_error_and_does_not_persist",
+                f"exit={result.returncode} stderr={result.stderr!r}",
+            )
+
+
+def test_register_null_id_produces_clear_error_and_does_not_persist() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        result = run_cli(["--register", json.dumps({"id": None, "title": "Bad"})], state_dir)
+        stderr_lower = result.stderr.lower()
+        if result.returncode == 1 and "non-empty" in stderr_lower:
+            report = run_cli(["--report", "json"], state_dir)
+            data = json.loads(report.stdout)
+            if data["features"] == []:
+                ok("register_null_id_produces_clear_error_and_does_not_persist")
+            else:
+                fail(
+                    "register_null_id_produces_clear_error_and_does_not_persist",
+                    f"entry persisted despite error: {data}",
+                )
+        else:
+            fail(
+                "register_null_id_produces_clear_error_and_does_not_persist",
+                f"exit={result.returncode} stderr={result.stderr!r}",
+            )
+
+
 def test_activate_unknown_id_exits_1() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         state_dir = Path(tmp) / ".craftflow" / "state"
@@ -283,6 +332,8 @@ def main() -> int:
     test_corrupted_backlog_fails_closed_and_preserves_existing_entries()
     test_report_skips_malformed_list_entries_and_computes_valid_vcr()
     test_complete_unknown_id_exits_1()
+    test_register_empty_string_id_produces_clear_error_and_does_not_persist()
+    test_register_null_id_produces_clear_error_and_does_not_persist()
     test_activate_unknown_id_exits_1()
     test_activate_empty_string_produces_clear_error_not_help_dump()
     test_multiple_subcommands_given_produces_clear_error()

@@ -28,8 +28,11 @@ Subcommands:
         about silent 0/0-fallback bugs, patterns.md line 58).
 
 Backlog file default: .craftflow/state/project/feature-backlog.json
-Exit 0 on success (including idempotent no-ops). Exit 1 on usage error,
-multiple subcommands given at once, unknown id for --activate/--complete, or
+Exit 0 on success (including idempotent no-ops). Exit 2 on argparse usage
+errors -- a bad --report choice, or multiple subcommand flags given at once
+(argparse's parser.error() always calls sys.exit(2), never 1). Exit 1 on a
+manually-raised error path: an empty/null/non-string id for
+--register/--activate/--complete, an unknown id for --activate/--complete, or
 fail-closed corruption -- a backlog file that EXISTS but fails to parse or
 has an invalid schema shape raises FeatureBacklogCorruptError and is reported
 as a stderr JSON error, mirroring craftflow_reliability_gates.py's actual
@@ -126,6 +129,18 @@ def save_backlog_atomic(path: Path, data: dict) -> None:
         raise
 
 
+def _require_nonempty_id(value, flag_name: str):
+    """Returns None if value is a valid non-empty string id, otherwise a
+    clear error message. Shared by --register/--activate/--complete so a
+    registered entry can never end up with an id that --activate/--complete
+    would then reject before lookup -- a permanently orphaned dead record
+    with no error at write time and no way to unstick it short of manually
+    editing the JSON file."""
+    if not isinstance(value, str) or not value:
+        return f"{flag_name} requires a non-empty string id (got {value!r})"
+    return None
+
+
 def find_feature(backlog: dict, feature_id: str):
     for feat in backlog.get("features", []):
         if isinstance(feat, dict) and feat.get("id") == feature_id:
@@ -136,7 +151,11 @@ def find_feature(backlog: dict, feature_id: str):
 def cmd_register(args) -> int:
     backlog_path = Path(args.backlog)
     payload = json.loads(args.register)
-    feature_id = payload["id"]
+    feature_id = payload.get("id")
+    id_error = _require_nonempty_id(feature_id, "--register id field")
+    if id_error:
+        print(json.dumps({"error": id_error}), file=sys.stderr)
+        return 1
     with _backlog_file_lock(backlog_path):
         backlog = load_backlog(backlog_path)
         if find_feature(backlog, feature_id) is not None:
@@ -157,8 +176,9 @@ def cmd_register(args) -> int:
 
 
 def cmd_activate(args) -> int:
-    if not args.activate:
-        print(json.dumps({"error": "--activate requires a non-empty feature id"}), file=sys.stderr)
+    id_error = _require_nonempty_id(args.activate, "--activate")
+    if id_error:
+        print(json.dumps({"error": id_error}), file=sys.stderr)
         return 1
     backlog_path = Path(args.backlog)
     with _backlog_file_lock(backlog_path):
@@ -178,8 +198,9 @@ def cmd_activate(args) -> int:
 
 
 def cmd_complete(args) -> int:
-    if not args.complete:
-        print(json.dumps({"error": "--complete requires a non-empty feature id"}), file=sys.stderr)
+    id_error = _require_nonempty_id(args.complete, "--complete")
+    if id_error:
+        print(json.dumps({"error": id_error}), file=sys.stderr)
         return 1
     backlog_path = Path(args.backlog)
     with _backlog_file_lock(backlog_path):
