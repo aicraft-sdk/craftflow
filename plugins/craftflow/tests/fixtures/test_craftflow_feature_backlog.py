@@ -75,10 +75,82 @@ def test_activate_then_complete_lifecycle() -> None:
             fail("activate_then_complete_lifecycle", f"got {data}")
 
 
+def test_vcr_zero_activated_is_explicit_na_not_silent_zero() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        run_cli(["--register", json.dumps({"id": "feat-c", "title": "Feature C"})], state_dir)
+        report = run_cli(["--report", "json"], state_dir)
+        data = json.loads(report.stdout)
+        if data["vcr"]["activated"] == 0 and data["vcr"]["ratio"] is None and "N/A" in data["vcr"]["display"]:
+            ok("vcr_zero_activated_is_explicit_na_not_silent_zero")
+        else:
+            fail("vcr_zero_activated_is_explicit_na_not_silent_zero", f"got {data['vcr']}")
+
+
+def test_vcr_mixed_statuses_computes_correct_ratio() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        run_cli(["--register", json.dumps({"id": "a"})], state_dir)
+        run_cli(["--register", json.dumps({"id": "b"})], state_dir)
+        run_cli(["--register", json.dumps({"id": "c"})], state_dir)
+        run_cli(["--activate", "a"], state_dir)
+        run_cli(["--activate", "b"], state_dir)
+        run_cli(["--complete", "b"], state_dir)
+        # c stays not_started -- must NOT count toward activated
+        report = run_cli(["--report", "json"], state_dir)
+        data = json.loads(report.stdout)
+        if data["vcr"]["passing"] == 1 and data["vcr"]["activated"] == 2 and data["vcr"]["display"] == "1/2":
+            ok("vcr_mixed_statuses_computes_correct_ratio")
+        else:
+            fail("vcr_mixed_statuses_computes_correct_ratio", f"got {data['vcr']}")
+
+
+def test_malformed_backlog_json_auto_recovers() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        backlog_path = state_dir / "project" / "feature-backlog.json"
+        backlog_path.parent.mkdir(parents=True)
+        backlog_path.write_text("{not valid json")
+        report = run_cli(["--report", "json"], state_dir)
+        if report.returncode == 0:
+            data = json.loads(report.stdout)
+            if data["features"] == []:
+                ok("malformed_backlog_json_auto_recovers")
+            else:
+                fail("malformed_backlog_json_auto_recovers", f"got {data}")
+        else:
+            fail("malformed_backlog_json_auto_recovers", f"exit {report.returncode}: {report.stderr}")
+
+
+def test_complete_unknown_id_exits_1() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        result = run_cli(["--complete", "never-registered"], state_dir)
+        if result.returncode == 1:
+            ok("complete_unknown_id_exits_1")
+        else:
+            fail("complete_unknown_id_exits_1", f"expected exit 1, got {result.returncode}")
+
+
+def test_activate_unknown_id_exits_1() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        result = run_cli(["--activate", "never-registered"], state_dir)
+        if result.returncode == 1:
+            ok("activate_unknown_id_exits_1")
+        else:
+            fail("activate_unknown_id_exits_1", f"expected exit 1, got {result.returncode}")
+
+
 def main() -> int:
     print("test_craftflow_feature_backlog: running")
     test_register_creates_not_started_entry()
     test_activate_then_complete_lifecycle()
+    test_vcr_zero_activated_is_explicit_na_not_silent_zero()
+    test_vcr_mixed_statuses_computes_correct_ratio()
+    test_malformed_backlog_json_auto_recovers()
+    test_complete_unknown_id_exits_1()
+    test_activate_unknown_id_exits_1()
     print()
     print("=" * 40)
     if _errors:
