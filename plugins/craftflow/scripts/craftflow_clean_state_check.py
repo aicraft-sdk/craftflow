@@ -23,12 +23,21 @@ import sys
 from pathlib import Path
 
 _CONSOLE_LOG_RE = re.compile(r"console\.log\(")
-_DEBUGGER_RE = re.compile(r"\bdebugger;")
+_DEBUGGER_RE = re.compile(r"\bdebugger\b")
 _TODO_RE = re.compile(r"\bTODO\b")
-_TICKET_RE = re.compile(r"(#\d+|[A-Z]{2,}-\d+)")
+# Anchored to TODO itself -- requires the ticket ref to appear immediately
+# after TODO (optionally inside parens), e.g. "TODO(#123)" or "TODO #123".
+# A bare match anywhere on the line (the old _TICKET_RE) wrongly treated an
+# unrelated hash-number elsewhere in the comment (e.g. "ref line #42") as a
+# ticket reference.
+_TODO_TICKET_RE = re.compile(r"TODO\(?\s*(?:#\d+|[A-Z]{2,}-\d+)")
 _COMMENT_LINE_RE = re.compile(r"^\s*(//|#)\s*(.*)$")
 _CODE_TOKEN_RE = re.compile(r"[=(){};]")
-_DISABLE_COMMENT_RE = re.compile(r"eslint-disable|@ts-|prettier-ignore")
+_DISABLE_COMMENT_RE = re.compile(
+    r"eslint-disable|@ts-|prettier-ignore|noqa|type:\s*ignore|pylint:\s*disable"
+)
+_BLOCK_COMMENT_START_RE = re.compile(r"/\*")
+_BLOCK_COMMENT_END_RE = re.compile(r"\*/")
 
 
 class GitError(Exception):
@@ -70,7 +79,12 @@ def _added_lines(project_root: Path) -> tuple:
             added.append((current_file, current_line, line[1:]))
             current_line += 1
 
-    status_output = _run_git(["status", "--porcelain"], project_root)
+    # --untracked-files=all lists every individual file inside a new
+    # directory instead of collapsing it to one `?? newdir/` line -- without
+    # this flag, a brand-new untracked directory is entirely invisible to
+    # this scan (the is_file() check below is False for a directory entry,
+    # so it would just be skipped, not even surfaced in `skipped`).
+    status_output = _run_git(["status", "--porcelain", "--untracked-files=all"], project_root)
     for status_line in status_output.splitlines():
         if not status_line.startswith("??"):
             continue
@@ -87,6 +101,51 @@ def _added_lines(project_root: Path) -> tuple:
             added.append((rel, line_no, content))
 
     return added, skipped
+
+
+def _scan_block_comments(lines: list) -> list:
+    """Second detection pass for /* ... */ block comments -- independent of
+    the // and # line-comment run tracked in scan(), since a block comment
+    is a single multi-line comment token, not a run of separately-prefixed
+    lines. Counts interior lines (between the /* and */ markers) against the
+    same 3+-line threshold used for line comments. A single-line /* ... */
+    (opened and closed on the same line) never counts -- it isn't a
+    multi-line commented-out block."""
+    findings: list = []
+    in_block = False
+    block_start = None
+    interior: list = []
+
+    def flush() -> None:
+        if len(interior) >= 3 and block_start is not None:
+            file_, start_line = block_start
+            findings.append({
+                "pattern": "commented-code-block",
+                "file": file_,
+                "line": start_line,
+                "snippet": f"{len(interior)} lines inside a /* */ block comment",
+            })
+        interior.clear()
+
+    for file_, line_no, content in lines:
+        if not in_block:
+            start_match = _BLOCK_COMMENT_START_RE.search(content)
+            if start_match is None:
+                continue
+            if _BLOCK_COMMENT_END_RE.search(content[start_match.end():]):
+                continue  # closes on the same line -- not a multi-line block
+            in_block = True
+            block_start = (file_, line_no)
+            interior = []
+            continue
+        if _BLOCK_COMMENT_END_RE.search(content):
+            in_block = False
+            flush()
+            block_start = None
+            continue
+        interior.append(content)
+
+    return findings
 
 
 def scan(project_root: Path) -> tuple:
@@ -111,7 +170,7 @@ def scan(project_root: Path) -> tuple:
             findings.append({"pattern": "console.log", "file": file_, "line": line_no, "snippet": content.strip()})
         if _DEBUGGER_RE.search(content):
             findings.append({"pattern": "debugger", "file": file_, "line": line_no, "snippet": content.strip()})
-        if _TODO_RE.search(content) and not _TICKET_RE.search(content):
+        if _TODO_RE.search(content) and not _TODO_TICKET_RE.search(content):
             findings.append({"pattern": "todo-without-ticket", "file": file_, "line": line_no, "snippet": content.strip()})
 
         comment_match = _COMMENT_LINE_RE.match(content)
@@ -125,6 +184,8 @@ def scan(project_root: Path) -> tuple:
         else:
             flush_comment_run()
     flush_comment_run()
+
+    findings.extend(_scan_block_comments(lines))
 
     return findings, skipped
 

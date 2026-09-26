@@ -6,6 +6,7 @@ Run: python3 tests/fixtures/test_craftflow_clean_state_check.py
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -74,6 +75,22 @@ def test_debugger_detected() -> None:
             fail("debugger_detected", f"got {data}")
 
 
+def test_debugger_without_semicolon_detected() -> None:
+    # Regression: _DEBUGGER_RE required a trailing semicolon, missing valid
+    # ASI forms like `if (x) debugger` (no semicolon) -- a real false negative.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "app.ts").write_text("function f(x) {\n  if (x) debugger\n}\n")
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "debugger"]
+        if len(hits) == 1 and hits[0]["line"] == 2:
+            ok("debugger_without_semicolon_detected")
+        else:
+            fail("debugger_without_semicolon_detected", f"got {data}")
+
+
 def test_clean_diff_reports_nothing() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -88,6 +105,13 @@ def test_clean_diff_reports_nothing() -> None:
 
 
 def test_unreadable_untracked_file_is_surfaced_not_swallowed() -> None:
+    # chmod(0o000) is a no-op for root (common in containerized CI) -- root
+    # can still read the file regardless of permission bits, so this test
+    # would spuriously behave differently under a root-run CI. Skip rather
+    # than produce a false pass/fail under that environment.
+    if hasattr(os, "getuid") and os.getuid() == 0:
+        print("  SKIP: unreadable_untracked_file_is_surfaced_not_swallowed (running as root; chmod 0o000 is a no-op)")
+        return
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         _init_repo(root)
@@ -105,6 +129,27 @@ def test_unreadable_untracked_file_is_surfaced_not_swallowed() -> None:
                 fail("unreadable_untracked_file_is_surfaced_not_swallowed", f"got {data}")
         finally:
             unreadable.chmod(0o644)
+
+
+def test_new_untracked_directory_is_not_collapsed_and_hidden() -> None:
+    # Regression: `git status --porcelain` (no --untracked-files=all) collapses
+    # a brand-new untracked DIRECTORY to a single `?? newdir/` line. The old
+    # `full.is_file()` check was False for that line, so the loop just
+    # `continue`d -- a console.log inside a brand-new module directory was
+    # completely invisible: not in findings, not even in skipped.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        newdir = root / "newmodule"
+        newdir.mkdir()
+        (newdir / "index.ts").write_text("function f() {\n  console.log('hi');\n}\n")
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "console.log"]
+        if len(hits) == 1 and hits[0]["file"] == "newmodule/index.ts" and hits[0]["line"] == 2:
+            ok("new_untracked_directory_is_not_collapsed_and_hidden")
+        else:
+            fail("new_untracked_directory_is_not_collapsed_and_hidden", f"got {data}")
 
 
 def test_todo_without_ticket_detected() -> None:
@@ -135,6 +180,26 @@ def test_todo_with_ticket_is_not_flagged() -> None:
             fail("todo_with_ticket_is_not_flagged", f"expected no todo findings, got {hits}")
 
 
+def test_todo_with_unrelated_hash_number_is_still_flagged() -> None:
+    # Regression: _TICKET_RE was checked against the WHOLE line and matched
+    # ANY bare hash-number anywhere in the comment, not just an actual ticket
+    # reference near TODO -- e.g. a line number mentioned elsewhere in the
+    # same comment was wrongly treated as "has a ticket".
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "app.ts").write_text(
+            "// TODO cleanup, ref line #42 not a real ticket\nfunction f() { return 1; }\n"
+        )
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "todo-without-ticket"]
+        if len(hits) == 1:
+            ok("todo_with_unrelated_hash_number_is_still_flagged")
+        else:
+            fail("todo_with_unrelated_hash_number_is_still_flagged", f"got {data}")
+
+
 def test_commented_code_block_detected() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -149,6 +214,26 @@ def test_commented_code_block_detected() -> None:
             ok("commented_code_block_detected")
         else:
             fail("commented_code_block_detected", f"got {data}")
+
+
+def test_block_comment_code_detected() -> None:
+    # Regression: _COMMENT_LINE_RE only recognized `//`/`#` line comments --
+    # block comments (/* ... */) were completely invisible to the
+    # commented-code-block detector, even though that's the most common way
+    # to comment out a chunk of code.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "app.ts").write_text(
+            "/*\nconst x = 1;\ndoSomething(x);\nreturn x + 1;\n*/\nfunction f() { return 1; }\n"
+        )
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "commented-code-block"]
+        if len(hits) == 1 and hits[0]["line"] == 1:
+            ok("block_comment_code_detected")
+        else:
+            fail("block_comment_code_detected", f"got {data}")
 
 
 def test_eslint_disable_comments_are_not_false_positives() -> None:
@@ -170,16 +255,45 @@ def test_eslint_disable_comments_are_not_false_positives() -> None:
             fail("eslint_disable_comments_are_not_false_positives", f"expected no findings, got {hits}")
 
 
+def test_python_suppression_directives_are_not_false_positives() -> None:
+    # Regression: _DISABLE_COMMENT_RE only recognized eslint/@ts-/prettier
+    # idioms -- Python suppression comments (# noqa, # type: ignore,
+    # # pylint: disable=...) are common in this Python-heavy plugin repo and
+    # would false-positive as a commented-code-block once they contain a
+    # code-like token (e.g. `disable=`).
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "app.py").write_text(
+            "# pylint: disable=invalid-name\n"
+            "# pylint: disable=missing-docstring\n"
+            "# pylint: disable=too-many-arguments\n"
+            "x = 1\n"
+        )
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "commented-code-block"]
+        if hits == []:
+            ok("python_suppression_directives_are_not_false_positives")
+        else:
+            fail("python_suppression_directives_are_not_false_positives", f"expected no findings, got {hits}")
+
+
 def main() -> int:
     print("test_craftflow_clean_state_check: running")
     test_console_log_detected()
     test_debugger_detected()
+    test_debugger_without_semicolon_detected()
     test_clean_diff_reports_nothing()
     test_unreadable_untracked_file_is_surfaced_not_swallowed()
+    test_new_untracked_directory_is_not_collapsed_and_hidden()
     test_todo_without_ticket_detected()
     test_todo_with_ticket_is_not_flagged()
+    test_todo_with_unrelated_hash_number_is_still_flagged()
     test_commented_code_block_detected()
+    test_block_comment_code_detected()
     test_eslint_disable_comments_are_not_false_positives()
+    test_python_suppression_directives_are_not_false_positives()
     print()
     print("=" * 40)
     if _errors:
