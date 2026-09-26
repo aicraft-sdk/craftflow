@@ -405,42 +405,45 @@ not.
 
 ### Router Contract (MACHINE-READABLE)
 ```yaml
-STATUS: PLAN_CREATED | DECISION_RFC_CREATED | NEEDS_CLARIFICATION
-SUMMARY: "[one-sentence human-readable handoff: what was planned this round, or what clarification is needed]"
-PLAN_MODE: direct | execution_plan | decision_rfc
-VERIFICATION_RIGOR: standard | critical_path
-CONFIDENCE: [0-100 from Confidence Score above]
-PLAN_FILE: "[path to saved plan, e.g., docs/plans/2026-02-05-feature-plan.md]"
-LIVING_SPEC_IMPACTED: "[path to the single impacted spec]" | null  # null when no living-spec Doc Targets declaration
-PHASES: [count of phases in plan]
-RISKS_IDENTIFIED: [count of risks identified]
-SCENARIOS:
-  - name: "[named scenario]"
-    given: "[state]"
-    when: "[action]"
-    then: "[expected result]"
-ASSUMPTIONS: ["assumption 1", "assumption 2"]
-DECISIONS: ["decision 1", "decision 2"]
-OPEN_DECISIONS: ["decision needing explicit approval"] | []
-DIFFERENCES_FROM_AGREEMENT: ["difference 1"] | []
-RECOMMENDED_DEFAULTS: ["decision -> recommended default"]
-PLANNING_REVIEW_STATUS: not_started | pending_review | findings_received | revised_after_review | passed
-PLANNING_REVIEW_RUNS: [0-2]
-ALTERNATIVES: ["alternative A", "alternative B"] | []
-DRAWBACKS: ["drawback 1", "drawback 2"] | []
-PROVABLE_PROPERTIES: ["property 1", "property 2"] | []
-BLOCKING: [false normally; true if STATUS=NEEDS_CLARIFICATION to halt workflow until clarified]
-NEXT_ACTION: "build" | "clarify" | "abort"
-REMEDIATION_NEEDED: [true if router should create re-plan or clarification path]
-REQUIRES_REMEDIATION: [false if PLAN_CREATED; true if NEEDS_CLARIFICATION]
-REMEDIATION_REASON: null | "Clarification required before plan can proceed: {summary of Your Input Needed items}"
-GATE_PASSED: [true if plan-review-gate returned SPEC_GATE_PASS (or was skipped as trivial); false if the gate failed]
-USER_INPUT_NEEDED: ["Q1 text", "Q2 text"] | []  # Compaction-safe list of open questions (same as Your Input Needed bullets)
-# Memory durability: describe behaviors and patterns, not line numbers. Reference stable module boundaries.
-MEMORY_NOTES:
-  learnings: ["Planning approach and key insights"]
-  patterns: ["Architectural decisions made"]
-  verification: ["Plan: {PLAN_FILE} with {CONFIDENCE}/100 confidence"]
+verdict:
+  STATUS: PLAN_CREATED | DECISION_RFC_CREATED | NEEDS_CLARIFICATION
+  PLAN_MODE: direct | execution_plan | decision_rfc
+  VERIFICATION_RIGOR: standard | critical_path
+  CONFIDENCE: [0-100 from Confidence Score above]
+  PHASES: [count of phases in plan]
+  RISKS_IDENTIFIED: [count of risks identified]
+  PLANNING_REVIEW_STATUS: not_started | pending_review | findings_received | revised_after_review | passed
+  PLANNING_REVIEW_RUNS: [0-2]
+  BLOCKING: [false normally; true if STATUS=NEEDS_CLARIFICATION to halt workflow until clarified]
+  NEXT_ACTION: "build" | "clarify" | "abort"
+  REMEDIATION_NEEDED: [true if router should create re-plan or clarification path]
+  REQUIRES_REMEDIATION: [false if PLAN_CREATED; true if NEEDS_CLARIFICATION]
+  GATE_PASSED: [true if plan-review-gate returned SPEC_GATE_PASS (or was skipped as trivial); false if the gate failed]
+  REMEDIATION_SCOPE_REQUESTED: "N/A"  # planner does not drive BUILD's 1a-SCOPE decision (see SKILL.md remediation-and-research.md Scope resolution) — always emit N/A
+rationale:
+  SUMMARY: "[one-sentence human-readable handoff: what was planned this round, or what clarification is needed]"
+  PLAN_FILE: "[path to saved plan, e.g., docs/plans/2026-02-05-feature-plan.md]"
+  LIVING_SPEC_IMPACTED: "[path to the single impacted spec]" | null  # null when no living-spec Doc Targets declaration
+  SCENARIOS:
+    - name: "[named scenario]"
+      given: "[state]"
+      when: "[action]"
+      then: "[expected result]"
+  ASSUMPTIONS: ["assumption 1", "assumption 2"]
+  DECISIONS: ["decision 1", "decision 2"]
+  OPEN_DECISIONS: ["decision needing explicit approval"] | []
+  DIFFERENCES_FROM_AGREEMENT: ["difference 1"] | []
+  RECOMMENDED_DEFAULTS: ["decision -> recommended default"]
+  ALTERNATIVES: ["alternative A", "alternative B"] | []
+  DRAWBACKS: ["drawback 1", "drawback 2"] | []
+  PROVABLE_PROPERTIES: ["property 1", "property 2"] | []
+  REMEDIATION_REASON: null | "Clarification required before plan can proceed: {summary of Your Input Needed items}"
+  USER_INPUT_NEEDED: ["Q1 text", "Q2 text"] | []  # Compaction-safe list of open questions (same as Your Input Needed bullets)
+  # Memory durability: describe behaviors and patterns, not line numbers. Reference stable module boundaries.
+  MEMORY_NOTES:
+    learnings: ["Planning approach and key insights"]
+    patterns: ["Architectural decisions made"]
+    verification: ["Plan: {PLAN_FILE} with {CONFIDENCE}/100 confidence"]
 ```
 **CONTRACT RULE:** `STATUS=PLAN_CREATED` or `STATUS=DECISION_RFC_CREATED` requires PLAN_FILE is valid path, `PLAN_MODE` is set, `VERIFICATION_RIGOR` is set, CONFIDENCE>=50, GATE_PASSED=true, `SCENARIOS` is non-empty, `OPEN_DECISIONS=[]`, and `DIFFERENCES_FROM_AGREEMENT` is explicitly present. `PLAN_MODE=decision_rfc` requires at least 2 `ALTERNATIVES` and at least 1 `DRAWBACKS` entry. `VERIFICATION_RIGOR=critical_path` requires non-empty `PROVABLE_PROPERTIES` and matching critical-path sections in the body. `STATUS=NEEDS_CLARIFICATION` requires BLOCKING=true and REMEDIATION_REASON summarizing the open questions. If gate was skipped (trivial plan), set GATE_PASSED=true. `PLANNING_REVIEW_RUNS` must reflect the number of completed fresh-review passes already applied to this artifact.
 ```

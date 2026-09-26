@@ -363,6 +363,54 @@ check("real-shape component-builder fixture passes", result["valid"], True)
 check("real-shape component-builder fixture has zero violations", result["violations"], [])
 
 # ---------------------------------------------------------------------------
+# 10. Real-template-shaped fixture (planner) parses and validates
+# ---------------------------------------------------------------------------
+print("\n[real planner template shape validates]")
+REAL_SHAPE_PLANNER_YAML = """\
+verdict:
+  STATUS: PLAN_CREATED
+  PLAN_MODE: execution_plan
+  VERIFICATION_RIGOR: standard
+  CONFIDENCE: 88
+  PHASES: 5
+  RISKS_IDENTIFIED: 5
+  PLANNING_REVIEW_STATUS: passed
+  PLANNING_REVIEW_RUNS: 0
+  BLOCKING: false
+  NEXT_ACTION: build
+  REMEDIATION_NEEDED: false
+  REQUIRES_REMEDIATION: false
+  GATE_PASSED: true
+  REMEDIATION_SCOPE_REQUESTED: N/A
+rationale:
+  SUMMARY: "planned the schema-validation pilot"
+  PLAN_FILE: "docs/plans/2026-09-18-schema-validation-router-contrac-plan.md"
+  LIVING_SPEC_IMPACTED: null
+  SCENARIOS:
+    - name: "valid contract passes"
+      given: "a well-formed nested contract"
+      when: "the validator runs"
+      then: "valid=true, zero violations"
+  ASSUMPTIONS: []
+  DECISIONS: ["nest fields under verdict/rationale without renaming any field"]
+  OPEN_DECISIONS: []
+  DIFFERENCES_FROM_AGREEMENT: []
+  RECOMMENDED_DEFAULTS: []
+  ALTERNATIVES: []
+  DRAWBACKS: []
+  PROVABLE_PROPERTIES: []
+  REMEDIATION_REASON: null
+  USER_INPUT_NEEDED: []
+  MEMORY_NOTES:
+    learnings: []
+    patterns: []
+    verification: []
+"""
+result = validate_contract(parse_block_yaml(REAL_SHAPE_PLANNER_YAML), PLANNER_SCHEMA)
+check("real-shape planner fixture passes", result["valid"], True)
+check("real-shape planner fixture has zero violations", result["violations"], [])
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 print(f"\n{PASS} PASS, {FAIL} FAIL")
