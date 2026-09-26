@@ -115,6 +115,7 @@ def _scan_block_comments(lines: list) -> list:
     in_block = False
     block_start = None
     interior: list = []
+    prev_file = None
 
     def flush() -> None:
         if len(interior) >= 3 and block_start is not None:
@@ -128,6 +129,15 @@ def _scan_block_comments(lines: list) -> list:
         interior.clear()
 
     for file_, line_no, content in lines:
+        if file_ != prev_file:
+            # A block comment can never legitimately span files -- reset all
+            # in-progress state at every file boundary so an unclosed /* in
+            # one file can never bleed into (and misattribute) a later,
+            # unrelated file's content.
+            in_block = False
+            interior = []
+            block_start = None
+            prev_file = file_
         if not in_block:
             start_match = _BLOCK_COMMENT_START_RE.search(content)
             if start_match is None:

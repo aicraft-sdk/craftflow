@@ -236,6 +236,32 @@ def test_block_comment_code_detected() -> None:
             fail("block_comment_code_detected", f"got {data}")
 
 
+def test_unclosed_block_comment_does_not_bleed_into_next_file() -> None:
+    # Regression: _scan_block_comments() iterates the flattened cross-file
+    # `lines` list with no reset of in_block/interior/block_start at file
+    # boundaries. An unclosed /* in first.ts (only 1 interior line -- below
+    # the 3-line threshold on its own) must not "borrow" second.ts's next 2
+    # real code lines to cross the threshold and produce a finding that
+    # misattributes second.ts's real code to first.ts. Neither file alone
+    # has a genuine 3+-line commented block, so the correct result is zero
+    # commented-code-block findings; a bleed produces exactly one, wrongly
+    # attributed to first.ts:1.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "first.ts").write_text("/* unclosed comment starts here\nnever closes in this file\n")
+        (root / "second.ts").write_text(
+            "function real() {\n  doSomething();\n  doSomethingElse(); /* end note */\n  return 1;\n}\n"
+        )
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        block_hits = [f for f in data["findings"] if f["pattern"] == "commented-code-block"]
+        if block_hits == []:
+            ok("unclosed_block_comment_does_not_bleed_into_next_file")
+        else:
+            fail("unclosed_block_comment_does_not_bleed_into_next_file", f"cross-file bleed produced a misattributed finding: {block_hits}")
+
+
 def test_eslint_disable_comments_are_not_false_positives() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -292,6 +318,7 @@ def main() -> int:
     test_todo_with_unrelated_hash_number_is_still_flagged()
     test_commented_code_block_detected()
     test_block_comment_code_detected()
+    test_unclosed_block_comment_does_not_bleed_into_next_file()
     test_eslint_disable_comments_are_not_false_positives()
     test_python_suppression_directives_are_not_false_positives()
     print()
