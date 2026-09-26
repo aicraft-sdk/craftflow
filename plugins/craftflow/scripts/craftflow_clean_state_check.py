@@ -32,8 +32,11 @@ _TODO_RE = re.compile(r"\bTODO\b")
 # hash-number elsewhere in the comment (e.g. "ref line #42") as a ticket
 # reference; the colon tolerance was added after "TODO: #123"/"TODO: JIRA-456"
 # (the common colon-separated ticket style) were found still being wrongly
-# flagged as ticketless.
-_TODO_TICKET_RE = re.compile(r"TODO\(?:?\s*(?:#\d+|[A-Z]{2,}-\d+)")
+# flagged as ticketless. The leading \b (mirroring _TODO_RE's \bTODO\b) is
+# required -- without it this pattern matches mid-identifier, e.g. the
+# embedded "TODO(#123" substring inside "MEGATODO(#123)", wrongly treating
+# an unrelated bare TODO elsewhere on the same line as ticketed.
+_TODO_TICKET_RE = re.compile(r"\bTODO\(?:?\s*(?:#\d+|[A-Z]{2,}-\d+)")
 _COMMENT_LINE_RE = re.compile(r"^\s*(//|#)\s*(.*)$")
 _CODE_TOKEN_RE = re.compile(r"[=(){};]")
 _DISABLE_COMMENT_RE = re.compile(
@@ -145,7 +148,15 @@ def _scan_block_comments(lines: list) -> list:
             # A block comment can never legitimately span files -- reset all
             # in-progress state at every file boundary so an unclosed /* in
             # one file can never bleed into (and misattribute) a later,
-            # unrelated file's content.
+            # unrelated file's content. An unclosed block must still be
+            # FLUSHED here before the reset: the end-of-scan `if in_block:
+            # flush()` below only rescues a block that is still open when the
+            # ENTIRE scan ends (i.e. only when it's in the LAST file) -- an
+            # unclosed block in any non-last file was previously discarded
+            # silently by this reset (reset without flush), never reaching
+            # findings or skipped.
+            if in_block:
+                flush()
             in_block = False
             interior = []
             block_start = None
@@ -182,6 +193,7 @@ def scan(project_root: Path) -> tuple:
     lines, skipped = _added_lines(project_root)
 
     comment_run: list = []
+    prev_comment_run_file = None
 
     def flush_comment_run() -> None:
         if len(comment_run) >= 3:
@@ -195,6 +207,16 @@ def scan(project_root: Path) -> tuple:
         comment_run.clear()
 
     for file_, line_no, content in lines:
+        if file_ != prev_comment_run_file:
+            # Mirrors the block-comment reset in _scan_block_comments(): a
+            # run of consecutive commented code-like lines can never
+            # legitimately span files. Without this reset, a comment run
+            # left open at the end of one file (below the 3-line threshold
+            # on its own) silently combines with the next file's leading
+            # comment lines, crossing the threshold and producing a finding
+            # misattributed to the first file.
+            flush_comment_run()
+            prev_comment_run_file = file_
         if _CONSOLE_LOG_RE.search(content):
             findings.append({"pattern": "console.log", "file": file_, "line": line_no, "snippet": content.strip()})
         if _DEBUGGER_RE.search(content):

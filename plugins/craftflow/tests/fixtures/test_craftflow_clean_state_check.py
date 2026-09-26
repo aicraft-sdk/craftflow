@@ -349,6 +349,81 @@ def test_unterminated_block_comment_at_end_of_scan_is_not_dropped() -> None:
             fail("unterminated_block_comment_at_end_of_scan_is_not_dropped", f"unterminated block silently dropped: {data}")
 
 
+def test_unclosed_block_in_first_of_three_files_is_still_flushed() -> None:
+    # Regression: the file-boundary reset in _scan_block_comments() cleared
+    # in_block/interior/block_start WITHOUT calling flush() first. The
+    # end-of-scan `if in_block: flush()` only rescues an unclosed block that
+    # is still open when the ENTIRE scan ends -- i.e. only when the unclosed
+    # block sits in the LAST file. An unclosed block with a genuine 3+-line
+    # interior sitting in a NON-last file (here, the first of three) was
+    # silently dropped: not in findings, not in skipped. This is the exact
+    # scenario existing tests never covered (they only exercise single-file
+    # or last-file unclosed blocks).
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "aaa_first.ts").write_text(
+            "/* unclosed\nline one\nline two\nline three\n"
+        )
+        (root / "bbb_middle.ts").write_text("function mid() { return 0; }\n")
+        (root / "ccc_last.ts").write_text("function last() { return 0; }\n")
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "commented-code-block" and f["file"] == "aaa_first.ts"]
+        if len(hits) == 1 and hits[0]["line"] == 1:
+            ok("unclosed_block_in_first_of_three_files_is_still_flushed")
+        else:
+            fail("unclosed_block_in_first_of_three_files_is_still_flushed", f"unclosed block in non-last file silently dropped: {data}")
+
+
+def test_line_comment_run_does_not_bleed_across_file_boundary() -> None:
+    # Regression: the sibling // and # line-comment `comment_run` tracker in
+    # scan() had NO file-boundary reset at all (unlike the block-comment
+    # path). It is shared across the whole flattened cross-file `lines`
+    # sequence and only flushed on a non-comment-like line, never on a file
+    # transition. fileA ends with 2 code-like `//` lines and fileB begins
+    # with 2 more -- neither alone crosses the 3-line threshold, but combined
+    # they wrongly do, producing one false finding misattributed to fileA.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "aaa_file.ts").write_text(
+            "function f() { return 1; }\n// const x = 1;\n// doSomething(x);\n"
+        )
+        (root / "bbb_file.ts").write_text(
+            "// return x + 1;\n// console.log(x);\nfunction g() { return 2; }\n"
+        )
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "commented-code-block"]
+        if hits == []:
+            ok("line_comment_run_does_not_bleed_across_file_boundary")
+        else:
+            fail("line_comment_run_does_not_bleed_across_file_boundary", f"cross-file bleed produced a misattributed finding: {hits}")
+
+
+def test_todo_ticket_regex_does_not_match_mid_identifier() -> None:
+    # Regression: _TODO_TICKET_RE had no leading \b boundary, unlike
+    # _TODO_RE's \bTODO\b -- it could match mid-identifier. On a line like
+    # "MEGATODO(#123) call site, TODO fix this bare one has no ticket",
+    # _TODO_TICKET_RE.search() wrongly matched the embedded "TODO(#123"
+    # substring inside "MEGATODO", causing the line's real, separate, bare
+    # TODO to be wrongly suppressed.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "app.ts").write_text(
+            "// MEGATODO(#123) call site, TODO fix this bare one has no ticket\nfunction f() { return 1; }\n"
+        )
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "todo-without-ticket"]
+        if len(hits) == 1:
+            ok("todo_ticket_regex_does_not_match_mid_identifier")
+        else:
+            fail("todo_ticket_regex_does_not_match_mid_identifier", f"got {data}")
+
+
 def test_eslint_disable_comments_are_not_false_positives() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -410,6 +485,9 @@ def main() -> int:
     test_block_comment_code_detected()
     test_unclosed_block_comment_does_not_bleed_into_next_file()
     test_unterminated_block_comment_at_end_of_scan_is_not_dropped()
+    test_unclosed_block_in_first_of_three_files_is_still_flushed()
+    test_line_comment_run_does_not_bleed_across_file_boundary()
+    test_todo_ticket_regex_does_not_match_mid_identifier()
     test_eslint_disable_comments_are_not_false_positives()
     test_python_suppression_directives_are_not_false_positives()
     print()
