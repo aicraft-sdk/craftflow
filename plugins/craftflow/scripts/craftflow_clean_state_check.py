@@ -94,6 +94,15 @@ def _added_lines(project_root: Path) -> tuple:
         rel = status_line[3:].strip()
         full = project_root / rel
         if not full.is_file():
+            if full.is_dir():
+                # git structurally never descends into an embedded .git,
+                # regardless of --untracked-files=all -- an untracked
+                # directory that itself contains a .git (e.g. an
+                # accidentally-vendored dependency) always collapses to one
+                # `?? dir/` line and can never be scanned. Surface the gap
+                # rather than silently dropping it from both findings and
+                # skipped.
+                skipped.append({"file": rel, "error": "nested git repository -- not scanned"})
             continue
         try:
             text = full.read_text(encoding="utf-8", errors="replace")

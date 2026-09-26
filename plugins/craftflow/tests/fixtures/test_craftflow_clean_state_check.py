@@ -152,6 +152,36 @@ def test_new_untracked_directory_is_not_collapsed_and_hidden() -> None:
             fail("new_untracked_directory_is_not_collapsed_and_hidden", f"got {data}")
 
 
+def test_nested_git_repo_directory_is_surfaced_in_skipped() -> None:
+    # Regression: git structurally never descends into an embedded .git
+    # regardless of --untracked-files=all -- an untracked directory that
+    # itself contains a .git (e.g. an accidentally-vendored dependency)
+    # still collapses to one `?? dir/` line. full.is_file() is False for
+    # it, so it was silently dropped: not in findings, not in skipped.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        nested = root / "vendored-dep"
+        nested.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=nested, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=nested, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=nested, check=True)
+        (nested / "console.txt").write_text("console.log('inside nested repo');\n")
+        subprocess.run(["git", "add", "."], cwd=nested, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "nested base"], cwd=nested, check=True)
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        findings_hits = [f for f in data["findings"] if "vendored-dep" in f.get("file", "")]
+        skipped_hits = [s for s in data.get("skipped", []) if "vendored-dep" in s.get("file", "")]
+        if skipped_hits and not findings_hits:
+            ok("nested_git_repo_directory_is_surfaced_in_skipped")
+        else:
+            fail(
+                "nested_git_repo_directory_is_surfaced_in_skipped",
+                f"expected vendored-dep/ in skipped (never silently absent from both), got findings={findings_hits} skipped={skipped_hits}",
+            )
+
+
 def test_todo_without_ticket_detected() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -370,6 +400,7 @@ def main() -> int:
     test_clean_diff_reports_nothing()
     test_unreadable_untracked_file_is_surfaced_not_swallowed()
     test_new_untracked_directory_is_not_collapsed_and_hidden()
+    test_nested_git_repo_directory_is_surfaced_in_skipped()
     test_todo_without_ticket_detected()
     test_todo_with_ticket_is_not_flagged()
     test_todo_with_unrelated_hash_number_is_still_flagged()
