@@ -36,7 +36,25 @@ section — never block or retry.
 
 ## Clean-State Check
 
-*(added in Phase 2 — see below)*
+**When:** BUILD — inside `SKILL.md`'s `### Worktree Isolation (BUILD Default)` step 4,
+immediately before sub-step 4a (the pre-merge safety guard) when `worktree_mode ==
+"auto_created"`, OR immediately before creating the BUILD Memory Update task when no worktree
+exists. DEBUG — immediately before creating the DEBUG Memory Update task
+(`debug-workflow.md`). Not run for PLAN or REVIEW — neither produces a code diff to scan.
+
+```bash
+python3 {plugin_root}/scripts/craftflow_clean_state_check.py --project-root . --format json
+```
+
+Parse stdout `{"findings": [...]}`.
+- `findings == []` → nothing to add.
+- `findings != []` → add one `[Deferred]: clean-state-check: {pattern} at {file}:{line}` line
+  per finding directly into the SAME workflow-scoped `activeContext.md` write that this
+  memory-finalize task already performs (via the `deferred` `MEMORY_NOTES` routing in
+  `SKILL.md` § 13) — never a separate write, never a blocking gate.
+
+Non-zero exit or unparseable stdout: log `{"event":"clean_state_check_failed","error":"..."}`
+and proceed to memory-finalize without a deferred note — never block or retry.
 
 ## Feature Backlog
 
