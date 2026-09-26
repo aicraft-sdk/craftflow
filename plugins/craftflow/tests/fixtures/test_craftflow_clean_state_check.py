@@ -262,6 +262,31 @@ def test_unclosed_block_comment_does_not_bleed_into_next_file() -> None:
             fail("unclosed_block_comment_does_not_bleed_into_next_file", f"cross-file bleed produced a misattributed finding: {block_hits}")
 
 
+def test_unterminated_block_comment_at_end_of_scan_is_not_dropped() -> None:
+    # Regression: flush() was only ever called from inside the block-close
+    # branch. A block comment that opens with /* and never closes anywhere
+    # in the scanned diff had its interior lines silently discarded -- the
+    # exact "invisible commented-out code" symptom this pass exists to
+    # catch. A finding (or an explicit skipped entry) must be produced, not
+    # silence.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "app.ts").write_text(
+            "/*\nconst x = 1;\ndoSomething(x);\nreturn x + 1;\nlogSomethingElse(x);\n"
+        )
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        block_hits = [f for f in data["findings"] if f["pattern"] == "commented-code-block"]
+        skipped_hits = [s for s in data.get("skipped", []) if s.get("file") == "app.ts"]
+        if len(block_hits) == 1 and block_hits[0]["line"] == 1:
+            ok("unterminated_block_comment_at_end_of_scan_is_not_dropped")
+        elif len(skipped_hits) == 1:
+            ok("unterminated_block_comment_at_end_of_scan_is_not_dropped")
+        else:
+            fail("unterminated_block_comment_at_end_of_scan_is_not_dropped", f"unterminated block silently dropped: {data}")
+
+
 def test_eslint_disable_comments_are_not_false_positives() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -319,6 +344,7 @@ def main() -> int:
     test_commented_code_block_detected()
     test_block_comment_code_detected()
     test_unclosed_block_comment_does_not_bleed_into_next_file()
+    test_unterminated_block_comment_at_end_of_scan_is_not_dropped()
     test_eslint_disable_comments_are_not_false_positives()
     test_python_suppression_directives_are_not_false_positives()
     print()

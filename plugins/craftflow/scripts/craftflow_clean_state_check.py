@@ -155,6 +155,13 @@ def _scan_block_comments(lines: list) -> list:
             continue
         interior.append(content)
 
+    if in_block:
+        # A block that opens with /* and never closes anywhere in the
+        # scanned diff must still be flushed -- otherwise its interior lines
+        # are silently discarded, the exact "invisible commented-out code"
+        # symptom this pass exists to catch.
+        flush()
+
     return findings
 
 
