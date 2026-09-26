@@ -182,6 +182,67 @@ def test_nested_git_repo_directory_is_surfaced_in_skipped() -> None:
             )
 
 
+def test_broken_symlink_is_surfaced_in_skipped() -> None:
+    # Regression: an untracked path that is neither is_file() nor is_dir()
+    # (a dangling/broken symlink, a symlink loop, a socket, a FIFO, a device
+    # file) fell through the if/if-dir chain with no `else` -- `continue`
+    # silently dropped it from BOTH findings and skipped. A scan gap must
+    # never be indistinguishable from a genuinely clean result.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        os.symlink("./does-not-exist.ts", root / "broken-link.ts")
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [s for s in data.get("skipped", []) if s.get("file") == "broken-link.ts"]
+        if len(hits) == 1 and "error" in hits[0] and hits[0]["error"]:
+            ok("broken_symlink_is_surfaced_in_skipped")
+        else:
+            fail("broken_symlink_is_surfaced_in_skipped", f"got {data}")
+
+
+def test_missing_git_binary_produces_clean_error_not_traceback() -> None:
+    # Regression: _run_git()'s subprocess.run(["git", ...]) raises a raw
+    # FileNotFoundError when the git binary is missing from PATH, which
+    # propagated uncaught out of main() instead of becoming a clean
+    # GitError/JSON-error exit-1 -- contradicting the module docstring's
+    # documented contract ("Exit 1 only on a genuine git error ... git
+    # binary missing"). Strip PATH so the child process's own `git`
+    # subprocess.run() lookup fails with FileNotFoundError.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        env = dict(os.environ)
+        env["PATH"] = ""
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--project-root", str(root), "--format", "json"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if result.returncode != 1:
+            fail(
+                "missing_git_binary_produces_clean_error_not_traceback",
+                f"expected exit 1, got exit={result.returncode}, stdout={result.stdout!r}, stderr={result.stderr!r}",
+            )
+            return
+        try:
+            payload = json.loads(result.stderr)
+        except json.JSONDecodeError:
+            fail(
+                "missing_git_binary_produces_clean_error_not_traceback",
+                f"expected clean JSON error on stderr, got uncaught traceback: {result.stderr!r}",
+            )
+            return
+        if "error" in payload and "git binary not found" in payload["error"]:
+            ok("missing_git_binary_produces_clean_error_not_traceback")
+        else:
+            fail(
+                "missing_git_binary_produces_clean_error_not_traceback",
+                f"expected error mentioning 'git binary not found', got {payload}",
+            )
+
+
 def test_todo_without_ticket_detected() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -476,6 +537,8 @@ def main() -> int:
     test_unreadable_untracked_file_is_surfaced_not_swallowed()
     test_new_untracked_directory_is_not_collapsed_and_hidden()
     test_nested_git_repo_directory_is_surfaced_in_skipped()
+    test_broken_symlink_is_surfaced_in_skipped()
+    test_missing_git_binary_produces_clean_error_not_traceback()
     test_todo_without_ticket_detected()
     test_todo_with_ticket_is_not_flagged()
     test_todo_with_unrelated_hash_number_is_still_flagged()

@@ -51,7 +51,15 @@ class GitError(Exception):
 
 
 def _run_git(args: list, project_root: Path) -> str:
-    result = subprocess.run(["git", "-C", str(project_root), *args], capture_output=True, text=True)
+    try:
+        result = subprocess.run(["git", "-C", str(project_root), *args], capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        # subprocess.run(["git", ...]) raises a raw FileNotFoundError when the
+        # git binary itself is missing from PATH -- re-raise as GitError so
+        # main() converts this into a clean JSON error + exit 1, matching
+        # this module's own documented contract, instead of an uncaught
+        # traceback propagating past main().
+        raise GitError(f"git binary not found: {exc}") from exc
     if result.returncode != 0:
         raise GitError(result.stderr.strip() or f"git {' '.join(args)} failed")
     return result.stdout
@@ -106,6 +114,18 @@ def _added_lines(project_root: Path) -> tuple:
                 # rather than silently dropping it from both findings and
                 # skipped.
                 skipped.append({"file": rel, "error": "nested git repository -- not scanned"})
+            else:
+                # Neither is_file() nor is_dir(): a broken/dangling symlink,
+                # a symlink loop, a socket, a FIFO, or a device file. There
+                # was no else branch here before -- it fell through to
+                # `continue` with nothing recorded in findings OR skipped, a
+                # silent scan gap indistinguishable from a genuinely clean
+                # result. Surface it explicitly instead.
+                reason = "broken symlink" if full.is_symlink() else "special file"
+                skipped.append({
+                    "file": rel,
+                    "error": f"not a regular file or directory ({reason}) -- not scanned",
+                })
             continue
         try:
             text = full.read_text(encoding="utf-8", errors="replace")
