@@ -248,6 +248,22 @@ def main() -> int:
     args = parser.parse_args()
     args.backlog = _resolve_backlog_path(args)
 
+    given = [
+        name
+        for name, value in (
+            ("--register", args.register),
+            ("--activate", args.activate),
+            ("--complete", args.complete),
+            ("--report", args.report),
+        )
+        if value is not None
+    ]
+    if len(given) > 1:
+        parser.error(
+            "only one of --register/--activate/--complete/--report may be given at a time "
+            f"(got {', '.join(given)})"
+        )
+
     try:
         if args.register is not None:
             return cmd_register(args)

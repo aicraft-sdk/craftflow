@@ -239,6 +239,23 @@ def test_activate_unknown_id_exits_1() -> None:
             fail("activate_unknown_id_exits_1", f"expected exit 1, got {result.returncode}")
 
 
+def test_multiple_subcommands_given_produces_clear_error() -> None:
+    # --activate x1 --report json previously only performed the activation;
+    # the --report request silently produced no output and no warning. Must
+    # be a clear error, not silent partial execution.
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = Path(tmp) / ".craftflow" / "state"
+        run_cli(["--register", json.dumps({"id": "feat-multi"})], state_dir)
+        result = run_cli(["--activate", "feat-multi", "--report", "json"], state_dir)
+        if result.returncode != 0 and "only one" in result.stderr.lower():
+            ok("multiple_subcommands_given_produces_clear_error")
+        else:
+            fail(
+                "multiple_subcommands_given_produces_clear_error",
+                f"exit={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}",
+            )
+
+
 def main() -> int:
     print("test_craftflow_feature_backlog: running")
     test_register_creates_not_started_entry()
@@ -251,6 +268,7 @@ def main() -> int:
     test_complete_unknown_id_exits_1()
     test_activate_unknown_id_exits_1()
     test_activate_empty_string_produces_clear_error_not_help_dump()
+    test_multiple_subcommands_given_produces_clear_error()
     print()
     print("=" * 40)
     if _errors:
