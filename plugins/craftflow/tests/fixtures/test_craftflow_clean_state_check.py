@@ -107,12 +107,79 @@ def test_unreadable_untracked_file_is_surfaced_not_swallowed() -> None:
             unreadable.chmod(0o644)
 
 
+def test_todo_without_ticket_detected() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "app.ts").write_text("// TODO fix this later\nfunction f() { return 1; }\n")
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "todo-without-ticket"]
+        if len(hits) == 1:
+            ok("todo_without_ticket_detected")
+        else:
+            fail("todo_without_ticket_detected", f"got {data}")
+
+
+def test_todo_with_ticket_is_not_flagged() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "app.ts").write_text("// TODO(#123): revisit after v2\nfunction f() { return 1; }\n")
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "todo-without-ticket"]
+        if hits == []:
+            ok("todo_with_ticket_is_not_flagged")
+        else:
+            fail("todo_with_ticket_is_not_flagged", f"expected no todo findings, got {hits}")
+
+
+def test_commented_code_block_detected() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "app.ts").write_text(
+            "// const x = 1;\n// doSomething(x);\n// return x + 1;\nfunction f() { return 1; }\n"
+        )
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "commented-code-block"]
+        if len(hits) == 1 and hits[0]["line"] == 1:
+            ok("commented_code_block_detected")
+        else:
+            fail("commented_code_block_detected", f"got {data}")
+
+
+def test_eslint_disable_comments_are_not_false_positives() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "app.ts").write_text(
+            "// eslint-disable-next-line no-console\n"
+            "// eslint-disable no-unused-vars\n"
+            "// @ts-ignore\n"
+            "function f() { return 1; }\n"
+        )
+        result = run_cli(root)
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "commented-code-block"]
+        if hits == []:
+            ok("eslint_disable_comments_are_not_false_positives")
+        else:
+            fail("eslint_disable_comments_are_not_false_positives", f"expected no findings, got {hits}")
+
+
 def main() -> int:
     print("test_craftflow_clean_state_check: running")
     test_console_log_detected()
     test_debugger_detected()
     test_clean_diff_reports_nothing()
     test_unreadable_untracked_file_is_surfaced_not_swallowed()
+    test_todo_without_ticket_detected()
+    test_todo_with_ticket_is_not_flagged()
+    test_commented_code_block_detected()
+    test_eslint_disable_comments_are_not_false_positives()
     print()
     print("=" * 40)
     if _errors:
