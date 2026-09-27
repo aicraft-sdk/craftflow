@@ -17,14 +17,15 @@ assignments, --password/--token/--secret/--api-key flag values) and Write/Edit f
 made cwd-relative or reduced to a bare basename via _relativize_path() -- never absolute (see
 Task 3.2).
 
-NOTE: this module currently exposes only the pure allowlist matcher and pure builders
-(build_state/build_questions/decide/telemetry_row/_append_event). main() -- the stdin-JSON-
-driven, fail-open hook entry point -- lands in Phase 4 of the implementation plan.
+main() is the stdin-JSON-driven, fail-open PreToolUse hook entry point (Task 4.1): it never
+prints anything and always returns 0, in every branch (no-match, off, inactive, matched+logged,
+matched+no_decision, exception) -- see DD-3.
 """
 from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import re
 import uuid
 from pathlib import Path
@@ -32,9 +33,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from craftflow_hooklib import (
     is_env_assignment,
+    latest_live_workflow_payload,
+    load_input,
     now_iso,
+    plugin_config_dir,
     split_subcommands,
+    state_root,
 )
+from craftflow_jev_client import call as jev_call
+from craftflow_jev_config import api_key, is_active, load_config
 from craftflow_jev_heuristic import classify_risk_gate
 
 # REM-FIX (silent-failure-hunter MEDIUM #1): hard byte cap on untrusted command text applied
@@ -618,3 +625,84 @@ def _append_event(path: Path, row: Dict[str, Any]) -> bool:
         return True
     except Exception:
         return False
+
+
+def main() -> int:
+    try:
+        data = load_input()
+        if data.get("hook_event_name") not in (None, "PreToolUse"):
+            return 0
+        tool_name = data.get("tool_name")
+        raw_tool_input = data.get("tool_input")
+        tool_input = raw_tool_input if isinstance(raw_tool_input, dict) else {}
+
+        category = matches_allowlist(tool_name, tool_input)
+        if category is None:
+            return 0  # zero I/O for the vast majority of calls -- config not even loaded
+
+        cfg, _decisions = load_config(plugin_config_dir() / "jev.json")
+        env = os.environ
+        mode = (cfg.get("features") or {}).get("riskGate", "off")
+        if mode == "off" or not is_active(cfg, env):
+            return 0
+
+        key = api_key(env)
+        # Hoisted above the tool_name branch (REM-FIX, planning-review pass 1, BLOCKING):
+        # `cwd` is needed by BOTH the Write/Edit path-relativization below AND the
+        # `latest_live_workflow_payload()` call further down -- a single trusted-payload
+        # read, used consistently everywhere this hook needs "which project is this call
+        # actually in".
+        cwd = data.get("cwd") if isinstance(data.get("cwd"), str) else None
+        if tool_name == "Bash":
+            action_text = tool_input.get("command")
+            action_text = action_text if isinstance(action_text, str) else ""
+        else:
+            # DD-9: send a project-relative path (never absolute) -- avoids leaking a
+            # home-dir/username segment for the least-sensitive field this feature sends.
+            raw_path = tool_input.get("file_path")
+            raw_path = raw_path if isinstance(raw_path, str) else ""
+            action_text = _relativize_path(raw_path, cwd)
+        state = build_state(tool_name, category, action_text, api_key=key, max_chars=cfg["maxStateChars"])
+        questions = build_questions()
+        result = jev_call(
+            state, questions,
+            api_key=key, model=cfg["model"], timeout=cfg["timeoutSeconds"], cache_dir=None,
+        )
+        answer = None
+        if isinstance(result, dict) and isinstance(result.get("answers"), dict):
+            answer = result["answers"].get("risk")
+        decision, choice, confidence = decide(mode, answer)
+
+        session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
+        workflow_uuid = None
+        try:
+            # REM-FIX (planning-review pass 1, BLOCKING): MUST pass project_root=Path(cwd)
+            # here, exactly like craftflow_pretooluse_bash_guard.py's own "ADR 0033
+            # deferred-sibling fix" and craftflow_pretooluse_guard.py's Item A fix. Omitting
+            # `project_root` makes `latest_live_workflow_payload()` silently fall back to
+            # THIS PROCESS's own env-derived project identity (`CLAUDE_PROJECT_DIR`/
+            # `Path.cwd()`) instead of the trusted PreToolUse payload's `cwd` -- in a
+            # multi-project session this can attribute this row's `workflow_uuid` to an
+            # UNRELATED project's live workflow, corrupting the PROMOTE/HOLD attribution
+            # this feature's telemetry depends on. This fails WRONG SILENTLY (a
+            # plausible-looking but incorrect workflow_uuid), not open -- the try/except
+            # only catches exceptions, never a successful-but-misattributed payload, so
+            # getting this call site right is the only thing that prevents it.
+            payload = latest_live_workflow_payload(session_id, project_root=Path(cwd) if cwd else None)
+            workflow_uuid = payload.get("workflow_uuid") or payload.get("workflow_id")
+        except Exception:
+            workflow_uuid = None  # best-effort only -- never blocks telemetry
+
+        row = telemetry_row(
+            decision=decision, choice=choice, confidence=confidence, result=result,
+            mode=mode, model=cfg["model"], workflow_uuid=workflow_uuid,
+            tool_name=tool_name, category=category,
+        )
+        _append_event(state_root() / "jev" / "events.jsonl", row)
+        return 0
+    except Exception:
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

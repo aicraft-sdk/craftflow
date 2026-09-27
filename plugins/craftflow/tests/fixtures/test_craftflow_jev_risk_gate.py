@@ -30,6 +30,7 @@ from craftflow_jev_risk_gate import (  # noqa: E402
     _append_event,
     _ACTION_TEXT_DOS_BACKSTOP_CHARS,
     _REDACT_MATCH_LOOKAHEAD_CHARS,
+    main,
 )
 
 _passes = 0
@@ -851,6 +852,273 @@ def test_append_event_returns_true_on_success_and_false_on_failure() -> None:
             fail("append-event-bool", f"succeeded={succeeded!r} failed={failed!r}")
 
 
+# ---------------------------------------------------------------------------
+# main() -- stdin-JSON-driven, fail-open PreToolUse hook (Phase 4, Task 4.1)
+# ---------------------------------------------------------------------------
+
+import os
+
+
+def run_hook(payload: dict, env: dict) -> tuple:
+    """stdin-JSON analog of test_craftflow_jev_remfix_scope.py's run_cli() -- feeds `payload`
+    on stdin via mock, runs main() in-process (unlike the live driver in Phase 6, which runs
+    the real subprocess)."""
+    out, err = io.StringIO(), io.StringIO()
+    with (
+        mock.patch("sys.stdin", io.StringIO(json.dumps(payload))),
+        mock.patch.dict("os.environ", env, clear=True),
+        contextlib.redirect_stdout(out),
+        contextlib.redirect_stderr(err),
+    ):
+        code = main()
+    return code, out.getvalue(), err.getvalue()
+
+
+def _cfg_path(tmp: str, features: dict) -> Path:
+    config_path = Path(tmp) / "jev.json"
+    config_path.write_text(json.dumps({"enabled": True, "features": features}))
+    return config_path
+
+
+def test_no_allowlist_match_makes_zero_calls_before_even_loading_config() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp) / "project"
+        plugin = Path(tmp) / "plugin"
+        (plugin / "config").mkdir(parents=True)
+        # deliberately NO config/jev.json written -- if main() short-circuits on the
+        # allowlist BEFORE ever touching config, a missing file must never matter here.
+        with mock.patch("craftflow_jev_risk_gate.jev_call") as mocked:
+            code, out, _err = run_hook(
+                {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "ls -la"}, "cwd": str(project)},
+                {"TYPESAFE_API_KEY": "k", "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin)},
+            )
+        if code == 0 and out == "" and not mocked.called:
+            ok("no allowlist match: zero jev_call invocations, empty stdout, exit 0")
+        else:
+            fail("no-match-zero-calls", f"code={code} out={out!r} mocked.called={mocked.called}")
+
+
+def test_off_mode_makes_zero_calls_and_writes_zero_telemetry() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp) / "project"
+        plugin = Path(tmp) / "plugin"
+        (plugin / "config").mkdir(parents=True)
+        (plugin / "config" / "jev.json").write_text(json.dumps({"enabled": True, "features": {"riskGate": "off"}}))
+        events_path = project / ".craftflow" / "state" / "jev" / "events.jsonl"
+        with mock.patch("craftflow_jev_risk_gate.jev_call") as mocked:
+            code, out, _err = run_hook(
+                {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/x"}, "cwd": str(project)},
+                {"TYPESAFE_API_KEY": "k", "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin)},
+            )
+        if code == 0 and out == "" and not mocked.called and not events_path.exists():
+            ok("riskGate=off: allowlist match but zero jev_call, zero telemetry")
+        else:
+            fail("off-mode-zero-calls", f"code={code} out={out!r} mocked.called={mocked.called} events_exists={events_path.exists()}")
+
+
+def test_missing_api_key_treated_as_off_even_when_mode_is_advise() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp) / "project"
+        plugin = Path(tmp) / "plugin"
+        (plugin / "config").mkdir(parents=True)
+        (plugin / "config" / "jev.json").write_text(json.dumps({"enabled": True, "features": {"riskGate": "advise"}}))
+        with mock.patch("craftflow_jev_risk_gate.jev_call") as mocked:
+            code, out, _err = run_hook(
+                {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "git push --force"}, "cwd": str(project)},
+                {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin)},  # no TYPESAFE_API_KEY
+            )
+        if code == 0 and out == "" and not mocked.called:
+            ok("missing API key falls open to off even when riskGate=advise")
+        else:
+            fail("missing-key-off", f"out={out!r} mocked.called={mocked.called}")
+
+
+def test_audit_mode_matched_logs_and_writes_one_row() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp) / "project"
+        plugin = Path(tmp) / "plugin"
+        (plugin / "config").mkdir(parents=True)
+        (plugin / "config" / "jev.json").write_text(json.dumps({"enabled": True, "features": {"riskGate": "audit"}}))
+        events_path = project / ".craftflow" / "state" / "jev" / "events.jsonl"
+        fake_result = {
+            "answers": {"risk": {"choice": "risky", "confidence": 0.9}},
+            "model": "jev-latest", "latency_ms": 80, "cache_hit": False, "usage": {},
+        }
+        with mock.patch("craftflow_jev_risk_gate.jev_call", return_value=fake_result) as mocked:
+            code, out, _err = run_hook(
+                {"hook_event_name": "PreToolUse", "tool_name": "Write", "tool_input": {"file_path": ".env", "content": "SECRET=1"}, "cwd": str(project)},
+                {"TYPESAFE_API_KEY": "k", "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin)},
+            )
+        rows = [json.loads(l) for l in events_path.read_text().splitlines()] if events_path.exists() else []
+        raw_text = events_path.read_text() if events_path.exists() else ""
+        if (
+            code == 0 and out == "" and mocked.called and len(rows) == 1
+            and rows[0]["feature"] == "risk_gate" and rows[0]["category"] == "secret_path"
+            and rows[0]["decision"] == "logged" and "SECRET=1" not in raw_text
+        ):
+            ok("audit mode: matched call logs via main(), writes exactly 1 telemetry row, no leaked content")
+        else:
+            fail("audit-mode-logged", f"code={code} out={out!r} rows={rows!r}")
+
+
+def test_jev_call_failure_falls_back_to_no_decision_but_still_logs() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp) / "project"
+        plugin = Path(tmp) / "plugin"
+        (plugin / "config").mkdir(parents=True)
+        (plugin / "config" / "jev.json").write_text(json.dumps({"enabled": True, "features": {"riskGate": "audit"}}))
+        events_path = project / ".craftflow" / "state" / "jev" / "events.jsonl"
+        with mock.patch("craftflow_jev_risk_gate.jev_call", return_value=None):
+            code, out, _err = run_hook(
+                {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/x"}, "cwd": str(project)},
+                {"TYPESAFE_API_KEY": "k", "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin)},
+            )
+        rows = [json.loads(l) for l in events_path.read_text().splitlines()] if events_path.exists() else []
+        if code == 0 and out == "" and len(rows) == 1 and rows[0]["decision"] == "no_decision":
+            ok("jev_call failure falls back to no_decision, still logs 1 row, still exits 0 silently")
+        else:
+            fail("jev-call-failure", f"code={code} rows={rows!r}")
+
+
+def test_main_never_raises_on_unexpected_exception() -> None:
+    with mock.patch("craftflow_jev_risk_gate.load_config", side_effect=RuntimeError("boom")):
+        with mock.patch(
+            "craftflow_jev_risk_gate.load_input",
+            return_value={"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/x"}},
+        ):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = main()
+    if code == 0 and out.getvalue() == "":
+        ok("main() never raises -- unexpected exceptions fail open, silent, exit 0")
+    else:
+        fail("main-never-raises", f"code={code} out={out.getvalue()!r}")
+
+
+def test_non_pretooluse_hook_event_name_short_circuits() -> None:
+    with mock.patch("craftflow_jev_risk_gate.load_input", return_value={"hook_event_name": "UserPromptSubmit"}):
+        with mock.patch("craftflow_jev_risk_gate.load_config") as mocked_load_config:
+            code = main()
+    if code == 0 and not mocked_load_config.called:
+        ok("a non-PreToolUse hook_event_name short-circuits before any config load")
+    else:
+        fail("wrong-hook-event", f"code={code} mocked_load_config.called={mocked_load_config.called}")
+
+
+def test_workflow_uuid_anchored_to_payload_cwd_not_env_project_dir() -> None:
+    # REM-FIX regression (planning-review pass 1, BLOCKING): telemetry's workflow_uuid must
+    # be selected via the trusted PreToolUse payload `cwd`, never via this process's own
+    # env-derived CLAUDE_PROJECT_DIR -- mirrors craftflow_pretooluse_bash_guard.py's own
+    # "ADR 0033 deferred-sibling fix" and craftflow_pretooluse_guard.py's Item A fix
+    # (see test_pretooluse_guard_worktree_path_diverges_cwd_and_claude_project_dir in
+    # craftflow_hook_unit_tests.py for the sibling precedent this mirrors). A workflow with
+    # worktree_path: None is always "live" (_workflow_payload_is_live()), so no worktree
+    # directory or git init is needed for this fixture -- just two distinct project roots
+    # each with their own live workflow JSON.
+    with tempfile.TemporaryDirectory() as tmp:
+        env_proj = Path(tmp) / "env-proj"    # this process's CLAUDE_PROJECT_DIR
+        cwd_proj = Path(tmp) / "cwd-proj"    # the PreToolUse payload's own trusted cwd
+        plugin = Path(tmp) / "plugin"
+        for d in (env_proj, cwd_proj):
+            (d / ".craftflow" / "state" / "workflows").mkdir(parents=True)
+        (plugin / "config").mkdir(parents=True)
+        (plugin / "config" / "jev.json").write_text(json.dumps({"enabled": True, "features": {"riskGate": "audit"}}))
+        (env_proj / ".craftflow" / "state" / "workflows" / "wf-env-should-not-leak.json").write_text(
+            json.dumps({"workflow_uuid": "wf-env-should-not-leak", "worktree_path": None})
+        )
+        (cwd_proj / ".craftflow" / "state" / "workflows" / "wf-cwd-correct.json").write_text(
+            json.dumps({"workflow_uuid": "wf-cwd-correct", "worktree_path": None})
+        )
+        # _append_event() writes via state_root() (no project_root override) -- that side of
+        # the code is intentionally unchanged by this fix and still resolves via
+        # CLAUDE_PROJECT_DIR, so the telemetry file itself lands under env_proj even though
+        # the workflow_uuid value INSIDE that row must come from cwd_proj.
+        events_path = env_proj / ".craftflow" / "state" / "jev" / "events.jsonl"
+        fake_result = {
+            "answers": {"risk": {"choice": "risky", "confidence": 0.9}},
+            "model": "jev-latest", "latency_ms": 80, "cache_hit": False, "usage": {},
+        }
+        with mock.patch("craftflow_jev_risk_gate.jev_call", return_value=fake_result):
+            code, out, _err = run_hook(
+                {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/x"}, "cwd": str(cwd_proj)},
+                {"TYPESAFE_API_KEY": "k", "CLAUDE_PROJECT_DIR": str(env_proj), "CLAUDE_PLUGIN_ROOT": str(plugin)},
+            )
+        rows = [json.loads(l) for l in events_path.read_text().splitlines()] if events_path.exists() else []
+        if code == 0 and out == "" and len(rows) == 1 and rows[0]["workflow_uuid"] == "wf-cwd-correct":
+            ok("telemetry workflow_uuid is anchored to the trusted payload cwd, never leaks the env-derived project's own workflow")
+        else:
+            fail("workflow-uuid-cross-project-leak", f"code={code} rows={rows!r}")
+
+
+# ---------------------------------------------------------------------------
+# hooks/hooks.json registration (Phase 4, Task 4.2)
+# ---------------------------------------------------------------------------
+
+def test_hooks_json_registers_pretooluse_jev_risk_gate_with_timeout_5() -> None:
+    hooks = json.loads((PLUGIN_ROOT / "hooks" / "hooks.json").read_text())
+    entries = [
+        hook
+        for block in hooks["hooks"]["PreToolUse"]
+        for hook in block["hooks"]
+        if "craftflow_jev_risk_gate.py" in hook["command"]
+    ]
+    matchers = [
+        block["matcher"]
+        for block in hooks["hooks"]["PreToolUse"]
+        for hook in block["hooks"]
+        if "craftflow_jev_risk_gate.py" in hook["command"]
+    ]
+    if len(entries) == 1 and entries[0]["timeout"] == 5 and matchers == ["Bash|Write|Edit"]:
+        ok("hooks.json registers exactly one PreToolUse entry for craftflow_jev_risk_gate.py, timeout=5, matcher Bash|Write|Edit")
+    else:
+        fail("hooks-json-registration", f"entries={entries!r} matchers={matchers!r}")
+
+
+def test_root_cursor_hooks_json_does_not_register_risk_gate() -> None:
+    # Verified precedent: neither craftflow_jev_session_check.py nor craftflow_jev_prompt_hint.py
+    # (the two most recent Jev hook features) are mirrored into the root Cursor-adapter
+    # hooks.json -- this feature follows the same precedent, deliberately.
+    root_hooks_text = (PLUGIN_ROOT / "hooks.json").read_text()
+    if "craftflow_jev_risk_gate.py" not in root_hooks_text:
+        ok("root Cursor-mirror hooks.json does not register risk_gate, matching existing Jev-hook precedent")
+    else:
+        fail("cursor-hooks-not-mirrored", "craftflow_jev_risk_gate.py unexpectedly appears in root hooks.json")
+
+
+# ---------------------------------------------------------------------------
+# Real-subprocess "never blocks on hostile input" property test (Phase 4, Task 4.4)
+# ---------------------------------------------------------------------------
+
+import subprocess
+
+
+def test_real_subprocess_never_blocks_on_hostile_stdin() -> None:
+    script = SCRIPTS / "craftflow_jev_risk_gate.py"
+    hostile_inputs = [
+        b"",
+        b"not json",
+        b"[1, 2, 3]",
+        b"\xff\xfe not valid utf-8",
+        json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "rm -rf x"}}).encode(),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin = Path(tmp) / "plugin"
+        (plugin / "config").mkdir(parents=True)
+        (plugin / "config" / "jev.json").write_text(json.dumps({"enabled": False, "features": {"riskGate": "off"}}))
+        env = {**os.environ, "CLAUDE_PLUGIN_ROOT": str(plugin), "CLAUDE_PROJECT_DIR": tmp}
+        failures = []
+        for payload in hostile_inputs:
+            result = subprocess.run(
+                ["python3", str(script)], input=payload, capture_output=True, timeout=10, env=env,
+            )
+            if result.returncode != 0 or result.stdout != b"" or result.stderr != b"":
+                failures.append((payload[:40], result.returncode, result.stdout, result.stderr))
+        if not failures:
+            ok("real subprocess exits 0 with empty stdout/stderr on every hostile stdin input")
+        else:
+            fail("real-subprocess-hostile-stdin", f"failures={failures!r}")
+
+
 def main_tests() -> int:
     test_rm_rf_allowlist_positive_and_negative()
     test_force_push_allowlist_positive_and_negative()
@@ -888,6 +1156,17 @@ def main_tests() -> int:
     test_telemetry_row_not_risky_disagrees_with_heuristic()
     test_telemetry_row_no_decision_disagrees_with_heuristic()
     test_append_event_returns_true_on_success_and_false_on_failure()
+    test_no_allowlist_match_makes_zero_calls_before_even_loading_config()
+    test_off_mode_makes_zero_calls_and_writes_zero_telemetry()
+    test_missing_api_key_treated_as_off_even_when_mode_is_advise()
+    test_audit_mode_matched_logs_and_writes_one_row()
+    test_jev_call_failure_falls_back_to_no_decision_but_still_logs()
+    test_main_never_raises_on_unexpected_exception()
+    test_non_pretooluse_hook_event_name_short_circuits()
+    test_workflow_uuid_anchored_to_payload_cwd_not_env_project_dir()
+    test_hooks_json_registers_pretooluse_jev_risk_gate_with_timeout_5()
+    test_root_cursor_hooks_json_does_not_register_risk_gate()
+    test_real_subprocess_never_blocks_on_hostile_stdin()
 
     print(f"\n{_passes} passed, {len(_errors)} failed")
     if _errors:
