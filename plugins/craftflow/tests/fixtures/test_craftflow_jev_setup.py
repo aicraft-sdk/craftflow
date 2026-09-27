@@ -114,9 +114,10 @@ def test_status_output_includes_remediation_scope() -> None:
         code == 0
         and "features.remediationScope: off" in out
         and "thresholds.remediationScope: 0.85" in out
+        and "features.riskGate: off" in out
         and err == ""
     ):
-        ok("--status output includes remediationScope feature+threshold")
+        ok("--status output includes remediationScope feature+threshold and riskGate feature")
     else:
         fail("status-remediation-scope", f"code={code} out={out!r} err={err!r}")
 

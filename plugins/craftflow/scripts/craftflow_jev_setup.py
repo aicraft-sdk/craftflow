@@ -64,6 +64,7 @@ def format_status(cfg: Dict[str, Any], config_path: Path, env: Dict[str, str]) -
         f"features.routingHint: {features.get('routingHint')}",
         f"features.skillHint: {features.get('skillHint')}",
         f"features.remediationScope: {features.get('remediationScope')}",
+        f"features.riskGate: {features.get('riskGate')}",
         f"thresholds.routing: {thresholds.get('routing')}",
         f"thresholds.skill: {thresholds.get('skill')}",
         f"thresholds.remediationScope: {thresholds.get('remediationScope')}",
