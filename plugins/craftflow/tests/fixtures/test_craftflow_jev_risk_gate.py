@@ -265,6 +265,158 @@ def test_redact_action_blank_api_key_never_replaces_empty_string() -> None:
         fail("redact-action-blank-key", f"redacted={redacted!r}")
 
 
+def test_redact_action_masks_url_userinfo_with_embedded_at_and_slash_in_password() -> None:
+    # REM-FIX (code-reviewer CRITICAL #1): the password char class used to exclude '@' and '/',
+    # so a password containing either character leaked (partially or entirely uncensored).
+    partial_leak = "psql postgres://dbuser:p@ss@dbhost:5432/prod --command 'drop table users'"
+    total_bypass = "psql postgres://dbuser:pa/ss@dbhost:5432/prod -c 'drop table users'"
+    redacted1, was_redacted1 = redact_action(partial_leak, "")
+    redacted2, was_redacted2 = redact_action(total_bypass, "")
+    checks = (
+        was_redacted1 is True,
+        was_redacted2 is True,
+        "postgres://dbuser:***@dbhost:5432/prod" in redacted1,
+        "postgres://dbuser:***@dbhost:5432/prod" in redacted2,
+        "p@ss" not in redacted1,
+        "pa/ss" not in redacted2,
+        "ss@dbhost" not in redacted1,
+        "ss@dbhost" not in redacted2,
+    )
+    if all(checks):
+        ok("redact_action masks passwords containing embedded @ and / (partial-leak and total-bypass PoCs both closed)")
+    else:
+        fail(
+            "redact-action-embedded-at-slash",
+            f"redacted1={redacted1!r} was_redacted1={was_redacted1!r} "
+            f"redacted2={redacted2!r} was_redacted2={was_redacted2!r} checks={checks!r}",
+        )
+
+
+def test_redact_action_masks_broadened_credential_name_shapes_and_concatenated_flags() -> None:
+    # REM-FIX (silent-failure-hunter CRITICAL #2): the closed name allowlist missed common real
+    # credential shapes (DB_PASS, *_KEY, *_PAT), and the single-dash concatenated mysql/psql
+    # `-p<value>` flag form was not recognized by the flag matcher at all.
+    cases = [
+        ("DB_PASS=hunter2secret rm -rf /tmp", "hunter2secret"),
+        ("OPENAI_KEY=sk-livesecretvalue rm -rf /tmp", "sk-livesecretvalue"),
+        ("AWS_ACCESS_KEY_ID=AKIAFAKEEXAMPLE rm -rf /tmp", "AKIAFAKEEXAMPLE"),
+        ('GH_PAT=ghp_faketoken123 git push --force', "ghp_faketoken123"),
+        ('mysql -uroot -pS3cretPass1 -e "DROP DATABASE prod"', "S3cretPass1"),
+    ]
+    details = []
+    all_ok = True
+    for command, secret in cases:
+        redacted, was_redacted = redact_action(command, "")
+        passed = was_redacted is True and secret not in redacted
+        all_ok = all_ok and passed
+        details.append((command, redacted, was_redacted, passed))
+    if all_ok:
+        ok("redact_action masks DB_PASS/OPENAI_KEY/AWS_ACCESS_KEY_ID/GH_PAT names and mysql -p<value> concatenated flag")
+    else:
+        fail("redact-action-broadened-names-and-flags", f"details={details!r}")
+
+
+def test_matches_allowlist_applies_hard_input_cap_before_pattern_matching() -> None:
+    # REM-FIX (silent-failure-hunter MEDIUM #1, matches_allowlist side): unlike
+    # test_matcher_and_redactor_are_bounded_time_on_pathological_input (which pre-slices samples
+    # to command[:20000] before calling the pure functions), this test calls matches_allowlist
+    # DIRECTLY with full, unsliced adversarial input. A db_drop-shaped phrase placed only beyond
+    # the cap boundary must not be detected -- proving the cap is enforced by matches_allowlist
+    # itself, not merely assumed from bounded regex quantifiers.
+    command_with_late_db_drop = ("a" * 25_000) + " DROP DATABASE prod"
+    category = matches_allowlist("Bash", {"command": command_with_late_db_drop})
+    if category is None:
+        ok("matches_allowlist caps raw command input -- a pattern occurring only beyond the cap boundary is not matched")
+    else:
+        fail(
+            "matches-allowlist-hard-input-cap",
+            f"category={category!r} (expected None -- db_drop phrase occurs beyond the 20000-char cap)",
+        )
+
+
+def test_build_state_redacts_password_straddling_old_pre_redaction_cap_boundary() -> None:
+    # code-reviewer re-review CRITICAL (REM-FIX cycle 2 regression). Cycle 1 added
+    # _MAX_RAW_ACTION_CHARS = 20_000 as a PRE-redaction truncation cap inside build_state,
+    # applied BEFORE redact_action() ran. _URL_USERINFO requires a literal trailing '@' to match
+    # at all -- if the 20,000-char cut lands inside a password before its terminating '@', the
+    # regex never fires and the truncated password fragment reaches action_text in cleartext.
+    # Reproduction per code-reviewer's own verified PoC: a psql connection-string password
+    # positioned so it starts 10 chars before the old 20,000-char cap boundary.
+    # Padding precedes the URL (as it would in a real long command preamble) so the actual
+    # userinfo password field itself stays realistically short -- it must never sit BETWEEN the
+    # userinfo ':' and the password (that would itself exceed _URL_USERINFO's own bounded
+    # password-length quantifier and mask the real bug behind an unrelated non-match).
+    password = "p" * 30
+    prefix = "psql postgres://dbuser:"
+    target_password_start = 19_990  # 10 chars before the old 20,000-char cap boundary
+    padding = "x" * (target_password_start - len(prefix))
+    command = f"{padding}{prefix}{password}@dbhost:5432/prod -c \"DROP TABLE t\""
+    state = build_state("Bash", "db_drop", command, api_key=None, max_chars=100_000)
+    if password not in state["action_text"] and "dbuser:***@dbhost" in state["action_text"]:
+        ok(
+            "build_state redacts a password whose terminating '@' falls past the old "
+            "20000-char pre-redaction cap boundary"
+        )
+    else:
+        fail(
+            "build-state-straddling-boundary-password",
+            f"tail={state['action_text'][19_950:20_060]!r} "
+            f"password_present={password in state['action_text']!r}",
+        )
+
+
+def test_build_state_does_not_pre_cap_raw_input_before_redaction() -> None:
+    # REM-FIX cycle 2: a hard PRE-redaction cap on raw input (previously _MAX_RAW_ACTION_CHARS
+    # applied inside build_state before redact_action ran) is exactly what reopened the
+    # URL-userinfo leak above. build_state must run redact_action() over the FULL raw text and
+    # cap only the REDACTED output at max_chars -- a marker placed beyond the old 20,000-char
+    # cap boundary must survive when max_chars is large enough to hold it.
+    marker = "MARKER_BEYOND_OLD_HARD_CAP"
+    action_text = ("a" * 25_000) + marker
+    state = build_state("Bash", "rm_rf", action_text, api_key="", max_chars=50_000)
+    if marker in state["action_text"]:
+        ok("build_state no longer pre-caps raw input before redact_action runs")
+    else:
+        fail(
+            "build-state-no-pre-cap",
+            f"action_text_len={len(state['action_text'])} marker_present={marker in state['action_text']!r}",
+        )
+
+
+def test_redact_action_safety_cap_truncates_output_never_the_raw_input() -> None:
+    # silent-failure-hunter re-hunt MEDIUM: redact_action() should have its own generous
+    # internal safety bound for a future direct caller that bypasses build_state's own max_chars
+    # egress cap -- but that bound must apply to the REDACTED OUTPUT, never truncate the raw
+    # input before the redaction passes run (that would reintroduce the exact straddling
+    # -boundary bug at a different layer). A password positioned to straddle redact_action's own
+    # internal safety-cap boundary must still be fully masked.
+    # Same construction rule as the build_state regression above: padding precedes the URL so
+    # the userinfo password field itself stays realistically short.
+    password = "s" * 30
+    prefix = "postgres://dbuser:"
+    target_password_start = 199_990  # 10 chars before redact_action's own 200,000-char safety cap
+    padding = "x" * (target_password_start - len(prefix))
+    command = padding + prefix + password + "@dbhost/prod " + ("z" * 5000)
+    redacted, was_redacted = redact_action(command, "")
+    checks = (
+        was_redacted is True,
+        password not in redacted,
+        "dbuser:***@dbhost" in redacted,
+        len(redacted) <= 200_000,
+    )
+    if all(checks):
+        ok(
+            "redact_action masks a credential straddling its own internal safety-cap boundary, "
+            "and still bounds output length"
+        )
+    else:
+        fail(
+            "redact-action-safety-cap",
+            f"len={len(redacted)} password_present={password in redacted!r} "
+            f"was_redacted={was_redacted!r}",
+        )
+
+
 def test_relativize_path_never_leaks_absolute_prefix() -> None:
     checks = (
         _relativize_path("/p/src/.env", "/p") == "src/.env",
@@ -298,6 +450,9 @@ def test_matcher_and_redactor_are_bounded_time_on_pathological_input() -> None:
         " -" * 50_000,
         "=" * 20_000,
         "x://" + "a" * 20_000 + ":" + "b" * 20_000 + "@",
+        # silent-failure-hunter re-hunt LOW: a -p/-u-shaped adversarial case, pinning
+        # _SHORT_FLAG_CONCAT's bounded-time property (previously only verified manually).
+        "-p" + "a" * 200_000,
     ]
     started = time.monotonic()
     for command in pathological_inputs:
@@ -418,6 +573,12 @@ def main_tests() -> int:
     test_redact_action_masks_url_userinfo_env_assignment_and_flag_value()
     test_redact_action_leaves_non_sensitive_commands_unchanged()
     test_redact_action_blank_api_key_never_replaces_empty_string()
+    test_redact_action_masks_url_userinfo_with_embedded_at_and_slash_in_password()
+    test_redact_action_masks_broadened_credential_name_shapes_and_concatenated_flags()
+    test_build_state_redacts_password_straddling_old_pre_redaction_cap_boundary()
+    test_build_state_does_not_pre_cap_raw_input_before_redaction()
+    test_redact_action_safety_cap_truncates_output_never_the_raw_input()
+    test_matches_allowlist_applies_hard_input_cap_before_pattern_matching()
     test_relativize_path_never_leaks_absolute_prefix()
     test_build_state_calls_redact_action_before_capping()
     test_matcher_and_redactor_are_bounded_time_on_pathological_input()

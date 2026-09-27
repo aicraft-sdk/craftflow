@@ -37,6 +37,22 @@ from craftflow_hooklib import (
 )
 from craftflow_jev_heuristic import classify_risk_gate
 
+# REM-FIX (silent-failure-hunter MEDIUM #1): hard byte cap on untrusted command text applied
+# BEFORE matches_allowlist's own category matchers/_db_drop_match run -- bounds the cost of
+# category classification on an attacker-controlled multi-megabyte command string.
+#
+# REM-FIX (code-reviewer re-review CRITICAL, cycle 2): this cap is scoped to matches_allowlist()
+# ONLY -- category classification does not do credential redaction, so truncating its input has
+# no secret-hygiene consequence. It must NEVER be applied to the raw text that reaches
+# redact_action() (see build_state()): cycle 1 briefly also capped build_state's raw input with
+# this same constant before redact_action ran, which reopened the URL-userinfo leak -- a password
+# straddling the cut lost its terminating '@' before the redaction regex ever saw it, so the
+# truncated fragment reached action_text in cleartext (test_build_state_redacts_password_
+# straddling_old_pre_redaction_cap_boundary pins the fix). build_state() now redacts the FULL raw
+# text first and caps only the already-redacted output, via `max_chars` and/or
+# `_REDACT_ACTION_SAFETY_CAP` (see redact_action()).
+_MAX_RAW_ACTION_CHARS = 20_000
+
 _FORCE_PUSH_LITERAL_FLAGS = ("-f", "--force", "--force-with-lease")
 
 
@@ -112,10 +128,11 @@ def matches_allowlist(tool_name: Any, tool_input: Any) -> Optional[str]:
         command = tool_input.get("command")
         if not isinstance(command, str) or not command.strip():
             return None
-        category = _rm_rf_or_force_push_category(command)
+        capped_command = command[:_MAX_RAW_ACTION_CHARS]
+        category = _rm_rf_or_force_push_category(capped_command)
         if category is not None:
             return category
-        return "db_drop" if _db_drop_match(command) else None
+        return "db_drop" if _db_drop_match(capped_command) else None
     if tool_name in ("Write", "Edit"):
         file_path = tool_input.get("file_path")
         if not isinstance(file_path, str) or not file_path.strip():
@@ -132,14 +149,41 @@ def matches_allowlist(tool_name: Any, tool_input: Any) -> Optional[str]:
 # must never leave the machine unredacted.
 # ---------------------------------------------------------------------------
 
-_URL_USERINFO = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]{0,20}://[^\s:/@]{1,256}:)[^\s@/]{1,512}@")
+# REM-FIX (code-reviewer CRITICAL #1): password char class must NOT exclude '@'/'/' -- excluding
+# them is what let a password containing either character leak (partially via the greedy match
+# stopping at the FIRST '@', or entirely when a '/' inside the password broke the match outright).
+# Dropping the exclusions makes the greedy `[^\s]{1,512}` quantifier backtrack to the RIGHTMOST
+# '@' in the whitespace-delimited authority token instead, which is always the real userinfo
+# separator for this shape (see test_redact_action_masks_url_userinfo_with_embedded_at_and_slash_in_password).
+_URL_USERINFO = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]{0,20}://[^\s:/@]{1,256}:)[^\s]{1,512}@")
 _ASSIGNMENT = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]{0,128})=(\"[^\"]{0,4096}\"|'[^']{0,4096}'|\S{1,4096})")
 _SECRET_FLAG = re.compile(
     r"(--(?:password|passwd|token|secret|api-key|apikey)(?:=|\s+))(\"[^\"]{0,4096}\"|'[^']{0,4096}'|\S{1,4096})",
     re.IGNORECASE,
 )
-_SENSITIVE_NAME_PARTS = ("PASSWORD", "PASSWD", "PWD", "TOKEN", "SECRET", "APIKEY", "API_KEY", "CREDENTIAL", "AUTH")
+# REM-FIX (silent-failure-hunter CRITICAL #2): single-dash concatenated CLI flags (mysql/psql
+# convention: `-p<password>`, `-u<username>`, no space) are not covered by _SECRET_FLAG (which
+# only matches `--password`/etc. double-dash forms). Requires a non-space, non-dash boundary
+# before the flag so it only fires on a genuine token start, not mid-word.
+_SHORT_FLAG_CONCAT = re.compile(r"(?<!\S)(-[pu])([^\s\-]\S{0,4095})")
+# REM-FIX (silent-failure-hunter CRITICAL #2): broadened from a closed enumeration that missed
+# common real credential shapes (DB_PASS, OPENAI_KEY, AWS_ACCESS_KEY_ID, GH_PAT). Per the hunter's
+# directive, over-redaction is the accepted safe-failure direction for this feature.
+_SENSITIVE_NAME_PARTS = (
+    "PASSWORD", "PASSWD", "PWD", "PASS", "TOKEN", "SECRET", "APIKEY", "API_KEY", "KEY",
+    "CREDENTIAL", "CRED", "AUTH", "PAT",
+)
 _REDACTED = "***"
+
+# REM-FIX (silent-failure-hunter re-hunt MEDIUM, cycle 2): a generous internal safety bound for a
+# future direct caller of redact_action() that bypasses build_state's own max_chars egress cap.
+# The bounded-quantifier regexes above already make this a performance-only concern, not a
+# correctness one (see test_matcher_and_redactor_are_bounded_time_on_pathological_input), so this
+# cap is applied to the OUTPUT of all four redaction passes below, NEVER to the input before they
+# run -- truncating the input first is exactly the straddling-boundary leak this same REM-FIX
+# round closed at the build_state layer (see build_state() and _MAX_RAW_ACTION_CHARS' docstring).
+# Sized to match the pathological-input test's own proven-fast size.
+_REDACT_ACTION_SAFETY_CAP = 200_000
 
 
 def _redact_assignment(match: "re.Match[str]") -> str:
@@ -152,22 +196,57 @@ def _redact_assignment(match: "re.Match[str]") -> str:
 def redact_action(text: str, api_key: Optional[str]) -> Tuple[str, bool]:
     """Pure. Masks values that must never leave the machine, in order: (1) the literal
     `api_key` if non-empty, (2) URL userinfo passwords, (3) credential-shaped `NAME=value`
-    env-style assignments, (4) `--password`/`--token`/`--secret`/`--api-key`-style flag values.
-    Never raises. Returns (possibly-modified text, whether anything was actually masked)."""
+    env-style assignments, (4) `--password`/`--token`/`--secret`/`--api-key`-style flag values,
+    (5) single-dash concatenated `-p<value>`/`-u<value>` CLI flags (mysql/psql convention).
+    Never raises. Runs every pass over the FULL input text -- never pre-truncates it (that would
+    risk cutting a credential before its terminating delimiter, silently defeating the very
+    redaction this function exists to do). `_REDACT_ACTION_SAFETY_CAP` bounds only the RETURNED,
+    already-redacted text. Returns (possibly-modified text, whether anything was actually
+    masked)."""
     out = text
+    changed = False
+
     if api_key:
-        out = out.replace(api_key, _REDACTED)
-    out = _URL_USERINFO.sub(r"\1" + _REDACTED + "@", out)
-    out = _ASSIGNMENT.sub(_redact_assignment, out)
-    out = _SECRET_FLAG.sub(r"\1" + _REDACTED, out)
-    return out, out != text
+        replaced = out.replace(api_key, _REDACTED)
+        changed = changed or replaced != out
+        out = replaced
+
+    replaced = _URL_USERINFO.sub(r"\1" + _REDACTED + "@", out)
+    changed = changed or replaced != out
+    out = replaced
+
+    replaced = _ASSIGNMENT.sub(_redact_assignment, out)
+    changed = changed or replaced != out
+    out = replaced
+
+    replaced = _SECRET_FLAG.sub(r"\1" + _REDACTED, out)
+    changed = changed or replaced != out
+    out = replaced
+
+    replaced = _SHORT_FLAG_CONCAT.sub(r"\1" + _REDACTED, out)
+    changed = changed or replaced != out
+    out = replaced
+
+    if len(out) > _REDACT_ACTION_SAFETY_CAP:
+        out = out[:_REDACT_ACTION_SAFETY_CAP]
+
+    return out, changed
 
 
 def _relativize_path(file_path: str, cwd: Optional[str]) -> str:
     """Pure (DD-9). Returns `file_path` made relative to `cwd` when `file_path` is a descendant
     of `cwd`; otherwise returns the bare basename. Never returns an absolute path -- avoids
     leaking a home-directory or OS username segment to the third-party classifier. Never raises
-    on malformed input (missing cwd, non-path strings, etc.)."""
+    on malformed input (missing cwd, non-path strings, etc.).
+
+    REM-FIX (code-reviewer MEDIUM #2): `Path(file_path).resolve()` resolves a RELATIVE `file_path`
+    against the real process `os.getcwd()`, not the `cwd` argument above -- a latent correctness
+    footgun (it does not leak an absolute path; confirmed inert today because there are no call
+    sites yet -- main() does not exist until Phase 4). Phase 4's main() MUST always pass an
+    absolute `file_path` (Claude Code's Write/Edit PreToolUse payloads already do this), so this
+    process-cwd-vs-argument-cwd mismatch never actually triggers in practice. No functional change
+    made here per the reviewer's own assessment; this comment exists so Phase 4's implementer does
+    not accidentally introduce a relative `file_path` call site without re-checking this."""
     if not file_path:
         return ""
     try:
@@ -182,9 +261,18 @@ def build_state(
     tool_name: str, category: str, action_text: str, *, api_key: Optional[str], max_chars: int
 ) -> Dict[str, Any]:
     """Pure. `action_text` is the raw command (Bash) or file_path (Write/Edit) -- NEVER
-    content/new_string/old_string (see module docstring, P1). The Bash command string is run
-    through `redact_action()` BEFORE truncation (DD-8) -- credential masking must see the full
-    text, not a value already cut off mid-secret."""
+    content/new_string/old_string (see module docstring, P1).
+
+    REM-FIX (code-reviewer re-review CRITICAL, cycle 2): `redact_action()` runs over the FULL,
+    UNTRUNCATED raw `action_text` -- cycle 1's `_MAX_RAW_ACTION_CHARS` pre-redaction truncation
+    cap (applied here, before redact_action) reopened the URL-userinfo leak: a credential
+    positioned so its terminating delimiter (e.g. '@') fell just past the cap boundary was cut
+    off before redact_action ever saw it, so the redaction regex -- which requires that trailing
+    delimiter to match at all -- never fired, and the truncated fragment reached `action_text` in
+    cleartext (see test_build_state_redacts_password_straddling_old_pre_redaction_cap_boundary).
+    The caller-supplied `max_chars` egress budget (DD-8) is applied ONLY to the already-redacted
+    output below, never to the raw text redact_action() receives; `redact_action()`'s own
+    `_REDACT_ACTION_SAFETY_CAP` provides a further, output-side-only safety bound."""
     redacted_text, was_redacted = redact_action(action_text, api_key)
     truncated = len(redacted_text) > max_chars
     return {
@@ -275,7 +363,16 @@ def _append_event(path: Path, row: Dict[str, Any]) -> bool:
     """Never raises. Returns True only if the row was actually written. Duplicated (not
     imported) from craftflow_jev_remfix_scope.py's identically-shaped private helper, matching
     this repo's established per-script duplication convention for small, script-private I/O
-    helpers (see craftflow_pretooluse_bash_guard.py's PROTECTED_MEMORY_FILES precedent)."""
+    helpers (see craftflow_pretooluse_bash_guard.py's PROTECTED_MEMORY_FILES precedent).
+
+    REM-FIX (silent-failure-hunter HIGH, forward-risk note): this bool return has no structural
+    mechanism yet forcing it to be checked -- main() (Phase 4, not this file yet) MUST follow
+    craftflow_jev_remfix_scope.py:207-214's pattern ("no auto-apply without a persisted audit
+    row"): if a future decision path ever treats a "logged" telemetry row as meaningful before
+    checking this function's return value, a failed write must downgrade that outcome the same
+    way remfix_scope.py demotes "applied" to "below_threshold" when `persisted` is False. This
+    feature has no "applied"-equivalent state today (see decide()'s docstring, DD-5), so there is
+    nothing to downgrade yet -- but Phase 4's implementer must not skip this check once one exists."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
