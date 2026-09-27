@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from craftflow_hooklib import state_root
 from craftflow_jev_report_lib import _manifest_by_call_id
 
-FEATURES = ("routing", "skill", "remfix_scope")
+FEATURES = ("routing", "skill", "remfix_scope", "risk_gate")
 
 
 # ---------------------------------------------------------------------------
@@ -233,8 +233,8 @@ def aggregate(
 ) -> Dict[str, Any]:
     """Pure: one DD-8 telemetry row per JSON line. A line that fails to parse,
     is not a JSON object, or names a feature other than routing/skill/
-    remfix_scope is skipped and counted in "malformed" rather than failing
-    the report. manifest_rows is an optional list of already-parsed
+    remfix_scope/risk_gate is skipped and counted in "malformed" rather than
+    failing the report. manifest_rows is an optional list of already-parsed
     replay_manifest.jsonl rows (dicts); None (the default) means no
     manifest was supplied and preserves the exact pre-dual-gate output
     shape for every feature."""
@@ -357,6 +357,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-agreement-routing", type=float, default=0.80)
     parser.add_argument("--min-agreement-skill", type=float, default=0.60)
     parser.add_argument("--min-agreement-remfix-scope", type=float, default=0.80)
+    parser.add_argument("--min-agreement-risk-gate", type=float, default=0.80)
     parser.add_argument(
         "--manifest",
         type=str,
@@ -399,6 +400,8 @@ def _min_agreement_for(feature: str, args: argparse.Namespace) -> float:
         return args.min_agreement_routing
     if feature == "remfix_scope":
         return args.min_agreement_remfix_scope
+    if feature == "risk_gate":
+        return args.min_agreement_risk_gate
     return args.min_agreement_skill
 
 

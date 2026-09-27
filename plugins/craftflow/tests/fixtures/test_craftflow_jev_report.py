@@ -337,9 +337,9 @@ def test_summarize_feature_skill_and_remfix_scope_never_get_accuracy_keys_even_w
 # ---------------------------------------------------------------------------
 
 
-def test_features_tuple_includes_remfix_scope() -> None:
-    if "remfix_scope" in FEATURES and len(FEATURES) == 3:
-        ok("FEATURES tuple includes remfix_scope")
+def test_features_tuple_includes_remfix_scope_and_risk_gate() -> None:
+    if "remfix_scope" in FEATURES and "risk_gate" in FEATURES and len(FEATURES) == 4:
+        ok("FEATURES tuple includes remfix_scope and risk_gate")
     else:
         fail("features-tuple", f"FEATURES={FEATURES!r}")
 
@@ -364,6 +364,60 @@ def test_aggregate_and_verdict_promote_remfix_scope_rows() -> None:
         ok("remfix_scope rows aggregate and PROMOTE exactly like routing/skill (no agree_risk key)")
     else:
         fail("remfix-scope-promote", f"feat={feat!r} result={result!r}")
+
+
+def test_cli_min_agreement_risk_gate_flag_defaults_to_080() -> None:
+    args = build_arg_parser().parse_args([])
+    if args.min_agreement_risk_gate == 0.80:
+        ok("--min-agreement-risk-gate CLI flag defaults to 0.80")
+    else:
+        fail("cli-default-risk-gate", f"args.min_agreement_risk_gate={args.min_agreement_risk_gate!r}")
+
+
+def test_aggregate_and_verdict_promote_risk_gate_rows() -> None:
+    lines = [json.dumps(
+        {"feature": "risk_gate", "agree": True, "answers": {"choice": "risky"}, "heuristic_result": "risky",
+         "latency_ms": 100, "usage": {}, "cache_hit": False, "injected": False}
+    )] * 100
+    summary = aggregate(lines)
+    feat = summary["features"]["risk_gate"]
+    result, _reason = verdict(feat, min_n=100, min_agreement=0.80)
+    if feat["n"] == 100 and feat["agreement"] == 1.0 and result == "PROMOTE" and "agree_risk" not in feat:
+        ok("risk_gate rows aggregate and PROMOTE exactly like routing/skill/remfix_scope (no agree_risk key)")
+    else:
+        fail("aggregate-promote-risk-gate", f"feat={feat!r} result={result!r}")
+
+
+def test_risk_gate_rows_advise_supported_false_never_special_cased() -> None:
+    # DD-5: riskGate:"advise" is treated identically to "audit" this round -- the report
+    # layer's aggregate()/_summarize_feature() must never branch on advise_supported; a row
+    # carrying advise_supported:False aggregates identically to one without the key at all.
+    row_kwargs = {
+        "feature": "risk_gate", "agree": True, "answers": {"choice": "risky"},
+        "heuristic_result": "risky", "latency_ms": 50,
+        "usage": {"input_tokens": 5, "output_tokens": 1}, "cache_hit": False, "injected": False,
+    }
+    rows_with_flag = [json.dumps({**row_kwargs, "advise_supported": False}) for _ in range(10)]
+    rows_without_flag = [json.dumps(dict(row_kwargs)) for _ in range(10)]
+    feat_with = aggregate(rows_with_flag)["features"]["risk_gate"]
+    feat_without = aggregate(rows_without_flag)["features"]["risk_gate"]
+    if feat_with == feat_without and feat_with["n"] == 10 and feat_with["agreement"] == 1.0:
+        ok("risk_gate rows with advise_supported:False aggregate identically to rows without it -- report layer never special-cases advise mode")
+    else:
+        fail("advise-supported-not-special-cased", f"with={feat_with!r} without={feat_without!r}")
+
+
+def test_routing_skill_remfix_scope_cli_defaults_unchanged_by_risk_gate_addition() -> None:
+    # Regression guard: adding risk_gate must not change the other 3 features' own bars.
+    args = build_arg_parser().parse_args([])
+    if (
+        args.min_agreement_routing == 0.80
+        and args.min_agreement_skill == 0.60
+        and args.min_agreement_remfix_scope == 0.80
+    ):
+        ok("routing/skill/remfix_scope CLI defaults unchanged by risk_gate addition")
+    else:
+        fail("cli-defaults-unchanged", f"args={args!r}")
 
 
 def test_routing_and_skill_verdicts_unchanged_by_third_feature() -> None:
@@ -1245,9 +1299,13 @@ def main() -> int:
     test_summarize_feature_routing_null_workflow_type_excluded_from_ground_truth()
     test_summarize_feature_skill_and_remfix_scope_never_get_accuracy_keys_even_with_manifest()
     test_jev_choice_and_heuristic_choice_match_ab_reports_routing_only_helpers()
-    test_features_tuple_includes_remfix_scope()
+    test_features_tuple_includes_remfix_scope_and_risk_gate()
     test_cli_min_agreement_remfix_scope_flag_defaults_to_080()
     test_aggregate_and_verdict_promote_remfix_scope_rows()
+    test_cli_min_agreement_risk_gate_flag_defaults_to_080()
+    test_aggregate_and_verdict_promote_risk_gate_rows()
+    test_risk_gate_rows_advise_supported_false_never_special_cased()
+    test_routing_skill_remfix_scope_cli_defaults_unchanged_by_risk_gate_addition()
     test_routing_and_skill_verdicts_unchanged_by_third_feature()
     test_verdict_promote_when_n_and_agreement_meet_thresholds()
     test_verdict_hold_when_n_below_minimum()
