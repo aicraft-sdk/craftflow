@@ -56,6 +56,17 @@
             "statusMessage": "CRAFTFLOW safe-shell catastrophic-command guard"
           }
         ]
+      },
+      {
+        "matcher": "Bash|Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_jev_risk_gate.py\"",
+            "timeout": 5,
+            "statusMessage": "CRAFTFLOW optional Jev pre-execution risk-gate audit (inert unless config/jev.json's features.riskGate enables it)"
+          }
+        ]
       }
     ],
     "SessionStart": [
