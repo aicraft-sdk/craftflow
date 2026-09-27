@@ -114,6 +114,14 @@ def test_remfix_scope_heuristic_matches_documented_recommendation() -> None:
         fail("remfix-scope-heuristic-drift", f"classify={classify_remfix_scope()!r}")
 
 
+def test_classify_risk_gate_is_constant_risky() -> None:
+    from craftflow_jev_heuristic import classify_risk_gate
+    if classify_risk_gate() == "risky":
+        ok("classify_risk_gate() returns the constant 'risky' baseline")
+    else:
+        fail("classify-risk-gate", f"got={classify_risk_gate()!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_heuristic: running")
     test_parity_with_router_protocol_markdown()
@@ -123,6 +131,7 @@ def main() -> int:
     test_risk_signals_and_skill_rule()
     test_skill_rule_source_lines_still_present()
     test_remfix_scope_heuristic_matches_documented_recommendation()
+    test_classify_risk_gate_is_constant_risky()
 
     print()
     print("=" * 40)

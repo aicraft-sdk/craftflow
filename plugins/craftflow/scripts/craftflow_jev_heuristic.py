@@ -184,3 +184,18 @@ def classify_remfix_scope() -> str:
     """Deterministic, input-independent heuristic baseline for the remfix_scope
     agreement telemetry -- never raises."""
     return REMFIX_SCOPE_RECOMMENDED
+
+
+# The allowlist match ITSELF is the deterministic baseline for risk_gate: every row this
+# feature ever produces already passed a hand-authored, reviewable pattern match (rm -rf,
+# force-push, DB-drop/migration-down, secret-path write) -- by construction, the naive
+# baseline says "risky" every time. `agree` in the risk_gate telemetry row therefore measures
+# whether Jev's classifier corroborates the naive allowlist match (== "risky") or overrides it
+# to "not_risky" given the call's actual arguments/target -- never the other direction.
+RISK_GATE_BASELINE = "risky"
+
+
+def classify_risk_gate() -> str:
+    """Deterministic, input-independent heuristic baseline for the risk_gate agreement
+    telemetry -- never raises."""
+    return RISK_GATE_BASELINE
