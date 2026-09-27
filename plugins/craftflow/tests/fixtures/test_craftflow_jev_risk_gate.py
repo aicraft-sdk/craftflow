@@ -1050,6 +1050,47 @@ def test_workflow_uuid_anchored_to_payload_cwd_not_env_project_dir() -> None:
             fail("workflow-uuid-cross-project-leak", f"code={code} rows={rows!r}")
 
 
+def test_failed_telemetry_append_is_logged_via_log_event_but_main_stays_fail_open() -> None:
+    # REM-FIX regression (silent-failure-hunter HIGH): a matched+active invocation whose
+    # _append_event() write fails previously vanished with zero trace anywhere on the machine
+    # -- not even via log_event(), which every other failure path in this hook family uses. Force
+    # the exact repro the hunter used: pre-create `.craftflow/state/jev` as a FILE, not a
+    # directory, so `_append_event`'s own `path.parent.mkdir(parents=True, exist_ok=True)` raises
+    # and its try/except degrades to `return False`.
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp) / "project"
+        plugin = Path(tmp) / "plugin"
+        (plugin / "config").mkdir(parents=True)
+        (plugin / "config" / "jev.json").write_text(json.dumps({"enabled": True, "features": {"riskGate": "audit"}}))
+        (project / ".craftflow" / "state").mkdir(parents=True)
+        (project / ".craftflow" / "state" / "jev").write_text("not a directory")
+        events_path = project / ".craftflow" / "state" / "jev" / "events.jsonl"
+        log_path = project / ".craftflow" / "state" / "craftflow-hook-events.log"
+        fake_result = {
+            "answers": {"risk": {"choice": "risky", "confidence": 0.9}},
+            "model": "jev-latest", "latency_ms": 80, "cache_hit": False, "usage": {},
+        }
+        with mock.patch("craftflow_jev_risk_gate.jev_call", return_value=fake_result):
+            code, out, _err = run_hook(
+                {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/x"}, "cwd": str(project)},
+                {"TYPESAFE_API_KEY": "k", "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin)},
+            )
+        log_text = log_path.read_text() if log_path.exists() else ""
+        events_written = events_path.exists() and events_path.is_file()
+        if (
+            code == 0 and out == "" and not events_written
+            and '"decision": "telemetry_write_failed"' in log_text
+            and '"event": "append_event"' in log_text
+            and '"category": "rm_rf"' in log_text
+        ):
+            ok("a failed telemetry append is recorded via log_event() (decision=telemetry_write_failed); main() still exits 0 with empty stdout")
+        else:
+            fail(
+                "telemetry-write-failed-logged",
+                f"code={code} out={out!r} events_written={events_written} log_text={log_text!r}",
+            )
+
+
 # ---------------------------------------------------------------------------
 # hooks/hooks.json registration (Phase 4, Task 4.2)
 # ---------------------------------------------------------------------------
@@ -1164,6 +1205,7 @@ def main_tests() -> int:
     test_main_never_raises_on_unexpected_exception()
     test_non_pretooluse_hook_event_name_short_circuits()
     test_workflow_uuid_anchored_to_payload_cwd_not_env_project_dir()
+    test_failed_telemetry_append_is_logged_via_log_event_but_main_stays_fail_open()
     test_hooks_json_registers_pretooluse_jev_risk_gate_with_timeout_5()
     test_root_cursor_hooks_json_does_not_register_risk_gate()
     test_real_subprocess_never_blocks_on_hostile_stdin()

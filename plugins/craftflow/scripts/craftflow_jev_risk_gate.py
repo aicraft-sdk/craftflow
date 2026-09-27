@@ -35,6 +35,7 @@ from craftflow_hooklib import (
     is_env_assignment,
     latest_live_workflow_payload,
     load_input,
+    log_event,
     now_iso,
     plugin_config_dir,
     split_subcommands,
@@ -610,14 +611,12 @@ def _append_event(path: Path, row: Dict[str, Any]) -> bool:
     this repo's established per-script duplication convention for small, script-private I/O
     helpers (see craftflow_pretooluse_bash_guard.py's PROTECTED_MEMORY_FILES precedent).
 
-    REM-FIX (silent-failure-hunter HIGH, forward-risk note): this bool return has no structural
-    mechanism yet forcing it to be checked -- main() (Phase 4, not this file yet) MUST follow
-    craftflow_jev_remfix_scope.py:207-214's pattern ("no auto-apply without a persisted audit
-    row"): if a future decision path ever treats a "logged" telemetry row as meaningful before
-    checking this function's return value, a failed write must downgrade that outcome the same
-    way remfix_scope.py demotes "applied" to "below_threshold" when `persisted` is False. This
-    feature has no "applied"-equivalent state today (see decide()'s docstring, DD-5), so there is
-    nothing to downgrade yet -- but Phase 4's implementer must not skip this check once one exists."""
+    REM-FIX (silent-failure-hunter HIGH): main() captures this return value and, on False, calls
+    log_event() so a failed telemetry append is at least discoverable via
+    craftflow-hook-events.log instead of vanishing with zero trace. This feature has no
+    "applied"-equivalent state (see decide()'s docstring, DD-5), so there is nothing to downgrade
+    the way craftflow_jev_remfix_scope.py:207-214 demotes "applied" to "below_threshold" -- the
+    log_event() call is the full remediation this feature needs."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
@@ -698,7 +697,26 @@ def main() -> int:
             mode=mode, model=cfg["model"], workflow_uuid=workflow_uuid,
             tool_name=tool_name, category=category,
         )
-        _append_event(state_root() / "jev" / "events.jsonl", row)
+        persisted = _append_event(state_root() / "jev" / "events.jsonl", row)
+        if not persisted:
+            # REM-FIX (silent-failure-hunter HIGH): a failed telemetry append previously left
+            # zero trace anywhere on the machine -- log_event() is the same fallback every other
+            # failure path in this hook family uses (see craftflow_jev_prompt_hint.py's own
+            # log_event() calls) so this is at least discoverable via craftflow-hook-events.log.
+            # This feature has no "applied"-equivalent state to downgrade (DD-5) -- unlike
+            # craftflow_jev_remfix_scope.py:207-214's persisted-gated decision demotion -- so
+            # there is nothing to demote here; main() still stays fail-open and silent on stdout.
+            log_event(
+                "plugin_jev_risk_gate",
+                {
+                    "event": "append_event",
+                    "decision": "telemetry_write_failed",
+                    "tool_name": tool_name,
+                    "category": category,
+                    "session_id": session_id,
+                    "workflow_uuid": workflow_uuid,
+                },
+            )
         return 0
     except Exception:
         return 0
