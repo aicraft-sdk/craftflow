@@ -203,18 +203,55 @@ _REDACT_ACTION_SAFETY_CAP = 200_000
 #     only to Bash command CLASSIFICATION, never to egress/redaction.
 #   - _REDACT_ACTION_SAFETY_CAP (200,000): redact_action()'s own OUTPUT-side bound, for a future
 #     direct caller that bypasses build_state's max_chars egress budget.
-#   - _MAX_REDACT_ACTION_INPUT_CHARS (this constant): build_state()'s INPUT-side bound, ahead of
-#     redact_action(), so the regex passes never run over unbounded text on the real hook path.
+#   - _MAX_REDACT_ACTION_INPUT_CHARS (this constant): build_state()'s base INPUT-side bound,
+#     ahead of redact_action(), so the regex passes never run over unbounded text on the real
+#     hook path. As of cycle 4 (below), this is no longer the literal slice point -- see
+#     _REDACT_ACTION_INPUT_MARGIN_CHARS.
 #
-# Sized generously enough that it can NEVER reintroduce the cycle-1/cycle-2 straddling-boundary
-# regression (a cap landing inside a credential before its terminating delimiter silently defeats
-# redaction): no realistic credential (URL password, env-var value, CLI flag value) is ever more
-# than a few hundred/thousand characters, so 100,000 characters gives a >>50x safety margin over
-# any genuine secret while still bounding worst-case regex compute cost to well under a second
-# (~0.01-0.03s at the measured per-MB rate). Both existing straddling-boundary regression tests
-# (cycle 1's build_state test, cycle 2's redact_action-internal-safety-cap test) construct
-# commands well under 100,000 characters and remain green under this cap.
+# REM-FIX (code-reviewer re-review CRITICAL, cycle 4, verified live PoC). Cycle 3's mistake:
+# treating this as a pure SIZE problem ("100,000 is >>50x any realistic credential, so it's
+# safe") reintroduced cycle 1's exact bug at a new boundary. The actual invariant is POSITIONAL,
+# not length-based: cutting `action_text` at EXACTLY `_MAX_REDACT_ACTION_INPUT_CHARS` can still
+# land between a credential and its regex's required trailing delimiter (_URL_USERINFO's '@'),
+# and no cap SIZE avoids that -- an adversarial input can always be constructed to straddle any
+# single fixed cut point (see test_build_state_redacts_password_straddling_old_pre_redaction_
+# cap_boundary and test_build_state_closes_credential_leak_straddling_100k_hard_cap_boundary,
+# which pins the reviewer's own reproduction of this exact class at the 100,000-char boundary).
+#
+# The fix is NOT to move the cut again -- it is to stop cutting the RAW input at the point where
+# a credential could be straddling it. `_REDACT_ACTION_INPUT_MARGIN_CHARS` extends the window fed
+# to redact_action() by at least the largest bounded-quantifier span among this module's four
+# redaction patterns (_ASSIGNMENT/_SECRET_FLAG's value captures are bounded to 4096 chars,
+# _SHORT_FLAG_CONCAT's to 4095, _URL_USERINFO's password field to 512 -- see redact_action()
+# below). Because every credential these patterns can ever recognize has a total match length
+# bounded by that same span, a credential that STARTS anywhere before
+# `_MAX_REDACT_ACTION_INPUT_CHARS` is mathematically guaranteed to have its full match (including
+# the trailing delimiter) complete before `_MAX_REDACT_ACTION_INPUT_CHARS +
+# _REDACT_ACTION_INPUT_MARGIN_CHARS` -- so the widened window can never sever it. This mirrors
+# exactly the principle that closed cycle 1's leak (redact first, cap after): the TRUE hard cap
+# (bounding compute cost) is applied only to the output of build_state()'s existing `max_chars`
+# egress budget, never to redact_action()'s input at the base `_MAX_REDACT_ACTION_INPUT_CHARS`
+# boundary -- only at the margin-extended one, which no realistic bounded-length credential can
+# straddle. `_REDACT_ACTION_SAFETY_CAP` (redact_action()'s own output-side bound, above) already
+# covers the "what if a future caller sends an even larger already-redacted string" case; no
+# third, redundant output cap is needed in build_state() -- its own `max_chars` parameter already
+# serves that purpose for this call path.
 _MAX_REDACT_ACTION_INPUT_CHARS = 100_000
+
+# See the cycle-4 note above: at least the largest bounded-quantifier span among
+# _URL_USERINFO/_ASSIGNMENT/_SECRET_FLAG/_SHORT_FLAG_CONCAT's value/password captures (4096 is
+# the largest -- _ASSIGNMENT and _SECRET_FLAG's quoted/unquoted value groups are `{0,4096}`/
+# `{1,4096}`, _SHORT_FLAG_CONCAT's is `{0,4095}`; _URL_USERINFO's password field is only `{1,512}`
+# but the whole module uses one shared margin rather than a bespoke one per pattern, for
+# simplicity and because 4096 already dominates every pattern's max span). This is the amount by
+# which `_MAX_REDACT_ACTION_INPUT_CHARS` is extended before it is ever used as a slice boundary --
+# see `_REDACT_ACTION_INPUT_WINDOW_CHARS` and `build_state()`.
+_REDACT_ACTION_INPUT_MARGIN_CHARS = 4096
+
+# The ACTUAL slice boundary applied to raw `action_text` before it reaches redact_action() (see
+# build_state()). Never slice at `_MAX_REDACT_ACTION_INPUT_CHARS` alone -- see the cycle-4 note
+# above for why that reintroduces the straddling-boundary leak.
+_REDACT_ACTION_INPUT_WINDOW_CHARS = _MAX_REDACT_ACTION_INPUT_CHARS + _REDACT_ACTION_INPUT_MARGIN_CHARS
 
 
 def _redact_assignment(match: "re.Match[str]") -> str:
@@ -309,16 +346,33 @@ def build_state(
     left `redact_action()`'s INPUT completely unbounded on this real production call path -- a
     multi-MB Bash command would run all 5 regex passes over genuinely unbounded,
     attacker-influenceable text, stalling this hook's synchronous PreToolUse call for multiple
-    seconds (see test_build_state_bounds_compute_time_on_unsliced_multi_mb_command).
-    `_MAX_REDACT_ACTION_INPUT_CHARS` (100,000 chars) now caps `action_text` BEFORE
-    redact_action() runs -- generously sized so it can NEVER reintroduce the straddling-boundary
-    leak above (100,000 chars is >>50x any realistic credential length; both existing
-    straddling-boundary regression tests construct commands well under this cap and remain
-    green). This is independent of and does not replace `_REDACT_ACTION_SAFETY_CAP` (still
-    applied inside redact_action() to its own output, for any future direct caller)."""
-    bounded_input = action_text[:_MAX_REDACT_ACTION_INPUT_CHARS]
-    redacted_text, was_redacted = redact_action(bounded_input, api_key)
-    truncated = len(action_text) > _MAX_REDACT_ACTION_INPUT_CHARS or len(redacted_text) > max_chars
+    seconds (see test_build_state_bounds_compute_time_on_unsliced_multi_mb_command). Cycle 3
+    capped `action_text` at exactly `_MAX_REDACT_ACTION_INPUT_CHARS` (100,000 chars) BEFORE
+    redact_action() runs.
+
+    REM-FIX (code-reviewer re-review CRITICAL, cycle 4, verified live PoC): cycle 3's cap
+    reintroduced cycle 1's exact credential-leak class at the new 100,000-char boundary -- a
+    credential straddling that EXACT cut point (starting before it, terminating just past it)
+    lost its trailing delimiter to the cut, so `redact_action()`'s regexes never matched it and
+    the raw fragment reached `action_text` in cleartext with `redacted=False` (see
+    test_build_state_closes_credential_leak_straddling_100k_hard_cap_boundary). The bug is
+    POSITIONAL, not length-based -- no cap SIZE alone fixes it. The actual fix: the raw text fed
+    to redact_action() is sliced at `_REDACT_ACTION_INPUT_WINDOW_CHARS`
+    (`_MAX_REDACT_ACTION_INPUT_CHARS + _REDACT_ACTION_INPUT_MARGIN_CHARS`), not at
+    `_MAX_REDACT_ACTION_INPUT_CHARS` alone -- a margin at least as large as the biggest
+    bounded-quantifier span among this module's redaction patterns, so any credential recognized
+    by those patterns and starting before `_MAX_REDACT_ACTION_INPUT_CHARS` is guaranteed to have
+    its full match (through its trailing delimiter) complete before the window edge (see the
+    constant's own docstring above). The TRUE hard cap on egress size is then applied only to the
+    already-redacted OUTPUT via the caller-supplied `max_chars` (DD-8) -- never to
+    redact_action()'s raw input -- mirroring exactly the principle that closed cycle 1's leak
+    (redact first, cap after), now applied at the correct stage. `redact_action()`'s own
+    `_REDACT_ACTION_SAFETY_CAP` remains as a further, independent output-side bound for any
+    future direct caller that bypasses this function's `max_chars` budget; no third,
+    build_state()-local output cap is added -- `max_chars` already serves that purpose here."""
+    windowed_input = action_text[:_REDACT_ACTION_INPUT_WINDOW_CHARS]
+    redacted_text, was_redacted = redact_action(windowed_input, api_key)
+    truncated = len(action_text) > _REDACT_ACTION_INPUT_WINDOW_CHARS or len(redacted_text) > max_chars
     return {
         "tool_name": tool_name,
         "category": category,

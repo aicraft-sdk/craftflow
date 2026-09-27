@@ -28,6 +28,8 @@ from craftflow_jev_risk_gate import (  # noqa: E402
     decide,
     telemetry_row,
     _append_event,
+    _MAX_REDACT_ACTION_INPUT_CHARS,
+    _REDACT_ACTION_INPUT_MARGIN_CHARS,
 )
 
 _passes = 0
@@ -365,21 +367,124 @@ def test_build_state_redacts_password_straddling_old_pre_redaction_cap_boundary(
         )
 
 
-def test_build_state_does_not_pre_cap_raw_input_before_redaction() -> None:
-    # REM-FIX cycle 2: a hard PRE-redaction cap on raw input (previously _MAX_RAW_ACTION_CHARS
-    # applied inside build_state before redact_action ran) is exactly what reopened the
-    # URL-userinfo leak above. build_state must run redact_action() over the FULL raw text and
-    # cap only the REDACTED output at max_chars -- a marker placed beyond the old 20,000-char
-    # cap boundary must survive when max_chars is large enough to hold it.
-    marker = "MARKER_BEYOND_OLD_HARD_CAP"
-    action_text = ("a" * 25_000) + marker
-    state = build_state("Bash", "rm_rf", action_text, api_key="", max_chars=50_000)
-    if marker in state["action_text"]:
-        ok("build_state no longer pre-caps raw input before redact_action runs")
+def test_build_state_redaction_window_extends_past_hard_cap_by_safety_margin() -> None:
+    # REM-FIX cycle 4 correction: this test used to be named/asserted
+    # "does_not_pre_cap_raw_input_before_redaction" and claimed build_state never bounds
+    # redact_action's input at all. That stopped being true the moment cycle 3 added
+    # _MAX_REDACT_ACTION_INPUT_CHARS as a PRE-redaction cap -- the old name/assertion directly
+    # contradicted cycle 3's own committed code (a test whose name/assertion contradicts actual
+    # behavior is itself a bug, per code-reviewer re-review HIGH).
+    #
+    # The corrected, actually-true behavior: build_state DOES bound redact_action()'s input --
+    # it must, to keep compute cost bounded on multi-MB commands (see
+    # test_build_state_bounds_compute_time_on_unsliced_multi_mb_command). But the bound is now
+    # _MAX_REDACT_ACTION_INPUT_CHARS + _REDACT_ACTION_INPUT_MARGIN_CHARS, not
+    # _MAX_REDACT_ACTION_INPUT_CHARS alone -- the margin exists precisely so a credential
+    # recognized by any of redact_action()'s bounded-quantifier patterns can never have its
+    # trailing delimiter severed by this cut (see redact_action()'s own docstring for the
+    # per-pattern bound accounting: _ASSIGNMENT/_SECRET_FLAG's value captures are bounded to
+    # 4096 chars, _SHORT_FLAG_CONCAT's to 4095 -- _REDACT_ACTION_INPUT_MARGIN_CHARS is sized to
+    # cover the largest of these).
+    #
+    # A marker placed just past the OLD 100,000-char cut point must still survive -- it is
+    # comfortably inside the new, margin-extended window. A marker placed well beyond the new
+    # window is legitimately dropped -- that drop is the intended compute-cost bound, not a bug.
+    within_new_window_marker = "MARKER_JUST_PAST_OLD_100K_CAP"
+    action_text = ("a" * (_MAX_REDACT_ACTION_INPUT_CHARS + 10)) + within_new_window_marker
+    state = build_state("Bash", "rm_rf", action_text, api_key="", max_chars=200_000)
+
+    beyond_new_window_marker = "MARKER_BEYOND_NEW_MARGIN_EXTENDED_WINDOW"
+    far_action_text = (
+        "a" * (_MAX_REDACT_ACTION_INPUT_CHARS + _REDACT_ACTION_INPUT_MARGIN_CHARS + 500)
+    ) + beyond_new_window_marker
+    far_state = build_state("Bash", "rm_rf", far_action_text, api_key="", max_chars=200_000)
+
+    if (
+        within_new_window_marker in state["action_text"]
+        and beyond_new_window_marker not in far_state["action_text"]
+    ):
+        ok(
+            "build_state's redaction window extends past the old 100000-char hard cap by a "
+            "safety margin -- content just past the old cap survives; content genuinely beyond "
+            "the margin-extended window is still (intentionally) dropped for compute-cost bounds"
+        )
     else:
         fail(
-            "build-state-no-pre-cap",
-            f"action_text_len={len(state['action_text'])} marker_present={marker in state['action_text']!r}",
+            "build-state-redaction-window-margin",
+            f"within_present={within_new_window_marker in state['action_text']!r} "
+            f"beyond_present={beyond_new_window_marker in far_state['action_text']!r}",
+        )
+
+
+def test_build_state_closes_credential_leak_straddling_100k_hard_cap_boundary() -> None:
+    # code-reviewer re-review CRITICAL (REM-FIX cycle 4, verified live PoC). Cycle 3's
+    # _MAX_REDACT_ACTION_INPUT_CHARS = 100_000 PRE-redaction cap reintroduced cycle 1's exact
+    # credential-leak class at the new 100,000-char boundary: _URL_USERINFO requires a literal
+    # trailing '@' to match at all, so a hard cut landing between a credential and its
+    # terminating '@' silently defeats redaction entirely -- the truncated fragment reaches
+    # action_text in cleartext, with state["redacted"] == False giving no error signal. This is
+    # POSITIONAL, not length-based: no cap SIZE fixes it, only never letting the cut land inside
+    # a credential's bounded-length span (see the margin test above). Reproduction is the
+    # reviewer's own verified PoC, byte-for-byte.
+    CAP = _MAX_REDACT_ACTION_INPUT_CHARS  # 100_000
+    password = "supersecretpassw0rd-1234567890"
+    scheme_user = "https://admin:"
+    suffix = "@example.com/api more-stuff-after-the-cut-boundary"
+    target_colon_end = CAP - 20
+    prefix = "a" * (target_colon_end - len(scheme_user))
+    command = prefix + scheme_user + password + suffix
+    state = build_state("Bash", "db_drop", command, api_key="", max_chars=1_000_000)
+    checks = (
+        password[:20] not in state["action_text"],
+        state["redacted"] is True,
+        "admin:***@" in state["action_text"],
+    )
+    if all(checks):
+        ok(
+            "build_state closes the straddling-boundary leak at the 100000-char hard cap -- "
+            "the reviewer's exact PoC no longer leaks the password and correctly reports "
+            "redacted=True"
+        )
+    else:
+        fail(
+            "build-state-100k-boundary-leak-closed",
+            f"password_fragment_present={password[:20] in state['action_text']!r} "
+            f"redacted={state['redacted']!r} "
+            f"tail={state['action_text'][target_colon_end - 10:target_colon_end + 80]!r}",
+        )
+
+
+def test_build_state_closes_credential_leak_straddling_margin_extended_boundary() -> None:
+    # Same PoC shape as above, but the password's terminating '@' is positioned deep inside the
+    # margin zone (just before _MAX_REDACT_ACTION_INPUT_CHARS + _REDACT_ACTION_INPUT_MARGIN_CHARS)
+    # rather than just past the OLD 100,000-char cut -- proving the margin is sized generously
+    # enough to cover the full span of a realistic credential starting anywhere before the base
+    # cap, not merely a few chars past it.
+    CAP = _MAX_REDACT_ACTION_INPUT_CHARS
+    password = "supersecretpassw0rd-1234567890"
+    scheme_user = "https://admin:"
+    suffix = "@example.com/api more-stuff-after-the-cut-boundary"
+    # Position the password so it starts just before CAP and its terminating '@' lands close to
+    # (but still inside) the margin-extended window edge.
+    target_colon_end = CAP - 5
+    prefix = "a" * (target_colon_end - len(scheme_user))
+    command = prefix + scheme_user + password + suffix
+    state = build_state("Bash", "db_drop", command, api_key="", max_chars=1_000_000)
+    checks = (
+        password[:20] not in state["action_text"],
+        state["redacted"] is True,
+        "admin:***@" in state["action_text"],
+    )
+    if all(checks):
+        ok(
+            "build_state closes the credential leak even when the password straddles deep into "
+            "the margin-extended window, not just a few chars past the old 100000-char boundary"
+        )
+    else:
+        fail(
+            "build-state-margin-boundary-leak-closed",
+            f"password_fragment_present={password[:20] in state['action_text']!r} "
+            f"redacted={state['redacted']!r}",
         )
 
 
@@ -617,7 +722,9 @@ def main_tests() -> int:
     test_redact_action_masks_url_userinfo_with_embedded_at_and_slash_in_password()
     test_redact_action_masks_broadened_credential_name_shapes_and_concatenated_flags()
     test_build_state_redacts_password_straddling_old_pre_redaction_cap_boundary()
-    test_build_state_does_not_pre_cap_raw_input_before_redaction()
+    test_build_state_redaction_window_extends_past_hard_cap_by_safety_margin()
+    test_build_state_closes_credential_leak_straddling_100k_hard_cap_boundary()
+    test_build_state_closes_credential_leak_straddling_margin_extended_boundary()
     test_redact_action_safety_cap_truncates_output_never_the_raw_input()
     test_matches_allowlist_applies_hard_input_cap_before_pattern_matching()
     test_relativize_path_never_leaks_absolute_prefix()
