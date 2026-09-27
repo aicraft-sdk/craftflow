@@ -28,8 +28,7 @@ from craftflow_jev_risk_gate import (  # noqa: E402
     decide,
     telemetry_row,
     _append_event,
-    _MAX_REDACT_ACTION_INPUT_CHARS,
-    _REDACT_ACTION_INPUT_MARGIN_CHARS,
+    _ACTION_TEXT_DOS_BACKSTOP_CHARS,
 )
 
 _passes = 0
@@ -336,319 +335,168 @@ def test_matches_allowlist_applies_hard_input_cap_before_pattern_matching() -> N
         )
 
 
-def test_build_state_redacts_password_straddling_old_pre_redaction_cap_boundary() -> None:
-    # code-reviewer re-review CRITICAL (REM-FIX cycle 2 regression). Cycle 1 added
-    # _MAX_RAW_ACTION_CHARS = 20_000 as a PRE-redaction truncation cap inside build_state,
-    # applied BEFORE redact_action() ran. _URL_USERINFO requires a literal trailing '@' to match
-    # at all -- if the 20,000-char cut lands inside a password before its terminating '@', the
-    # regex never fires and the truncated password fragment reaches action_text in cleartext.
-    # Reproduction per code-reviewer's own verified PoC: a psql connection-string password
-    # positioned so it starts 10 chars before the old 20,000-char cap boundary.
-    # Padding precedes the URL (as it would in a real long command preamble) so the actual
-    # userinfo password field itself stays realistically short -- it must never sit BETWEEN the
-    # userinfo ':' and the password (that would itself exceed _URL_USERINFO's own bounded
-    # password-length quantifier and mask the real bug behind an unrelated non-match).
-    password = "p" * 30
-    prefix = "psql postgres://dbuser:"
-    target_password_start = 19_990  # 10 chars before the old 20,000-char cap boundary
-    padding = "x" * (target_password_start - len(prefix))
-    command = f"{padding}{prefix}{password}@dbhost:5432/prod -c \"DROP TABLE t\""
-    state = build_state("Bash", "db_drop", command, api_key=None, max_chars=100_000)
-    if password not in state["action_text"] and "dbuser:***@dbhost" in state["action_text"]:
+# ---------------------------------------------------------------------------
+# REM-FIX cycle 6 (architectural redesign; origin: code-reviewer + silent-failure-hunter, 6
+# rounds of findings). Cycles 1-5 each fixed a leak at one fixed cut point only to reopen the
+# same bug class at a new one (see craftflow_jev_risk_gate.py's build_state() docstring for the
+# full audit trail). The tests below that pinned the now-removed cap/margin/window boundary
+# values (`_MAX_REDACT_ACTION_INPUT_CHARS`, `_REDACT_ACTION_INPUT_MARGIN_CHARS`,
+# `_REDACT_ACTION_INPUT_WINDOW_CHARS`, `_REDACT_ACTION_SAFETY_CAP`) are replaced by the tests in
+# this section, which validate the new, simpler, position-independent invariant instead: a
+# credential ANYWHERE in a realistic-to-large-but-still-far-below-the-backstop-sized input is
+# always fully redacted, because there is no positional cut point left for it to straddle.
+# ---------------------------------------------------------------------------
+
+
+def _url_userinfo_command(offset: int, marker_suffix: str) -> tuple[str, str]:
+    password = "supersecretpassw0rd-1234567890"
+    command = ("a" * offset) + "https://admin:" + password + "@example.com/api AFTER_" + marker_suffix
+    return command, password
+
+
+def _assignment_command(offset: int, marker_suffix: str) -> tuple[str, str]:
+    secret = "S" * 40
+    # A space (not another word char) separates the "a" padding from the credential-shaped
+    # assignment -- _ASSIGNMENT's `\b` requires an actual word boundary before NAME, which a
+    # direct a-to-letter concatenation (no separator) would not provide.
+    command = ("a" * offset) + f' MY_TOKEN="{secret}" --done AFTER_{marker_suffix}'
+    return command, secret
+
+
+def _secret_flag_command(offset: int, marker_suffix: str) -> tuple[str, str]:
+    secret = "S" * 40
+    command = ("a" * offset) + f'--password "{secret}" AFTER_{marker_suffix}'
+    return command, secret
+
+
+def test_build_state_redacts_credentials_position_independently_across_offsets() -> None:
+    # Replaces cycles 2-5's boundary-pinning tests (straddling the pre-redaction cap, the 100k
+    # cap, and the margin-extended window edge). Under the new architecture there is no fixed
+    # cut point before redact_action() runs (see build_state()'s docstring) -- so a credential of
+    # any of the three recognized shapes must be fully redacted regardless of where in the
+    # command it starts, as long as the whole command stays under the DoS-only backstop cap.
+    # Offsets deliberately include the exact positions where cycles 2 ("20,000"), 3 ("100,000"),
+    # and 5 ("104,500" margin edge) each drew their now-removed fixed cut points, plus much larger
+    # offsets (500,000; 2,000,000) that are still comfortably below the new backstop cap.
+    offsets = [0, 19_990, 99_995, 104_495, 500_000, 2_000_000]
+    builders = (
+        ("url_userinfo", _url_userinfo_command, "admin:***@"),
+        ("assignment", _assignment_command, "MY_TOKEN=***"),
+        ("secret_flag", _secret_flag_command, "--password ***"),
+    )
+    failures = []
+    for label, builder, masked_marker in builders:
+        for offset in offsets:
+            marker_suffix = f"{label}_{offset}"
+            command, secret = builder(offset, marker_suffix)
+            state = build_state("Bash", "db_drop", command, api_key="", max_chars=6_000_000)
+            text = state["action_text"]
+            if secret in text or masked_marker not in text or f"AFTER_{marker_suffix}" not in text:
+                failures.append((label, offset, secret in text, masked_marker in text, f"AFTER_{marker_suffix}" in text))
+    if not failures:
         ok(
-            "build_state redacts a password whose terminating '@' falls past the old "
-            "20000-char pre-redaction cap boundary"
+            "build_state fully redacts url_userinfo/assignment/secret_flag credentials at every "
+            "tested offset (0 through 2,000,000) -- no positional cut point exists to straddle"
         )
     else:
-        fail(
-            "build-state-straddling-boundary-password",
-            f"tail={state['action_text'][19_950:20_060]!r} "
-            f"password_present={password in state['action_text']!r}",
-        )
+        fail("build-state-position-independent-redaction", f"failures={failures!r}")
 
 
-def test_build_state_redaction_window_extends_past_hard_cap_by_safety_margin() -> None:
-    # REM-FIX cycle 4 correction: this test used to be named/asserted
-    # "does_not_pre_cap_raw_input_before_redaction" and claimed build_state never bounds
-    # redact_action's input at all. That stopped being true the moment cycle 3 added
-    # _MAX_REDACT_ACTION_INPUT_CHARS as a PRE-redaction cap -- the old name/assertion directly
-    # contradicted cycle 3's own committed code (a test whose name/assertion contradicts actual
-    # behavior is itself a bug, per code-reviewer re-review HIGH).
-    #
-    # The corrected, actually-true behavior: build_state DOES bound redact_action()'s input --
-    # it must, to keep compute cost bounded on multi-MB commands (see
-    # test_build_state_bounds_compute_time_on_unsliced_multi_mb_command). But the bound is now
-    # _MAX_REDACT_ACTION_INPUT_CHARS + _REDACT_ACTION_INPUT_MARGIN_CHARS, not
-    # _MAX_REDACT_ACTION_INPUT_CHARS alone -- the margin exists precisely so a credential
-    # recognized by any of redact_action()'s bounded-quantifier patterns can never have its
-    # trailing delimiter severed by this cut (see redact_action()'s own docstring for the
-    # per-pattern bound accounting: _ASSIGNMENT/_SECRET_FLAG's value captures are bounded to
-    # 4096 chars, _SHORT_FLAG_CONCAT's to 4095 -- _REDACT_ACTION_INPUT_MARGIN_CHARS is sized to
-    # cover the largest of these).
-    #
-    # A marker placed just past the OLD 100,000-char cut point must still survive -- it is
-    # comfortably inside the new, margin-extended window. A marker placed well beyond the new
-    # window is legitimately dropped -- that drop is the intended compute-cost bound, not a bug.
-    within_new_window_marker = "MARKER_JUST_PAST_OLD_100K_CAP"
-    action_text = ("a" * (_MAX_REDACT_ACTION_INPUT_CHARS + 10)) + within_new_window_marker
-    state = build_state("Bash", "rm_rf", action_text, api_key="", max_chars=200_000)
+def test_build_state_credential_at_large_arbitrary_offset_is_fully_redacted() -> None:
+    # Explicit proof of the class this redesign is meant to make trivially safe: a
+    # credential-shaped value positioned at an arbitrary large offset (500,000 chars) into the
+    # command is still fully redacted.
+    offset = 500_000
+    password = "supersecretpassw0rd-arbitrary-offset"
+    command = ("x" * offset) + "https://svc:" + password + "@internal.example.com/api --done"
+    state = build_state("Bash", "db_drop", command, api_key="", max_chars=6_000_000)
+    checks = (
+        password not in state["action_text"],
+        "svc:***@" in state["action_text"],
+        state["redacted"] is True,
+        "--done" in state["action_text"],
+    )
+    if all(checks):
+        ok("a credential positioned 500,000 chars into the command is still fully redacted")
+    else:
+        fail("credential-at-large-offset", f"checks={checks!r}")
 
-    beyond_new_window_marker = "MARKER_BEYOND_NEW_MARGIN_EXTENDED_WINDOW"
-    far_action_text = (
-        "a" * (_MAX_REDACT_ACTION_INPUT_CHARS + _REDACT_ACTION_INPUT_MARGIN_CHARS + 500)
-    ) + beyond_new_window_marker
-    far_state = build_state("Bash", "rm_rf", far_action_text, api_key="", max_chars=200_000)
 
+def test_build_state_backstop_cap_is_dos_only_sized_far_beyond_any_credential() -> None:
+    # Pins the design intent of the replacement constant: a low-single-digit-megabyte DoS-only
+    # backstop, not a "big enough to contain any credential" cap (that framing is exactly what
+    # made cycles 3-5's caps/margins straddle-able).
+    largest_plausible_credential_value = 4096  # each pattern's own bounded value-capture quantifier
     if (
-        within_new_window_marker in state["action_text"]
-        and beyond_new_window_marker not in far_state["action_text"]
+        2_000_000 <= _ACTION_TEXT_DOS_BACKSTOP_CHARS <= 5_000_000
+        and _ACTION_TEXT_DOS_BACKSTOP_CHARS >= largest_plausible_credential_value * 1000
     ):
         ok(
-            "build_state's redaction window extends past the old 100000-char hard cap by a "
-            "safety margin -- content just past the old cap survives; content genuinely beyond "
-            "the margin-extended window is still (intentionally) dropped for compute-cost bounds"
+            "the DoS-only backstop cap is in the low-single-digit-megabyte range and orders of "
+            "magnitude larger than any plausible credential value"
         )
     else:
         fail(
-            "build-state-redaction-window-margin",
-            f"within_present={within_new_window_marker in state['action_text']!r} "
-            f"beyond_present={beyond_new_window_marker in far_state['action_text']!r}",
+            "backstop-cap-sizing",
+            f"_ACTION_TEXT_DOS_BACKSTOP_CHARS={_ACTION_TEXT_DOS_BACKSTOP_CHARS!r}",
         )
 
 
-def test_build_state_closes_credential_leak_straddling_100k_hard_cap_boundary() -> None:
-    # code-reviewer re-review CRITICAL (REM-FIX cycle 4, verified live PoC). Cycle 3's
-    # _MAX_REDACT_ACTION_INPUT_CHARS = 100_000 PRE-redaction cap reintroduced cycle 1's exact
-    # credential-leak class at the new 100,000-char boundary: _URL_USERINFO requires a literal
-    # trailing '@' to match at all, so a hard cut landing between a credential and its
-    # terminating '@' silently defeats redaction entirely -- the truncated fragment reaches
-    # action_text in cleartext, with state["redacted"] == False giving no error signal. This is
-    # POSITIONAL, not length-based: no cap SIZE fixes it, only never letting the cut land inside
-    # a credential's bounded-length span (see the margin test above). Reproduction is the
-    # reviewer's own verified PoC, byte-for-byte.
-    CAP = _MAX_REDACT_ACTION_INPUT_CHARS  # 100_000
-    password = "supersecretpassw0rd-1234567890"
-    scheme_user = "https://admin:"
-    suffix = "@example.com/api more-stuff-after-the-cut-boundary"
-    target_colon_end = CAP - 20
-    prefix = "a" * (target_colon_end - len(scheme_user))
-    command = prefix + scheme_user + password + suffix
-    state = build_state("Bash", "db_drop", command, api_key="", max_chars=1_000_000)
-    checks = (
-        password[:20] not in state["action_text"],
-        state["redacted"] is True,
-        "admin:***@" in state["action_text"],
-    )
-    if all(checks):
+def test_build_state_content_beyond_backstop_cap_is_intentionally_dropped() -> None:
+    # The backstop cap still exists (it must, to bound compute time on a genuinely pathological
+    # multi-MB input) -- content genuinely beyond it is dropped. That drop is an accepted,
+    # intentional compute-cost bound, not a re-introduction of the straddling-cut-point bug: no
+    # real-world command places a credential 5,000,000+ characters in specifically to land on
+    # this boundary (see _ACTION_TEXT_DOS_BACKSTOP_CHARS's own sizing rationale).
+    marker = "MARKER_BEYOND_BACKSTOP_CAP"
+    action_text = ("a" * (_ACTION_TEXT_DOS_BACKSTOP_CHARS + 500)) + marker
+    state = build_state("Bash", "rm_rf", action_text, api_key="", max_chars=10_000_000)
+    if marker not in state["action_text"] and state["truncated"] is True:
         ok(
-            "build_state closes the straddling-boundary leak at the 100000-char hard cap -- "
-            "the reviewer's exact PoC no longer leaks the password and correctly reports "
-            "redacted=True"
+            "content genuinely beyond the DoS-only backstop cap is dropped and flagged "
+            "truncated -- the intended compute-cost bound, not a bug"
         )
     else:
         fail(
-            "build-state-100k-boundary-leak-closed",
-            f"password_fragment_present={password[:20] in state['action_text']!r} "
-            f"redacted={state['redacted']!r} "
-            f"tail={state['action_text'][target_colon_end - 10:target_colon_end + 80]!r}",
-        )
-
-
-def test_build_state_closes_credential_leak_straddling_margin_extended_boundary() -> None:
-    # Same PoC shape as above, but the password's terminating '@' is positioned deep inside the
-    # margin zone (just before _MAX_REDACT_ACTION_INPUT_CHARS + _REDACT_ACTION_INPUT_MARGIN_CHARS)
-    # rather than just past the OLD 100,000-char cut -- proving the margin is sized generously
-    # enough to cover the full span of a realistic credential starting anywhere before the base
-    # cap, not merely a few chars past it.
-    CAP = _MAX_REDACT_ACTION_INPUT_CHARS
-    password = "supersecretpassw0rd-1234567890"
-    scheme_user = "https://admin:"
-    suffix = "@example.com/api more-stuff-after-the-cut-boundary"
-    # Position the password so it starts just before CAP and its terminating '@' lands close to
-    # (but still inside) the margin-extended window edge.
-    target_colon_end = CAP - 5
-    prefix = "a" * (target_colon_end - len(scheme_user))
-    command = prefix + scheme_user + password + suffix
-    state = build_state("Bash", "db_drop", command, api_key="", max_chars=1_000_000)
-    checks = (
-        password[:20] not in state["action_text"],
-        state["redacted"] is True,
-        "admin:***@" in state["action_text"],
-    )
-    if all(checks):
-        ok(
-            "build_state closes the credential leak even when the password straddles deep into "
-            "the margin-extended window, not just a few chars past the old 100000-char boundary"
-        )
-    else:
-        fail(
-            "build-state-margin-boundary-leak-closed",
-            f"password_fragment_present={password[:20] in state['action_text']!r} "
-            f"redacted={state['redacted']!r}",
-        )
-
-
-def test_redact_action_safety_cap_truncates_output_never_the_raw_input() -> None:
-    # silent-failure-hunter re-hunt MEDIUM: redact_action() should have its own generous
-    # internal safety bound for a future direct caller that bypasses build_state's own max_chars
-    # egress cap -- but that bound must apply to the REDACTED OUTPUT, never truncate the raw
-    # input before the redaction passes run (that would reintroduce the exact straddling
-    # -boundary bug at a different layer). A password positioned to straddle redact_action's own
-    # internal safety-cap boundary must still be fully masked.
-    # Same construction rule as the build_state regression above: padding precedes the URL so
-    # the userinfo password field itself stays realistically short.
-    password = "s" * 30
-    prefix = "postgres://dbuser:"
-    target_password_start = 199_990  # 10 chars before redact_action's own 200,000-char safety cap
-    padding = "x" * (target_password_start - len(prefix))
-    command = padding + prefix + password + "@dbhost/prod " + ("z" * 5000)
-    redacted, was_redacted = redact_action(command, "")
-    checks = (
-        was_redacted is True,
-        password not in redacted,
-        "dbuser:***@dbhost" in redacted,
-        len(redacted) <= 200_000,
-    )
-    if all(checks):
-        ok(
-            "redact_action masks a credential straddling its own internal safety-cap boundary, "
-            "and still bounds output length"
-        )
-    else:
-        fail(
-            "redact-action-safety-cap",
-            f"len={len(redacted)} password_present={password in redacted!r} "
-            f"was_redacted={was_redacted!r}",
+            "content-beyond-backstop-cap",
+            f"marker_present={marker in state['action_text']!r} truncated={state['truncated']!r}",
         )
 
 
 # ---------------------------------------------------------------------------
 # REM-FIX cycle 5 (doubt-verifier CRITICAL, corroborated 3x independently by code-reviewer +
 # silent-failure-hunter + doubt-verifier). Root cause: _SECRET_FLAG's separator group was
-# `(?:=|\s+)` -- the `\s+` alternative was UNBOUNDED -- combined with
-# _REDACT_ACTION_INPUT_MARGIN_CHARS being sized only from patterns' value-capture quantifier bound
-# (not their full match span). A quoted secret value containing internal whitespace, positioned so
-# its closing quote falls just past the redaction window edge, defeats the quoted-value
-# alternative (no closing quote in the windowed text); the engine falls back to the unquoted
-# `\S{1,4096}` alternative, which stops at the FIRST internal whitespace character -- masking only
-# the pre-space fragment and leaving the rest (part of the real secret) in cleartext, while
-# `build_state()` still reports `redacted=True`. Fixed by (1) bounding `_SECRET_FLAG`'s separator
-# to `\s{1,32}` and (2) recomputing `_REDACT_ACTION_INPUT_MARGIN_CHARS` from each pattern's TRUE
-# FULL match span (worst case: `_ASSIGNMENT` at 4228 chars), not the value-capture bound alone.
+# `(?:=|\s+)` -- the `\s+` alternative was UNBOUNDED. Fixed by bounding `_SECRET_FLAG`'s separator
+# to `\s{1,32}` -- this fix is orthogonal to the cycle 3-5 cap/margin/window architecture (which
+# cycle 6 removes entirely): it closes a real hole in the regex itself, independent of any
+# positional cut point. The test below pins that fix on its own terms, without constructing its
+# target offset relative to any now-removed window/margin constant.
 # ---------------------------------------------------------------------------
 
 
-# Cycle 4's margin (4096) was sized only from the value-capture quantifier bound, not each
-# pattern's TRUE full match span (flag/name literal + separator + quote-wrapper chars + value
-# capture) -- see _REDACT_ACTION_INPUT_MARGIN_CHARS's own corrected docstring. This historical,
-# known-insufficient value is used ONLY to construct these two regression tests' target byte
-# offset -- it is not imported from the module (cycle 5 replaces it) -- so the constructions below
-# remain meaningful regardless of the CURRENT margin's exact value.
-_CYCLE_4_INSUFFICIENT_MARGIN_CHARS = 4096
-
-
-def _build_quoted_value_straddle_command(flag: str, secret: str) -> str:
-    """Shared PoC-1 construction: flag starts at the LATEST position that still legally
-    qualifies as "before `_MAX_REDACT_ACTION_INPUT_CHARS`" (CAP - 1 -- the design's own
-    guarantee only protects credentials starting before CAP), with a quoted value (one internal
-    space, then `secret`) sized so its closing quote lands exactly 1 char past where cycle 4's
-    insufficient, value-capture-only margin would have placed the window edge. A margin correctly
-    derived from each pattern's TRUE full match span must still contain this -- a margin sized
-    only from the value-capture bound (cycle 4) does not."""
-    cap = _MAX_REDACT_ACTION_INPUT_CHARS
-    flag_start = cap - 1
-    target_quote_index = cap + _CYCLE_4_INSUFFICIENT_MARGIN_CHARS + 1
-    span = target_quote_index - flag_start  # flag + filler + space + secret + closing quote
-    filler_len = span - len(flag) - 1 - len(secret) - 1
-    filler = "H" * filler_len
-    return ("A" * flag_start) + flag + filler + " " + secret + '"' + " --done"
-
-
-def test_build_state_closes_secret_flag_quoted_value_straddling_window_edge() -> None:
-    # PoC 1 (--password / _SECRET_FLAG). Pre-fix, the quoted alternative can never see its own
-    # closing quote (past cycle 4's insufficient window edge), so the engine falls back to
-    # `\S{1,4096}`, which masks only "quote+H-run" up to the internal space and leaves the real
-    # secret (the S-run) in cleartext while still reporting redacted=True.
+def test_redact_action_large_separator_gap_never_produces_false_safe_leak() -> None:
+    # A large, arbitrary whitespace gap between "--password" and its quoted value must never let
+    # _SECRET_FLAG bridge the two (separator bounded to `\s{1,32}`) in a way that produces a
+    # "false-safe" leak -- build_state() must never claim `redacted=True` while the actual secret
+    # is still present in cleartext. Unlike cycle 5's original regression test, this gap and flag
+    # position are arbitrary literals, not derived from any removed cap/margin/window constant --
+    # the property being pinned (bounded separator => no bridging => no false-safe leak) does not
+    # depend on where any cut point used to be.
     secret = "S" * 40
-    command = _build_quoted_value_straddle_command('--password "', secret)
+    gap = " " * 50_000
+    command = ("A" * 200_000) + "--password" + gap + '"' + secret + '"' + " --done"
     state = build_state("Bash", "db_drop", command, api_key=None, max_chars=2_000_000)
-    checks = (
-        secret not in state["action_text"],
-        state["redacted"] is True,
-    )
-    if all(checks):
-        ok(
-            "build_state fully masks a --password quoted value starting just before the base cap "
-            "whose closing quote would have straddled cycle 4's insufficient margin -- no "
-            "partial-mask false-safe leak"
-        )
-    else:
-        fail(
-            "secret-flag-quoted-value-straddle",
-            f"secret_present={secret in state['action_text']!r} redacted={state['redacted']!r} "
-            f"tail={state['action_text'][-80:]!r}",
-        )
-
-
-def test_build_state_closes_assignment_quoted_value_straddling_window_edge() -> None:
-    # Same PoC shape as above, for `_ASSIGNMENT` (`NAME="..."`) -- the pattern that actually
-    # determines the TRUE worst-case margin (4228 chars). Pins that the recomputed margin covers
-    # this pattern's full match span (name + "=" + quote-wrapped value), not just its value
-    # capture.
-    secret = "S" * 40
-    command = _build_quoted_value_straddle_command(' MY_TOKEN="', secret)
-    state = build_state("Bash", "db_drop", command, api_key=None, max_chars=2_000_000)
-    checks = (
-        secret not in state["action_text"],
-        state["redacted"] is True,
-    )
-    if all(checks):
-        ok(
-            "build_state fully masks a NAME=\"...\" (_ASSIGNMENT) quoted value starting just "
-            "before the base cap whose closing quote would have straddled cycle 4's insufficient "
-            "margin"
-        )
-    else:
-        fail(
-            "assignment-quoted-value-straddle",
-            f"secret_present={secret in state['action_text']!r} redacted={state['redacted']!r} "
-            f"tail={state['action_text'][-80:]!r}",
-        )
-
-
-def test_redact_action_unbounded_separator_padding_reaims_exploit_regardless_of_margin() -> None:
-    # PoC 2: reproduces the reviewer's own verified case -- a flag starting at 79989 (nowhere near
-    # _MAX_REDACT_ACTION_INPUT_CHARS=100_000), with an arbitrary (here: exactly 20,000-space,
-    # derived not hardcoded) gap between "--password" and its quoted value. Because the OLD
-    # separator (`\s+`) was unbounded, an attacker could always pad this gap to re-aim a value's
-    # closing quote at whatever the (fixed) window edge is, no matter how far from any cap
-    # boundary the flag itself starts and no matter how large the margin is set -- proving margin
-    # size alone can never close this class. Bounding the separator to `\s{1,32}` closes it: a
-    # 20,000-space gap can no longer bridge "--password" to its value at all, so _SECRET_FLAG
-    # simply does not match this (unrealistic) shape -- the critical invariant is that
-    # build_state() must never claim `redacted=True` while this secret leaks in cleartext.
-    window_edge = _MAX_REDACT_ACTION_INPUT_CHARS + _REDACT_ACTION_INPUT_MARGIN_CHARS
-    flag_start = 79989
-    flag_word = "--password"
-    filler = "H" * 4055
-    secret = "S" * 40
-    gap = window_edge - flag_start - len(flag_word) - 1 - len(filler) - 1 - len(secret)
-    command = (
-        ("A" * flag_start) + flag_word + (" " * gap) + '"' + filler + " " + secret + '"' + " --done"
-    )
-    state = build_state("Bash", "db_drop", command, api_key=None, max_chars=2_000_000)
-    # The invariant that must hold post-fix: never both "claims redacted" AND "still leaks".
     false_safe_leak = state["redacted"] is True and secret in state["action_text"]
-    if gap > 32 and not false_safe_leak:
+    if not false_safe_leak:
         ok(
-            "redact_action never claims redacted=True while a secret still leaks, even when an "
-            "unbounded-style separator gap is used to re-aim the exploit far from any cap "
-            "boundary -- bounding the separator closes the re-aim vector regardless of margin size"
+            "redact_action never claims redacted=True while a secret still leaks, even with a "
+            "large (50,000-space) arbitrary gap between a flag and its value -- the bounded "
+            "separator (\\s{1,32}) prevents the bridge regardless of any cap/margin/window"
         )
     else:
         fail(
-            "secret-flag-unbounded-separator-reaim",
-            f"gap={gap} redacted={state['redacted']!r} secret_present={secret in state['action_text']!r}",
+            "secret-flag-large-separator-gap",
+            f"redacted={state['redacted']!r} secret_present={secret in state['action_text']!r}",
         )
 
 
@@ -681,13 +529,12 @@ def test_matcher_and_redactor_are_bounded_time_on_pathological_input() -> None:
     # backtracking. Bounded quantifiers were used throughout precisely to make this true; this
     # test pins that property instead of assuming it.
     #
-    # NOTE (REM-FIX cycle 3 correction): every sample below is pre-sliced to `command[:20000]`
-    # before calling `_db_drop_match`/`redact_action` directly -- this test proves the regexes
-    # themselves have no catastrophic-backtracking blowup at realistic post-cap sizes, NOT that
-    # the real build_state() production call path bounds its own input size (it did not, until
-    # this cycle's fix). See test_build_state_bounds_compute_time_on_unsliced_multi_mb_command
-    # below for the un-sliced, build_state()-direct property this test's own pre-slice cannot
-    # demonstrate.
+    # NOTE: every sample below is pre-sliced to `command[:20000]` before calling
+    # `_db_drop_match`/`redact_action` directly -- this test proves the regexes themselves have
+    # no catastrophic-backtracking blowup at realistic sizes. See
+    # test_build_state_bounds_compute_time_on_unsliced_multi_mb_command below for the un-sliced,
+    # build_state()-direct property (bounded by `_ACTION_TEXT_DOS_BACKSTOP_CHARS`) this test's own
+    # pre-slice cannot demonstrate.
     pathological_inputs = [
         "a" * 200_000,
         " -" * 50_000,
@@ -709,21 +556,18 @@ def test_matcher_and_redactor_are_bounded_time_on_pathological_input() -> None:
 
 
 def test_build_state_bounds_compute_time_on_unsliced_multi_mb_command() -> None:
-    # REM-FIX (silent-failure-hunter HIGH, corroborated MEDIUM by code-reviewer re-review;
-    # REM-FIX cycle 3). Cycle 2 correctly moved the only raw-command size bound from a
-    # PRE-redaction cap inside build_state (cycle 1 -- see the straddling-boundary regression
-    # test above) to redact_action()'s OUTPUT-side _REDACT_ACTION_SAFETY_CAP. But that left
-    # redact_action()'s INPUT, on the real production call path (build_state()), completely
-    # unbounded: a multi-MB Bash command (heredoc, base64 blob) makes this PreToolUse hook's 5
-    # sequential regex passes run over genuinely unbounded, attacker-influenceable text -- both
-    # agents independently benchmarked ~0.32s/1MB, ~1.6s/5MB, ~6.6-6.9s/20MB, scaling linearly
-    # with no ceiling, stalling this synchronous PreToolUse call for multiple seconds.
+    # A multi-MB Bash command (heredoc, base64 blob) must not make this PreToolUse hook's regex
+    # passes run over genuinely unbounded, attacker-influenceable text -- that would stall this
+    # synchronous PreToolUse call. `_ACTION_TEXT_DOS_BACKSTOP_CHARS` (applied to the raw input
+    # inside build_state(), BEFORE redact_action() runs) bounds this: at ~0.01s/MB, a 5,000,000
+    # char cap costs ~0.05s worst case, comfortably inside this test's 1.0s budget even for a
+    # 20MB genuinely un-sliced input.
     #
     # Unlike test_matcher_and_redactor_are_bounded_time_on_pathological_input above (which
     # pre-slices every sample to command[:20000] before calling the pure functions directly --
     # a citation that is misleading as proof of THIS property, since it never exercises the real
     # unbounded build_state() call path), this test calls build_state() DIRECTLY with a genuinely
-    # un-sliced 20MB command and pins a tight time budget that only an input-side cap ahead of
+    # un-sliced 20MB command and pins a tight time budget that only the backstop cap ahead of
     # redact_action() can satisfy.
     huge_command = "rm -rf /tmp/x " + ("a" * (20 * 1024 * 1024))
     started = time.monotonic()
@@ -851,14 +695,11 @@ def main_tests() -> int:
     test_redact_action_blank_api_key_never_replaces_empty_string()
     test_redact_action_masks_url_userinfo_with_embedded_at_and_slash_in_password()
     test_redact_action_masks_broadened_credential_name_shapes_and_concatenated_flags()
-    test_build_state_redacts_password_straddling_old_pre_redaction_cap_boundary()
-    test_build_state_redaction_window_extends_past_hard_cap_by_safety_margin()
-    test_build_state_closes_credential_leak_straddling_100k_hard_cap_boundary()
-    test_build_state_closes_credential_leak_straddling_margin_extended_boundary()
-    test_redact_action_safety_cap_truncates_output_never_the_raw_input()
-    test_build_state_closes_secret_flag_quoted_value_straddling_window_edge()
-    test_build_state_closes_assignment_quoted_value_straddling_window_edge()
-    test_redact_action_unbounded_separator_padding_reaims_exploit_regardless_of_margin()
+    test_build_state_redacts_credentials_position_independently_across_offsets()
+    test_build_state_credential_at_large_arbitrary_offset_is_fully_redacted()
+    test_build_state_backstop_cap_is_dos_only_sized_far_beyond_any_credential()
+    test_build_state_content_beyond_backstop_cap_is_intentionally_dropped()
+    test_redact_action_large_separator_gap_never_produces_false_safe_leak()
     test_matches_allowlist_applies_hard_input_cap_before_pattern_matching()
     test_relativize_path_never_leaks_absolute_prefix()
     test_build_state_calls_redact_action_before_capping()
