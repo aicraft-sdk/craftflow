@@ -588,6 +588,89 @@ def test_build_state_multi_match_cumulative_shrink_never_leaks_credential_past_e
         fail("multi-match-cumulative-shrink", f"failures={failures!r}")
 
 
+# ---------------------------------------------------------------------------
+# REM-FIX cycle 9 (origin: code-reviewer, 2 CRITICAL findings against cycle 8's own
+# reimplementation of substitution -- see craftflow_jev_risk_gate.py's build_state()/
+# redact_action() docstrings for the full account). Cycle 8 correctly closed the
+# multi-match cumulative-shrink leak (test_build_state_multi_match_cumulative_shrink_...
+# above) by gating inclusion on each match's ORIGINAL start position -- but it did so by
+# reimplementing substitution itself (finditer + first-claim-wins span assembly), which
+# introduced two NEW bugs the tests below pin: (1) a later-priority pattern's candidate
+# span gets dropped WHOLESALE (not just the overlapping portion) when it overlaps an
+# earlier-claimed span, even though the later pattern's span is much larger and would have
+# masked the real secret; (2) the claim-list is scanned linearly for every new candidate,
+# making the whole pass O(n^2) in match count -- a real DoS risk on dense adversarial input
+# at the production max_chars ceiling (150000). This cycle restores the original sequential
+# `.sub()` chain (proven correct on overlap across cycles 1-7) as the actual substitution
+# mechanism, and moves the "which original position is safe to include" decision into a
+# separate, read-only pre-pass over the RAW (pre-substitution) text -- see
+# _compute_safe_cut()'s own docstring.
+# ---------------------------------------------------------------------------
+
+
+def test_redact_action_masks_full_value_when_higher_priority_pattern_claims_a_nested_substring() -> None:
+    # Overlap bug repro (cycle 9 target #1): _URL_USERINFO's small nested match
+    # ("http://u:x@") must never block _SECRET_FLAG's much larger, fully-masking candidate
+    # span ("--password=http://u:x@REALSECRETTAIL999") from being applied -- the value must
+    # end up FULLY masked, not partially leaked because a smaller higher-priority pattern
+    # claimed a piece of the same text first.
+    command = "mysql --password=http://u:x@REALSECRETTAIL999 --other-flag"
+    redacted, was_redacted = redact_action(command, None)
+    if was_redacted is True and "REALSECRETTAIL999" not in redacted:
+        ok("redact_action fully masks a credential value even when a smaller, higher-priority pattern matched a nested substring of it first")
+    else:
+        fail(
+            "redact-action-overlap-full-mask",
+            f"redacted={redacted!r} was_redacted={was_redacted!r}",
+        )
+
+
+def test_build_state_bounded_time_on_dense_credential_shaped_input_at_production_max_chars() -> None:
+    # Performance regression repro (cycle 9 target #2): a dense, credential-shaped
+    # adversarial input at max_chars=150000 (the real production ceiling in
+    # craftflow_jev_config.py) must redact in a small fraction of a second -- not the ~2.2s
+    # measured against cycle 8's O(n^2) claim-list scan, which alone consumed ~43% of the
+    # PreToolUse hook's entire 5-second timeout budget before the Jev call or telemetry
+    # append even run.
+    dense_unit = "PWD=x "  # short, credential-shaped, maximizes match density per char
+    command = dense_unit * 40_000  # far exceeds the 150000+8192 search window on its own
+    started = time.monotonic()
+    state = build_state("Bash", "db_drop", command, api_key="", max_chars=150_000)
+    elapsed = time.monotonic() - started
+    if elapsed < 1.0 and isinstance(state["action_text"], str):
+        ok(
+            f"build_state redacts a dense credential-shaped input at max_chars=150000 in "
+            f"{elapsed:.3f}s (< 1.0s budget, dramatically faster than the ~2.2s measured "
+            "against cycle 8's O(n^2) claim-list scan)"
+        )
+    else:
+        fail(
+            "build-state-bounded-time-dense-credential-input",
+            f"elapsed={elapsed:.3f}s (budget 1.0s)",
+        )
+
+
+def test_build_state_safe_cut_also_protects_a_straddling_literal_api_key() -> None:
+    # DEVIATION (documented in _collect_credential_match_spans()'s docstring): this cycle's
+    # remediation instructions named only the 4 regex patterns for the safe-cut pre-pass, but
+    # experimentally verified during implementation that the literal `api_key` match needs the
+    # same straddling-cut protection -- redact_action()'s first substitution step is an exact
+    # literal `str.replace(api_key, ...)`, and if `api_key` itself straddles `effective_cap`,
+    # slicing the raw text there truncates the literal occurrence before `.replace()` ever sees
+    # it, leaking a partial fragment of the real secret (confirmed experimentally: without this
+    # inclusion, the same PoC below leaks "...TYPES" in cleartext).
+    api_key = "TYPESAFE_LIVE_KEY_ABCDEFGHIJ0123456789"
+    max_chars = 4000
+    start = max_chars - 5  # api_key starts just before effective_cap, ends well past it
+    command = ("a" * start) + api_key + " --done"
+    state = build_state("Bash", "db_drop", command, api_key=api_key, max_chars=max_chars)
+    text = state["action_text"]
+    if api_key not in text and api_key[:10] not in text and api_key[-10:] not in text:
+        ok("build_state's safe-cut pre-pass also protects a literal api_key straddling effective_cap, not just the 4 regex patterns")
+    else:
+        fail("safe-cut-protects-straddling-api-key", f"action_text_tail={text[-40:]!r}")
+
+
 def test_relativize_path_never_leaks_absolute_prefix() -> None:
     checks = (
         _relativize_path("/p/src/.env", "/p") == "src/.env",
@@ -790,6 +873,9 @@ def main_tests() -> int:
     test_build_state_content_beyond_backstop_cap_is_intentionally_dropped()
     test_build_state_multi_match_cumulative_shrink_never_leaks_credential_past_effective_cap()
     test_redact_action_large_separator_gap_never_produces_false_safe_leak()
+    test_redact_action_masks_full_value_when_higher_priority_pattern_claims_a_nested_substring()
+    test_build_state_bounded_time_on_dense_credential_shaped_input_at_production_max_chars()
+    test_build_state_safe_cut_also_protects_a_straddling_literal_api_key()
     test_matches_allowlist_applies_hard_input_cap_before_pattern_matching()
     test_relativize_path_never_leaks_absolute_prefix()
     test_build_state_calls_redact_action_before_capping()

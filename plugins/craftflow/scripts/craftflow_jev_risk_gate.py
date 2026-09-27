@@ -219,121 +219,86 @@ def _is_credential_shaped_name(name: str) -> bool:
     return any(part in name.upper() for part in _SENSITIVE_NAME_PARTS)
 
 
-# REM-FIX (architectural redesign, REM-FIX cycle 8; origin: code-reviewer, 8th distinct bug shape
-# in this module, confirmed the shared root cause across ALL 8 cycles). Every cycle 1-7 fix
-# (including cycle 6/7's own redesign, see build_state()'s docstring) implicitly assumed that a
-# character position in the POST-redaction OUTPUT string corresponds to the same position in the
-# PRE-redaction INPUT string. That assumption is false whenever any substitution actually fires,
-# because `***` is shorter than the real credential it replaces -- every real redaction SHRINKS
-# the text. Cycle 7 correctly handled a SINGLE credential straddling the `effective_cap` boundary,
-# but not MULTIPLE credential-shaped matches occurring earlier in the text: their cumulative
-# shrinkage can pull content that originated PAST `effective_cap` into the region that ends up
-# actually returned by an output-length-based `[:effective_cap]` slice -- and that pulled-in
-# content was never held to the redaction guarantee, because (in the old architecture) inclusion
-# was decided by counting OUTPUT characters, not by checking each match's ORIGINAL position.
+def _redact_assignment(match: "re.Match[str]") -> str:
+    name = match.group(1)
+    if _is_credential_shaped_name(name):
+        return f"{name}={_REDACTED}"
+    return match.group(0)
+
+
+# REM-FIX (architectural restoration, REM-FIX cycle 9; origin: code-reviewer, 2 CRITICAL findings
+# against cycle 8's own reimplementation of substitution). Cycle 8 correctly closed the
+# multi-match cumulative-shrink leak (see build_state()'s docstring, cycle 8 entry) by gating
+# inclusion on each match's ORIGINAL position -- but it did so by REPLACING the sequential
+# `.sub()` chain with a from-scratch `finditer()` + first-claim-wins span assembly
+# (`_find_redaction_spans()`/`_assemble_redacted_text()`, removed by this cycle). That
+# reimplementation introduced two NEW bugs live-reproduced this cycle:
+#   1. Overlap bug (confidentiality regression): when a later-priority pattern's candidate span
+#      overlapped an earlier-claimed span but extended beyond it, the ENTIRE later candidate was
+#      dropped -- not just the overlapping portion -- even when the later pattern's span was much
+#      larger and would have fully masked the real secret
+#      (e.g. `redact_action("mysql --password=http://u:x@REALSECRETTAIL999 --other-flag", None)`
+#      leaked `REALSECRETTAIL999` because `_URL_USERINFO` claimed the small nested
+#      `http://u:x@` substring first, and `_SECRET_FLAG`'s full-masking candidate span was
+#      discarded wholesale for overlapping it).
+#   2. Performance regression (DoS): `_claim()` linearly scanned every previously-claimed span for
+#      every new candidate span -- O(n) per candidate, O(n^2) total in match count. Measured ~2.2s
+#      at the production `max_chars` ceiling (150000) on dense, realistic credential-shaped input
+#      -- ~43% of the hook's entire 5-second PreToolUse timeout, before the Jev call or telemetry
+#      append even run.
+# The OLD sequential `.sub()` chain restored below does NOT have either problem: each pass
+# re-scans the ALREADY-substituted output of the previous pass (so a later pattern can still mask
+# text a smaller earlier pattern already touched -- no "claimed, untouchable" region concept
+# exists), and each pass is a single O(n) `.sub()` call with no per-match claim-list scan. This is
+# the exact function (byte-identical logic) that was in place through cycle 7, proven correct on
+# overlap across cycles 1-7's own findings.
 #
-# This redesign tracks each match's position in the ORIGINAL (pre-substitution) text via
-# `re.Pattern.finditer()` instead of `re.Pattern.sub()` (which discards where a match started).
-# `_find_redaction_spans()` returns (start, end, replacement) tuples keyed to original positions;
-# `_assemble_redacted_text()` then walks the text ONCE and decides inclusion purely from each
-# span's/segment's ORIGINAL `start` relative to a `cap` -- never by measuring the assembled
-# OUTPUT's length. A match whose original start is >= cap is dropped entirely (neither raw nor
-# masked form ever appears); a match whose original start is < cap is ALWAYS fully masked,
-# regardless of how much earlier content shrank or where the match itself ends. The result is
-# never re-sliced after assembly -- re-slicing an already-assembled string would just move this
-# exact bug class to a new position, which is precisely what cycles 1-5 each did in turn.
-def _find_redaction_spans(text: str, api_key: Optional[str]) -> List[Tuple[int, int, str]]:
-    """Pure. Returns non-overlapping (start, end, replacement) spans, positions keyed to `text`'s
-    OWN original character offsets -- `text` itself is never mutated here. Passes run in the same
-    priority order as the historical sequential-substitution implementation (literal `api_key`,
-    then URL userinfo, then credential-shaped `NAME=value` assignments, then `--password`-style
-    flag values, then single-dash concatenated `-p<value>`/`-u<value>` flags): a later pass's
-    candidate span is dropped if it overlaps a span an earlier pass already claimed, mirroring the
-    fact that the old sequential `.sub()` chain ran each pass over the ALREADY-substituted output
-    of the previous pass, so an earlier pass's matched text was never visible to a later pass."""
-    claimed: List[Tuple[int, int]] = []
-    spans: List[Tuple[int, int, str]] = []
-
-    def _claim(start: int, end: int, replacement: str) -> None:
-        for claimed_start, claimed_end in claimed:
-            if start < claimed_end and end > claimed_start:
-                return  # overlaps an already-claimed (higher-priority) span
-        claimed.append((start, end))
-        spans.append((start, end, replacement))
-
-    if api_key:
-        idx = text.find(api_key)
-        while idx != -1:
-            _claim(idx, idx + len(api_key), _REDACTED)
-            idx = text.find(api_key, idx + len(api_key))
-
-    for match in _URL_USERINFO.finditer(text):
-        _claim(match.start(), match.end(), match.group(1) + _REDACTED + "@")
-
-    for match in _ASSIGNMENT.finditer(text):
-        name = match.group(1)
-        if _is_credential_shaped_name(name):
-            _claim(match.start(), match.end(), f"{name}={_REDACTED}")
-
-    for match in _SECRET_FLAG.finditer(text):
-        _claim(match.start(), match.end(), match.group(1) + _REDACTED)
-
-    for match in _SHORT_FLAG_CONCAT.finditer(text):
-        _claim(match.start(), match.end(), match.group(1) + _REDACTED)
-
-    return spans
-
-
-def _assemble_redacted_text(text: str, spans: List[Tuple[int, int, str]], cap: int) -> Tuple[str, bool]:
-    """Pure. Builds the final text by walking `text` ONCE in ascending original-position order,
-    gating inclusion purely on each span's/segment's ORIGINAL position relative to `cap` -- never
-    by counting characters in the assembled OUTPUT (see the redesign comment directly above
-    `_find_redaction_spans`). `spans` must be non-overlapping (guaranteed by
-    `_find_redaction_spans`'s `_claim` helper).
-
-    A span whose original `start` is < `cap` is ALWAYS fully masked (its `replacement` is
-    emitted), regardless of where it ends or how much earlier content shrank. A span whose
-    original `start` is >= `cap` is dropped entirely -- neither its raw form nor a mask ever
-    appears in the output; this is the same "truncated" semantics as before, just gated on
-    original position instead of output length. Unmatched text is copied verbatim up to `cap`,
-    then dropped. Because `spans` is sorted ascending and non-overlapping, a span already emitted
-    can only be followed by spans starting at or after its own end -- so once a span starting
-    at/past `cap` is reached, every remaining span also starts at/past `cap` (nothing to gain by
-    continuing to scan), and the loop stops. The result is NEVER re-sliced after assembly -- doing
-    so would reintroduce cycle 1-7's exact bug class at a new boundary."""
-    parts: List[str] = []
-    changed = False
-    pos = 0
-    for start, end, replacement in sorted(spans, key=lambda span: span[0]):
-        if start >= cap:
-            break
-        if start > pos:
-            parts.append(text[pos:start])
-        parts.append(replacement)
-        changed = True
-        pos = end
-    if pos < cap:
-        parts.append(text[pos:cap])
-    return "".join(parts), changed
-
-
+# The multi-match cumulative-shrink property cycle 8 closed is preserved WITHOUT reintroducing
+# either of the above: build_state() now computes a `safe_cut` boundary on the RAW,
+# pre-substitution text via a separate, purely additive, read-only pre-pass
+# (`_compute_safe_cut()`, below) BEFORE this chain ever runs. Because the cut point is decided on
+# original character positions before any substitution can shrink anything, there is nothing left
+# for cumulative shrinkage to corrupt -- see `_compute_safe_cut()`'s own docstring.
 def redact_action(text: str, api_key: Optional[str]) -> Tuple[str, bool]:
     """Pure. Masks values that must never leave the machine, in order: (1) the literal
     `api_key` if non-empty, (2) URL userinfo passwords, (3) credential-shaped `NAME=value`
     env-style assignments, (4) `--password`/`--token`/`--secret`/`--api-key`-style flag values,
     (5) single-dash concatenated `-p<value>`/`-u<value>` CLI flags (mysql/psql convention).
     Never raises. Runs every pass over the FULL text it is given -- applies NO truncation of its
-    own, at input or output: internally this is `_assemble_redacted_text(text, spans, cap=len
-    (text))`, i.e. every match found anywhere in `text` is masked and nothing is dropped, since
-    `cap` equals the text's own length. Returns (possibly-modified text, whether anything was
-    actually masked). See `_find_redaction_spans`'s docstring (REM-FIX cycle 8) for why matches
-    are now tracked by ORIGINAL position via `finditer()` rather than by `re.sub()`, which
-    discards where a match started and was the root cause shared by all 8 REM-FIX cycles on this
-    module: every prior fix implicitly assumed a POST-redaction output position corresponds to
-    the same PRE-redaction input position, which is false whenever any substitution shrinks the
-    text (a `***` mask is always shorter than the real credential it replaces)."""
-    spans = _find_redaction_spans(text, api_key)
-    return _assemble_redacted_text(text, spans, cap=len(text))
+    own, at input or output (unchanged property since cycle 6): any cut point this function
+    introduced itself could, in principle, land inside a credential before its terminating
+    delimiter, silently defeating the very redaction it exists to do. The caller (build_state())
+    is responsible for handing this function a text window that is already safe to redact in
+    full -- see `_compute_safe_cut()`. Each pass runs over the ALREADY-substituted output of the
+    previous pass (a plain sequential `re.sub()` chain, restored REM-FIX cycle 9 -- see the
+    module-level comment directly above this function for why this is deliberately NOT the
+    finditer/span-assembly approach cycle 8 introduced and this cycle removed). Returns
+    (possibly-modified text, whether anything was actually masked)."""
+    out = text
+    changed = False
+
+    if api_key:
+        replaced = out.replace(api_key, _REDACTED)
+        changed = changed or replaced != out
+        out = replaced
+
+    replaced = _URL_USERINFO.sub(r"\1" + _REDACTED + "@", out)
+    changed = changed or replaced != out
+    out = replaced
+
+    replaced = _ASSIGNMENT.sub(_redact_assignment, out)
+    changed = changed or replaced != out
+    out = replaced
+
+    replaced = _SECRET_FLAG.sub(r"\1" + _REDACTED, out)
+    changed = changed or replaced != out
+    out = replaced
+
+    replaced = _SHORT_FLAG_CONCAT.sub(r"\1" + _REDACTED, out)
+    changed = changed or replaced != out
+    out = replaced
+
+    return out, changed
 
 
 def _relativize_path(file_path: str, cwd: Optional[str]) -> str:
@@ -388,26 +353,87 @@ def _relativize_path(file_path: str, cwd: Optional[str]) -> str:
 #     realistic-to-large command" -- the property this redesign actually needs to guarantee.
 _ACTION_TEXT_DOS_BACKSTOP_CHARS = 5_000_000
 
-# REM-FIX (REM-FIX cycle 7; re-justified under the cycle-8 position-tracked redesign). Fixed,
-# small, match-context lookahead used to widen the text `build_state()` searches for matches a
-# little beyond `effective_cap` -- so that a match STARTING before `effective_cap` is seen with
-# its full span (hence its correct, complete replacement text) even when that span extends past
+# REM-FIX (REM-FIX cycle 7; re-justified under cycle 8's position-tracked design, still valid
+# under cycle 9's restoration). Fixed, small, match-context lookahead used to widen the text
+# `build_state()` searches for matches a little beyond `effective_cap` -- so that a match
+# STARTING before `effective_cap` is seen with its full span (hence its correct, complete
+# replacement text and correct `safe_cut` contribution) even when that span extends past
 # `effective_cap`. Sized comfortably larger than the largest total match span any single pattern
 # in this module can ever produce (the biggest is `_ASSIGNMENT`: 129-char name + "=" + up to
 # 4,096-char quoted/unquoted value + 2 quote chars == 4,228 chars; `_URL_USERINFO`, `_SECRET_FLAG`,
 # and `_SHORT_FLAG_CONCAT` are all smaller).
 #
-# Under cycle 8's position-tracked redesign this constant needs NO further scaling for multiple
-# preceding matches (unlike the old output-length-based architecture, where cumulative shrinkage
-# from earlier matches was exactly what let this same fixed margin be defeated -- see
-# `_find_redaction_spans`'s module-level redesign comment). A match's completion boundary now
-# depends only on ITS OWN span in the ORIGINAL text -- `_assemble_redacted_text()` decides
-# inclusion from each span's ORIGINAL `start` position, never from a count of assembled output
-# characters -- so how many OTHER matches precede it, or how much they individually shrink, has
-# no bearing on whether this match's own span is captured within the search window. One
-# fixed-size margin, sized to the single largest possible match span, remains correct regardless
-# of how many decoy matches occur earlier in the text.
+# This constant needs NO further scaling for multiple preceding matches: `_compute_safe_cut()`
+# (below) decides how far to extend the cut using each match's OWN span in the ORIGINAL,
+# pre-substitution text -- never by counting assembled output characters -- so how many OTHER
+# matches precede a given match, or how much any of them would eventually shrink under
+# redaction, has no bearing on whether THIS match's own span is captured within the search
+# window. One fixed-size margin, sized to the single largest possible match span, remains correct
+# regardless of how many decoy matches occur earlier in the text.
 _REDACT_MATCH_LOOKAHEAD_CHARS = 8192
+
+
+def _collect_credential_match_spans(text: str, api_key: Optional[str]) -> List[Tuple[int, int]]:
+    """Pure, READ-ONLY (performs no substitution). Returns every (start, end) span, keyed to
+    `text`'s own original character offsets, that the sequential `redact_action()` chain below
+    could ever match or replace: literal `api_key` occurrences, then all 4 regex patterns in the
+    same order `redact_action()` applies them. Does not filter `_ASSIGNMENT` matches by
+    credential-shapedness (unlike `_redact_assignment()`, which only replaces credential-shaped
+    names) -- collecting a superset of spans here only makes `_compute_safe_cut()`'s resulting cut
+    sit at or after the minimum required boundary, never before it, which is the safe direction;
+    it never causes an actual leak, only (at most) a few extra bytes of otherwise-harmless
+    non-credential text included in the redacted output.
+
+    Includes literal `api_key` occurrences (a deliberate addition beyond the 4 regex patterns):
+    `redact_action()`'s FIRST substitution step is an exact literal `str.replace(api_key, ...)` --
+    if the real `api_key` value itself straddled the same cut boundary the 4 regex patterns are
+    protected against, slicing the raw text at that boundary would truncate the literal occurrence
+    before `.replace()` ever saw it, leaving an unmasked fragment of the real secret in the output.
+    There is no principled reason the literal `api_key` match should be exempt from the same
+    straddling-cut protection every regex-matched credential shape gets, so it is folded into the
+    same safe-cut computation for consistency."""
+    spans: List[Tuple[int, int]] = []
+    if api_key:
+        idx = text.find(api_key)
+        while idx != -1:
+            spans.append((idx, idx + len(api_key)))
+            idx = text.find(api_key, idx + len(api_key))
+    for pattern in (_URL_USERINFO, _ASSIGNMENT, _SECRET_FLAG, _SHORT_FLAG_CONCAT):
+        for match in pattern.finditer(text):
+            spans.append((match.start(), match.end()))
+    return spans
+
+
+def _compute_safe_cut(text: str, api_key: Optional[str], cap: int) -> int:
+    """Pure, READ-ONLY (performs no substitution) -- REM-FIX cycle 9 (origin: code-reviewer, 2
+    CRITICAL findings against cycle 8's finditer/span-assembly reimplementation of substitution
+    itself; see `redact_action()`'s module-level comment for the full account of what cycle 8 got
+    wrong). This function is the ONLY new piece of machinery cycle 9 adds -- it decides a single
+    safe cut point on the RAW, pre-substitution `text`, entirely separately from (and before) the
+    restored sequential `.sub()` chain ever runs, so that chain can keep working exactly as it did
+    through cycle 7 (proven correct on overlap across cycles 1-7) while still closing cycle 8's
+    own legitimate target: a real credential must never be partially exposed because earlier
+    decoy redactions cumulatively shrank the text and pulled unredacted content across an
+    output-length-based cut.
+
+    Every match (from `_collect_credential_match_spans()`) whose ORIGINAL `.start()` is < `cap` is
+    "qualifying" -- it must survive to the sequential chain with its FULL span intact, or the
+    chain could see a truncated fragment: either fail to match it at all (a partially-truncated
+    literal `api_key`) or match a corrupted remainder (a partially-truncated regex value),  in
+    both cases risking a partial, unmasked leak. `safe_cut` is therefore the smallest boundary
+    that is guaranteed not to straddle any qualifying match: `max(cap, max(end for every
+    qualifying match))`, or just `cap` if no match qualifies. A match starting at or after `cap`
+    is correctly excluded from this computation -- it was never going to be included in the
+    caller's returned text anyway (dropping it entirely, not partially, is the safe outcome for
+    content beyond the egress budget).
+
+    Because this decision is made entirely on ORIGINAL, pre-substitution positions -- before the
+    sequential chain has shrunk anything -- there is nothing left for cumulative shrinkage to
+    corrupt: `redact_action()` subsequently runs on `text[:safe_cut]` as a single, complete,
+    already-safe window, and its own overlap handling (unmodified since cycle 7 and earlier)
+    produces the final output directly with no further slicing needed."""
+    qualifying_ends = [end for start, end in _collect_credential_match_spans(text, api_key) if start < cap]
+    return max(cap, max(qualifying_ends)) if qualifying_ends else cap
 
 
 def build_state(
@@ -416,9 +442,10 @@ def build_state(
     """Pure. `action_text` is the raw command (Bash) or file_path (Write/Edit) -- NEVER
     content/new_string/old_string (see module docstring, P1).
 
-    REM-FIX (position-tracked redesign, REM-FIX cycle 8; origin: code-reviewer, 8th distinct bug
-    shape, confirmed shared root cause across ALL 8 cycles). Condensed audit trail (see git
-    history for each cycle's original, much longer comments):
+    REM-FIX (architectural restoration, REM-FIX cycle 9; origin: code-reviewer, 2 CRITICAL
+    findings against cycle 8's own reimplementation of substitution). Condensed audit trail (see
+    git history for each cycle's original, much longer comments; cycles 1-7 summarized here,
+    cycle 8 and 9 in full since they are the two most recent architectural changes):
       cycle 1: a pre-redaction truncation cap inside build_state reopened the URL-userinfo leak
                (a straddling cut lost the credential's terminating delimiter before redact_action
                ever saw it).
@@ -442,42 +469,50 @@ def build_state(
                straddle -- but `redact_action()` still worked by substituting into a whole string
                and then SLICING THE OUTPUT (`redacted_text[:effective_cap]`), which silently
                assumed a POST-redaction output position corresponds to the same PRE-redaction
-               input position. That assumption breaks whenever MULTIPLE credential-shaped matches
-               occur earlier in the text: their cumulative shrinkage (every `***` mask is shorter
-               than the real credential it replaces) can pull content that originated PAST
-               `effective_cap` into the region an output-length slice actually returns -- content
-               that was never held to the same redaction guarantee, because inclusion was decided
-               by counting OUTPUT characters, not by checking each match's ORIGINAL position. This
-               is the shared root cause underlying all 8 cycles: every fix through cycle 7 moved a
-               position-counting cut point around instead of removing the position-counting
-               entirely.
-    This cycle removes it entirely: matches are found via `finditer()` (which exposes each
-    match's ORIGINAL `.start()`/`.end()`, unlike `.sub()`, which discards them), and
-    `_assemble_redacted_text()` decides what to include using each match's/segment's ORIGINAL
-    position relative to `effective_cap` -- never by measuring the assembled OUTPUT's length:
-      1. `effective_cap = min(max_chars, _ACTION_TEXT_DOS_BACKSTOP_CHARS)` -- unchanged from
-         cycle 7 -- is still the single value that governs what can ever be returned.
+               input position -- an assumption that breaks whenever MULTIPLE credential-shaped
+               matches occur earlier in the text (their cumulative shrinkage can pull content that
+               originated PAST `effective_cap` into the region an output-length slice returns).
+      cycle 8: correctly diagnosed cycle 7's root cause (output-length-based inclusion) and closed
+               the multi-match cumulative-shrink leak -- but did so by REPLACING the sequential
+               `.sub()` chain with a from-scratch `finditer()` + first-claim-wins span-assembly
+               reimplementation of substitution itself. That reimplementation introduced two NEW
+               bugs: an overlap bug (a later, larger, fully-masking pattern's candidate span was
+               dropped WHOLESALE -- not just its overlapping portion -- when it overlapped an
+               earlier-claimed smaller span, live-reproduced leaking a real secret in cleartext),
+               and a performance regression (the per-candidate linear scan of claimed spans made
+               the pass O(n^2) in match count, measured ~2.2s at the production max_chars=150000
+               ceiling on dense adversarial input -- ~43% of the hook's entire 5-second timeout).
+      cycle 9 (this cycle): restores the original sequential `.sub()` chain byte-identical to its
+               pre-cycle-8 form as the ONLY substitution mechanism (proven correct on overlap
+               across cycles 1-7; see `redact_action()`'s own docstring) -- this closes both of
+               cycle 8's new bugs, since a plain `.sub()` chain has neither a claim-list to scan
+               (no O(n^2)) nor a "claimed, untouchable" region concept (a later pass can still mask
+               text an earlier, smaller pattern already touched). Cycle 8's own legitimate target
+               (multi-match cumulative-shrink) is preserved via a SEPARATE, purely additive,
+               read-only pre-pass, `_compute_safe_cut()`, that decides a single cut point on the
+               RAW, pre-substitution text -- BEFORE the sequential chain ever runs. Because the
+               cut point is decided entirely on original character positions, before any
+               substitution can shrink anything, there is nothing left for cumulative shrinkage to
+               corrupt (unlike cycle 7's output-length-based `[:effective_cap]` slice).
+    Current pipeline:
+      1. `effective_cap = min(max_chars, _ACTION_TEXT_DOS_BACKSTOP_CHARS)` -- unchanged since
+         cycle 7 -- is the single value that governs what can ever be returned.
       2. `search_window = action_text[: effective_cap + _REDACT_MATCH_LOOKAHEAD_CHARS]` -- also
-         unchanged in form from cycle 7 -- gives `finditer()` enough trailing text to see the
-         FULL span (and therefore the correct replacement text) of any match starting at or
-         before `effective_cap`, without needing to scale with how many other matches precede it
-         (see `_REDACT_MATCH_LOOKAHEAD_CHARS`'s own docstring for why position-tracking makes this
-         margin's sizing independent of decoy count).
-      3. `_find_redaction_spans(search_window, api_key)` finds every match's (start, end,
-         replacement) keyed to `search_window`'s own (== `action_text`'s own, since it's a
-         prefix) original character offsets.
-      4. `_assemble_redacted_text(search_window, spans, effective_cap)` builds the final text by
-         walking those ORIGINAL positions once: a span whose original start is < `effective_cap`
-         is always fully masked, regardless of how much earlier content shrank or where that span
-         itself ends; a span whose original start is >= `effective_cap` is dropped entirely
-         (neither raw nor masked form ever appears). The result is the function's actual return
-         value -- it is NEVER re-sliced afterward, which is precisely the step that let cycles 1-7
-         each reintroduce this bug class at a new boundary."""
+         unchanged in form -- gives the read-only pre-pass enough trailing text to see the FULL
+         span of any match starting at or before `effective_cap`.
+      3. `safe_cut = _compute_safe_cut(search_window, api_key, effective_cap)` computes the single
+         cut point on RAW positions (see its own docstring).
+      4. `safe_input = search_window[:safe_cut]` slices the RAW (still unredacted) text at that
+         boundary -- this is the ONLY slice ever taken of untouched input.
+      5. `redact_action(safe_input, api_key)` runs the restored, unmodified sequential chain on
+         `safe_input` and produces the final redacted output DIRECTLY -- no further slicing is
+         applied afterward, since `safe_input` already excludes everything past the boundary."""
     effective_cap = min(max_chars, _ACTION_TEXT_DOS_BACKSTOP_CHARS)
     search_window = action_text[: effective_cap + _REDACT_MATCH_LOOKAHEAD_CHARS]
-    spans = _find_redaction_spans(search_window, api_key)
-    redacted_text, was_redacted = _assemble_redacted_text(search_window, spans, effective_cap)
-    truncated = len(action_text) > effective_cap
+    safe_cut = _compute_safe_cut(search_window, api_key, effective_cap)
+    safe_input = search_window[:safe_cut]
+    redacted_text, was_redacted = redact_action(safe_input, api_key)
+    truncated = len(action_text) > safe_cut
     return {
         "tool_name": tool_name,
         "category": category,
