@@ -1,7 +1,7 @@
 {
   "enabled": false,
   "model": "jev-latest",
-  "features": {"routingHint": "audit", "skillHint": "audit", "remediationScope": "off"},
+  "features": {"routingHint": "audit", "skillHint": "audit", "remediationScope": "off", "riskGate": "off"},
   "thresholds": {"routing": 0.85, "skill": 0.7, "remediationScope": 0.85},
   "maxStateChars": 4000,
   "timeoutSeconds": 2.5,
