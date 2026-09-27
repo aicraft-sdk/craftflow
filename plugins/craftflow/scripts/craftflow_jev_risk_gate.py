@@ -155,10 +155,21 @@ def matches_allowlist(tool_name: Any, tool_input: Any) -> Optional[str]:
 # Dropping the exclusions makes the greedy `[^\s]{1,512}` quantifier backtrack to the RIGHTMOST
 # '@' in the whitespace-delimited authority token instead, which is always the real userinfo
 # separator for this shape (see test_redact_action_masks_url_userinfo_with_embedded_at_and_slash_in_password).
+# REM-FIX (doubt-verifier CRITICAL, corroborated 3x, REM-FIX cycle 5): the `\s+` alternative in
+# this separator group was UNBOUNDED. Combined with `_REDACT_ACTION_INPUT_MARGIN_CHARS` being
+# sized only from patterns' value-capture quantifier bound (not their full match span -- see that
+# constant's own corrected docstring below), an attacker could pad the gap between `--password`
+# and its value with an arbitrary number of spaces, re-aiming a quoted value's closing quote at
+# whatever the (fixed, compile-time) redaction window edge happened to be -- REGARDLESS of margin
+# size, since an unbounded separator makes this pattern's own worst-case match length unbounded
+# too. No realistic CLI invocation has dozens of spaces between a flag and its value, so bounding
+# this to 32 is safe and closes the "attacker re-aims exploit via arbitrary padding" structural
+# hole for good (see test_redact_action_unbounded_separator_padding_reaims_exploit_regardless_of_
+# margin, and _REDACT_ACTION_INPUT_MARGIN_CHARS below for the matching margin recomputation).
 _URL_USERINFO = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]{0,20}://[^\s:/@]{1,256}:)[^\s]{1,512}@")
 _ASSIGNMENT = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]{0,128})=(\"[^\"]{0,4096}\"|'[^']{0,4096}'|\S{1,4096})")
 _SECRET_FLAG = re.compile(
-    r"(--(?:password|passwd|token|secret|api-key|apikey)(?:=|\s+))(\"[^\"]{0,4096}\"|'[^']{0,4096}'|\S{1,4096})",
+    r"(--(?:password|passwd|token|secret|api-key|apikey)(?:=|\s{1,32}))(\"[^\"]{0,4096}\"|'[^']{0,4096}'|\S{1,4096})",
     re.IGNORECASE,
 )
 # REM-FIX (silent-failure-hunter CRITICAL #2): single-dash concatenated CLI flags (mysql/psql
@@ -220,11 +231,12 @@ _REDACT_ACTION_SAFETY_CAP = 200_000
 #
 # The fix is NOT to move the cut again -- it is to stop cutting the RAW input at the point where
 # a credential could be straddling it. `_REDACT_ACTION_INPUT_MARGIN_CHARS` extends the window fed
-# to redact_action() by at least the largest bounded-quantifier span among this module's four
-# redaction patterns (_ASSIGNMENT/_SECRET_FLAG's value captures are bounded to 4096 chars,
-# _SHORT_FLAG_CONCAT's to 4095, _URL_USERINFO's password field to 512 -- see redact_action()
-# below). Because every credential these patterns can ever recognize has a total match length
-# bounded by that same span, a credential that STARTS anywhere before
+# to redact_action() by at least the max FULL MATCH SPAN across all four redaction patterns
+# (flag/name literal + separator + quote-wrapper chars + value capture -- NOT the value-capture
+# quantifier bound alone; see that constant's own docstring below for the corrected, cycle-5
+# derivation and why cycle 4's narrower "value-capture span" phrasing under-counted it). Because
+# every credential these patterns can ever recognize has a total match length bounded by that same
+# span, a credential that STARTS anywhere before
 # `_MAX_REDACT_ACTION_INPUT_CHARS` is mathematically guaranteed to have its full match (including
 # the trailing delimiter) complete before `_MAX_REDACT_ACTION_INPUT_CHARS +
 # _REDACT_ACTION_INPUT_MARGIN_CHARS` -- so the widened window can never sever it. This mirrors
@@ -238,15 +250,36 @@ _REDACT_ACTION_SAFETY_CAP = 200_000
 # serves that purpose for this call path.
 _MAX_REDACT_ACTION_INPUT_CHARS = 100_000
 
-# See the cycle-4 note above: at least the largest bounded-quantifier span among
-# _URL_USERINFO/_ASSIGNMENT/_SECRET_FLAG/_SHORT_FLAG_CONCAT's value/password captures (4096 is
-# the largest -- _ASSIGNMENT and _SECRET_FLAG's quoted/unquoted value groups are `{0,4096}`/
-# `{1,4096}`, _SHORT_FLAG_CONCAT's is `{0,4095}`; _URL_USERINFO's password field is only `{1,512}`
-# but the whole module uses one shared margin rather than a bespoke one per pattern, for
-# simplicity and because 4096 already dominates every pattern's max span). This is the amount by
-# which `_MAX_REDACT_ACTION_INPUT_CHARS` is extended before it is ever used as a slice boundary --
-# see `_REDACT_ACTION_INPUT_WINDOW_CHARS` and `build_state()`.
-_REDACT_ACTION_INPUT_MARGIN_CHARS = 4096
+# REM-FIX (doubt-verifier CRITICAL, corroborated 3x independently, REM-FIX cycle 5): cycle 4's
+# derivation of this margin was itself wrong -- it was sized from "the largest bounded-quantifier
+# VALUE-CAPTURE span" (4096) alone, not each pattern's TRUE FULL MATCH SPAN (flag/name literal +
+# separator + quote-wrapper chars + value capture). A value-capture-only margin is too small: it
+# does not account for the flag/name literal, the separator, or the two quote characters that
+# also sit between the window edge and wherever the credential logically "starts" for margin-
+# guarantee purposes -- so a credential's own closing delimiter could still be severed by the old,
+# too-narrow margin even though `\s+` was the more severe, margin-proof structural hole (fixed
+# above). The correct derivation is: margin >= max FULL MATCH SPAN across all four patterns, so
+# that ANY credential recognized by ANY of them, starting anywhere before
+# `_MAX_REDACT_ACTION_INPUT_CHARS`, is mathematically guaranteed to have its entire match --
+# including its trailing delimiter -- complete before the window edge, regardless of where in
+# `[0, _MAX_REDACT_ACTION_INPUT_CHARS)` it starts.
+#
+# Full match span per pattern (derived directly from each pattern's own bounded quantifiers,
+# re-verified against the actual current regex source -- prior cycles' reasoning about "which
+# pattern is worst" has been wrong before, so this is NOT copied from an earlier comment):
+#   - _URL_USERINFO:      scheme(1-21) + "://"(3) + username(1-256) + ":"(1) + password(1-512)
+#                         + "@"(1)                                            = 794
+#   - _ASSIGNMENT:        name(1-129) + "="(1) + quoted value("..."/'...', 2 wrapper chars +
+#                         up to 4096 content = 4098)                          = 4228  <- worst
+#   - _SECRET_FLAG:       longest flag literal "--password"(10) + separator("="  or, post
+#                         cycle-5 fix, `\s{1,32}`, so max 32) + quoted value (4098)
+#                                                                              = 4140
+#   - _SHORT_FLAG_CONCAT: flag "-p"/"-u"(2) + value group ([^\s\-]\S{0,4095}, max 4096)
+#                                                                              = 4098
+# Worst case is `_ASSIGNMENT` at 4228 chars. Set with a generous buffer above that (not the bare
+# minimum, so a small drift in any pattern's bound during a future edit does not silently
+# reopen this class of bug): 4228 + ~270 buffer, rounded to 4500.
+_REDACT_ACTION_INPUT_MARGIN_CHARS = 4500
 
 # The ACTUAL slice boundary applied to raw `action_text` before it reaches redact_action() (see
 # build_state()). Never slice at `_MAX_REDACT_ACTION_INPUT_CHARS` alone -- see the cycle-4 note

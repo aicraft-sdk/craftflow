@@ -522,6 +522,136 @@ def test_redact_action_safety_cap_truncates_output_never_the_raw_input() -> None
         )
 
 
+# ---------------------------------------------------------------------------
+# REM-FIX cycle 5 (doubt-verifier CRITICAL, corroborated 3x independently by code-reviewer +
+# silent-failure-hunter + doubt-verifier). Root cause: _SECRET_FLAG's separator group was
+# `(?:=|\s+)` -- the `\s+` alternative was UNBOUNDED -- combined with
+# _REDACT_ACTION_INPUT_MARGIN_CHARS being sized only from patterns' value-capture quantifier bound
+# (not their full match span). A quoted secret value containing internal whitespace, positioned so
+# its closing quote falls just past the redaction window edge, defeats the quoted-value
+# alternative (no closing quote in the windowed text); the engine falls back to the unquoted
+# `\S{1,4096}` alternative, which stops at the FIRST internal whitespace character -- masking only
+# the pre-space fragment and leaving the rest (part of the real secret) in cleartext, while
+# `build_state()` still reports `redacted=True`. Fixed by (1) bounding `_SECRET_FLAG`'s separator
+# to `\s{1,32}` and (2) recomputing `_REDACT_ACTION_INPUT_MARGIN_CHARS` from each pattern's TRUE
+# FULL match span (worst case: `_ASSIGNMENT` at 4228 chars), not the value-capture bound alone.
+# ---------------------------------------------------------------------------
+
+
+# Cycle 4's margin (4096) was sized only from the value-capture quantifier bound, not each
+# pattern's TRUE full match span (flag/name literal + separator + quote-wrapper chars + value
+# capture) -- see _REDACT_ACTION_INPUT_MARGIN_CHARS's own corrected docstring. This historical,
+# known-insufficient value is used ONLY to construct these two regression tests' target byte
+# offset -- it is not imported from the module (cycle 5 replaces it) -- so the constructions below
+# remain meaningful regardless of the CURRENT margin's exact value.
+_CYCLE_4_INSUFFICIENT_MARGIN_CHARS = 4096
+
+
+def _build_quoted_value_straddle_command(flag: str, secret: str) -> str:
+    """Shared PoC-1 construction: flag starts at the LATEST position that still legally
+    qualifies as "before `_MAX_REDACT_ACTION_INPUT_CHARS`" (CAP - 1 -- the design's own
+    guarantee only protects credentials starting before CAP), with a quoted value (one internal
+    space, then `secret`) sized so its closing quote lands exactly 1 char past where cycle 4's
+    insufficient, value-capture-only margin would have placed the window edge. A margin correctly
+    derived from each pattern's TRUE full match span must still contain this -- a margin sized
+    only from the value-capture bound (cycle 4) does not."""
+    cap = _MAX_REDACT_ACTION_INPUT_CHARS
+    flag_start = cap - 1
+    target_quote_index = cap + _CYCLE_4_INSUFFICIENT_MARGIN_CHARS + 1
+    span = target_quote_index - flag_start  # flag + filler + space + secret + closing quote
+    filler_len = span - len(flag) - 1 - len(secret) - 1
+    filler = "H" * filler_len
+    return ("A" * flag_start) + flag + filler + " " + secret + '"' + " --done"
+
+
+def test_build_state_closes_secret_flag_quoted_value_straddling_window_edge() -> None:
+    # PoC 1 (--password / _SECRET_FLAG). Pre-fix, the quoted alternative can never see its own
+    # closing quote (past cycle 4's insufficient window edge), so the engine falls back to
+    # `\S{1,4096}`, which masks only "quote+H-run" up to the internal space and leaves the real
+    # secret (the S-run) in cleartext while still reporting redacted=True.
+    secret = "S" * 40
+    command = _build_quoted_value_straddle_command('--password "', secret)
+    state = build_state("Bash", "db_drop", command, api_key=None, max_chars=2_000_000)
+    checks = (
+        secret not in state["action_text"],
+        state["redacted"] is True,
+    )
+    if all(checks):
+        ok(
+            "build_state fully masks a --password quoted value starting just before the base cap "
+            "whose closing quote would have straddled cycle 4's insufficient margin -- no "
+            "partial-mask false-safe leak"
+        )
+    else:
+        fail(
+            "secret-flag-quoted-value-straddle",
+            f"secret_present={secret in state['action_text']!r} redacted={state['redacted']!r} "
+            f"tail={state['action_text'][-80:]!r}",
+        )
+
+
+def test_build_state_closes_assignment_quoted_value_straddling_window_edge() -> None:
+    # Same PoC shape as above, for `_ASSIGNMENT` (`NAME="..."`) -- the pattern that actually
+    # determines the TRUE worst-case margin (4228 chars). Pins that the recomputed margin covers
+    # this pattern's full match span (name + "=" + quote-wrapped value), not just its value
+    # capture.
+    secret = "S" * 40
+    command = _build_quoted_value_straddle_command(' MY_TOKEN="', secret)
+    state = build_state("Bash", "db_drop", command, api_key=None, max_chars=2_000_000)
+    checks = (
+        secret not in state["action_text"],
+        state["redacted"] is True,
+    )
+    if all(checks):
+        ok(
+            "build_state fully masks a NAME=\"...\" (_ASSIGNMENT) quoted value starting just "
+            "before the base cap whose closing quote would have straddled cycle 4's insufficient "
+            "margin"
+        )
+    else:
+        fail(
+            "assignment-quoted-value-straddle",
+            f"secret_present={secret in state['action_text']!r} redacted={state['redacted']!r} "
+            f"tail={state['action_text'][-80:]!r}",
+        )
+
+
+def test_redact_action_unbounded_separator_padding_reaims_exploit_regardless_of_margin() -> None:
+    # PoC 2: reproduces the reviewer's own verified case -- a flag starting at 79989 (nowhere near
+    # _MAX_REDACT_ACTION_INPUT_CHARS=100_000), with an arbitrary (here: exactly 20,000-space,
+    # derived not hardcoded) gap between "--password" and its quoted value. Because the OLD
+    # separator (`\s+`) was unbounded, an attacker could always pad this gap to re-aim a value's
+    # closing quote at whatever the (fixed) window edge is, no matter how far from any cap
+    # boundary the flag itself starts and no matter how large the margin is set -- proving margin
+    # size alone can never close this class. Bounding the separator to `\s{1,32}` closes it: a
+    # 20,000-space gap can no longer bridge "--password" to its value at all, so _SECRET_FLAG
+    # simply does not match this (unrealistic) shape -- the critical invariant is that
+    # build_state() must never claim `redacted=True` while this secret leaks in cleartext.
+    window_edge = _MAX_REDACT_ACTION_INPUT_CHARS + _REDACT_ACTION_INPUT_MARGIN_CHARS
+    flag_start = 79989
+    flag_word = "--password"
+    filler = "H" * 4055
+    secret = "S" * 40
+    gap = window_edge - flag_start - len(flag_word) - 1 - len(filler) - 1 - len(secret)
+    command = (
+        ("A" * flag_start) + flag_word + (" " * gap) + '"' + filler + " " + secret + '"' + " --done"
+    )
+    state = build_state("Bash", "db_drop", command, api_key=None, max_chars=2_000_000)
+    # The invariant that must hold post-fix: never both "claims redacted" AND "still leaks".
+    false_safe_leak = state["redacted"] is True and secret in state["action_text"]
+    if gap > 32 and not false_safe_leak:
+        ok(
+            "redact_action never claims redacted=True while a secret still leaks, even when an "
+            "unbounded-style separator gap is used to re-aim the exploit far from any cap "
+            "boundary -- bounding the separator closes the re-aim vector regardless of margin size"
+        )
+    else:
+        fail(
+            "secret-flag-unbounded-separator-reaim",
+            f"gap={gap} redacted={state['redacted']!r} secret_present={secret in state['action_text']!r}",
+        )
+
+
 def test_relativize_path_never_leaks_absolute_prefix() -> None:
     checks = (
         _relativize_path("/p/src/.env", "/p") == "src/.env",
@@ -726,6 +856,9 @@ def main_tests() -> int:
     test_build_state_closes_credential_leak_straddling_100k_hard_cap_boundary()
     test_build_state_closes_credential_leak_straddling_margin_extended_boundary()
     test_redact_action_safety_cap_truncates_output_never_the_raw_input()
+    test_build_state_closes_secret_flag_quoted_value_straddling_window_edge()
+    test_build_state_closes_assignment_quoted_value_straddling_window_edge()
+    test_redact_action_unbounded_separator_padding_reaims_exploit_regardless_of_margin()
     test_matches_allowlist_applies_hard_input_cap_before_pattern_matching()
     test_relativize_path_never_leaks_absolute_prefix()
     test_build_state_calls_redact_action_before_capping()
