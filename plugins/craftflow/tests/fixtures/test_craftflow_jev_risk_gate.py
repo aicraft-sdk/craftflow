@@ -445,6 +445,14 @@ def test_matcher_and_redactor_are_bounded_time_on_pathological_input() -> None:
     # attacker-influenced input) -- a pathological input must not trigger catastrophic regex
     # backtracking. Bounded quantifiers were used throughout precisely to make this true; this
     # test pins that property instead of assuming it.
+    #
+    # NOTE (REM-FIX cycle 3 correction): every sample below is pre-sliced to `command[:20000]`
+    # before calling `_db_drop_match`/`redact_action` directly -- this test proves the regexes
+    # themselves have no catastrophic-backtracking blowup at realistic post-cap sizes, NOT that
+    # the real build_state() production call path bounds its own input size (it did not, until
+    # this cycle's fix). See test_build_state_bounds_compute_time_on_unsliced_multi_mb_command
+    # below for the un-sliced, build_state()-direct property this test's own pre-slice cannot
+    # demonstrate.
     pathological_inputs = [
         "a" * 200_000,
         " -" * 50_000,
@@ -463,6 +471,39 @@ def test_matcher_and_redactor_are_bounded_time_on_pathological_input() -> None:
         ok(f"matcher + redact_action finish in {elapsed:.3f}s total on 4 pathological inputs (< 2.0s budget)")
     else:
         fail("matcher-redactor-bounded-time", f"elapsed={elapsed:.3f}s (budget 2.0s)")
+
+
+def test_build_state_bounds_compute_time_on_unsliced_multi_mb_command() -> None:
+    # REM-FIX (silent-failure-hunter HIGH, corroborated MEDIUM by code-reviewer re-review;
+    # REM-FIX cycle 3). Cycle 2 correctly moved the only raw-command size bound from a
+    # PRE-redaction cap inside build_state (cycle 1 -- see the straddling-boundary regression
+    # test above) to redact_action()'s OUTPUT-side _REDACT_ACTION_SAFETY_CAP. But that left
+    # redact_action()'s INPUT, on the real production call path (build_state()), completely
+    # unbounded: a multi-MB Bash command (heredoc, base64 blob) makes this PreToolUse hook's 5
+    # sequential regex passes run over genuinely unbounded, attacker-influenceable text -- both
+    # agents independently benchmarked ~0.32s/1MB, ~1.6s/5MB, ~6.6-6.9s/20MB, scaling linearly
+    # with no ceiling, stalling this synchronous PreToolUse call for multiple seconds.
+    #
+    # Unlike test_matcher_and_redactor_are_bounded_time_on_pathological_input above (which
+    # pre-slices every sample to command[:20000] before calling the pure functions directly --
+    # a citation that is misleading as proof of THIS property, since it never exercises the real
+    # unbounded build_state() call path), this test calls build_state() DIRECTLY with a genuinely
+    # un-sliced 20MB command and pins a tight time budget that only an input-side cap ahead of
+    # redact_action() can satisfy.
+    huge_command = "rm -rf /tmp/x " + ("a" * (20 * 1024 * 1024))
+    started = time.monotonic()
+    state = build_state("Bash", "rm_rf", huge_command, api_key="", max_chars=4000)
+    elapsed = time.monotonic() - started
+    if elapsed < 1.0 and isinstance(state["action_text"], str):
+        ok(
+            f"build_state bounds compute time to {elapsed:.3f}s on a genuinely un-sliced 20MB "
+            "command (< 1.0s budget) -- redact_action()'s input, not just its output, is bounded"
+        )
+    else:
+        fail(
+            "build-state-bounded-time-unsliced-multi-mb",
+            f"elapsed={elapsed:.3f}s (budget 1.0s) action_text_type={type(state.get('action_text'))!r}",
+        )
 
 
 def test_build_questions_shape() -> None:
@@ -582,6 +623,7 @@ def main_tests() -> int:
     test_relativize_path_never_leaks_absolute_prefix()
     test_build_state_calls_redact_action_before_capping()
     test_matcher_and_redactor_are_bounded_time_on_pathological_input()
+    test_build_state_bounds_compute_time_on_unsliced_multi_mb_command()
     test_build_questions_shape()
     test_decide_logs_well_formed_answer_regardless_of_mode()
     test_decide_rejects_malformed_answer_as_no_decision()

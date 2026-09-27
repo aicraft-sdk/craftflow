@@ -185,6 +185,37 @@ _REDACTED = "***"
 # Sized to match the pathological-input test's own proven-fast size.
 _REDACT_ACTION_SAFETY_CAP = 200_000
 
+# REM-FIX (silent-failure-hunter HIGH, corroborated MEDIUM by code-reviewer re-review; REM-FIX
+# cycle 3). Cycle 2 correctly moved the only raw-command size bound from a PRE-redaction cap
+# inside build_state (cycle 1 -- reopened the URL-userinfo leak, see build_state()'s own
+# docstring) to redact_action()'s OUTPUT-side _REDACT_ACTION_SAFETY_CAP above. But that left
+# redact_action()'s INPUT, on the real production call path (build_state()), completely
+# unbounded: a multi-MB Bash command (heredoc, base64 blob) makes this PreToolUse hook's 5
+# sequential regex passes run over genuinely unbounded, attacker-influenceable text -- measured
+# ~0.1-0.32s/1MB, scaling linearly with no ceiling, stalling this synchronous PreToolUse call for
+# multiple seconds on a large payload (see test_build_state_bounds_compute_time_on_unsliced_
+# multi_mb_command).
+#
+# Fix: build_state() caps its RAW `action_text` to this many characters BEFORE calling
+# redact_action() -- distinct from BOTH other caps in this module (three caps, three purposes,
+# none reused for another's job):
+#   - _MAX_RAW_ACTION_CHARS (20,000): matches_allowlist()'s own category-matching cap, applied
+#     only to Bash command CLASSIFICATION, never to egress/redaction.
+#   - _REDACT_ACTION_SAFETY_CAP (200,000): redact_action()'s own OUTPUT-side bound, for a future
+#     direct caller that bypasses build_state's max_chars egress budget.
+#   - _MAX_REDACT_ACTION_INPUT_CHARS (this constant): build_state()'s INPUT-side bound, ahead of
+#     redact_action(), so the regex passes never run over unbounded text on the real hook path.
+#
+# Sized generously enough that it can NEVER reintroduce the cycle-1/cycle-2 straddling-boundary
+# regression (a cap landing inside a credential before its terminating delimiter silently defeats
+# redaction): no realistic credential (URL password, env-var value, CLI flag value) is ever more
+# than a few hundred/thousand characters, so 100,000 characters gives a >>50x safety margin over
+# any genuine secret while still bounding worst-case regex compute cost to well under a second
+# (~0.01-0.03s at the measured per-MB rate). Both existing straddling-boundary regression tests
+# (cycle 1's build_state test, cycle 2's redact_action-internal-safety-cap test) construct
+# commands well under 100,000 characters and remain green under this cap.
+_MAX_REDACT_ACTION_INPUT_CHARS = 100_000
+
 
 def _redact_assignment(match: "re.Match[str]") -> str:
     name = match.group(1)
@@ -272,9 +303,22 @@ def build_state(
     cleartext (see test_build_state_redacts_password_straddling_old_pre_redaction_cap_boundary).
     The caller-supplied `max_chars` egress budget (DD-8) is applied ONLY to the already-redacted
     output below, never to the raw text redact_action() receives; `redact_action()`'s own
-    `_REDACT_ACTION_SAFETY_CAP` provides a further, output-side-only safety bound."""
-    redacted_text, was_redacted = redact_action(action_text, api_key)
-    truncated = len(redacted_text) > max_chars
+    `_REDACT_ACTION_SAFETY_CAP` provides a further, output-side-only safety bound.
+
+    REM-FIX (silent-failure-hunter HIGH / code-reviewer re-review, cycle 3): cycle 2's fix above
+    left `redact_action()`'s INPUT completely unbounded on this real production call path -- a
+    multi-MB Bash command would run all 5 regex passes over genuinely unbounded,
+    attacker-influenceable text, stalling this hook's synchronous PreToolUse call for multiple
+    seconds (see test_build_state_bounds_compute_time_on_unsliced_multi_mb_command).
+    `_MAX_REDACT_ACTION_INPUT_CHARS` (100,000 chars) now caps `action_text` BEFORE
+    redact_action() runs -- generously sized so it can NEVER reintroduce the straddling-boundary
+    leak above (100,000 chars is >>50x any realistic credential length; both existing
+    straddling-boundary regression tests construct commands well under this cap and remain
+    green). This is independent of and does not replace `_REDACT_ACTION_SAFETY_CAP` (still
+    applied inside redact_action() to its own output, for any future direct caller)."""
+    bounded_input = action_text[:_MAX_REDACT_ACTION_INPUT_CHARS]
+    redacted_text, was_redacted = redact_action(bounded_input, api_key)
+    truncated = len(action_text) > _MAX_REDACT_ACTION_INPUT_CHARS or len(redacted_text) > max_chars
     return {
         "tool_name": tool_name,
         "category": category,
