@@ -29,6 +29,7 @@ from craftflow_jev_risk_gate import (  # noqa: E402
     telemetry_row,
     _append_event,
     _ACTION_TEXT_DOS_BACKSTOP_CHARS,
+    _REDACT_MATCH_LOOKAHEAD_CHARS,
 )
 
 _passes = 0
@@ -531,6 +532,62 @@ def test_redact_action_large_separator_gap_never_produces_false_safe_leak() -> N
         )
 
 
+# ---------------------------------------------------------------------------
+# REM-FIX cycle 8 (origin: code-reviewer, 8th distinct bug shape; confirmed shared root cause
+# across all 8 cycles). Cycle 7's fix correctly handled a SINGLE credential straddling
+# `effective_cap`, but not MULTIPLE credential-shaped matches occurring earlier in the text:
+# their cumulative shrinkage (every `***` mask is shorter than the real credential it replaces)
+# pulled content that originated PAST `effective_cap` into the region an output-length-based
+# `[:effective_cap]` slice actually returned -- content that was never held to the redaction
+# guarantee, because inclusion was decided by counting OUTPUT characters, not by checking each
+# match's ORIGINAL position. This test reproduces that exact multi-decoy shape at both
+# max_chars=4000 (the real config default) and max_chars=150000 (the real production ceiling in
+# craftflow_jev_config.py) -- not an exotic edge case.
+# ---------------------------------------------------------------------------
+
+
+def _multi_match_cumulative_shrink_poc(effective_cap: int, num_decoys: int = 60, decoy_raw_len: int = 200):
+    """Builds a command with `num_decoys` credential-shaped decoys (each individually redacted
+    to a few bytes, so their COMBINED shrinkage is large) followed by a real URL-userinfo
+    credential positioned so its raw start sits just inside the pre-redaction search window
+    (`effective_cap + _REDACT_MATCH_LOOKAHEAD_CHARS`) but close enough to that window's end that
+    its terminating "@" delimiter falls just PAST it -- i.e. positioned so the OLD
+    (output-length-slicing) architecture would fail to see a complete match for it, leaving it
+    raw inside the window, and the preceding decoys' cumulative shrinkage would then pull that
+    raw text across the OLD output-length cut and into the returned text."""
+    password = "REALSECRET" + "X" * 30
+    decoy_secret = "D" * (decoy_raw_len - len("PGPASSWORD_000="))
+    decoys = "".join(f"PGPASSWORD_{i:03d}={decoy_secret} " for i in range(num_decoys))
+    lookahead = _REDACT_MATCH_LOOKAHEAD_CHARS
+    window_end = effective_cap + lookahead
+    prefix = "https://admin:"
+    cred_body_len = 200
+    full_span = len(prefix) + cred_body_len + 1  # +1 for the terminating '@'
+    target_start = window_end - full_span + 20  # '@' lands ~20 chars past window_end
+    filler = "f" * max(target_start - len(decoys), 0)
+    credential = prefix + password.ljust(cred_body_len, "Z") + "@example.com/api --done AFTER_MARKER"
+    return decoys + filler + credential, password
+
+
+def test_build_state_multi_match_cumulative_shrink_never_leaks_credential_past_effective_cap() -> None:
+    failures = []
+    for max_chars in (4000, 150000):
+        command, password = _multi_match_cumulative_shrink_poc(max_chars)
+        state = build_state("Bash", "db_drop", command, api_key="", max_chars=max_chars)
+        if password in state["action_text"]:
+            failures.append((max_chars, "password leaked"))
+        elif "PGPASSWORD_000=***" not in state["action_text"]:
+            failures.append((max_chars, "decoy redaction missing -- PoC did not exercise the shrink path"))
+    if not failures:
+        ok(
+            "build_state never leaks a real credential across effective_cap even when many "
+            "preceding decoy redactions cumulatively shrink the text (max_chars=4000 and "
+            "max_chars=150000, the real config default and production ceiling)"
+        )
+    else:
+        fail("multi-match-cumulative-shrink", f"failures={failures!r}")
+
+
 def test_relativize_path_never_leaks_absolute_prefix() -> None:
     checks = (
         _relativize_path("/p/src/.env", "/p") == "src/.env",
@@ -731,6 +788,7 @@ def main_tests() -> int:
     test_build_state_backstop_cap_is_dos_only_sized_far_beyond_any_credential()
     test_build_state_credential_straddling_backstop_boundary_is_redacted_when_max_chars_exceeds_backstop()
     test_build_state_content_beyond_backstop_cap_is_intentionally_dropped()
+    test_build_state_multi_match_cumulative_shrink_never_leaks_credential_past_effective_cap()
     test_redact_action_large_separator_gap_never_produces_false_safe_leak()
     test_matches_allowlist_applies_hard_input_cap_before_pattern_matching()
     test_relativize_path_never_leaks_absolute_prefix()
