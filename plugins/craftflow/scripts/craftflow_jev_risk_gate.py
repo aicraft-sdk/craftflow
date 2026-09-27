@@ -288,20 +288,25 @@ def _relativize_path(file_path: str, cwd: Optional[str]) -> str:
     return Path(file_path).name
 
 
-# REM-FIX (architectural redesign, REM-FIX cycle 6). Pure DoS-only backstop -- bounds worst-case
-# compute time on a genuinely pathological (multi-megabyte) adversarial Bash command; it is NOT
-# sized to "be big enough to contain any credential" (that framing is exactly what made cycles
-# 3-5's caps/margins straddle-able -- see build_state()'s own docstring for the condensed history
-# this redesign replaces). Sized instead so many orders of magnitude larger than any plausible
-# credential, flag value, or realistic Bash command that no real-world input could ever position a
-# credential near this boundary, making the boundary's existence practically irrelevant to the
-# credential-safety property:
-#   - Benchmarked cost of redact_action()'s 4 regex passes: ~0.01s per MB, confirmed linear at
-#     1MB/5MB/20MB/50MB across this workflow's review cycles (all bounded-quantifier regexes, no
-#     catastrophic backtracking found in 6 rounds of review).
-#   - At 5,000,000 chars (~5MB), worst-case compute cost is ~0.05s -- a small fraction of the
-#     5-second PreToolUse hook timeout, leaving ample headroom for the rest of the hook's work
-#     (the Jev call itself, telemetry append).
+# REM-FIX (architectural redesign, REM-FIX cycle 6; timing comment corrected REM-FIX cycle 7).
+# Pure DoS-only backstop -- bounds worst-case compute time on a genuinely pathological
+# (multi-megabyte) adversarial Bash command; it is NOT sized to "be big enough to contain any
+# credential" (that framing is exactly what made cycles 3-5's caps/margins straddle-able -- see
+# build_state()'s own docstring for the condensed history this redesign replaces). Sized instead
+# so many orders of magnitude larger than any plausible credential, flag value, or realistic Bash
+# command that no real-world input could ever position a credential near this boundary, making the
+# boundary's existence practically irrelevant to the credential-safety property:
+#   - Benchmarked cost of redact_action()'s regex passes at ~0.65s (5 runs, 0.641-0.657s range)
+#     for a 5,000,000-char (~5MB) input, measured with genuinely ADVERSARIAL, dense-match-
+#     triggering text (a repeating unit packing overlapping "://", "=", "--password="/"-p"-shaped
+#     substrings and "DROP TABLE"/"migrate:down" phrases throughout the input) -- NOT a repeated
+#     single character, which produces near-zero regex matches and understates the true worst-case
+#     cost by roughly 13x (independently re-measured for cycle 7; corrects the prior "~0.01s/MB,
+#     ~0.05s at 5,000,000 chars" figure, which was benchmarked against sparse input and did not
+#     reflect this threat model).
+#   - Even at that corrected cost, this remains a small fraction (~13%) of the 5-second PreToolUse
+#     hook timeout, leaving ample headroom for the rest of the hook's work (the Jev call itself,
+#     telemetry append).
 #   - Every credential this module's patterns can ever recognize is bounded to a generously-sized
 #     ~4,096-char value capture (see each pattern's own bounded quantifier) -- roughly 1,200x
 #     smaller than this cap. No realistic command embeds a credential anywhere near this boundary;
@@ -311,6 +316,23 @@ def _relativize_path(file_path: str, cwd: Optional[str]) -> str:
 #     realistic-to-large command" -- the property this redesign actually needs to guarantee.
 _ACTION_TEXT_DOS_BACKSTOP_CHARS = 5_000_000
 
+# REM-FIX (REM-FIX cycle 7; origin: code-reviewer + silent-failure-hunter). Fixed, small,
+# match-context lookahead used ONLY to extend the window handed to redact_action() a little
+# beyond `effective_cap` (see build_state()) -- it is NEVER part of what gets returned. Sized
+# comfortably larger than the largest total match span any single pattern in this module can ever
+# produce (the biggest is `_ASSIGNMENT`: 129-char name + "=" + up to 4,096-char quoted/unquoted
+# value + 2 quote chars == 4,228 chars; `_URL_USERINFO`, `_SECRET_FLAG`, and
+# `_SHORT_FLAG_CONCAT` are all smaller). Because every pattern's value capture is a BOUNDED
+# quantifier (never open-ended), any credential-shaped match that overlaps the returned window
+# (i.e. starts at or before `effective_cap`) is guaranteed to complete within
+# `effective_cap + _REDACT_MATCH_LOOKAHEAD_CHARS` -- this is NOT the cap/margin/window arithmetic
+# cycles 3-5 got wrong (their margin was derived relative to a much SMALLER base and, per cycle
+# 6's audit, was never re-verified against each pattern's true bound); it also does not
+# reintroduce a second OBSERVABLE cut point in the cycles-1-5 sense, because nothing beyond
+# `effective_cap` is ever part of `action_text` -- only used so redact_action() sees a
+# match's full terminating delimiter before that boundary is applied.
+_REDACT_MATCH_LOOKAHEAD_CHARS = 8192
+
 
 def build_state(
     tool_name: str, category: str, action_text: str, *, api_key: Optional[str], max_chars: int
@@ -318,9 +340,9 @@ def build_state(
     """Pure. `action_text` is the raw command (Bash) or file_path (Write/Edit) -- NEVER
     content/new_string/old_string (see module docstring, P1).
 
-    REM-FIX (architectural redesign, REM-FIX cycle 6; origin: code-reviewer + silent-failure-
-    hunter, 6 rounds of findings). Condensed audit trail of cycles 1-5 this redesign replaces (see
-    git history for each cycle's original, much longer comments):
+    REM-FIX (architectural redesign, REM-FIX cycle 6; coupled-cut fix, REM-FIX cycle 7; origin:
+    code-reviewer + silent-failure-hunter, 7 rounds of findings). Condensed audit trail of cycles
+    1-6 this redesign builds on (see git history for each cycle's original, much longer comments):
       cycle 1: a pre-redaction truncation cap inside build_state reopened the URL-userinfo leak
                (a straddling cut lost the credential's terminating delimiter before redact_action
                ever saw it).
@@ -333,39 +355,45 @@ def build_state(
                each pattern's true full match span -- closed that specific gap, but a credential
                starting inside the margin zone itself reproduced the SAME straddling-cut-point bug
                at the new (bigger) boundary.
-    The pattern across all 5 cycles: every fix relocated the same bug class to a new boundary
-    instead of eliminating it, because a fixed-size slice applied BEFORE pattern-matching can
-    always be straddled by an adversarially-positioned credential -- the cut point and the
-    pattern-match are two independent things that can misalign, and no cut SIZE prevents that,
-    only removing the cut (before matching) does.
-
-    This redesign eliminates the fixed-cut-point-before-matching architecture entirely:
-      1. redact_action() runs over the FULL text it is given, with no cut of its own (see its own
-         docstring) -- this is exactly cycles 1-2's already-proven-correct principle ("redact
-         first, cap only the output"), now applied consistently instead of being partially
-         reintroduced by cycles 3-5's compute-cost concerns.
-      2. A single, large, DoS-ONLY backstop cap (`_ACTION_TEXT_DOS_BACKSTOP_CHARS`) is applied to
-         the RAW `action_text` here, before it reaches redact_action() at all -- but sized so many
-         orders of magnitude larger than any plausible credential that no real-world input could
-         ever position a credential near it (see that constant's own docstring for the exact size
-         derivation). This makes the boundary's existence practically irrelevant to the
-         credential-safety property, while still bounding worst-case compute time for a genuinely
-         pathological (multi-megabyte) adversarial input.
-      3. The caller-supplied `max_chars` egress budget (DD-8) is applied ONLY to the fully-redacted
-         OUTPUT, exactly as before -- this part of the design was already correct since cycle 2
-         and is unchanged here.
-
-    `_MAX_REDACT_ACTION_INPUT_CHARS`, `_REDACT_ACTION_INPUT_MARGIN_CHARS`, and
-    `_REDACT_ACTION_INPUT_WINDOW_CHARS` (cycles 3-5's cap/margin/window machinery) are removed
-    entirely, not kept "just in case" -- the whole point of this redesign is to eliminate the
-    class of bug they were designed to prevent, which they structurally cannot do."""
-    capped_input = action_text[:_ACTION_TEXT_DOS_BACKSTOP_CHARS]
-    redacted_text, was_redacted = redact_action(capped_input, api_key)
-    truncated = len(action_text) > _ACTION_TEXT_DOS_BACKSTOP_CHARS or len(redacted_text) > max_chars
+      cycle 6: eliminated the fixed-cut-point-before-matching architecture: redact_action() runs
+               over the FULL text it is given (no cut of its own), and a single, large, DoS-ONLY
+               backstop cap (`_ACTION_TEXT_DOS_BACKSTOP_CHARS`) is applied to the RAW
+               `action_text` before it reaches redact_action() at all, sized so many orders of
+               magnitude larger than any plausible credential that a straddle was reasoned to be
+               practically irrelevant. BUT this backstop cut and the caller-supplied `max_chars`
+               egress budget (applied only to the fully-redacted OUTPUT) were still two
+               INDEPENDENT cuts: whenever `max_chars` exceeds the backstop, the output-side cut
+               becomes a no-op and the RAW backstop-cut boundary itself becomes observable in the
+               returned `action_text` -- reopening cycle 1's exact bug class at that boundary,
+               with the safety property only holding today because `craftflow_jev_config.py`
+               happens to cap `maxStateChars` well below the backstop (an assumption external to
+               this file, not a guarantee this file itself makes).
+    This cycle couples the two cuts into one:
+      1. `effective_cap = min(max_chars, _ACTION_TEXT_DOS_BACKSTOP_CHARS)` is now the SINGLE value
+         that governs what can ever be returned -- whichever limit is smaller always wins, so the
+         returned `action_text` can never exceed a caller-controlled bound larger than what this
+         file itself is willing to redact-and-return, regardless of what `max_chars` value a
+         future caller passes.
+      2. redact_action() is still handed a window that starts at `action_text[0]` (unchanged) but
+         extends `_REDACT_MATCH_LOOKAHEAD_CHARS` PAST `effective_cap` (see that constant's own
+         docstring) -- purely so any credential-shaped match that overlaps the RETURNED window
+         (i.e. starts at or before `effective_cap`) is seen with its full terminating delimiter
+         before `effective_cap` is applied to the OUTPUT. This is not a second cap/margin/window
+         in the cycles-3-5 sense: nothing past `effective_cap` is ever part of what
+         `build_state()` returns -- the lookahead only feeds redact_action()'s matching, and its
+         size is derived from each pattern's own bounded quantifier (not re-derived ad hoc per
+         cycle, which is what made cycles 3-5's margin math wrong).
+      3. The final `action_text` is `redacted_text[:effective_cap]` -- a single post-redaction
+         slice at the SAME value used to build the pre-redaction match window, so the two cuts
+         this docstring's cycle-6 predecessor left independent can no longer disagree."""
+    effective_cap = min(max_chars, _ACTION_TEXT_DOS_BACKSTOP_CHARS)
+    match_window = action_text[: effective_cap + _REDACT_MATCH_LOOKAHEAD_CHARS]
+    redacted_text, was_redacted = redact_action(match_window, api_key)
+    truncated = len(action_text) > effective_cap or len(redacted_text) > effective_cap
     return {
         "tool_name": tool_name,
         "category": category,
-        "action_text": redacted_text[:max_chars],
+        "action_text": redacted_text[:effective_cap],
         "truncated": truncated,
         "redacted": was_redacted,
     }

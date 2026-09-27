@@ -442,6 +442,37 @@ def test_build_state_backstop_cap_is_dos_only_sized_far_beyond_any_credential() 
         )
 
 
+def test_build_state_credential_straddling_backstop_boundary_is_redacted_when_max_chars_exceeds_backstop() -> None:
+    # REM-FIX cycle 7 (code-reviewer + silent-failure-hunter). Cycle 6 removed every pre-redaction
+    # cut EXCEPT the DoS-only backstop itself, on the reasoning that the backstop is "so large
+    # no real-world input could ever position a credential near it" -- true for realistic
+    # commands, but the backstop's raw pre-redaction cut and the caller-supplied `max_chars`
+    # post-redaction cut were still two INDEPENDENT cuts. When max_chars is LARGER than the
+    # backstop, the post-redaction max_chars slice becomes a no-op, and a credential
+    # deliberately positioned so its terminating delimiter (the URL userinfo "@") lands just
+    # past the raw backstop-cut boundary reaches egress unredacted -- redact_action() never even
+    # sees the "@" because build_state() chopped the raw text at the backstop before calling it.
+    # Neither cycle 6's tests nor any earlier cycle's tests combined "credential at the backstop
+    # boundary itself" with "max_chars > backstop" -- this test pins that exact combination.
+    password = "supersecretpassw0rd-straddle-7"
+    userinfo_prefix = "https://admin:" + password
+    filler_len = _ACTION_TEXT_DOS_BACKSTOP_CHARS - len(userinfo_prefix)
+    command = ("a" * filler_len) + userinfo_prefix + "@example.com/api --done"
+    state = build_state("Bash", "db_drop", command, api_key="", max_chars=6_000_000)
+    text = state["action_text"]
+    if password not in text:
+        ok(
+            "a credential straddling the DoS backstop's raw cut boundary is fully redacted (or "
+            "fully excluded) even when max_chars (6,000,000) exceeds the backstop -- no "
+            "max_chars value can reopen the straddling-cut-point leak"
+        )
+    else:
+        fail(
+            "credential-straddles-backstop-boundary-oversized-max-chars",
+            f"password leaked in action_text near backstop boundary; len(text)={len(text)!r}",
+        )
+
+
 def test_build_state_content_beyond_backstop_cap_is_intentionally_dropped() -> None:
     # The backstop cap still exists (it must, to bound compute time on a genuinely pathological
     # multi-MB input) -- content genuinely beyond it is dropped. That drop is an accepted,
@@ -698,6 +729,7 @@ def main_tests() -> int:
     test_build_state_redacts_credentials_position_independently_across_offsets()
     test_build_state_credential_at_large_arbitrary_offset_is_fully_redacted()
     test_build_state_backstop_cap_is_dos_only_sized_far_beyond_any_credential()
+    test_build_state_credential_straddling_backstop_boundary_is_redacted_when_max_chars_exceeds_backstop()
     test_build_state_content_beyond_backstop_cap_is_intentionally_dropped()
     test_redact_action_large_separator_gap_never_produces_false_safe_leak()
     test_matches_allowlist_applies_hard_input_cap_before_pattern_matching()
