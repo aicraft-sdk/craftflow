@@ -69,9 +69,12 @@ def test_committed_config_is_disabled_by_default() -> None:
     raw = json.loads((PLUGIN_ROOT / "config" / "jev.json").read_text())
     if (
         raw["enabled"] is False
-        and raw["features"] == {"routingHint": "audit", "skillHint": "audit", "remediationScope": "off"}
+        and raw["features"] == {
+            "routingHint": "audit", "skillHint": "audit",
+            "remediationScope": "off", "riskGate": "off",
+        }
     ):
-        ok("committed config/jev.json is disabled by default")
+        ok("committed config/jev.json ships enabled:false, riskGate:off")
     else:
         fail("committed-config-disabled", f"raw={raw!r}")
 
@@ -155,6 +158,22 @@ def test_bad_remediation_scope_threshold_falls_back_to_default() -> None:
         fail("bad-remediation-scope-threshold", f"cfg={cfg!r} decisions={decisions!r}")
 
 
+def test_risk_gate_defaults_off() -> None:
+    cfg, decisions = normalize({})
+    if cfg["features"]["riskGate"] == "off" and decisions == []:
+        ok("riskGate defaults to off")
+    else:
+        fail("risk-gate-default", f"cfg={cfg!r} decisions={decisions!r}")
+
+
+def test_unrecognized_risk_gate_mode_degrades_to_off_with_distinct_decision() -> None:
+    cfg, decisions = normalize({"features": {"riskGate": "Advise"}})
+    if cfg["features"]["riskGate"] == "off" and ("riskGate", "off-unrecognized-config-value") in decisions:
+        ok("unrecognized riskGate mode degrades to off with distinct decision")
+    else:
+        fail("risk-gate-unrecognized", f"cfg={cfg!r} decisions={decisions!r}")
+
+
 def main() -> int:
     print("test_craftflow_jev_config: running")
     print(f"  (MODES = {MODES})")
@@ -170,6 +189,8 @@ def main() -> int:
     test_remediation_scope_defaults_off_with_085_threshold()
     test_unrecognized_remediation_scope_mode_degrades_to_off_with_distinct_decision()
     test_bad_remediation_scope_threshold_falls_back_to_default()
+    test_risk_gate_defaults_off()
+    test_unrecognized_risk_gate_mode_degrades_to_off_with_distinct_decision()
 
     print()
     print("=" * 40)

@@ -25,7 +25,7 @@ CONSENT_STATUSES = ("unset", "granted", "declined")
 DEFAULTS: Dict[str, Any] = {
     "enabled": False,
     "model": "jev-latest",
-    "features": {"routingHint": "audit", "skillHint": "audit", "remediationScope": "off"},
+    "features": {"routingHint": "audit", "skillHint": "audit", "remediationScope": "off", "riskGate": "off"},
     "thresholds": {"routing": 0.85, "skill": 0.7, "remediationScope": 0.85},
     "maxStateChars": 4000,
     "timeoutSeconds": 2.5,
@@ -43,7 +43,7 @@ def normalize(raw: Any) -> Tuple[Dict[str, Any], List[Decision]]:
     if isinstance(raw.get("model"), str) and raw["model"].strip():
         cfg["model"] = raw["model"].strip()
     feats = raw.get("features") if isinstance(raw.get("features"), dict) else {}
-    for key in ("routingHint", "skillHint", "remediationScope"):
+    for key in ("routingHint", "skillHint", "remediationScope", "riskGate"):
         value = feats.get(key, DEFAULTS["features"][key])
         if value in MODES:
             cfg["features"][key] = value
