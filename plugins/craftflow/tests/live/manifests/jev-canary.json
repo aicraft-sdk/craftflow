@@ -37,6 +37,15 @@
       "then": "the script exits 0 with decision=logged, choice in {critical_only, all_issues}, and events.jsonl gains exactly 1 telemetry row (feature=remfix_scope) containing no raw finding text",
       "command": "python3 plugins/craftflow/tests/live/jev_remfix_scope_roundtrip.py",
       "expected": "exit 0; decision=logged; 1 telemetry row; no raw finding text"
+    },
+    {
+      "name": "Risk-gate audit round-trip against the real API",
+      "mode": "proof",
+      "given": "config/jev.json enabled:true with features.riskGate:audit in a temp plugin root, and a real TYPESAFE_API_KEY in env",
+      "when": "the real craftflow_jev_risk_gate.py hook is fed a PreToolUse payload for an rm -rf Bash command",
+      "then": "the hook exits 0 with empty stdout and events.jsonl gains exactly 1 telemetry row (feature=risk_gate, category=rm_rf) containing no raw command text",
+      "command": "python3 plugins/craftflow/tests/live/jev_risk_gate_roundtrip.py",
+      "expected": "exit 0; empty stdout; 1 telemetry row; no raw command text"
     }
   ]
 }
