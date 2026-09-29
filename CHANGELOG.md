@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.14.0] - 2026-09-28
+
+### Features
+
+- aggregate risk_gate telemetry in craftflow_jev_report.py
+- register PreToolUse risk-gate hook in hooks/hooks.json
+- wire craftflow_jev_risk_gate.py main() fail-open hook I/O
+- add risk_gate pure builders (state/questions/decide/telemetry)
+- add craftflow_jev_risk_gate.py allowlist matcher
+- add classify_risk_gate() deterministic baseline
+- surface features.riskGate in jev setup --status
+- ship riskGate:off in committed jev.json default
+- add riskGate feature key to jev config normalizer
+
+### Fixes
+
+- log failed risk-gate telemetry append via log_event (REM-FIX HIGH)
+- restore sequential redaction chain, move safe-cut to raw-input pre-pass (REM-FIX cycle 9)
+- position-tracked redaction closes multi-match cumulative-shrink leak (REM-FIX cycle 8)
+- couple risk_gate's backstop and max_chars cuts, correct timing comment (REM-FIX cycle 7)
+- bound _SECRET_FLAG separator and derive margin from full match span
+- widen redact_action input window to close 100k-boundary credential leak
+- bound redact_action's input size in build_state (REM-FIX cycle 3)
+- move risk_gate length cap to post-redaction, close straddling-boundary leak
+
+### Refactoring
+
+- eliminate fixed-cut-point-before-matching architecture in risk_gate redaction
+
+### Tests
+
+- add live risk_gate audit round-trip driver + canary scenario (Phase 6, driver-only)
+
 ## [1.13.0] - 2026-09-26
 
 ### Features
