@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.20.0] - 2026-09-29
+
+### Features
+
+- add component-registry hint to cursor-router
+
 ## [1.19.0] - 2026-09-29
 
 ### Features
