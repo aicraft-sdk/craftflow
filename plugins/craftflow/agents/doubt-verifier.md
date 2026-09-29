@@ -1,7 +1,7 @@
 ---
 name: doubt-verifier
 description: "Internal agent. Use craftflow-router for all development tasks."
-model: inherit
+model: opus
 color: orange
 tools: Read, Bash, Grep, Glob, LSP
 ---

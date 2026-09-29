@@ -1,7 +1,7 @@
 ---
 name: github-researcher
 description: "Internal agent. Use craftflow-router for all development tasks."
-model: inherit
+model: sonnet
 color: purple
 tools: Read, Write, Edit, Bash, WebFetch, WebSearch, TaskUpdate
 ---

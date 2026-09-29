@@ -1,7 +1,7 @@
 ---
 name: bug-investigator
 description: "Investigate bugs, failing tests, and broken behavior when root cause must be proven before code is changed."
-model: inherit
+model: opus
 color: red
 tools: Read, Edit, Write, Bash, Grep, Glob, Skill, LSP, WebFetch, TaskUpdate
 skills:

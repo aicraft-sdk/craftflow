@@ -1,7 +1,7 @@
 ---
 name: learn-distiller
 description: "Internal agent. Use craftflow-router for all development tasks."
-model: haiku
+model: sonnet
 tools: Read, Bash, Grep, Glob
 user-invocable: false
 ---

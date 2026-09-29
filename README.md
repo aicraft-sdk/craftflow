@@ -11,7 +11,7 @@ Router-first AI development orchestration for Claude Code. Every build, debug, r
 ## What it does
 
 - **Routes all dev tasks** — one entry point (`craftflow-router`) dispatches to the right agent automatically
-- **Agent chain** — 13 specialized agents: planner, component-builder, bug-investigator, code-reviewer, integration-verifier, and more
+- **Agent chain** — 14 specialized agents: planner, component-builder, bug-investigator, code-reviewer, integration-verifier, and more
 - **29 skills** — planning, TDD, code-generation, debugging patterns, diff-driven docs, and others
 - **Hook system** — 18 wired Python lifecycle hooks (44 total scripts in `scripts/`) for memory protection, write guards, URL caching, and session continuity
 - **Shared state** — `.craftflow/state/` is readable by both Claude Code and Cursor
@@ -217,7 +217,7 @@ edits will be overwritten or will fail the consistency gate on the next release.
 
 ```
 plugins/craftflow/
-├── agents/          # 13 agent definitions (markdown)
+├── agents/          # 14 agent definitions (markdown)
 ├── skills/          # 29 skill definitions (each has SKILL.md)
 ├── scripts/         # 44 Python hook scripts (18 wired in hooks.json)
 ├── hooks/           # Hook event bindings for Claude Code

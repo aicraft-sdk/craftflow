@@ -476,6 +476,69 @@ check_contains(
 )
 
 # ---------------------------------------------------------------------------
+# Default agent model pins (ADR-0049)
+# ---------------------------------------------------------------------------
+AGENTS_DIR = os.path.join(_FIXTURES_DIR, "../../agents")
+
+EXPECTED_AGENT_MODELS = {
+    "planner": "opus",
+    "plan-gap-reviewer": "opus",
+    "plan-bakeoff-judge": "opus",
+    "bug-investigator": "opus",
+    "doubt-verifier": "opus",
+    "component-builder": "sonnet",
+    "code-reviewer": "sonnet",
+    "silent-failure-hunter": "sonnet",
+    "integration-verifier": "sonnet",
+    "web-researcher": "sonnet",
+    "github-researcher": "sonnet",
+    "doc-syncer": "sonnet",
+    "learn-distiller": "sonnet",
+    "skill-author": "sonnet",
+}
+
+
+def read_frontmatter_model(path: str):
+    """Return the list of `model:` values found in the frontmatter block
+    (the text between the first two `---` lines)."""
+    with open(path, "r", encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+    delimiters = [i for i, line in enumerate(lines) if line.strip() == "---"]
+    if len(delimiters) < 2 or delimiters[0] != 0:
+        return []
+    block = lines[delimiters[0] + 1 : delimiters[1]]
+    return [line.split(":", 1)[1].strip() for line in block if line.startswith("model:")]
+
+
+_agent_files = sorted(f for f in os.listdir(AGENTS_DIR) if f.endswith(".md"))
+
+print("\n[test_every_agent_declares_expected_model]")
+for _name, _expected in EXPECTED_AGENT_MODELS.items():
+    _models = read_frontmatter_model(os.path.join(AGENTS_DIR, f"{_name}.md"))
+    check(f"agents/{_name}.md frontmatter model is {_expected!r}", _models, [_expected])
+
+print("\n[test_expected_model_map_covers_every_agent_file]")
+check(
+    "set of agents/*.md stems equals EXPECTED_AGENT_MODELS keys",
+    sorted(f[: -len(".md")] for f in _agent_files),
+    sorted(EXPECTED_AGENT_MODELS),
+)
+
+print("\n[test_no_agent_uses_haiku_or_inherit]")
+for _f in _agent_files:
+    _models = read_frontmatter_model(os.path.join(AGENTS_DIR, _f))
+    check(
+        f"agents/{_f} does not use haiku or inherit (ADR-0047/0049)",
+        [m for m in _models if m in ("haiku", "inherit")],
+        [],
+    )
+
+print("\n[test_agent_frontmatter_has_single_model_line]")
+for _f in _agent_files:
+    _models = read_frontmatter_model(os.path.join(AGENTS_DIR, _f))
+    check(f"agents/{_f} has exactly one frontmatter model line", len(_models), 1)
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 print(f"\n{'='*40}")
