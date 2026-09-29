@@ -10,7 +10,7 @@ allowed-tools: Read Grep Glob
 
 The ai-craft registry holds shadcn-style entries: token sets, components, patterns, UI flows, and agent flows.
 Read-only MCP tools: `registry_search`, `registry_get`, `registry_list` (Claude Code names: `mcp__ai-craft-registry__registry_*`).
-Promotion of new entries is CLI-only (`promote`), offered at finish by `finishing-a-development-branch`.
+Promotion of new entries is CLI-only (`promote`); follow `craftflow:registry-promote` for when and how, offered at finish by `finishing-a-development-branch`.
 
 ## The Iron Law
 
@@ -25,7 +25,7 @@ NO NEW UI COMPONENT BEFORE A REGISTRY SEARCH
 3. Check `x-craft.framework` and `x-craft.styling` against the target `package.json` and DESIGN.md. Adapt token names only through a wrapper; never edit registry token names.
 4. Copy the entry's files to its `target` paths (or the project's component dir), keep the spec, and run it.
 5. Cite the entries used in the build summary under `Registry entries used:`.
-6. After the build, list new components under `Promotion candidates:` (name, files, suggested kind).
+6. After the build, list new components under `Promotion candidates:` (name, files, suggested kind); promote per `craftflow:registry-promote`.
 
 ## Degraded mode
 
