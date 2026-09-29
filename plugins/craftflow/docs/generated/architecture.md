@@ -30,9 +30,11 @@ flowchart LR
   script_craftflow_sdd_cache_pre_py(["craftflow_sdd_cache_pre.py"])
   script_craftflow_pretooluse_bash_guard_py(["craftflow_pretooluse_bash_guard.py"])
   script_craftflow_safe_shell_guard_py(["craftflow_safe_shell_guard.py"])
+  script_craftflow_jev_risk_gate_py(["craftflow_jev_risk_gate.py"])
   script_craftflow_context_migration_py(["craftflow_context_migration.py"])
   script_craftflow_sessionstart_context_py(["craftflow_sessionstart_context.py"])
   script_craftflow_hook_selfcheck_py(["craftflow_hook_selfcheck.py"])
+  script_craftflow_jev_session_check_py(["craftflow_jev_session_check.py"])
   script_craftflow_posttooluse_artifact_guard_py(["craftflow_posttooluse_artifact_guard.py"])
   script_craftflow_memory_protect_restore_py(["craftflow_memory_protect_restore.py"])
   script_craftflow_sdd_cache_post_py(["craftflow_sdd_cache_post.py"])
@@ -52,9 +54,11 @@ flowchart LR
   event_PreToolUse -->|"Bash"| script_craftflow_pretooluse_guard_py
   event_PreToolUse -->|"Bash"| script_craftflow_pretooluse_bash_guard_py
   event_PreToolUse -->|"Bash"| script_craftflow_safe_shell_guard_py
+  event_PreToolUse -->|"Bash / Write / Edit"| script_craftflow_jev_risk_gate_py
   event_SessionStart -->|"startup"| script_craftflow_context_migration_py
   event_SessionStart -->|"startup / resume / compact"| script_craftflow_sessionstart_context_py
   event_SessionStart -->|"startup / resume / compact"| script_craftflow_hook_selfcheck_py
+  event_SessionStart -->|"startup / resume / compact"| script_craftflow_jev_session_check_py
   event_PostToolUse -->|"Edit / Write"| script_craftflow_posttooluse_artifact_guard_py
   event_PostToolUse -->|"Edit / Write"| script_craftflow_memory_protect_restore_py
   event_PostToolUse -->|"WebFetch"| script_craftflow_sdd_cache_post_py
@@ -72,7 +76,7 @@ flowchart LR
   event_UserPromptSubmit --> script_craftflow_jev_prompt_hint_py
 ```
 
-24 hook registrations across 11 event types, 20 distinct scripts.
+26 hook registrations across 11 event types, 22 distinct scripts.
 
 ## Agent -> declared skills
 
@@ -145,5 +149,5 @@ flowchart LR
 ## Inventory
 
 - 14 agents (`agents/*.md`)
-- 30 skills (`skills/*/SKILL.md`)
-- 20 hook scripts wired in `hooks/hooks.json`
+- 32 skills (`skills/*/SKILL.md`)
+- 22 hook scripts wired in `hooks/hooks.json`
