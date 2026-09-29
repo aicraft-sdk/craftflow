@@ -646,6 +646,91 @@ def test_non_string_model_and_id_are_tolerated():
 
 
 # ---------------------------------------------------------------------------
+# last_turn_context_tokens (SPEC-0016 DD-4)
+# ---------------------------------------------------------------------------
+
+_NONE_RESULT = {"tokens": None, "model": None, "source": None}
+
+
+def _boundary(post=None, pre=966834, with_meta=True):
+    row = {"type": "system", "subtype": "compact_boundary"}
+    if with_meta:
+        meta = {"preTokens": pre}
+        if post is not None:
+            meta["postTokens"] = post
+        row["compactMetadata"] = meta
+    return json.dumps(row)
+
+
+def test_last_turn_tokens_sums_input_cache_read_cache_creation():
+    r = ctu.last_turn_context_tokens([_assistant("m1", "claude-x", 5, inp=10, cr=1000, cc=220)])
+    assert r == {"tokens": 1230, "model": "claude-x", "source": "assistant"}, r
+
+
+def test_last_turn_tokens_takes_last_assistant():
+    r = ctu.last_turn_context_tokens([_assistant("m1", "a", 1, inp=100), _assistant("m2", "b", 1, inp=5000)])
+    assert r["tokens"] == 5000 and r["model"] == "b", r
+
+
+def test_last_turn_tokens_skips_synthetic_zero_usage():
+    r = ctu.last_turn_context_tokens([
+        _assistant("m1", "real", 1, inp=5000),
+        _assistant("m2", "<synthetic>", 0, inp=0),
+    ])
+    assert r == {"tokens": 5000, "model": "real", "source": "assistant"}, r
+
+
+def test_last_turn_tokens_skips_sidechain():
+    side = json.loads(_assistant("m2", "side", 1, inp=90000))
+    side["isSidechain"] = True
+    r = ctu.last_turn_context_tokens([_assistant("m1", "main", 1, inp=5000), json.dumps(side)])
+    assert r["tokens"] == 5000 and r["model"] == "main", r
+
+
+def test_last_turn_tokens_none_when_no_usage():
+    r = ctu.last_turn_context_tokens([_user("hi"), _user("again")])
+    assert r == _NONE_RESULT, r
+
+
+def test_last_turn_tokens_corrupt_and_non_dict_lines_skipped():
+    r = ctu.last_turn_context_tokens(["{bad", "[1]", "", _assistant("m1", "m", 1, inp=700)])
+    assert r["tokens"] == 700, r
+
+
+def test_last_turn_tokens_invalid_values_coerced_to_zero():
+    r = ctu.last_turn_context_tokens([_assistant("m1", "m", 1, inp=True, cr=-5, cc=300)])
+    assert r["tokens"] == 300, r
+
+
+def test_last_turn_tokens_never_raises():
+    for bad in (None, [None, 3, b"x"]):
+        r = ctu.last_turn_context_tokens(bad)
+        assert isinstance(r, dict) and "tokens" in r, r
+
+    def gen():
+        yield _assistant("m1", "m", 1, inp=42)
+        raise RuntimeError("boom")
+
+    r = ctu.last_turn_context_tokens(gen())
+    assert isinstance(r, dict) and "tokens" in r, r
+
+
+def test_last_turn_tokens_boundary_after_assistant_uses_post_tokens():
+    r = ctu.last_turn_context_tokens([_assistant("m1", "m", 1, inp=300705), _boundary(post=21775)])
+    assert r["tokens"] == 21775 and r["source"] == "compact_boundary", r
+
+
+def test_last_turn_tokens_boundary_without_post_tokens_is_none():
+    r = ctu.last_turn_context_tokens([_assistant("m1", "m", 1, inp=5000), _boundary(with_meta=False)])
+    assert r["tokens"] is None and r["source"] == "compact_boundary", r
+
+
+def test_last_turn_tokens_assistant_after_boundary_wins():
+    r = ctu.last_turn_context_tokens([_boundary(post=21775), _assistant("m1", "m", 1, inp=83661)])
+    assert r["tokens"] == 83661 and r["source"] == "assistant", r
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 

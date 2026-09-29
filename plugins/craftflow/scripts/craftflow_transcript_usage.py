@@ -353,3 +353,40 @@ def summarize_transcript(path, max_bytes=67108864, deadline_s=3.0, clock=None,
                                    want_final_text=want_final_text)
     except Exception as exc:  # noqa: BLE001 - fail-open contract: never raise
         return _failed("unexpected:" + type(exc).__name__, want_final_text)
+
+
+def last_turn_context_tokens(lines):
+    """Context size of the last main-chain turn (SPEC-0016 DD-4). Pure; never raises.
+    Returns {"tokens": int|None, "model": str|None, "source": "assistant"|"compact_boundary"|None}."""
+    out = {"tokens": None, "model": None, "source": None}
+    try:
+        for raw in lines:
+            try:
+                row = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else None
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(row, dict) or row.get("isSidechain") is True:
+                continue
+            if row.get("type") == "system" and row.get("subtype") == "compact_boundary":
+                meta = row.get("compactMetadata")
+                post, valid = _coerce_token(meta.get("postTokens")) if isinstance(meta, dict) else (0, False)
+                out = {"tokens": post if valid and post > 0 else None, "model": None, "source": "compact_boundary"}
+                continue
+            if row.get("type") != "assistant":
+                continue
+            message = row.get("message")
+            if not isinstance(message, dict) or not isinstance(message.get("usage"), dict):
+                continue
+            model = message.get("model")
+            if model == "<synthetic>":
+                continue
+            usage = message["usage"]
+            total = sum(_coerce_token(usage.get(k, 0))[0] for k in
+                        ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+            if total <= 0:
+                continue
+            out = {"tokens": total, "model": model if isinstance(model, str) and model else None,
+                   "source": "assistant"}
+    except Exception:  # noqa: BLE001 - totality (P3)
+        return out
+    return out
