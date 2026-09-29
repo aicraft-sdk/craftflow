@@ -3,7 +3,7 @@ name: component-builder
 description: "Execute the current approved build phase with TDD when implementation work is ready to be carried out."
 model: inherit
 color: green
-tools: Read, Edit, Write, Bash, Grep, Glob, Skill, LSP, WebFetch, TaskUpdate
+tools: Read, Edit, Write, Bash, Grep, Glob, Skill, LSP, WebFetch, TaskUpdate, mcp__ai-craft-registry__registry_search, mcp__ai-craft-registry__registry_get, mcp__ai-craft-registry__registry_list
 skills:
   - craftflow:session-memory
   - craftflow:test-driven-development
