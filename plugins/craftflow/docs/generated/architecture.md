@@ -133,7 +133,7 @@ flowchart LR
 |-------|----------------|
 | `bug-investigator` | `Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `Skill`, `LSP`, `WebFetch`, `TaskUpdate` |
 | `code-reviewer` | `Read`, `Bash`, `Grep`, `Glob`, `Skill`, `LSP`, `WebFetch` |
-| `component-builder` | `Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `Skill`, `LSP`, `WebFetch`, `TaskUpdate` |
+| `component-builder` | `Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `Skill`, `LSP`, `WebFetch`, `TaskUpdate`, `mcp__ai-craft-registry__registry_search`, `mcp__ai-craft-registry__registry_get`, `mcp__ai-craft-registry__registry_list` |
 | `doc-syncer` | `Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob` |
 | `doubt-verifier` | `Read`, `Bash`, `Grep`, `Glob`, `LSP` |
 | `github-researcher` | `Read`, `Write`, `Edit`, `Bash`, `WebFetch`, `WebSearch`, `TaskUpdate` |
