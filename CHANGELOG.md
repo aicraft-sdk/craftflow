@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.15.1] - 2026-09-29
+
+### Reverts
+
+- return github-researcher and web-researcher to model inherit (ADR-0047)
+
 ## [1.15.0] - 2026-09-29
 
 ### Features
