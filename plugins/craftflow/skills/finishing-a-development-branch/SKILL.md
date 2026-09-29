@@ -162,7 +162,7 @@ git branch -D <feature-branch>
 
 #### Option 5: Promote to registry (Option 4 on detached HEAD)
 
-Follow `craftflow:registry-promote` for authoring and validation before running promote. Ask the user for the files to promote and a slug. `--kind` defaults to `component`; use `--tokens craft-dark` when the files reference `var(--`.
+Follow `craftflow:registry-promote` for authoring and validation before running promote. Ask the user for the files to promote and a slug. `--kind` is required (`component` is typical); use `--tokens craft-dark` when the files reference `var(--`.
 
 ```bash
 REGISTRY_ROOT="${CRAFT_REGISTRY_ROOT:-}"
