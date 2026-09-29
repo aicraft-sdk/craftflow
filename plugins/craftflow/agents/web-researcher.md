@@ -1,7 +1,7 @@
 ---
 name: web-researcher
 description: "Internal agent. Use craftflow-router for all development tasks."
-model: haiku
+model: inherit
 color: blue
 tools: Read, Write, Edit, Bash, WebFetch, WebSearch, TaskUpdate
 ---
