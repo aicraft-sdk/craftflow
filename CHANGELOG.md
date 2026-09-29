@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.15.0] - 2026-09-29
+
+### Features
+
+- add trust-boundary, test-integrity, and irreversibility guardrails; add failure-digest skill
+- pilot haiku model routing on github-researcher and web-researcher (ADR-0043)
+
+### Documentation
+
+- document risk_gate threshold and hook in READMEs (ADR-0044)
+
 ## [1.14.0] - 2026-09-28
 
 ### Features
