@@ -511,6 +511,13 @@ You are running inside Cursor, not Claude Code. The following tools referenced i
 - Wherever the agent file says `Skill(skill="craftflow:X")` — instead, read
   `tools/craftflow-plugin/plugins/craftflow/skills/X/SKILL.md` and follow its
   instructions inline first, before continuing with the phase's work.
+- For UI/frontend work (components, token files, layouts, multi-step UI flows), also
+  read `tools/craftflow-plugin/plugins/craftflow/skills/component-registry/SKILL.md`
+  and follow it: search the registry with the `ai-craft-registry` MCP tools
+  (`registry_search`/`registry_get`/`registry_list`) before writing new UI. If that
+  MCP server is not registered, state it once and continue. When the user wants to
+  promote finished work into the registry, read
+  `tools/craftflow-plugin/plugins/craftflow/skills/registry-promote/SKILL.md`.
 
 ## Task Context
 - Task ID: {task_id_or_none}
