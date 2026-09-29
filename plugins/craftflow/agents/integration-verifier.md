@@ -143,6 +143,7 @@ For now, keep the normal full verification pass. This classification exists so C
 
 | Coverage gate | `grep -rE "(test|spec|it|describe)\(" <test-files> \| wc -l` → if 0 tests found for changed files: WARNING (not FAIL unless project has coverage config) | Report as WARNING |
 | Test tampering | `git diff HEAD -- '*.test.*' '*.spec.*' \| grep -E '\.skip\|\.only\|expect\(\)\.not\b\|\.toBe\(true\)$'` → if test assertions were weakened, skipped, or trivialized to force green | Report as CRITICAL |
+| Observability/rollback (production-facing changes only) | If the phase touches a deployed service, migration, or user-facing prod path: is there a monitoring signal (log, metric, alert) that would surface this change misbehaving, and a known rollback path? Not applicable to internal tooling, tests, or docs-only phases. | Report as WARNING if neither exists — not FAIL |
 | Verification run cap | Count total test/build/lint commands executed. If >15 in one task: stop, report what was covered and what remains | Emit WARNING with scope note |
 
 **All checks must PASS before STATUS: PASS. Skip any = STATUS: FAIL.**

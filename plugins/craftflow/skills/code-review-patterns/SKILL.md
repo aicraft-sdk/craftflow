@@ -20,6 +20,7 @@ Read only the references needed for the current review:
 - `references/review-order-and-checkpoints.md` for concern-first reading order, review checkpoints, zero-finding halts, and re-review loops
 - `references/security-review-checklist.md` for auth, input/output, secrets, network, storage, and dependency checks
 - `references/code-review-heuristics.md` for maintainability, performance, hidden-failure, edge-case, sloppy-pattern, and UI quick scans
+- `references/shortcut-debt.md` for the full `cf:shortcut:` marker convention, its Pass 5 debt-harvest classification (clean/rot-risk/resolved), and the repo-wide harvest command for a full ledger of tracked shortcuts
 
 ## Signal Quality Rule
 

@@ -15,6 +15,24 @@ Write the test first. Watch it fail. Write minimal code to pass.
 
 **Violating the letter of the rules is violating the spirit of the rules.**
 
+## Tests Are the Source of Truth (CRITICAL)
+
+The test encodes the required behavior. When a test fails — in GREEN, in REFACTOR, on a regression run, or anywhere in the full suite, including tests you did not write this session — the default assumption is **the code is wrong, not the test.** Fix the code.
+
+**Never make a failing test pass by:**
+- Loosening or deleting the assertion (`toBe(true)`, removing an `expect(...)`)
+- Adding `.skip`, `.only`, or an early `return` that bypasses the check
+- Changing the expected value to match whatever the buggy code currently outputs
+- Wrapping the assertion in a try/catch that swallows the failure
+- Deleting the test
+
+**The only valid reason to edit a test is that the test itself is provably wrong** — it encodes a stale requirement, has a typo, or asserts on the wrong fixture. That is rare, and it is not a silent edit:
+1. State plainly, in output, which test is being changed and why.
+2. Name the correct expected behavior per the spec/plan — not "what the code currently does."
+3. If the correctness of the requirement is not yours to decide, stop and ask instead of rewriting it.
+
+This is not a new carve-out from the rules below — it's the same rule the RED and GREEN sections already apply locally ("Test passes? Fix test." at RED, "Test fails? Fix code, not test." at GREEN), stated as the general principle so it also covers pre-existing and regression tests encountered outside the current RED/GREEN cycle. `craftflow:integration-verifier` scans diffs for exactly this pattern (weakened, skipped, or trivialized assertions) and reports it as a CRITICAL finding — don't produce work that gate is designed to catch.
+
 ## Reference Files
 
 Read only the references needed for the current test cycle:

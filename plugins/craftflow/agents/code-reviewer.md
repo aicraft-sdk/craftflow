@@ -109,7 +109,7 @@ git ls-files --others --exclude-standard      # NEW untracked files
    - PR adds ≥2 ad-hoc conditionals bolted onto a busy existing flow → HIGH (design problem, not style nit)
    - A plausible code-judo move exists that would delete a category of complexity → MEDIUM
    Preferred remedies: delete a layer rather than polish it; reframe the state model so conditionals disappear; extract a helper or focused module; replace condition chains with a typed model or explicit dispatcher; move logic to the canonical layer that already owns the concept; reuse the existing utility instead of a bespoke near-duplicate.
-   **Shortcut debt:** scan for `cf:shortcut:` markers in the changed files. Any marker with no upgrade trigger → flag as `shrink:` rot-risk. Any marker that has now been addressed → note as resolved.
+   **Shortcut debt:** scan for `cf:shortcut:` markers in the changed files. Any marker with no upgrade trigger → flag as `shrink:` rot-risk. Any marker that has now been addressed → note as resolved. For the full classification rules and the repo-wide harvest command (a full ledger of every tracked shortcut, not just this diff), see `craftflow:code-review-patterns` skill's `references/shortcut-debt.md`.
    **End this pass with:** `net: -N lines possible` (count of removable lines across all structural findings). Nothing to cut: `net: 0 — structurally lean`.
 8. **Output Memory Notes** — Include learnings in output (router persists)
 
