@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.19.0] - 2026-09-29
+
+### Features
+
+- router phase-boundary context check + context_nudge event contract and docs
+- context-nudge --boundary phase checkpoint + relay contract
+- context-size nudge UserPromptSubmit hook + compact reset (audit by default)
+- context-nudge pure core (classify/decide/config/state)
+- last_turn_context_tokens transcript helper for context-size nudge
+
+### Tests
+
+- live proof + timing for context-size nudge; ADR-0051 accepted
+
 ## [1.18.0] - 2026-09-29
 
 ### Features
