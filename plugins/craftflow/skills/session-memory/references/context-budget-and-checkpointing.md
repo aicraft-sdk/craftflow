@@ -73,3 +73,9 @@ If you need to warn about rising context pressure, say it plainly:
 `Context is getting heavy. I’m checkpointing the durable state so we don’t lose the thread.`
 
 That is better than silently continuing with fuzzy recall.
+
+## Measured Nudge (optional)
+
+The `UserPromptSubmit` hook `craftflow_context_nudge.py` and the router phase-boundary check (`skills/craftflow-router/references/context-boundary.md`) measure context from the transcript instead of guessing.
+Defaults (60%/80% of an assumed 200k window) are deliberately earlier than the 70%/90% tiers above because the nudge is a lead indicator.
+No tokentracker is needed; audit by default, enable with `"contextNudge": "on"`.

@@ -49,6 +49,7 @@ BUILD is sequential in v10:
 - one builder run for the current phase only
 - review, hunt, and verify validate that phase before `phase_cursor` advances
 - if phase exit evidence is incomplete, record `partial` or `blocked`, persist state, and stop
+- after `phase_exit_gate` passes for a phase (standard or fast path) and before `phase_cursor` advances or memory-finalize begins, run the advisory context-boundary check per `references/context-boundary.md`
 
 ```text
 TaskCreate({
@@ -201,6 +202,8 @@ TaskUpdate({ taskId: memory_task_id, addBlockedBy: [chain_tail_task_id] })
 ```
 
 **Verifier PASS on fast path:** Advance `phase_exit_gate` → run the Learn-Distill Gate and Skill-Distill Gate → proceed to memory-finalize.
+
+**Context boundary (advisory):** after each fast-path `phase_exit_gate` pass, run the check per `references/context-boundary.md` before the next phase or memory-finalize.
 
 **Verifier FAIL on fast path:** Do NOT advance phase cursor. Trigger Fast Path Escalation (see `### Fast Path Escalation` below).
 

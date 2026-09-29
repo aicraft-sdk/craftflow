@@ -147,6 +147,7 @@ When `plan-gap-reviewer` pass 1 returns `PASS`:
 - Set `planning_review_status=passed`
 - Persist findings summary into `results.planning_reviewer`
 - Mark the pre-created `re-plan` and `plan-review-gap-2` tasks as `deleted`
+- PLAN hand-off: run the advisory context-boundary check per `references/context-boundary.md` (`--phase plan-handoff`); on a critical relay, end the turn there and resume with memory finalization on "continue"
 - Continue to memory finalization
 
 When `plan-gap-reviewer` pass 1 returns `FINDINGS`:
@@ -161,6 +162,7 @@ When `plan-gap-reviewer` pass 2 returns `PASS`:
 - Increment `planning_review_runs += 1`
 - Set `planning_review_status=passed`
 - Persist findings summary into `results.planning_reviewer`
+- PLAN hand-off: run the advisory context-boundary check per `references/context-boundary.md` (`--phase plan-handoff`); on a critical relay, end the turn there and resume with memory finalization on "continue"
 - Continue to memory finalization
 
 When `plan-gap-reviewer` pass 2 returns `FINDINGS`:

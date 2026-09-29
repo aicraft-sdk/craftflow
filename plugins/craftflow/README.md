@@ -348,6 +348,15 @@ the router's Intent Routing table always win over any Jev hint (see `router-prot
 
 ---
 
+## Optional: context-size nudge
+
+`craftflow_context_nudge.py` measures the session's context size from the transcript tail (local only, never blocks) and warns once per threshold crossing. It runs on `UserPromptSubmit`, resets on `SessionStart(compact)`, and is also called by the router at phase boundaries.
+
+- Default is `audit`: decisions are logged, nothing is shown. Set `"contextNudge": "on"` in `config/hook-mode.json` to enable advisories.
+- Thresholds live in `config/context-nudge.json` (`warnTokens`, `criticalTokens`, `assumedWindow`). Defaults assume a 200k window; on a 1M window raise `assumedWindow` and both thresholds.
+- Phase-boundary `/compact` prompt: after each BUILD phase exit (and at PLAN hand-off) the router runs the check (`skills/craftflow-router/references/context-boundary.md`). A `warn` is informational; a `critical` makes the router persist the workflow artifact and pause so you can run `/compact` and say "continue".
+- Every decision is logged as the `context_nudge` event (see `docs/craftflow-event-contract.md`); per-session state is kept under `.craftflow/state/context-nudge/`.
+
 ## Architecture graph
 
 `docs/generated/architecture.md` is a generated (not hand-maintained) view of

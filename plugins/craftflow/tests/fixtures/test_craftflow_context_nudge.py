@@ -1166,6 +1166,81 @@ def test_hook_mode_and_thresholds_config_shipped():
 
 
 # ---------------------------------------------------------------------------
+# Phase 6: router reference + docs anchors
+# ---------------------------------------------------------------------------
+
+REFS = PLUGIN_ROOT / "skills" / "craftflow-router" / "references"
+_POINTER = "references/context-boundary.md"
+_BUILD_CMD = ("python3 {plugin_root}/scripts/craftflow_context_nudge.py --boundary --wf {workflow_uuid} "
+              "--phase {phase_id} --project-root \"$PROJECT_ROOT\"")
+_PLAN_CMD = ("python3 {plugin_root}/scripts/craftflow_context_nudge.py --boundary --wf {workflow_uuid} "
+             "--phase plan-handoff --project-root \"$PROJECT_ROOT\"")
+_FINALIZE_MARKERS = (
+    "craftflow_state_query.py <destination_file_path> --mode full",
+    "write archive_path FIRST",
+    "unit mode, notes are prepended as new raw-text entries",
+    "phase:learn-distill",
+    "phase:skill-distill",
+    "circuit_breaker",
+    "craftflow_jev_remfix_scope.py",
+)
+
+
+def _read(path):
+    return Path(path).read_text(encoding="utf-8")
+
+
+def test_router_context_boundary_reference_contract():
+    text = _read(REFS / "context-boundary.md")
+    flat = " ".join(text.split())  # tolerate hard line wraps and indentation in prose
+    for needle in (_BUILD_CMD, _PLAN_CMD, "`relay` is literally `true`", "end the turn",
+                   "never run /compact yourself"):
+        assert needle in flat, "missing: " + needle
+
+
+def test_router_pointer_counts():
+    assert _read(REFS / "build-workflow.md").count(_POINTER) == 2
+    rr = _read(REFS / "remediation-and-research.md")
+    assert rr.count(_POINTER) == 2
+    assert _read(REFS / "plan-workflow.md").count(_POINTER) == 0
+    lines = rr.splitlines()
+    heads = [i for i, ln in enumerate(lines) if ln.startswith("When `plan-gap-reviewer`")]
+    for title in ("When `plan-gap-reviewer` pass 1 returns `PASS`:",
+                  "When `plan-gap-reviewer` pass 2 returns `PASS`:"):
+        h = lines.index(title)
+        nxt = min(i for i in heads if i > h)
+        ptr = next(i for i in range(h + 1, nxt) if _POINTER in lines[i])
+        cont = next(i for i in range(h + 1, nxt) if lines[i].startswith("- Continue to memory finalization"))
+        assert ptr < cont < nxt, title
+
+
+def test_router_pointers_avoid_memory_finalize_markers():
+    texts = [_read(REFS / "context-boundary.md")]
+    for name in ("build-workflow.md", "remediation-and-research.md"):
+        texts.extend(ln for ln in _read(REFS / name).splitlines() if _POINTER in ln)
+    for t in texts:
+        for marker in _FINALIZE_MARKERS:
+            assert marker not in t, "marker leaked: " + marker
+
+
+def test_contract_doc_documents_context_nudge():
+    doc = _read(PLUGIN_ROOT / "docs" / "craftflow-event-contract.md")
+    assert "### Log event: `context_nudge`" in doc
+    for field in ("schema", "source", "mode", "session_id", "level", "tokens", "token_source",
+                  "threshold", "last_level", "had_state", "outcome", "error", "wf", "phase",
+                  "session_source", "relay", "checkpoint_path"):
+        assert "`" + field + "`" in doc.split("### Log event: `context_nudge`", 1)[1], field
+    assert "| `UserPromptSubmit` |" in doc
+
+
+def test_hook_inventory_docs_mention_context_nudge():
+    assert "craftflow_context_nudge.py" in _read(PLUGIN_ROOT / "hooks" / "README.md")
+    policy = _read(REFS / "workflow-artifact-and-hook-policy.md")
+    assert "craftflow_context_nudge.py" in policy
+    assert "`UserPromptSubmit` for the optional Jev" in policy
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 

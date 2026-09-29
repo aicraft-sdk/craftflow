@@ -31,7 +31,7 @@ The 11 event names below are Claude Code's native hook event vocabulary
 | `hook_event_name` | Fires on | Wired via matcher(s) in `hooks.json` |
 |---|---|---|
 | `PreToolUse` | before a tool call executes | `Edit\|Write`, `Read`, `WebFetch`, `Bash` |
-| `SessionStart` | session boot, resume, or post-compact | `startup`, `startup\|resume\|compact` |
+| `SessionStart` | session boot, resume, or post-compact | `startup`, `startup\|resume\|compact`, `compact` |
 | `PostToolUse` | after a tool call executes | `Edit\|Write`, `WebFetch`, unmatched |
 | `TaskCompleted` | a `TaskUpdate`/`TaskCreate`-tracked task finishes | unmatched |
 | `PostCompact` | context compaction finishes | unmatched |
@@ -40,7 +40,7 @@ The 11 event names below are Claude Code's native hook event vocabulary
 | `Stop` | the main agent turn ends | unmatched |
 | `StopFailure` | the main agent turn ends abnormally | unmatched |
 | `InstructionsLoaded` | project/global instruction files are loaded | unmatched |
-| `UserPromptSubmit` | the user submits a prompt, before the model sees it (opt-in Jev hint; inert by default) | unmatched |
+| `UserPromptSubmit` | the user submits a prompt, before the model sees it (opt-in Jev hint; inert by default; context-size nudge, audit by default) | unmatched |
 
 `UserPromptSubmit` is intentionally absent from `HookEventName` in `scripts/craftflow_hooklib.py`
 (which keeps its 10 members): `craftflow_jev_prompt_hint.py` does not use the `TypedDict`s or any
@@ -72,11 +72,12 @@ binding knows they exist and are host-specific, not part of the required core.
 `prompt` (UserPromptSubmit only, Claude Code native) is read solely by
 `craftflow_jev_prompt_hint.py` and is not added to the `TypedDict`s — it is passed through
 unvalidated like `cwd`.
+`transcript_path` (Claude Code native) is read by `craftflow_context_nudge.py`; passed through unvalidated beyond the `.jsonl`/regular-file guard.
 
 ## Response shape (`json_print()`)
 
 Hook scripts write one JSON object to stdout via `craftflow_hooklib.json_print()`.
-Four call sites build it:
+Five call sites build it:
 
 ```python
 class HookSpecificOutput(TypedDict, total=False):
@@ -95,6 +96,9 @@ class HookResponse(TypedDict, total=False):
 | `posttool_context(message)` | `"PostToolUse"` | `additionalContext` | non-blocking nudge after a tool already ran (no `permissionDecision` — too late to deny) |
 | `session_context(message)` | `"SessionStart"` | `additionalContext` | injecting context at session boot/resume/compact |
 | `craftflow_jev_prompt_hint.py` (inline `json_print`) | `"UserPromptSubmit"` | `additionalContext` | advisory routing/skill hint injected before the model sees the prompt (never a decision) |
+| `craftflow_context_nudge.py` (inline `json_print`) | `"UserPromptSubmit"` | `additionalContext` + top-level `systemMessage` | one-line context-size advisory, once per threshold crossing, only when `contextNudge` is `on` (never a decision) |
+
+`craftflow_context_nudge.py` additionally sets a top-level `systemMessage` (user-visible copy of the advisory); it is not part of the `HookResponse` TypedDict above.
 
 A script that emits no output (prints nothing) is the implicit "allow, no comment"
 response — this is not a distinct shape, it's simply skipping the optional write.
@@ -205,6 +209,49 @@ Shape (abridged):
     }
   },
   "primary_model": "claude-sonnet-5-5",
+  "error": null
+}
+```
+
+### Log event: `context_nudge`
+
+- Emitter: `scripts/craftflow_context_nudge.py` (`hook_main` for `UserPromptSubmit`, `reset_main`
+  for `SessionStart(compact)` via `--reset`, `boundary_main` for the router's `--boundary` call).
+- Trigger: a decision only (DD-8): a `UserPromptSubmit` that reaches a measurement or skip, a
+  post-compact reset, or a phase-boundary check. Prompts below threshold with no state change
+  are not logged.
+- Fail-open: any failure logs `outcome: "error"` with an `error` value and never blocks.
+- No `event` key in the payload (ADR-0048 DD-2).
+- `schema`: integer, currently `1`.
+- `source`: `hook`, `reset`, or `boundary`.
+- `mode`: `audit`, `on`, or `audit-unrecognized-config-value`.
+- `session_id`: string or `null`.
+- `level`: `none`, `warn`, `critical`, or `null`.
+- `tokens`: measured context tokens, or `null`.
+- `token_source`: `assistant`, `compact_boundary`, or `null`.
+- `threshold`: the configured threshold that applied, or `null`.
+- `last_level`: previously nudged level (hook only).
+- `had_state`: boolean, whether a state file existed (reset only).
+- `outcome`: `nudged`, `would_nudge`, `rearmed`, `skipped`, `reset`, `advised`, `would_advise`,
+  `already_advised`, `below_threshold`, `no_session_state`, or `error`.
+- `error`: `null`, `no_transcript_path`, `transcript_missing`, `transcript_not_regular_jsonl`,
+  `no_usage`, `post_tokens_missing`, `config_invalid`, `bad_session_id`, `state_write_failed`,
+  `workflow_missing`, `workflow_unreadable`, `bad_wf`, `bad_args`, `remeasure_failed`, or
+  `unexpected:<Type>`.
+- Boundary only: `wf`, `phase`, `session_source`, `relay`, `checkpoint_path`.
+
+```json
+{
+  "schema": 1,
+  "source": "hook",
+  "mode": "on",
+  "session_id": "6f1c0a52",
+  "level": "warn",
+  "tokens": 123456,
+  "token_source": "assistant",
+  "threshold": 120000,
+  "last_level": "none",
+  "outcome": "nudged",
   "error": null
 }
 ```
