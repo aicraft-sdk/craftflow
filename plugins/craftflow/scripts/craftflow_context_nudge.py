@@ -19,6 +19,7 @@ from craftflow_hooklib import (
     log_event,
     now_iso,
     plugin_config_dir,
+    read_workflow_state,
     state_root,
 )
 from craftflow_transcript_usage import last_turn_context_tokens
@@ -385,6 +386,140 @@ def reset_main(data):
         return 0
 
 
+def resolve_session(state_dir, arg_sid, env_sid, now):
+    """(sid, state, source) per DD-12: arg > env > newest non-checkpoint state within 12 h.
+    An explicit/env id whose state file is absent falls through. (None, None, None) if unresolved."""
+    try:
+        for source, raw in (("arg", arg_sid), ("env", env_sid)):
+            sid = safe_session_id(raw)
+            if sid is not None and state_path(state_dir, sid).is_file():
+                return sid, load_state(state_path(state_dir, sid)), source
+        best = None
+        d = Path(state_dir)
+        if d.is_dir():
+            for entry in d.glob("*.json"):
+                sid = entry.stem
+                if entry.name.startswith("checkpoint-") or safe_session_id(sid) is None:
+                    continue
+                try:
+                    mtime = entry.stat().st_mtime
+                except OSError:
+                    continue
+                if now - mtime <= BOUNDARY_STATE_MAX_AGE_S and (best is None or mtime > best[0]):
+                    best = (mtime, sid, entry)
+        if best is not None:
+            return best[1], load_state(best[2]), "mtime_fallback"
+    except Exception:  # noqa: BLE001 - fail-open contract
+        pass
+    return None, None, None
+
+
+def write_checkpoint(path, snapshot):
+    """Atomic write of the phase-boundary checkpoint. Returns True on success."""
+    return save_state(path, snapshot)
+
+
+def _build_checkpoint(wf, phase, tokens, level, sid, cfg):
+    """Snapshot dict via the PreCompact builders, or (None, error). Lazy import (DD-3)."""
+    payload, path, perr = read_workflow_state(wf)
+    if path is None:
+        return None, "workflow_missing"
+    if perr or not isinstance(payload, dict):
+        return None, "workflow_unreadable"
+    import craftflow_precompact_state as pcs
+    try:
+        digest = pcs._narrative_digest()
+    except Exception:  # noqa: BLE001 - digest is best-effort
+        digest = None
+    usage = None
+    if tokens is not None:
+        window = cfg["assumedWindow"]
+        usage = {"percent_full": round(tokens * 100.0 / window, 1), "total": tokens,
+                 "model_context": window, "source": "transcript"}
+    snap = pcs._build_snapshot(payload, "phase_boundary", usage, digest)
+    snap.update(source="phase_boundary", phase=phase, context_tokens=tokens, context_level=level,
+                session_id=sid)
+    return snap, None
+
+
+def boundary_main(args):
+    """Router CLI: always prints exactly one JSON line, returns 0 (DD-11/12/13)."""
+    res = boundary_result(outcome="error", error="unexpected")
+    try:
+        if args.project_root:
+            os.environ["CLAUDE_PROJECT_DIR"] = args.project_root
+        effective, logged = resolve_mode(load_mode().get("contextNudge"))
+        if effective == "off":
+            res = boundary_result(mode="off", outcome="off")
+            return 0
+        res = boundary_result(mode=logged, phase=args.phase, outcome="error")
+        cfg, cerr = load_config(plugin_config_dir() / "context-nudge.json")
+        if cerr:
+            res = boundary_result(mode=logged, phase=args.phase, outcome="error", error=cerr)
+            log_event("context_nudge", _boundary_row(res, args.wf))
+            return 0
+        error = None
+        wf = safe_wf(args.wf)
+        if wf is None:
+            error = "bad_wf"
+        state_dir = state_root() / STATE_DIRNAME
+        sid, state, session_source = resolve_session(
+            state_dir, args.session_id, os.environ.get("CLAUDE_CODE_SESSION_ID"), time.time())
+        tokens, level = None, "none"
+        if state is not None:
+            m = current_context_tokens(state.get("transcript_path"))
+            tokens = m["tokens"]
+            if tokens is None:
+                error = error or "remeasure_failed"
+                last = state.get("last_tokens")
+                tokens = last if type(last) is int and last > 0 else None
+            level = classify(tokens, cfg["warnTokens"], cfg["criticalTokens"])
+        checkpoint_path = None
+        if wf is not None:
+            try:  # a checkpoint failure must never suppress relay (E21)
+                snap, cerr2 = _build_checkpoint(wf, args.phase, tokens, level, sid, cfg)
+                target = state_dir / ("checkpoint-" + wf + ".json")
+                if snap is not None and write_checkpoint(target, snap):
+                    checkpoint_path = str(target)
+                elif snap is not None:
+                    cerr2 = "checkpoint_write_failed"
+                error = error or cerr2
+            except Exception:  # noqa: BLE001
+                checkpoint_path = None
+                error = error or "workflow_unreadable"
+        b = decide_boundary(level, (state or {}).get("boundary_level", "none"), effective,
+                            measured=tokens is not None)
+        if b["relay"] and state is not None:
+            state = dict(state)
+            state["boundary_level"] = b["new_boundary_level"]
+            state["updated_at"] = now_iso()
+            save_state(state_path(state_dir, sid), state)
+        threshold = (cfg["criticalTokens"] if level == "critical"
+                     else cfg["warnTokens"] if level == "warn" else None)
+        res = boundary_result(
+            mode=logged, level=level if tokens is not None else None, tokens=tokens,
+            threshold=threshold, assumed_window=cfg["assumedWindow"], relay=b["relay"],
+            advisory=render_advisory(level, tokens, cfg) if b["relay"] else None,
+            checkpoint_path=checkpoint_path, session_id=sid, session_source=session_source,
+            phase=args.phase, outcome=b["outcome"], error=error)
+        log_event("context_nudge", _boundary_row(res, args.wf))
+        return 0
+    except Exception as exc:  # noqa: BLE001 - fail-open contract
+        res = boundary_result(phase=getattr(args, "phase", None), outcome="error",
+                              error="unexpected:" + type(exc).__name__)
+        return 0
+    finally:
+        print(json.dumps(res))
+
+
+def _boundary_row(res, wf):
+    """Log row for a boundary invocation; no 'event' key (DD-8)."""
+    row = {k: res.get(k) for k in ("mode", "level", "tokens", "threshold", "relay", "checkpoint_path",
+                                   "session_id", "session_source", "phase", "outcome", "error")}
+    row.update(schema=SCHEMA_VERSION, source="boundary", wf=wf)
+    return row
+
+
 def _parse_args(argv):
     """(namespace, None) or (None, "bad_args"); argparse's SystemExit never escapes."""
     import argparse
@@ -414,10 +549,7 @@ def main(argv=None):
                 print(json.dumps(boundary_result(outcome="error", error=err)))
             return 0
         if args.boundary:
-            # stub until Phase 5 (boundary_main)
-            print(json.dumps({"schema": SCHEMA_VERSION, "outcome": "error", "error": "not_implemented",
-                              "relay": False}))
-            return 0
+            return boundary_main(args)
         if args.reset:
             return reset_main(load_input())
         return hook_main(load_input())

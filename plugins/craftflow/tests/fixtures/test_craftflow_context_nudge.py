@@ -813,17 +813,304 @@ def test_reset_prunes_old_state_files():
     assert rows[0]["outcome"] == "reset" and rows[0]["had_state"] is False
 
 
-def test_boundary_flag_is_stub_until_p5_and_bad_args_is_one_json_line():
+# ---------------------------------------------------------------------------
+# --boundary (Phase 5)
+# ---------------------------------------------------------------------------
+
+WF = "wf-t-0001"
+
+
+def _seed_wf(box, wf=WF, payload=None):
+    d = box.project / ".craftflow" / "state" / "workflows"
+    d.mkdir(parents=True, exist_ok=True)
+    body = payload if payload is not None else {
+        "workflow_uuid": wf, "workflow_type": "BUILD", "phase_cursor": "P1",
+        "phase_status": {"P1": "in_progress"}, "plan_file": "docs/plans/x.md"}
+    (d / (wf + ".json")).write_text(json.dumps(body), encoding="utf-8")
+
+
+def _seed_session(box, sid, tokens, name=None, **state_extra):
+    tpath = box.transcript(tokens, name=name or (sid + ".jsonl"))
+    state = {"schema": 1, "session_id": sid, "last_level": "none", "boundary_level": "none",
+             "last_tokens": tokens, "transcript_path": str(tpath), "updated_at": "2026-01-01T00:00:00Z"}
+    state.update(state_extra)
+    assert cn.save_state(box.state_dir / (sid + ".json"), state)
+    return tpath
+
+
+def _bnd(box, *args, env_extra=None, wf=WF, session="s1"):
+    """Run --boundary; assert exit 0 + exactly one JSON line; return the parsed dict."""
+    argv = ["--boundary"]
+    if wf is not None:
+        argv += ["--wf", wf]
+    if session is not None:
+        argv += ["--session-id", session]
+    argv += list(args)
+    argv += ["--project-root", str(box.project)]
+    code, out, _err, _rows, _ = run_script({}, box=box, args=tuple(argv), env_extra=env_extra)
+    assert code == 0, code
+    assert out.endswith("\n") and out.count("\n") == 1, repr(out)
+    parsed = json.loads(out)
+    assert parsed["schema"] == 1 and isinstance(parsed["relay"], bool), parsed
+    return parsed
+
+
+def _checkpoint(box, wf=WF):
+    return box.state_dir / ("checkpoint-" + wf + ".json")
+
+
+def test_boundary_on_over_warn_relays_and_checkpoints():
+    box = _Box("on")
+    _seed_wf(box)
+    _seed_session(box, "s1", 130000)
+    r = _bnd(box, "--phase", "P1")
+    assert r["relay"] is True and r["level"] == "warn" and r["mode"] == "on", r
+    assert r["tokens"] == 130000 and r["threshold"] == WARN and r["assumed_window"] == WINDOW, r
+    assert r["outcome"] == "advised" and r["error"] is None, r
+    assert r["session_id"] == "s1" and r["session_source"] == "arg" and r["phase"] == "P1", r
+    assert isinstance(r["advisory"], str) and "/compact" in r["advisory"], r
+    assert r["checkpoint_path"] == str(_checkpoint(box)), r
+    snap = json.loads(_checkpoint(box).read_text(encoding="utf-8"))
+    assert snap["source"] == "phase_boundary" and snap["trigger"] == "phase_boundary", snap
+    assert snap["workflow_uuid"] == WF and snap["phase"] == "P1" and snap["session_id"] == "s1", snap
+    assert snap["context_tokens"] == 130000 and snap["context_level"] == "warn", snap
+    assert snap["context_usage"] == {"percent_full": 65.0, "total": 130000, "model_context": WINDOW,
+                                     "source": "transcript"}, snap["context_usage"]
+    assert snap["phase_cursor"] == "P1" and snap["plan_file"] == "docs/plans/x.md", snap
+    state = json.loads((box.state_dir / "s1.json").read_text(encoding="utf-8"))
+    assert state["boundary_level"] == "warn", state
+
+
+def test_boundary_second_call_same_level_already_advised():
+    box = _Box("on")
+    _seed_wf(box)
+    _seed_session(box, "s1", 130000)
+    assert _bnd(box, "--phase", "P1")["relay"] is True
+    r = _bnd(box, "--phase", "P2")
+    assert r["relay"] is False and r["outcome"] == "already_advised" and r["level"] == "warn", r
+    assert r["advisory"] is None and r["checkpoint_path"] == str(_checkpoint(box)), r
+
+
+def test_boundary_escalates_warn_then_critical():
+    box = _Box("on")
+    _seed_wf(box)
+    tpath = _seed_session(box, "s1", 130000)
+    assert _bnd(box)["level"] == "warn"
+    _write_lines(tpath, [_assistant_line(170000)])
+    r = _bnd(box)
+    assert r["relay"] is True and r["level"] == "critical" and r["outcome"] == "advised", r
+    assert r["threshold"] == CRIT and r["tokens"] == 170000, r
+    r = _bnd(box)
+    assert r["relay"] is False and r["outcome"] == "already_advised", r
+
+
+def test_boundary_audit_checkpoints_but_never_relays():
     box = _Box("audit")
-    code, out, _err, _rows, _ = run_script({}, box=box, args=("--boundary", "--wf", "wf-x"))
+    _seed_wf(box)
+    _seed_session(box, "s1", 130000)
+    r = _bnd(box, "--phase", "P1")
+    assert r["relay"] is False and r["outcome"] == "would_advise" and r["level"] == "warn", r
+    assert r["advisory"] is None and r["mode"] == "audit", r
+    assert _checkpoint(box).exists() and r["checkpoint_path"] == str(_checkpoint(box)), r
+    state = json.loads((box.state_dir / "s1.json").read_text(encoding="utf-8"))
+    assert state["boundary_level"] == "none", state
+
+
+def test_boundary_below_threshold_no_relay():
+    box = _Box("on")
+    _seed_wf(box)
+    _seed_session(box, "s1", 1000)
+    r = _bnd(box)
+    assert r["relay"] is False and r["level"] == "none" and r["outcome"] == "below_threshold", r
+    assert r["tokens"] == 1000 and r["threshold"] is None, r
+    assert _checkpoint(box).exists(), r
+
+
+def test_boundary_off_mode_no_checkpoint_no_relay():
+    box = _Box("off")
+    _seed_wf(box)
+    _seed_session(box, "s1", 130000)
+    before = _fs_snapshot(box.root)
+    r = _bnd(box, "--phase", "P1")
+    assert r["mode"] == "off" and r["outcome"] == "off" and r["relay"] is False, r
+    assert r["checkpoint_path"] is None and r["advisory"] is None, r
+    assert _fs_snapshot(box.root) == before
+    assert not _checkpoint(box).exists() and log_rows(box) == []
+
+
+def test_boundary_missing_and_corrupt_workflow():
+    cases = [("missing", None, "workflow_missing"), ("corrupt", "{bad", "workflow_unreadable"),
+             ("list", "[]", "workflow_unreadable"), ("str", '"x"', "workflow_unreadable"),
+             ("int", "3", "workflow_unreadable")]
+    for label, raw, want in cases:
+        box = _Box("on")
+        _seed_session(box, "s1", 130000)
+        if raw is not None:
+            wdir = box.project / ".craftflow" / "state" / "workflows"
+            wdir.mkdir(parents=True)
+            (wdir / (WF + ".json")).write_text(raw, encoding="utf-8")
+        r = _bnd(box)
+        assert r["checkpoint_path"] is None and r["error"] == want, (label, r)
+        assert r["relay"] is True and r["level"] == "warn" and r["outcome"] == "advised", (label, r)
+        assert not _checkpoint(box).exists(), label
+
+
+def test_boundary_bad_wf_rejected():
+    box = _Box("on")
+    _seed_wf(box)
+    (box.project / ".craftflow" / "state" / "x.json").write_text("{}", encoding="utf-8")
+    _seed_session(box, "s1", 130000)
+    r = _bnd(box, wf="../x")
+    assert r["error"] == "bad_wf" and r["checkpoint_path"] is None, r
+    assert r["relay"] is True, r
+    assert sorted(os.listdir(box.state_dir)) == ["s1.json"], os.listdir(box.state_dir)
+    r = _bnd(box, wf=None)
+    assert r["error"] == "bad_wf" and r["checkpoint_path"] is None, r
+
+
+def test_boundary_session_resolution_order():
+    box = _Box("on")
+    _seed_wf(box)
+    _seed_session(box, "sarg", 130000)
+    _seed_session(box, "senv", 130000)
+    _seed_session(box, "smtime", 130000)
+    r = _bnd(box, session="sarg", env_extra={"CLAUDE_CODE_SESSION_ID": "senv"})
+    assert r["session_id"] == "sarg" and r["session_source"] == "arg", r
+    r = _bnd(box, session=None, env_extra={"CLAUDE_CODE_SESSION_ID": "senv"})
+    assert r["session_id"] == "senv" and r["session_source"] == "env", r
+    # explicit ids without a state file fall through to the next source
+    r = _bnd(box, session="missing", env_extra={"CLAUDE_CODE_SESSION_ID": "senv"})
+    assert r["session_id"] == "senv" and r["session_source"] == "env", r
+    now = time.time()
+    os.utime(box.state_dir / "sarg.json", (now - 7200, now - 7200))
+    os.utime(box.state_dir / "senv.json", (now - 3600, now - 3600))
+    os.utime(box.state_dir / "smtime.json", (now - 60, now - 60))
+    r = _bnd(box, session=None, env_extra={"CLAUDE_CODE_SESSION_ID": "unknown"})
+    assert r["session_id"] == "smtime" and r["session_source"] == "mtime_fallback", r
+    # a newer checkpoint-* file must never be picked as a session
+    _bnd(box, session="smtime")
+    assert _checkpoint(box).exists()
+    r = _bnd(box, session=None)
+    assert r["session_id"] == "smtime" and r["session_source"] == "mtime_fallback", r
+
+
+def test_boundary_no_or_stale_session_state():
+    box = _Box("on")
+    _seed_wf(box)
+    r = _bnd(box, session=None)
+    assert r["outcome"] == "no_session_state" and r["relay"] is False, r
+    assert r["session_id"] is None and r["session_source"] is None and r["tokens"] is None, r
+    assert r["checkpoint_path"] == str(_checkpoint(box)) and _checkpoint(box).exists(), r
+    box = _Box("on")
+    _seed_wf(box)
+    _seed_session(box, "s1", 130000)
+    old = time.time() - 13 * 3600
+    os.utime(box.state_dir / "s1.json", (old, old))
+    r = _bnd(box, session=None)
+    assert r["outcome"] == "no_session_state" and r["relay"] is False, r
+    assert r["session_source"] is None and _checkpoint(box).exists(), r
+
+
+def test_boundary_remeasure_failure_falls_back_to_last_tokens():
+    box = _Box("on")
+    _seed_wf(box)
+    tpath = _seed_session(box, "s1", 130000)
+    os.unlink(tpath)
+    r = _bnd(box)
+    assert r["error"] == "remeasure_failed", r
+    assert r["tokens"] == 130000 and r["level"] == "warn" and r["relay"] is True, r
+    assert r["checkpoint_path"] is not None, r
+
+
+def test_boundary_reset_rearms_relay():
+    box = _Box("on")
+    _seed_wf(box)
+    tpath = _seed_session(box, "s1", 130000)
+    assert _bnd(box)["relay"] is True
+    assert _bnd(box)["relay"] is False
+    reset = {"hook_event_name": "SessionStart", "source": "compact", "session_id": "s1"}
+    code, out, _err, _rows, _ = run_script(reset, box=box, args=("--reset",))
+    assert code == 0 and out == ""
+    # the hook recreates the state on the next prompt (keeps a state file present)
+    code, out, _err, _rows, _ = run_script(_prompt(tpath), box=box)
     assert code == 0
-    assert json.loads(out) == {"schema": 1, "outcome": "error", "error": "not_implemented", "relay": False}
+    r = _bnd(box)
+    assert r["relay"] is True and r["level"] == "warn", r
+
+
+def test_boundary_bad_args_json_error_exit0():
+    box = _Box("audit")
     code, out, _err, _rows, _ = run_script({}, box=box, args=("--boundary", "--bogus-flag"))
     assert code == 0
     parsed = json.loads(out)
-    assert parsed["error"] == "bad_args" and parsed["relay"] is False and out.count("\n") == 1
+    assert parsed["error"] == "bad_args" and parsed["relay"] is False and out.count("\n") == 1, parsed
+    assert parsed["outcome"] == "error", parsed
     code, out, _err, _rows, _ = run_script({}, box=box, args=("--bogus-flag",))
     assert code == 0 and out == ""
+
+
+def test_boundary_never_calls_tokentracker():
+    box = _Box("on")
+    _seed_wf(box)
+    _seed_session(box, "s1", 130000)
+    fake_dir = box.root / "fakebin"
+    fake_dir.mkdir()
+    marker = box.root / "tokentracker-called"
+    fake = fake_dir / "tokentracker"
+    fake.write_text("#!/bin/sh\ntouch '" + str(marker) + "'\necho '{}'\n", encoding="utf-8")
+    fake.chmod(0o755)
+    r = _bnd(box, env_extra={"PATH": str(fake_dir) + os.pathsep + os.environ.get("PATH", "")})
+    assert r["relay"] is True, r
+    assert not marker.exists()
+
+
+def test_boundary_checkpoint_not_precompact_state():
+    box = _Box("on")
+    _seed_wf(box)
+    _seed_session(box, "s1", 130000)
+    _bnd(box)
+    assert _checkpoint(box).exists()
+    assert not (box.project / ".craftflow" / "state" / "precompact-state.json").exists()
+    assert not list(box.root.rglob("precompact-state.json"))
+
+
+def test_boundary_phase_label_passthrough():
+    for phase in ("P3", "plan-handoff"):
+        box = _Box("on")
+        _seed_wf(box)
+        _seed_session(box, "s1", 130000)
+        r = _bnd(box, "--phase", phase)
+        assert r["phase"] == phase, r
+        assert json.loads(_checkpoint(box).read_text(encoding="utf-8"))["phase"] == phase
+    box = _Box("on")
+    _seed_wf(box)
+    _seed_session(box, "s1", 130000)
+    r = _bnd(box)
+    assert r["phase"] is None and r["error"] is None, r
+    assert json.loads(_checkpoint(box).read_text(encoding="utf-8"))["phase"] is None
+
+
+def test_boundary_config_invalid_prints_error_line():
+    box = _Box("on", config={"warnTokens": 5, "criticalTokens": 4, "assumedWindow": 3})
+    _seed_wf(box)
+    _seed_session(box, "s1", 130000)
+    r = _bnd(box)
+    assert r["outcome"] == "error" and r["error"] == "config_invalid" and r["relay"] is False, r
+    assert not _checkpoint(box).exists()
+    assert [x["error"] for x in log_rows(box)] == ["config_invalid"]
+
+
+def test_boundary_logs_one_decision_row():
+    box = _Box("on")
+    _seed_wf(box)
+    _seed_session(box, "s1", 130000)
+    _bnd(box, "--phase", "P1")
+    rows = log_rows(box)
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert row["source"] == "boundary" and row["wf"] == WF and row["phase"] == "P1", row
+    assert row["session_source"] == "arg" and row["relay"] is True and row["event"] == "context_nudge", row
+    assert row["checkpoint_path"] == str(_checkpoint(box)), row
 
 
 def test_module_import_cheap():
