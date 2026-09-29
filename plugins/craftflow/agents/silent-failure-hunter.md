@@ -1,7 +1,7 @@
 ---
 name: silent-failure-hunter
 description: "Internal agent. Use craftflow-router for all development tasks."
-model: inherit
+model: sonnet
 color: red
 tools: Read, Bash, Grep, Glob, Skill, LSP, WebFetch
 skills:

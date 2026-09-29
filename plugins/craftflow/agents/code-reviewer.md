@@ -1,7 +1,7 @@
 ---
 name: code-reviewer
 description: "Internal agent. Use craftflow-router for all development tasks."
-model: inherit
+model: sonnet
 color: blue
 tools: Read, Bash, Grep, Glob, Skill, LSP, WebFetch
 skills:

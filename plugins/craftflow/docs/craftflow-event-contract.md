@@ -141,10 +141,79 @@ invoked them.
 - This does not cover the router *orchestration protocol* (`SKILL.md` content) — that is
   Layer B of the same plan, starting at its Phase 1.
 
+## Hook-emitted log events (craftflow-hook-events.log)
+
+Records in `.craftflow/state/craftflow-hook-events.log` are JSON lines written by
+`craftflow_hooklib.log_event(name, payload)`. The `event` field equals `name` unless the
+payload itself carries an `event` key, which overwrites it (the existing SubagentStop
+audit record is logged under `event: "subagent_stop"` for that reason). Payloads for the
+events below must never contain an `event` key.
+
+### Log event: `agent_usage`
+
+- Emitter: `scripts/craftflow_subagent_stop_audit.py` (`_log_agent_usage`), run after the
+  existing SubagentStop events so they are written first.
+- Trigger: a craftflow SubagentStop when the `agentUsageTelemetry` mode is not `off`.
+- Fail-open: any failure logs a reduced record (`schema`, `agent_type`, `agent_id`,
+  `error`) and never blocks the hook.
+- `schema`: integer, currently `1`.
+- `agent_type`, `agent_id`: strings copied from the SubagentStop payload.
+- `session_id`: string or `null`.
+- `stop_hook_active`: boolean.
+- `mode`: `audit`, or `audit-unrecognized-config-value` when the configured value is
+  neither `audit` nor `off`.
+- `contract_source`: `hook_last_message` (shape classified from `last_assistant_message`).
+- `contract_shape`: `yaml_block`, `envelope`, `heading_other`, `none`, or `null` when the
+  classifier itself failed.
+- `contract_valid`: boolean for `yaml_block`, otherwise `null`.
+- `contract_errors`: up to 3 strings, each at most 120 characters (`classifier_error`,
+  `validator_unavailable`, `classify_error` are the internal markers).
+- `models`: object keyed by model id. Each value holds `input_tokens`, `output_tokens`,
+  `cache_read_input_tokens`, `cache_creation_input_tokens`, `cache_write_5m`,
+  `cache_write_1h`, `messages`, `fast_messages`.
+- `primary_model`: model id with the most output tokens (first seen wins ties), or `null`.
+- `turns`: number of distinct API messages.
+- `duration_s`: seconds between first and last transcript timestamp, or `null`.
+- `effort`: most common `effort` value in the transcript, or `null`.
+- `attribution_agent`: first `attributionAgent` seen, or `null`.
+- `workflow_id`, `dispatch_phase`: parsed from the first user message (dispatch prompt),
+  or `null`; `is_remfix`: boolean.
+- `unkeyed_messages`, `corrupt_lines`, `invalid_usage_values`: integer counters of
+  transcript rows that were skipped or coerced to 0.
+- `partial`: boolean, true when the parse stopped early.
+- `error`: `null` on success, otherwise one of `no_transcript_path`, `transcript_missing`,
+  `transcript_not_regular_jsonl`, `transcript_too_large`, `time_budget_exceeded`, or
+  `unexpected:<Type>`.
+- Dedupe rule: assistant records sharing a `message.id` are one API message (streamed
+  chunks), so per-field maximum is taken across duplicates before summing per model.
+- Cursor: `agent_transcript_path` is absent, so `error: no_transcript_path`.
+
+Shape (abridged):
+
+```json
+{
+  "event": "agent_usage",
+  "schema": 1,
+  "agent_type": "craftflow:component-builder",
+  "mode": "audit",
+  "contract_shape": "yaml_block",
+  "models": {
+    "claude-sonnet-5-5": {
+      "input_tokens": 120,
+      "output_tokens": 900,
+      "messages": 4
+    }
+  },
+  "primary_model": "claude-sonnet-5-5",
+  "error": null
+}
+```
+
 ## Keeping this doc honest
 
 `scripts/verify-craftflow-event-contract.mjs` (`pnpm run verify:event-contract`) asserts
 every canonical event in the table above has a real match in
 `hooks/hooks.json`, and that `.cursor/hooks.json`'s adapter invocations only ever pass
-`--event` values drawn from the same set. Run it after editing this doc or either
-`hooks.json` file.
+`--event` values drawn from the same set. It also asserts every `### Log event:` heading
+in the section above has a `scripts/*.py` caller of `log_event("<name>", ...)`. Run it
+after editing this doc or either `hooks.json` file.

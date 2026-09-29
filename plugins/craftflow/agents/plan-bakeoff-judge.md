@@ -1,7 +1,7 @@
 ---
 name: plan-bakeoff-judge
 description: "Compare N surviving parallel-model plan/decision-RFC candidates for the same request and synthesize exactly one canonical plan artifact, deleting the non-winning candidate files."
-model: inherit
+model: opus
 color: cyan
 tools: Read, Grep, Glob, LSP, Write, Edit, Bash
 skills:

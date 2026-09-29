@@ -9,7 +9,7 @@ Every build, debug, review, and plan task routes through a single entry point th
 ## What it does
 
 - **Routes all dev tasks** — one router (`craftflow-router`) classifies intent and dispatches to the right agent chain automatically
-- **Agent chain** — 13 specialized agents: planner, component-builder, bug-investigator, code-reviewer, silent-failure-hunter, integration-verifier, and more
+- **Agent chain** — 14 specialized agents: planner, component-builder, bug-investigator, code-reviewer, silent-failure-hunter, integration-verifier, and more
 - **29 skills** — planning patterns, TDD, code generation, debugging, diff-driven docs, workflow status, and others
 - **Hook system** — Python lifecycle hooks for memory protection, write guards, URL caching, and session continuity
 - **Shared state** — `.craftflow/state/` is readable by both Claude Code and Cursor
@@ -25,6 +25,29 @@ Every build, debug, review, and plan task routes through a single entry point th
   catastrophic shell command patterns pre-execution, `craftflow_stop_verify.py` is an opt-in
   end-of-session verification gate (inert by default), and `craftflow_hook_trust.py` is a standalone
   hash-manifest trust gate for repo-local hook scripts (not itself wired into `hooks.json`)
+
+### Default agent models
+
+Each agent pins its model in its `model:` frontmatter line:
+
+| Agent | Default model | Why |
+|-------|---------------|-----|
+| `planner` | opus | plan quality drives every later phase |
+| `plan-gap-reviewer` | opus | fresh, anti-anchoring review of a saved plan |
+| `plan-bakeoff-judge` | opus | compares and synthesizes competing plans |
+| `bug-investigator` | opus | root-cause proof before any fix |
+| `doubt-verifier` | opus | adversarial verification of claims |
+| `component-builder` | sonnet | TDD execution of an approved phase |
+| `code-reviewer` | sonnet | diff review |
+| `silent-failure-hunter` | sonnet | error-handling review |
+| `integration-verifier` | sonnet | end-to-end verification |
+| `web-researcher` | sonnet | research lookups with a Router Contract |
+| `github-researcher` | sonnet | repository research with a Router Contract |
+| `doc-syncer` | sonnet | documentation sync from the current diff |
+| `learn-distiller` | sonnet | distills workflow learnings into notes |
+| `skill-author` | sonnet | drafts skill stubs |
+
+Precedence: a per-dispatch `model` parameter > the frontmatter pin > `CLAUDE_CODE_SUBAGENT_MODEL` on Claude Code >= 2.1.251 (older versions ranked the environment variable first) > the session model. Cursor cannot select custom subagent types, so it inherits the session model for every agent. Rationale and evidence: ADR-0049, craftflow default agent model pins, in the ai-craft repository.
 
 ## Workflow types
 
