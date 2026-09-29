@@ -1,0 +1,45 @@
+{
+  "name": "context-nudge",
+  "workdir": ".",
+  "required_env": [],
+  "environment": {
+    "CI": "true"
+  },
+  "healthcheck": {
+    "name": "claude CLI present",
+    "command": "claude --version",
+    "expected": "exit 0, claude version printed"
+  },
+  "scenarios": [
+    {
+      "name": "Load probe: --plugin-dir overrides the installed craftflow",
+      "mode": "proof",
+      "given": "an empty scratch project with a .craftflow/state dir, CLAUDE_PLUGIN_ROOT / CLAUDE_CODE_SESSION_ID unset and CLAUDE_PROJECT_DIR pointing at the scratch project",
+      "when": "claude -p --plugin-dir plugins/craftflow --model haiku --debug-file <file> runs a one-word prompt",
+      "then": "the debug log contains 'from --plugin-dir overrides installed version' at least once, proving the worktree plugin (not the installed one) is what the live scenarios exercise",
+      "command": "SCR=$(mktemp -d) && mkdir -p \"$SCR/p1/.craftflow/state\" && PLUGIN=\"$PWD/plugins/craftflow\" && (cd \"$SCR/p1\" && env -u CLAUDE_PLUGIN_ROOT -u CLAUDE_CODE_SESSION_ID CLAUDE_PROJECT_DIR=\"$SCR/p1\" claude -p --plugin-dir \"$PLUGIN\" --model haiku --debug-file \"$SCR/dbg.txt\" \"Reply OK\" >/dev/null 2>&1); N=$(grep -c 'from --plugin-dir overrides installed version' \"$SCR/dbg.txt\"); rm -rf \"$SCR\"; echo \"load_probe_hits=$N\"; test \"$N\" -ge 1",
+      "expected": "exit 0; load_probe_hits >= 1",
+      "timeout_seconds": 240
+    },
+    {
+      "name": "Round-trip LV-1..LV-6 against the real CLI",
+      "mode": "proof",
+      "given": "the worktree plugin loaded via --plugin-dir and a scratch plugin copy with contextNudge on, warnTokens 1000, criticalTokens 100000000, assumedWindow 200000000",
+      "when": "context_nudge_roundtrip.py drives real haiku sessions through default audit (LV-1), the warn nudge reaching the model once (LV-2), critical escalation (LV-3), /compact reset without a stale re-nudge (LV-4), the --boundary relay against the live transcript (LV-5) and CLAUDE_CODE_SESSION_ID parity (LV-6)",
+      "then": "the driver prints the summary JSON with load_probe PASS and evidence_class A, every lv PASS or the allowed LIMITATION for lv4/lv6, and exits 0",
+      "command": "python3 plugins/craftflow/tests/live/context_nudge_roundtrip.py --plugin-dir plugins/craftflow",
+      "expected": "exit 0; {\"load_probe\":\"PASS\",\"lv1\":\"PASS\",\"lv2\":\"PASS\",\"lv3\":\"PASS\",\"lv4\":\"PASS\"|\"LIMITATION:<reason>\",\"lv5\":\"PASS\",\"lv6\":\"PASS\"|\"LIMITATION:<reason>\",\"evidence_class\":\"A\"}",
+      "timeout_seconds": 1800
+    },
+    {
+      "name": "Timing on the largest real transcript",
+      "mode": "stress",
+      "given": "the largest *.jsonl under ~/.claude/projects (hundreds of MB), a temp plugin root and project in audit mode, and a real-size activeContext.md",
+      "when": "context_nudge_timing.py times in-process current_context_tokens x50, 20 interleaved bare-vs-hook subprocess runs and 10 --boundary audit runs",
+      "then": "delta_median_ms < 50, inproc_median_ms < 50, boundary_median_ms < 1000 and boundary_max_ms < 2600; the driver exits 0 and never prints transcript content",
+      "command": "python3 plugins/craftflow/tests/live/context_nudge_timing.py --runs 20",
+      "expected": "exit 0; gate_pass true with all four gate numbers under budget",
+      "timeout_seconds": 600
+    }
+  ]
+}
