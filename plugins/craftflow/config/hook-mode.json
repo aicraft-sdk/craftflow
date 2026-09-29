@@ -5,6 +5,7 @@
   "taskMetadata": "block",
   "postcompactAudit": "audit",
   "subagentStopAudit": "audit",
+  "agentUsageTelemetry": "audit",
   "precompactState": "audit",
   "stopPersist": "audit",
   "stopFailureLog": "audit",

@@ -23945,6 +23945,302 @@ def test_all_or_nothing_loop_detector_closes_known_blind_spots() -> None:
     ok(name)
 
 
+# ---------------------------------------------------------------------------
+# SubagentStop audit: agent_usage telemetry (SPEC-0014)
+# ---------------------------------------------------------------------------
+
+def _sa_write_transcript(path: Path, lines: list) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _sa_assistant(mid, model, out, inp=2, cr=0, cc=0):
+    return json.dumps({
+        "type": "assistant",
+        "timestamp": "2026-09-27T22:30:57.563Z",
+        "message": {
+            "role": "assistant",
+            "id": mid,
+            "model": model,
+            "usage": {
+                "input_tokens": inp,
+                "output_tokens": out,
+                "cache_read_input_tokens": cr,
+                "cache_creation_input_tokens": cc,
+            },
+        },
+    })
+
+
+def _sa_user(text):
+    return json.dumps({
+        "type": "user",
+        "timestamp": "2026-09-27T22:30:50.000Z",
+        "message": {"role": "user", "content": text},
+    })
+
+
+def _sa_read_log(project_root: Path) -> list:
+    log = project_root / ".craftflow" / "state" / "craftflow-hook-events.log"
+    if not log.exists():
+        return []
+    rows = []
+    for line in log.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            rows.append(json.loads(line))
+    return rows
+
+
+def _sa_payload(transcript_path, **over) -> dict:
+    payload = {
+        "hook_event_name": "SubagentStop",
+        "agent_type": "craftflow:component-builder",
+        "agent_id": "a1",
+        "agent_transcript_path": str(transcript_path),
+        "session_id": "s1",
+        "last_assistant_message": "done",
+        "stop_hook_active": False,
+    }
+    payload.update(over)
+    return payload
+
+
+def _sa_run(tmp_dir: Path, payload: dict, hook_mode: "dict | None" = None):
+    """Run the audit hook in an isolated project (and optional fake plugin root)."""
+    project_root = tmp_dir / "project"
+    project_root.mkdir(parents=True, exist_ok=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root)}
+    if hook_mode is not None:
+        fake_plugin_root = tmp_dir / "plugin_root"
+        (fake_plugin_root / "config").mkdir(parents=True, exist_ok=True)
+        (fake_plugin_root / "config" / "hook-mode.json").write_text(
+            json.dumps(hook_mode), encoding="utf-8"
+        )
+        env["CLAUDE_PLUGIN_ROOT"] = str(fake_plugin_root)
+    code, out = run_hook("craftflow_subagent_stop_audit.py", payload, env)
+    return code, out, _sa_read_log(project_root), project_root
+
+
+def _sa_usage_rows(rows: list) -> list:
+    return [r for r in rows if r.get("event") == "agent_usage"]
+
+
+def test_subagent_stop_audit_logs_agent_usage(tmp_dir: Path) -> None:
+    name = "subagent-stop-audit/agent-usage-logged-for-craftflow-agent"
+    tp = tmp_dir / "t.jsonl"
+    _sa_write_transcript(tp, [
+        _sa_user("Parent Workflow ID: wf-abc-123\nDo the thing"),
+        _sa_assistant("m1", "claude-sonnet-5", 100, inp=5, cr=7),
+        _sa_assistant("m2", "claude-sonnet-5", 50, inp=3),
+    ])
+    code, out, rows, _ = _sa_run(tmp_dir, _sa_payload(tp))
+    if code != 0 or out != "":
+        fail(name, f"exit={code} stdout={out!r}; expected 0 and empty")
+        return
+    events = [r.get("event") for r in rows]
+    if events != ["subagent_stop", "agent_usage"]:
+        fail(name, f"events={events}; expected ['subagent_stop', 'agent_usage']")
+        return
+    usage = rows[1]
+    if usage.get("schema") != 1:
+        fail(name, f"schema={usage.get('schema')!r}; expected 1")
+        return
+    bucket = usage.get("models", {}).get("claude-sonnet-5")
+    if not bucket or bucket.get("output_tokens") != 150:
+        fail(name, f"models={usage.get('models')!r}; expected sonnet output_tokens 150")
+        return
+    if usage.get("workflow_id") != "wf-abc-123":
+        fail(name, f"workflow_id={usage.get('workflow_id')!r}; expected wf-abc-123")
+        return
+    if usage.get("agent_type") != "craftflow:component-builder" or usage.get("agent_id") != "a1":
+        fail(name, "agent_type/agent_id not carried into agent_usage")
+        return
+    if "final_text" in usage:
+        fail(name, "final_text leaked into agent_usage payload")
+        return
+    ok(name)
+
+
+def test_subagent_stop_audit_mixed_models(tmp_dir: Path) -> None:
+    name = "subagent-stop-audit/mixed-models"
+    tp = tmp_dir / "t.jsonl"
+    _sa_write_transcript(tp, [
+        _sa_assistant("m1", "claude-sonnet-5", 100),
+        _sa_assistant("m2", "claude-opus-5-5", 40),
+    ])
+    code, _, rows, _ = _sa_run(tmp_dir, _sa_payload(tp))
+    usage = _sa_usage_rows(rows)
+    if code != 0 or len(usage) != 1:
+        fail(name, f"exit={code} usage_rows={len(usage)}; expected 0 and 1")
+        return
+    models = usage[0].get("models", {})
+    got = {k: v.get("output_tokens") for k, v in models.items()}
+    if got != {"claude-sonnet-5": 100, "claude-opus-5-5": 40}:
+        fail(name, f"per-model output tokens={got}")
+        return
+    ok(name)
+
+
+def test_subagent_stop_audit_duplicate_ids_deduped(tmp_dir: Path) -> None:
+    name = "subagent-stop-audit/duplicate-ids-deduped"
+    tp = tmp_dir / "t.jsonl"
+    _sa_write_transcript(tp, [
+        _sa_assistant("dup", "claude-sonnet-5", 6),
+        _sa_assistant("dup", "claude-sonnet-5", 120),
+        _sa_assistant("dup", "claude-sonnet-5", 480),
+    ])
+    code, _, rows, _ = _sa_run(tmp_dir, _sa_payload(tp))
+    usage = _sa_usage_rows(rows)
+    if code != 0 or len(usage) != 1:
+        fail(name, f"exit={code} usage_rows={len(usage)}")
+        return
+    out_tokens = usage[0].get("models", {}).get("claude-sonnet-5", {}).get("output_tokens")
+    if out_tokens != 480:
+        fail(name, f"output_tokens={out_tokens!r}; expected 480 (per-field max)")
+        return
+    ok(name)
+
+
+def test_subagent_stop_audit_missing_transcript_fail_open(tmp_dir: Path) -> None:
+    name = "subagent-stop-audit/missing-transcript-fail-open"
+    code, out, rows, _ = _sa_run(tmp_dir, _sa_payload(tmp_dir / "nope.jsonl"))
+    usage = _sa_usage_rows(rows)
+    if code != 0 or out != "":
+        fail(name, f"exit={code} stdout={out!r}")
+        return
+    if len(usage) != 1 or usage[0].get("error") != "transcript_missing":
+        fail(name, f"usage rows={usage!r}; expected one with error transcript_missing")
+        return
+    ok(name)
+
+
+def test_subagent_stop_audit_corrupt_transcript_fail_open(tmp_dir: Path) -> None:
+    name = "subagent-stop-audit/corrupt-transcript-fail-open"
+    tp = tmp_dir / "t.jsonl"
+    _sa_write_transcript(tp, ["not json {{{", "\x00\x01garbage", "]]]"])
+    code, out, rows, _ = _sa_run(tmp_dir, _sa_payload(tp))
+    usage = _sa_usage_rows(rows)
+    if code != 0 or out != "":
+        fail(name, f"exit={code} stdout={out!r}")
+        return
+    if len(usage) != 1 or not usage[0].get("corrupt_lines", 0) > 0 or usage[0].get("models") != {}:
+        fail(name, f"usage rows={usage!r}; expected corrupt_lines>0 and models == {{}}")
+        return
+    ok(name)
+
+
+def test_subagent_stop_audit_non_craftflow_ignored(tmp_dir: Path) -> None:
+    name = "subagent-stop-audit/non-craftflow-agent-ignored"
+    tp = tmp_dir / "t.jsonl"
+    _sa_write_transcript(tp, [_sa_assistant("m1", "claude-sonnet-5", 10)])
+    payload = _sa_payload(tp, agent_type="Explore", last_assistant_message="plain result")
+    code, out, rows, _ = _sa_run(tmp_dir, payload)
+    if code != 0 or out != "":
+        fail(name, f"exit={code} stdout={out!r}")
+        return
+    if rows:
+        fail(name, f"expected no log rows for non-craftflow agent, got {[r.get('event') for r in rows]}")
+        return
+    ok(name)
+
+
+def test_subagent_stop_audit_toggle_off(tmp_dir: Path) -> None:
+    name = "subagent-stop-audit/toggle-off-suppresses"
+    tp = tmp_dir / "t.jsonl"
+    _sa_write_transcript(tp, [_sa_assistant("m1", "claude-sonnet-5", 10)])
+    code, _, rows, _ = _sa_run(tmp_dir, _sa_payload(tp), hook_mode={"agentUsageTelemetry": "off"})
+    events = [r.get("event") for r in rows]
+    if code != 0 or events != ["subagent_stop"]:
+        fail(name, f"exit={code} events={events}; expected ['subagent_stop'] only")
+        return
+    ok(name)
+
+
+def test_subagent_stop_audit_unrecognized_toggle_audits(tmp_dir: Path) -> None:
+    name = "subagent-stop-audit/unrecognized-toggle-audits"
+    tp = tmp_dir / "t.jsonl"
+    _sa_write_transcript(tp, [_sa_assistant("m1", "claude-sonnet-5", 10)])
+    code, _, rows, _ = _sa_run(tmp_dir, _sa_payload(tp), hook_mode={"agentUsageTelemetry": "Off"})
+    usage = _sa_usage_rows(rows)
+    if code != 0 or len(usage) != 1:
+        fail(name, f"exit={code} usage_rows={len(usage)}; expected 1")
+        return
+    if usage[0].get("mode") != "audit-unrecognized-config-value":
+        fail(name, f"mode={usage[0].get('mode')!r}; expected audit-unrecognized-config-value")
+        return
+    ok(name)
+
+
+def test_subagent_stop_audit_event_name_not_clobbered(tmp_dir: Path) -> None:
+    name = "subagent-stop-audit/event-name-not-clobbered"
+    tp = tmp_dir / "t.jsonl"
+    _sa_write_transcript(tp, [_sa_assistant("m1", "claude-sonnet-5", 10)])
+    code, _, rows, project_root = _sa_run(tmp_dir, _sa_payload(tp))
+    log = project_root / ".craftflow" / "state" / "craftflow-hook-events.log"
+    raw = log.read_text(encoding="utf-8") if log.exists() else ""
+    if code != 0 or '"event": "agent_usage"' not in raw:
+        fail(name, f"exit={code}; raw log lacks literal event agent_usage: {raw[:300]!r}")
+        return
+    if any(r.get("event") == "subagent_stop" and "models" in r for r in rows):
+        fail(name, "agent_usage payload clobbered the subagent_stop event name")
+        return
+    ok(name)
+
+
+_SA_YAML_CONTRACT = "\n".join([
+    "All done.",
+    "",
+    "### Router Contract (MACHINE-READABLE)",
+    "```yaml",
+    "STATUS: PASS",
+    "SUMMARY: built it",
+    "CONFIDENCE: 90",
+    "PHASE_ID: P2",
+    "PHASE_STATUS: completed",
+    "PHASE_EXIT_READY: true",
+    "PROOF_STATUS: passed",
+    "TDD_RED_EXIT: 1",
+    "TDD_GREEN_EXIT: 0",
+    "SCENARIOS: []",
+    "BLOCKING: false",
+    "REMEDIATION_NEEDED: false",
+    "```",
+    "",
+])
+
+
+def test_subagent_stop_audit_contract_fields(tmp_dir: Path) -> None:
+    name = "subagent-stop-audit/contract-fields"
+    tp = tmp_dir / "t.jsonl"
+    _sa_write_transcript(tp, [_sa_assistant("m1", "claude-sonnet-5", 10)])
+    cases = [
+        ("a", _SA_YAML_CONTRACT, "yaml_block", True),
+        ("b", 'Review done.\nCONTRACT {"s":"PASS"}', "envelope", None),
+        ("c", "just plain prose", "none", None),
+    ]
+    for tag, message, shape, valid in cases:
+        case_dir = tmp_dir / tag
+        code, _, rows, _ = _sa_run(case_dir, _sa_payload(tp, last_assistant_message=message))
+        usage = _sa_usage_rows(rows)
+        if code != 0 or len(usage) != 1:
+            fail(name, f"case {tag}: exit={code} usage_rows={len(usage)}")
+            return
+        u = usage[0]
+        if u.get("contract_shape") != shape or u.get("contract_valid") is not valid:
+            fail(name, f"case {tag}: shape={u.get('contract_shape')!r} valid={u.get('contract_valid')!r}; "
+                       f"expected {shape!r}/{valid!r}")
+            return
+        if u.get("contract_source") != "hook_last_message":
+            fail(name, f"case {tag}: contract_source={u.get('contract_source')!r}")
+            return
+        if tag == "b":
+            old = [r for r in rows if r.get("event") == "subagent_stop"]
+            if len(old) != 1 or old[0].get("contract_found") is not True or old[0].get("contract_valid") is not False:
+                fail(name, f"case b: old subagent_stop row changed: {old!r}")
+                return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -25185,6 +25481,21 @@ def main() -> int:
     print()
     print("[ all-or-nothing-loop detector: hardening pass -- closes comprehension/while/dict/+= blind spots ]")
     test_all_or_nothing_loop_detector_closes_known_blind_spots()
+
+    print()
+    print("[ subagent-stop-audit agent_usage ]")
+    with tempfile.TemporaryDirectory(prefix="craftflow_hook_test_sa_") as sa_tmpdir:
+        sa_tmp = Path(sa_tmpdir)
+        test_subagent_stop_audit_logs_agent_usage(sa_tmp / "sa1")
+        test_subagent_stop_audit_mixed_models(sa_tmp / "sa2")
+        test_subagent_stop_audit_duplicate_ids_deduped(sa_tmp / "sa3")
+        test_subagent_stop_audit_missing_transcript_fail_open(sa_tmp / "sa4")
+        test_subagent_stop_audit_corrupt_transcript_fail_open(sa_tmp / "sa5")
+        test_subagent_stop_audit_non_craftflow_ignored(sa_tmp / "sa6")
+        test_subagent_stop_audit_toggle_off(sa_tmp / "sa7")
+        test_subagent_stop_audit_unrecognized_toggle_audits(sa_tmp / "sa8")
+        test_subagent_stop_audit_event_name_not_clobbered(sa_tmp / "sa9")
+        test_subagent_stop_audit_contract_fields(sa_tmp / "sa10")
 
     print()
     if _errors:
