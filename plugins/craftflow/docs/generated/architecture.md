@@ -35,6 +35,7 @@ flowchart LR
   script_craftflow_sessionstart_context_py(["craftflow_sessionstart_context.py"])
   script_craftflow_hook_selfcheck_py(["craftflow_hook_selfcheck.py"])
   script_craftflow_jev_session_check_py(["craftflow_jev_session_check.py"])
+  script_craftflow_context_nudge_py(["craftflow_context_nudge.py"])
   script_craftflow_posttooluse_artifact_guard_py(["craftflow_posttooluse_artifact_guard.py"])
   script_craftflow_memory_protect_restore_py(["craftflow_memory_protect_restore.py"])
   script_craftflow_sdd_cache_post_py(["craftflow_sdd_cache_post.py"])
@@ -59,6 +60,7 @@ flowchart LR
   event_SessionStart -->|"startup / resume / compact"| script_craftflow_sessionstart_context_py
   event_SessionStart -->|"startup / resume / compact"| script_craftflow_hook_selfcheck_py
   event_SessionStart -->|"startup / resume / compact"| script_craftflow_jev_session_check_py
+  event_SessionStart -->|"compact"| script_craftflow_context_nudge_py
   event_PostToolUse -->|"Edit / Write"| script_craftflow_posttooluse_artifact_guard_py
   event_PostToolUse -->|"Edit / Write"| script_craftflow_memory_protect_restore_py
   event_PostToolUse -->|"WebFetch"| script_craftflow_sdd_cache_post_py
@@ -74,9 +76,10 @@ flowchart LR
   event_StopFailure --> script_craftflow_stop_failure_log_py
   event_InstructionsLoaded --> script_craftflow_instructions_loaded_audit_py
   event_UserPromptSubmit --> script_craftflow_jev_prompt_hint_py
+  event_UserPromptSubmit --> script_craftflow_context_nudge_py
 ```
 
-26 hook registrations across 11 event types, 22 distinct scripts.
+28 hook registrations across 11 event types, 23 distinct scripts.
 
 ## Agent -> declared skills
 
@@ -150,4 +153,4 @@ flowchart LR
 
 - 14 agents (`agents/*.md`)
 - 33 skills (`skills/*/SKILL.md`)
-- 22 hook scripts wired in `hooks/hooks.json`
+- 23 hook scripts wired in `hooks/hooks.json`

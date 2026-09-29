@@ -1,0 +1,5 @@
+{
+  "warnTokens": 120000,
+  "criticalTokens": 160000,
+  "assumedWindow": 200000
+}

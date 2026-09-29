@@ -9,8 +9,18 @@ import os
 import re
 import sys
 import tempfile
+import time
 from pathlib import Path
 
+from craftflow_hooklib import (
+    json_print,
+    load_input,
+    load_mode,
+    log_event,
+    now_iso,
+    plugin_config_dir,
+    state_root,
+)
 from craftflow_transcript_usage import last_turn_context_tokens
 
 SCHEMA_VERSION = 1
@@ -259,9 +269,160 @@ def save_state(path, state):
         return False
 
 
+# ---------------------------------------------------------------------------
+# Entry points (each returns 0; nothing propagates out)
+# ---------------------------------------------------------------------------
+
+def hook_main(data):
+    """UserPromptSubmit hook. Check order: event guard, mode, config, session_id, transcript."""
+    row = {"schema": SCHEMA_VERSION, "source": "hook", "mode": None, "session_id": None, "level": None,
+           "tokens": None, "token_source": None, "threshold": None, "last_level": None,
+           "outcome": "error", "error": None}
+    try:
+        data = data if isinstance(data, dict) else {}
+        if data.get("hook_event_name") not in (None, "UserPromptSubmit"):
+            return 0
+        effective, row["mode"] = resolve_mode(load_mode().get("contextNudge"))
+        if effective == "off":
+            return 0
+        cfg, cerr = load_config(plugin_config_dir() / "context-nudge.json")
+        if cerr:
+            row["error"] = cerr
+            log_event("context_nudge", row)
+            return 0
+        sid = safe_session_id(data.get("session_id"))
+        row["session_id"] = sid
+        if sid is None:
+            row["error"] = "bad_session_id"
+            log_event("context_nudge", row)
+            return 0
+        m = current_context_tokens(data.get("transcript_path"))
+        if m["tokens"] is None:
+            skipped = m["error"] in ("transcript_missing", "no_usage", "post_tokens_missing")
+            row["outcome"] = "skipped" if skipped else "error"
+            row["error"] = m["error"]
+            log_event("context_nudge", row)
+            return 0
+        level = classify(m["tokens"], cfg["warnTokens"], cfg["criticalTokens"])
+        sp = state_path(state_root() / STATE_DIRNAME, sid)
+        exists = sp.exists()
+        st = load_state(sp)
+        d = decide(level, st["last_level"], effective)
+        # boundary_level can only fall (min) when the observed level drops below it
+        new_b = st["boundary_level"] if rank(level) >= rank(st["boundary_level"]) else level
+        tpath = str(data.get("transcript_path"))
+        saved = True
+        if (not exists or d["new_last_level"] != st["last_level"] or new_b != st["boundary_level"]
+                or st.get("transcript_path") != tpath):  # DD-9 write cadence
+            saved = save_state(sp, {"schema": SCHEMA_VERSION, "session_id": sid,
+                                    "last_level": d["new_last_level"], "boundary_level": new_b,
+                                    "last_tokens": m["tokens"], "transcript_path": tpath,
+                                    "updated_at": now_iso()})
+        if d["action"] in ("nudge", "would_nudge", "rearmed") or not saved:
+            threshold = (cfg["criticalTokens"] if level == "critical"
+                         else cfg["warnTokens"] if level == "warn" else None)
+            row.update(level=level, tokens=m["tokens"], token_source=m["source"],
+                       last_level=st["last_level"], threshold=threshold,
+                       outcome="nudged" if d["action"] == "nudge" else d["action"],
+                       error=None if saved else "state_write_failed")
+            log_event("context_nudge", row)
+        if d["action"] == "nudge":
+            msg = render_advisory(level, m["tokens"], cfg)
+            json_print({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
+                                               "additionalContext": msg},
+                        "systemMessage": msg})
+        return 0
+    except Exception as exc:  # noqa: BLE001 - fail-open contract
+        try:
+            row.update(outcome="error", error="unexpected:" + type(exc).__name__)
+            log_event("context_nudge", row)
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
+
+
+def reset_main(data):
+    """SessionStart(compact): drop this session's dedup state and prune stale state files."""
+    row = {"schema": SCHEMA_VERSION, "source": "reset", "mode": None, "session_id": None,
+           "outcome": "error", "had_state": False, "error": None}
+    try:
+        data = data if isinstance(data, dict) else {}
+        effective, row["mode"] = resolve_mode(load_mode().get("contextNudge"))
+        if effective == "off" or data.get("source") != "compact":
+            return 0
+        sid = safe_session_id(data.get("session_id"))
+        row["session_id"] = sid
+        if sid is None:
+            row["error"] = "bad_session_id"
+            log_event("context_nudge", row)
+            return 0
+        state_dir = state_root() / STATE_DIRNAME
+        sp = state_path(state_dir, sid)
+        try:
+            row["had_state"] = sp.exists()
+            os.unlink(str(sp))
+        except FileNotFoundError:
+            pass
+        cutoff = time.time() - STATE_PRUNE_AGE_S
+        if state_dir.is_dir():
+            for entry in state_dir.glob("*.json"):
+                if entry.name.startswith("checkpoint-"):
+                    continue
+                try:
+                    if entry.stat().st_mtime < cutoff:
+                        entry.unlink()
+                except OSError:
+                    pass
+        row.update(outcome="reset", error=None)
+        log_event("context_nudge", row)
+        return 0
+    except Exception as exc:  # noqa: BLE001 - fail-open contract
+        try:
+            row.update(outcome="error", error="unexpected:" + type(exc).__name__)
+            log_event("context_nudge", row)
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
+
+
+def _parse_args(argv):
+    """(namespace, None) or (None, "bad_args"); argparse's SystemExit never escapes."""
+    import argparse
+    import contextlib
+    import io
+    parser = argparse.ArgumentParser(prog="craftflow_context_nudge", add_help=False)
+    parser.add_argument("--reset", action="store_true")
+    parser.add_argument("--boundary", action="store_true")
+    parser.add_argument("--wf")
+    parser.add_argument("--phase")
+    parser.add_argument("--project-root")
+    parser.add_argument("--session-id")
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            return parser.parse_args(argv), None
+    except SystemExit:
+        return None, "bad_args"
+
+
 def main(argv=None):
-    """Stub: hook/reset/boundary entry points land in later phases (fail-open exit 0)."""
-    return 0
+    """Dispatch hook / --reset / --boundary. Always returns 0 (fail-open)."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        args, err = _parse_args(argv)
+        if err:
+            if "--boundary" in argv:
+                print(json.dumps(boundary_result(outcome="error", error=err)))
+            return 0
+        if args.boundary:
+            # stub until Phase 5 (boundary_main)
+            print(json.dumps({"schema": SCHEMA_VERSION, "outcome": "error", "error": "not_implemented",
+                              "relay": False}))
+            return 0
+        if args.reset:
+            return reset_main(load_input())
+        return hook_main(load_input())
+    except Exception:  # noqa: BLE001 - fail-open contract
+        return 0
 
 
 if __name__ == "__main__":

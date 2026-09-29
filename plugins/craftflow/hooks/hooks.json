@@ -113,6 +113,17 @@
             "statusMessage": "CRAFTFLOW optional Jev auto-detect (inert unless TYPESAFE_API_KEY is set and config/jev.json's enabled flag is not true)"
           }
         ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_context_nudge.py\" --reset",
+            "timeout": 5,
+            "statusMessage": "CRAFTFLOW context-nudge reset after compaction"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -267,6 +278,16 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_jev_prompt_hint.py\"",
             "timeout": 5,
             "statusMessage": "CRAFTFLOW optional Jev routing hint (inert unless config/jev.json enables it)"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_context_nudge.py\"",
+            "timeout": 5,
+            "statusMessage": "CRAFTFLOW context-size nudge (audit-only unless config/hook-mode.json contextNudge is on)"
           }
         ]
       }

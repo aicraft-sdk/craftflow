@@ -6,6 +6,7 @@
   "postcompactAudit": "audit",
   "subagentStopAudit": "audit",
   "agentUsageTelemetry": "audit",
+  "contextNudge": "audit",
   "precompactState": "audit",
   "stopPersist": "audit",
   "stopFailureLog": "audit",

@@ -5,11 +5,16 @@ Run: python3 tests/fixtures/test_craftflow_context_nudge.py
 """
 from __future__ import annotations
 
+import atexit
+import hashlib
 import json
 import os
 import random
+import shutil
+import subprocess
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -50,6 +55,108 @@ def _assistant_line(total, model="claude-x", sidechain=False):
 def _write_lines(path, lines):
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Subprocess helpers (DD-17 env isolation)
+# ---------------------------------------------------------------------------
+
+_BOXES = []
+
+
+def _cleanup_boxes():
+    for root in _BOXES:
+        for dirpath, dirnames, _files in os.walk(root):
+            for d in dirnames:
+                try:
+                    os.chmod(os.path.join(dirpath, d), 0o700)
+                except OSError:
+                    pass
+        shutil.rmtree(root, ignore_errors=True)
+
+
+atexit.register(_cleanup_boxes)
+
+
+class _Box:
+    """Temp plugin root + temp project + transcript dir for one scenario."""
+
+    def __init__(self, mode, config=None):
+        self.root = Path(tempfile.mkdtemp(prefix="cn-test-"))
+        _BOXES.append(self.root)
+        self.plugin = self.root / "plugin"
+        self.project = self.root / "project"
+        self.tdir = self.root / "transcripts"
+        (self.plugin / "config").mkdir(parents=True)
+        self.project.mkdir()
+        self.tdir.mkdir()
+        self.set_mode(mode)
+        if config is not None:
+            (self.plugin / "config" / "context-nudge.json").write_text(
+                json.dumps(config), encoding="utf-8")
+
+    def set_mode(self, mode):
+        data = {} if mode is None else {"contextNudge": mode}
+        (self.plugin / "config" / "hook-mode.json").write_text(json.dumps(data), encoding="utf-8")
+
+    @property
+    def state_dir(self):
+        return self.project / ".craftflow" / "state" / "context-nudge"
+
+    def transcript(self, tokens, name="t.jsonl", extra_rows=()):
+        return write_transcript(self.tdir, tokens, extra_rows=extra_rows, name=name)
+
+
+def write_transcript(directory, tokens, extra_rows=(), name="t.jsonl"):
+    path = Path(directory) / name
+    _write_lines(path, [_assistant_line(tokens)] + [json.dumps(r) for r in extra_rows])
+    return path
+
+
+def run_script(payload, *, mode="audit", config=None, args=(), env_extra=None, box=None, raw=None):
+    """Run the script as a subprocess. Returns (code, stdout, stderr, rows, box)."""
+    box = box or _Box(mode, config)
+    env = dict(os.environ)
+    env.pop("CLAUDE_CODE_SESSION_ID", None)
+    env.update(CLAUDE_PLUGIN_ROOT=str(box.plugin), CLAUDE_PROJECT_DIR=str(box.project),
+               PYTHONPATH=str(SCRIPTS))
+    env.update(env_extra or {})
+    data = raw if raw is not None else json.dumps(payload).encode("utf-8")
+    proc = subprocess.run([sys.executable, str(SCRIPTS / "craftflow_context_nudge.py"), *args],
+                          input=data, env=env, cwd=str(box.root), capture_output=True, timeout=10)
+    return (proc.returncode, proc.stdout.decode("utf-8", "replace"),
+            proc.stderr.decode("utf-8", "replace"), log_rows(box), box)
+
+
+def log_rows(box):
+    log = box.project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    rows = []
+    if log.exists():
+        for line in log.read_text(encoding="utf-8").splitlines():
+            row = json.loads(line)
+            if row.get("event") == "context_nudge":
+                rows.append(row)
+    return rows
+
+
+def _prompt(box_or_path, sid="s1", **extra):
+    path = box_or_path if not isinstance(box_or_path, _Box) else box_or_path.tdir / "t.jsonl"
+    payload = {"hook_event_name": "UserPromptSubmit", "session_id": sid,
+               "transcript_path": str(path), "prompt": "hi"}
+    payload.update(extra)
+    return payload
+
+
+def _fs_snapshot(root):
+    snap = {}
+    for dirpath, dirnames, files in os.walk(root):
+        for d in dirnames:
+            snap[os.path.join(dirpath, d)] = "dir"
+        for f in files:
+            p = os.path.join(dirpath, f)
+            with open(p, "rb") as fh:
+                snap[p] = hashlib.sha256(fh.read()).hexdigest()
+    return snap
 
 
 # ---------------------------------------------------------------------------
@@ -428,12 +535,347 @@ def test_totality_never_raises():
     assert isinstance(cn.render_advisory("critical", None, None), str)
 
 
-def test_import_has_no_side_effects_and_main_stub_returns_zero():
+def test_import_constants_and_main_returns_zero_on_empty_stdin():
+    # P4 changed: main() is the real entry point now (reads stdin), so it runs with an
+    # empty stdin and a sandboxed project/plugin instead of the Phase 3 no-op stub.
+    import io
     assert cn.SCHEMA_VERSION == 1 and cn.LEVELS == ("none", "warn", "critical")
     assert cn.TAIL_BYTES == 262144 and cn.RETRY_TAIL_BYTES == 4194304
     assert cn.BOUNDARY_STATE_MAX_AGE_S == 43200 and cn.STATE_PRUNE_AGE_S == 1209600
     assert cn.STATE_DIRNAME == "context-nudge"
-    assert cn.main([]) == 0
+    box = _Box("audit")
+    saved_env = {k: os.environ.get(k) for k in ("CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR")}
+    saved_stdin = sys.stdin
+    try:
+        os.environ["CLAUDE_PLUGIN_ROOT"] = str(box.plugin)
+        os.environ["CLAUDE_PROJECT_DIR"] = str(box.project)
+        sys.stdin = io.StringIO("")
+        assert cn.main([]) == 0
+    finally:
+        sys.stdin = saved_stdin
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: hook_main / reset_main / main (subprocess-proven)
+# ---------------------------------------------------------------------------
+
+def _outcomes(rows):
+    return [r.get("outcome") for r in rows]
+
+
+def test_hook_off_mode_inert_fs_snapshot():
+    box = _Box("off")
+    box.transcript(130000)
+    before = _fs_snapshot(box.root)
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box)
+    assert code == 0 and out == "", (code, out)
+    assert rows == []
+    assert _fs_snapshot(box.root) == before
+
+
+def test_hook_audit_mode_logs_would_nudge_no_stdout():
+    box = _Box("audit")
+    box.transcript(130000)
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box)
+    assert code == 0 and out == "", (code, out)
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert row["outcome"] == "would_nudge" and row["level"] == "warn" and row["tokens"] == 130000
+    assert row["mode"] == "audit" and row["session_id"] == "s1" and row["threshold"] == WARN
+    assert row["last_level"] == "none" and row["source"] == "hook" and row["error"] is None
+
+
+def test_hook_missing_mode_key_defaults_audit():
+    box = _Box(None)
+    box.transcript(130000)
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box)
+    assert code == 0 and out == ""
+    assert _outcomes(rows) == ["would_nudge"] and rows[0]["mode"] == "audit"
+
+
+def test_hook_on_mode_nudges_once_then_silent():
+    box = _Box("on")
+    box.transcript(130000)
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box)
+    assert code == 0
+    payload = json.loads(out)
+    assert set(payload) == {"hookSpecificOutput", "systemMessage"}, payload
+    assert payload["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+    assert payload["systemMessage"] == payload["hookSpecificOutput"]["additionalContext"]
+    assert "130,000" in payload["systemMessage"]
+    assert out.count("\n") == 1
+    assert _outcomes(rows) == ["nudged"]
+    code2, out2, _e2, rows2, _ = run_script(_prompt(box), box=box)
+    assert code2 == 0 and out2 == ""
+    assert rows2 == rows, "second identical prompt must not add a row (P6)"
+
+
+def test_hook_below_threshold_writes_state_no_row():
+    box = _Box("on")
+    tp = box.transcript(50000)
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box)
+    assert code == 0 and out == "" and rows == []
+    state = json.loads((box.state_dir / "s1.json").read_text(encoding="utf-8"))
+    assert state["last_level"] == "none" and state["boundary_level"] == "none"
+    assert state["transcript_path"] == str(tp) and state["session_id"] == "s1"
+    assert state["schema"] == 1 and state["last_tokens"] == 50000
+
+
+def test_hook_on_mode_warn_then_critical_nudges_again():
+    box = _Box("on")
+    box.transcript(130000)
+    _c, out1, _e, _r, _ = run_script(_prompt(box), box=box)
+    assert json.loads(out1)["systemMessage"]
+    box.transcript(170000)
+    _c, out2, _e, rows, _ = run_script(_prompt(box), box=box)
+    assert "critical" in json.loads(out2)["systemMessage"]
+    assert _outcomes(rows) == ["nudged", "nudged"]
+    assert [r["level"] for r in rows] == ["warn", "critical"]
+    assert rows[1]["last_level"] == "warn"
+
+
+def test_hook_none_to_critical_single_nudge_at_critical():
+    box = _Box("on")
+    box.transcript(170000)
+    _c, out, _e, rows, _ = run_script(_prompt(box), box=box)
+    assert "critical" in json.loads(out)["systemMessage"]
+    assert _outcomes(rows) == ["nudged"] and rows[0]["level"] == "critical"
+    assert rows[0]["threshold"] == CRIT
+
+
+def test_hook_on_mode_shrink_rearms_then_renudges():
+    box = _Box("on")
+    box.transcript(170000)
+    run_script(_prompt(box), box=box)
+    box.transcript(50000)
+    _c, out, _e, rows, _ = run_script(_prompt(box), box=box)
+    assert out == "" and _outcomes(rows) == ["nudged", "rearmed"]
+    box.transcript(130000)
+    _c, out, _e, rows, _ = run_script(_prompt(box), box=box)
+    assert json.loads(out)["systemMessage"]
+    assert _outcomes(rows) == ["nudged", "rearmed", "nudged"]
+
+
+def test_hook_post_compact_boundary_does_not_renudge():
+    box = _Box("on")
+    box.transcript(130000)
+    _c, out, _e, rows, _ = run_script(_prompt(box), box=box)
+    assert json.loads(out)["systemMessage"] and _outcomes(rows) == ["nudged"]
+    reset = {"hook_event_name": "SessionStart", "source": "compact", "session_id": "s1"}
+    code, rout, _e, _r, _ = run_script(reset, box=box, args=("--reset",))
+    assert code == 0 and rout == ""
+    box.transcript(130000, extra_rows=[{"type": "system", "subtype": "compact_boundary",
+                                        "compactMetadata": {"preTokens": 130000, "postTokens": 20000}}])
+    code, out, _e, rows, _ = run_script(_prompt(box), box=box)
+    assert code == 0 and out == ""
+    assert _outcomes(rows).count("nudged") == 1, rows
+
+
+def test_hook_unrecognized_mode_behaves_as_audit():
+    box = _Box("On")
+    box.transcript(130000)
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box)
+    assert code == 0 and out == ""
+    assert _outcomes(rows) == ["would_nudge"]
+    assert rows[0]["mode"] == "audit-unrecognized-config-value"
+
+
+def test_hook_fail_open_matrix():
+    def case(label, expect_outcome, expect_error, payload=None, raw=None, config=None, mode="on"):
+        box = _Box(mode, config)
+        code, out, _err, rows, _ = run_script(payload, box=box, raw=raw)
+        assert code == 0 and out == "", (label, code, out)
+        if expect_outcome is None:
+            assert rows == [], (label, rows)
+        else:
+            assert len(rows) == 1, (label, rows)
+            assert rows[0]["outcome"] == expect_outcome and rows[0]["error"] == expect_error, (label, rows)
+        return box
+
+    good = Path(tempfile.mkdtemp(prefix="cn-good-"))
+    _BOXES.append(good)
+    tp = write_transcript(good, 130000)
+    case("E11 missing", "skipped", "transcript_missing", _prompt(good / "nope.jsonl"))
+    (good / "dir.jsonl").mkdir()
+    case("E11 dir", "error", "transcript_not_regular_jsonl", _prompt(good / "dir.jsonl"))
+    for label, raw in (("empty", b""), ("nonjson", b"not json"), ("list", b"[1]"), ("badutf8", b"\xff\xfe")):
+        case("E12 " + label, "error", "bad_session_id", raw=raw)
+    case("E12b", "error", "no_transcript_path", {"session_id": "s1"})
+    for label, sid in (("missing", None), ("int", 7), ("slash", "../x"), ("long", "a" * 129), ("empty", "")):
+        payload = _prompt(tp)
+        if sid is None:
+            payload.pop("session_id")
+        else:
+            payload["session_id"] = sid
+        case("E13 " + label, "error", "bad_session_id", payload)
+    case("E17", "error", "config_invalid", _prompt(tp),
+         config={"warnTokens": 5, "criticalTokens": 5, "assumedWindow": 10})
+    case("E20", None, None, dict(_prompt(tp), hook_event_name="PreToolUse"))
+    case("no-usage", "skipped", "no_usage", _prompt(_write_only(good, "empty.jsonl", ['{"type":"user"}'])))
+
+
+def _write_only(directory, name, lines):
+    path = Path(directory) / name
+    _write_lines(path, lines)
+    return path
+
+
+def test_hook_state_dir_unwritable_still_nudges_once():
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return  # root ignores directory permissions: skip-as-pass
+    box = _Box("on")
+    box.transcript(130000)
+    box.state_dir.mkdir(parents=True)
+    os.chmod(box.state_dir, 0o500)
+    try:
+        code, out, _err, rows, _ = run_script(_prompt(box), box=box)
+        assert code == 0
+        assert json.loads(out)["systemMessage"], out
+        assert len(rows) == 1 and rows[0]["outcome"] == "nudged", rows
+        assert rows[0]["error"] == "state_write_failed", rows
+        assert os.listdir(box.state_dir) == [], os.listdir(box.state_dir)
+    finally:
+        os.chmod(box.state_dir, 0o700)
+
+
+def test_hook_log_row_event_name_not_clobbered():
+    box = _Box("audit")
+    box.transcript(130000)
+    run_script(_prompt(box), box=box)
+    log = box.project / ".craftflow" / "state" / "craftflow-hook-events.log"
+    lines = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()]
+    assert lines and all(x["event"] == "context_nudge" for x in lines), lines
+    assert lines[0]["outcome"] == "would_nudge"
+
+
+def test_reset_compact_deletes_state_then_renudges():
+    box = _Box("on")
+    box.transcript(130000)
+    run_script(_prompt(box), box=box)
+    assert (box.state_dir / "s1.json").exists()
+    reset = {"hook_event_name": "SessionStart", "source": "compact", "session_id": "s1"}
+    code, out, _err, rows, _ = run_script(reset, box=box, args=("--reset",))
+    assert code == 0 and out == ""
+    assert not (box.state_dir / "s1.json").exists()
+    reset_rows = [r for r in rows if r["outcome"] == "reset"]
+    assert len(reset_rows) == 1 and reset_rows[0]["had_state"] is True
+    assert reset_rows[0]["source"] == "reset" and reset_rows[0]["session_id"] == "s1"
+    _c, out2, _e, rows2, _ = run_script(_prompt(box), box=box)
+    assert json.loads(out2)["systemMessage"]
+    assert _outcomes(rows2) == ["nudged", "reset", "nudged"]
+
+
+def test_reset_non_compact_source_noop():
+    box = _Box("on")
+    box.transcript(130000)
+    run_script(_prompt(box), box=box)
+    before = _fs_snapshot(box.state_dir)
+    for src in ("startup", "resume", None):
+        payload = {"hook_event_name": "SessionStart", "session_id": "s1"}
+        if src:
+            payload["source"] = src
+        code, out, _err, rows, _ = run_script(payload, box=box, args=("--reset",))
+        assert code == 0 and out == ""
+        assert _outcomes(rows) == ["nudged"]
+    assert _fs_snapshot(box.state_dir) == before
+
+
+def test_reset_bad_session_id_logs_error_and_off_is_inert():
+    box = _Box("on")
+    payload = {"hook_event_name": "SessionStart", "source": "compact", "session_id": "../x"}
+    code, out, _err, rows, _ = run_script(payload, box=box, args=("--reset",))
+    assert code == 0 and out == ""
+    assert len(rows) == 1 and rows[0]["outcome"] == "error" and rows[0]["error"] == "bad_session_id"
+    off = _Box("off")
+    before = _fs_snapshot(off.root)
+    code, out, _err, rows, _ = run_script(dict(payload, session_id="s1"), box=off, args=("--reset",))
+    assert code == 0 and out == "" and rows == [] and _fs_snapshot(off.root) == before
+
+
+def test_reset_prunes_old_state_files():
+    box = _Box("on")
+    box.state_dir.mkdir(parents=True)
+    now = time.time()
+    files = {"old.json": 15 * 86400, "recent.json": 86400, "checkpoint-x.json": 15 * 86400}
+    for name, age in files.items():
+        p = box.state_dir / name
+        p.write_text("{}", encoding="utf-8")
+        os.utime(p, (now - age, now - age))
+    reset = {"hook_event_name": "SessionStart", "source": "compact", "session_id": "s1"}
+    code, out, _err, rows, _ = run_script(reset, box=box, args=("--reset",))
+    assert code == 0 and out == ""
+    assert sorted(os.listdir(box.state_dir)) == ["checkpoint-x.json", "recent.json"]
+    assert rows[0]["outcome"] == "reset" and rows[0]["had_state"] is False
+
+
+def test_boundary_flag_is_stub_until_p5_and_bad_args_is_one_json_line():
+    box = _Box("audit")
+    code, out, _err, _rows, _ = run_script({}, box=box, args=("--boundary", "--wf", "wf-x"))
+    assert code == 0
+    assert json.loads(out) == {"schema": 1, "outcome": "error", "error": "not_implemented", "relay": False}
+    code, out, _err, _rows, _ = run_script({}, box=box, args=("--boundary", "--bogus-flag"))
+    assert code == 0
+    parsed = json.loads(out)
+    assert parsed["error"] == "bad_args" and parsed["relay"] is False and out.count("\n") == 1
+    code, out, _err, _rows, _ = run_script({}, box=box, args=("--bogus-flag",))
+    assert code == 0 and out == ""
+
+
+def test_module_import_cheap():
+    box = _Box("audit")
+    env = dict(os.environ)
+    env.pop("CLAUDE_CODE_SESSION_ID", None)
+    env.update(CLAUDE_PLUGIN_ROOT=str(box.plugin), CLAUDE_PROJECT_DIR=str(box.project),
+               PYTHONPATH=str(SCRIPTS))
+    t0 = time.perf_counter()
+    proc = subprocess.run([sys.executable, "-c", "import craftflow_context_nudge"], env=env,
+                          cwd=str(box.root), capture_output=True, timeout=10)
+    elapsed = time.perf_counter() - t0
+    assert proc.returncode == 0 and proc.stdout == b"", (proc.returncode, proc.stdout, proc.stderr)
+    assert elapsed < 0.5, elapsed
+    assert not (box.project / ".craftflow").exists()
+    assert not (box.root / ".craftflow").exists()
+
+
+def test_hooks_json_wiring():
+    hooks = json.loads((PLUGIN_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+    ups = hooks["UserPromptSubmit"]
+    assert len(ups) == 2, len(ups)
+    assert ups[0] == {"hooks": [{"type": "command",
+                                 "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_jev_prompt_hint.py"',
+                                 "timeout": 5,
+                                 "statusMessage": "CRAFTFLOW optional Jev routing hint (inert unless config/jev.json enables it)"}]}
+    assert len(ups[1]["hooks"]) == 1 and "matcher" not in ups[1]
+    h = ups[1]["hooks"][0]
+    assert h["type"] == "command" and h["timeout"] == 5
+    assert h["command"] == 'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_context_nudge.py"'
+    ss = hooks["SessionStart"]
+    assert len(ss) == 5, len(ss)
+    assert [e.get("matcher") for e in ss[:4]] == ["startup", "startup|resume|compact",
+                                                  "startup|resume|compact", "startup|resume|compact"]
+    order = ["craftflow_context_migration.py", "craftflow_sessionstart_context.py",
+             "craftflow_hook_selfcheck.py", "craftflow_jev_session_check.py"]
+    for entry, script in zip(ss[:4], order):
+        assert script in entry["hooks"][0]["command"], (script, entry)
+    assert ss[4]["matcher"] == "compact" and len(ss[4]["hooks"]) == 1
+    assert ss[4]["hooks"][0]["command"] == 'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_context_nudge.py" --reset'
+    assert ss[4]["hooks"][0]["timeout"] == 5 and ss[4]["hooks"][0]["type"] == "command"
+
+
+def test_hook_mode_and_thresholds_config_shipped():
+    cfg_dir = PLUGIN_ROOT / "config"
+    mode = json.loads((cfg_dir / "hook-mode.json").read_text(encoding="utf-8"))
+    assert mode["contextNudge"] == "audit", mode
+    keys = list(mode)
+    assert keys.index("contextNudge") == keys.index("agentUsageTelemetry") + 1, keys
+    thresholds = json.loads((cfg_dir / "context-nudge.json").read_text(encoding="utf-8"))
+    assert thresholds == {"warnTokens": 120000, "criticalTokens": 160000, "assumedWindow": 200000}
+    assert cn.validate_config(thresholds) == (thresholds, None)
 
 
 # ---------------------------------------------------------------------------
