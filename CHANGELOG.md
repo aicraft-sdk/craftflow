@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.17.0] - 2026-09-29
+
+### Features
+
+- component-registry skill, router hint, finishing Promote option
+
+### Fixes
+
+- let component-builder call ai-craft-registry MCP tools
+
+### Chores
+
+- regenerate architecture graph for component-builder tools
+- regenerate architecture graph (adds component-registry; absorbs pre-existing drift)
+
 ## [1.16.0] - 2026-09-29
 
 ### Features
