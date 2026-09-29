@@ -50,9 +50,9 @@ This determines which menu to show and how cleanup works:
 
 | State | Menu | Cleanup |
 |-------|------|---------|
-| `GIT_DIR == GIT_COMMON` (normal repo) | Standard 4 options | No worktree to clean up |
-| `GIT_DIR != GIT_COMMON`, named branch | Standard 4 options | Provenance-based (see Step 6) |
-| `GIT_DIR != GIT_COMMON`, detached HEAD | Reduced 3 options (no merge) | No cleanup (externally managed) |
+| `GIT_DIR == GIT_COMMON` (normal repo) | Standard 5 options | No worktree to clean up |
+| `GIT_DIR != GIT_COMMON`, named branch | Standard 5 options | Provenance-based (see Step 6) |
+| `GIT_DIR != GIT_COMMON`, detached HEAD | Reduced 4 options (no merge) | No cleanup (externally managed) |
 
 ### Step 3: Determine Base Branch
 
@@ -65,7 +65,7 @@ Or ask: "This branch split from main - is that correct?"
 
 ### Step 4: Present Options
 
-**Normal repo and named-branch worktree — present exactly these 4 options:**
+**Normal repo and named-branch worktree — present exactly these 5 options:**
 
 ```
 Implementation complete. What would you like to do?
@@ -74,11 +74,12 @@ Implementation complete. What would you like to do?
 2. Push and create a Pull Request
 3. Keep the branch as-is (I'll handle it later)
 4. Discard this work
+5. Promote component(s) to the ai-craft registry first, then choose 1-4
 
 Which option?
 ```
 
-**Detached HEAD — present exactly these 3 options:**
+**Detached HEAD — present exactly these 4 options:**
 
 ```
 Implementation complete. You're on a detached HEAD (externally managed workspace).
@@ -86,6 +87,7 @@ Implementation complete. You're on a detached HEAD (externally managed workspace
 1. Push as new branch and create a Pull Request
 2. Keep as-is (I'll handle it later)
 3. Discard this work
+4. Promote component(s) to the ai-craft registry first, then choose 1-3
 
 Which option?
 ```
@@ -158,9 +160,26 @@ Then: Cleanup worktree (Step 6), then force-delete branch:
 git branch -D <feature-branch>
 ```
 
+#### Option 5: Promote to registry (Option 4 on detached HEAD)
+
+Ask the user for the files to promote and a slug. `--kind` defaults to `component`; use `--tokens craft-dark` when the files reference `var(--`.
+
+```bash
+REGISTRY_ROOT="${CRAFT_REGISTRY_ROOT:-}"
+# If empty, ask for the ai-craft checkout path and use <checkout>/packages/registry
+node "$REGISTRY_ROOT/../../dist/packages/registry/cli.js" promote \
+  --root "$REGISTRY_ROOT" --kind <kind> --name <slug> --from <file>... \
+  --source <this repo name> --workflow <wf id or manual>
+```
+
+- If `cli.js` is missing: tell the user to run `pnpm exec nx run registry:build` in ai-craft, and stop.
+- Exit 2 (duplicate slug): report the existing path and stop.
+- On success: print the created path and the warning lines, and remind the user that `pnpm registry build` fails until `usage.md` and a spec are completed.
+- Then re-present options 1-4 (1-3 on detached HEAD). Do not clean up the worktree.
+
 ### Step 6: Cleanup Workspace
 
-**Only runs for Options 1 and 4.** Options 2 and 3 always preserve the worktree.
+**Only runs for Merge and Discard.** Create PR, Keep as-is and Promote always preserve the worktree.
 
 ```bash
 GIT_DIR=$(cd "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)
@@ -189,6 +208,7 @@ git worktree prune  # Self-healing: clean up any stale registrations
 | 2. Create PR | - | yes | yes | - |
 | 3. Keep as-is | - | - | yes | - |
 | 4. Discard | - | - | - | yes (force) |
+| 5. Promote to registry | - | - | yes | - (re-prompts 1-4) |
 
 ## Common Mistakes
 
@@ -198,11 +218,11 @@ git worktree prune  # Self-healing: clean up any stale registrations
 
 **Open-ended questions**
 - **Problem:** "What should I do next?" is ambiguous
-- **Fix:** Present exactly 4 structured options (or 3 for detached HEAD)
+- **Fix:** Present exactly 5 structured options (or 4 for detached HEAD)
 
 **Cleaning up worktree for Option 2**
 - **Problem:** Remove worktree user needs for PR iteration
-- **Fix:** Only cleanup for Options 1 and 4
+- **Fix:** Only cleanup for Merge and Discard
 
 **Deleting branch before removing worktree**
 - **Problem:** `git branch -d` fails because worktree still references the branch
@@ -234,8 +254,8 @@ git worktree prune  # Self-healing: clean up any stale registrations
 **Always:**
 - Verify tests before offering options
 - Detect environment before presenting menu
-- Present exactly 4 options (or 3 for detached HEAD)
-- Get typed confirmation for Option 4
-- Clean up worktree for Options 1 & 4 only
+- Present exactly 5 options (or 4 for detached HEAD)
+- Get typed confirmation for Discard
+- Clean up worktree for Merge and Discard only
 - `cd` to main repo root before worktree removal
 - Run `git worktree prune` after removal

@@ -968,6 +968,7 @@ Record the assigned effort in `telemetry.effort.{agent}` in the workflow artifac
 - Router is the only authority allowed to load internal CRAFTFLOW skills.
 - Agents may not self-activate `frontend-patterns`, `architecture-patterns`, or `debugging-patterns`.
 - Include `craftflow:frontend-patterns` only when the request, changed files, plan, or design clearly targets UI/frontend work.
+- Include `craftflow:component-registry` whenever `craftflow:frontend-patterns` is included (registry search-before-build; the skill degrades explicitly when the `ai-craft-registry` MCP server is not registered).
 - Include `craftflow:architecture-patterns` only for multi-component, API, schema, auth, or integration-heavy work.
 - Include `craftflow:research` only when planner or investigator receives `## Research Files`.
 - Include project/domain skills only from `patterns.md ## Project SKILL_HINTS`.
