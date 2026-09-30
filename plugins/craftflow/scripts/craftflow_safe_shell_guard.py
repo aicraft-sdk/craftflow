@@ -220,18 +220,24 @@ INTERPRETER_INLINE_FLAGS = {
     "node": ("-e", "--eval"),
 }
 SCRIPTING_INTERPRETERS = set(INTERPRETER_INLINE_FLAGS)
-# Heredoc-body stripping (see `_strip_heredoc_bodies`): the ONLY consumers whose
-# quoted-delimiter heredoc body is treated as data. Deliberately NOT
-# SCRIPTING_INTERPRETERS: perl/ruby/node bodies stay fully tokenized so their
-# decision is unchanged from today.
-HEREDOC_DATA_INTERPRETERS = {"python", "python3"}
-# Any OTHER command on the heredoc header line whose name is here means the
-# heredoc-bearing command's output (or the heredoc itself) may reach a shell or
-# code-reading interpreter, so the body is not stripped.
-HEREDOC_SHELL_SINKS = INTERPRETER_C_SHELLS | {
-    "eval", "xargs", "ssh", "su", "source", ".", "perl", "ruby", "node", "python", "python3",
-}
-_HEREDOC_WORD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# Heredoc-body stripping (see `_strip_heredoc_bodies`): a STRICT WHOLE-COMMAND
+# ALLOWLIST. Only a command that is, in its entirety, one physical header line
+# of the shape `[cd PATH &&] python|python3 [-] [ARG]* <<[-]'WORD'|"WORD"` whose
+# body ends at a terminator line (the last non-blank line) has its heredoc body
+# treated as data. Everything else is fully tokenized exactly as before.
+# SAFEPATH/SAFEARG: only [A-Za-z0-9_./-], and never starting with `-` (a lone
+# `-` is accepted separately), so no `$`, quotes, braces, brackets, globs,
+# operators, `NAME=value` or python flags (-u/-c/-m/-X/-W/-I ...) can appear.
+_HEREDOC_SAFE_WORD = r"[A-Za-z0-9_./][A-Za-z0-9_./-]*"
+_STRICT_HEREDOC_HEADER_RE = re.compile(
+    r"[ \t]*"
+    r"(?:cd[ \t]+" + _HEREDOC_SAFE_WORD + r"[ \t]*&&[ \t]*)?"
+    r"(?:python3|python)"
+    r"(?:[ \t]+-(?=[ \t]))?"
+    r"(?:[ \t]+" + _HEREDOC_SAFE_WORD + r")*"
+    r"[ \t]+<<(?P<dash>-)?[ \t]*(?P<quote>['\"])(?P<word>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)"
+    r"[ \t]*\n"
+)
 # Best-effort, fixed list of common OS-command-execution call shapes to
 # regex-extract a shell-command string argument from within interpreter
 # code (CRITICAL-C) -- NOT a real language parser, see module docstring.
@@ -612,178 +618,50 @@ def _extract_embedded_calls(code: str) -> list:
     return [m.group(2) for m in DANGEROUS_CALL_RE.finditer(code)]
 
 
-def _heredoc_header_strippable(header: str, prefix: str = "") -> bool:
-    """True when the heredoc header line's consumer is a python/python3 that
-    reads the body as DATA or as its stdin script (never `-c`/`-m`), and no
-    other command on the line is a shell/code-reading sink.
-
-    Consumer-name shadowing guard (allowlist, fail closed): `prefix` (all text
-    before the header line) must be blank -- earlier text could `alias
-    python3=bash` or symlink a shell over `python3` -- and every subcommand
-    BEFORE the consumer on the header must be a plain `cd`. Any `NAME=value`
-    assignment ahead of the interpreter (`PATH=...`, `env X=1`) disqualifies."""
-    if prefix.strip():
-        return False
-    if header.rstrip()[-1:] in ("(", ")", ";", "<", ">", "|", "&"):
-        # A trailing punctuation run would merge with the following line's
-        # first token once the body is removed (shlex quirk), hiding it.
-        return False
-    subcommands = _split_subcommands(header)
-    if not subcommands:
-        return False
-    consumers = [sub for sub in subcommands if "<<" in sub]
-    if len(consumers) != 1:
-        return False
-    consumer = consumers[0]
-    for sub in subcommands[: subcommands.index(consumer)]:
-        if not sub or sub[0] != "cd":
-            return False
-    idx = _skip_wrapper_prefixes(consumer)
-    if any("=" in tok for tok in consumer[:idx]):
-        return False
-    if idx >= len(consumer) or os.path.basename(consumer[idx]) not in HEREDOC_DATA_INTERPRETERS:
-        return False
-    for tok in consumer[idx + 1 :]:
-        # `-c`/`-m` (alone or bundled, e.g. `-uc`) make stdin/argv code.
-        if tok.startswith("-") and not tok.startswith("--") and ("c" in tok or "m" in tok):
-            return False
-    for sub in subcommands:
-        if sub is consumer:
-            continue
-        sub_idx = _skip_wrapper_prefixes(sub)
-        # Wrapper prefixes (e.g. a bare `xargs`) are skipped by
-        # `_skip_wrapper_prefixes`, so check the prefix region and the
-        # resolved command name.
-        if any(os.path.basename(t) in HEREDOC_SHELL_SINKS for t in sub[: sub_idx + 1]):
-            return False
-    return True
-
-
 def _strip_heredoc_bodies(command: str) -> tuple | None:
-    """Remove the bodies of quoted-delimiter (`<<'W'`/`<<"W"`) heredocs whose
-    consumer is python/python3 so data lines in them (dict/set literals, `$`)
-    are not mis-scanned as shell. Returns `(stripped_text, [body, ...])`, with
-    `stripped_text == command` when nothing was stripped, or None on any parse
-    doubt (the caller then scans the original command exactly as before).
+    """Remove the body of a python/python3 quoted-delimiter heredoc so data
+    lines in it (dict/set literals, `$`) are not mis-scanned as shell. Returns
+    `(stripped_text, [body])` -- `(command, [])` when the command has no `<<`
+    at all -- or None whenever the command is anything other than the strict
+    shape below (the caller then tokenizes the whole command exactly as it did
+    before heredoc stripping existed).
 
-    Bodies of every other heredoc (perl/ruby/node/cat/bash/sh, unquoted
-    delimiter, `-c`/`-m` python headers, sink on the header line, header with
-    a `#` comment or trailing punctuation) are kept verbatim, so their
-    decision is unchanged from today. Header lines and everything after the
-    terminator stay in `stripped_text`. Single left-to-right scan that tracks
-    quotes, backslash escapes and `#` comments outside heredoc bodies.
+    STRICT WHOLE-COMMAND ALLOWLIST (fail closed). A hand-rolled scanner that
+    tries to recognise `<<'W'` inside arbitrary shell keeps losing to bash's
+    real parser (`${x:-<<'EOF' }`, `$[ 1 <<'EOF' ]`, ... are literal word text
+    to bash, which then runs the "body" as shell). So nothing is parsed
+    permissively: the ENTIRE command must be
+        [ws] [cd SAFEPATH &&] (python|python3) [-] [SAFEARG]* ws <<[-]'W' NL
+        BODY-LINES NL W [NL] [ws]
+    with a single physical header line (see `_STRICT_HEREDOC_HEADER_RE`), the
+    terminator line equal to W (for `<<-`: after stripping leading TABS only)
+    and being the last non-blank line, no terminator line inside the body, and
+    no other `<<` anywhere. `_extract_embedded_calls` still scans the body.
     """
     if "<<" not in command:
         return command, []
-    if "$'" in command or '$"' in command:
-        # ANSI-C / locale quoting: a backslash-escaped quote inside `$'..'` is
-        # not modelled by this scanner, so its quote state would desync from
-        # bash. Fall back to full tokenization.
+    match = _STRICT_HEREDOC_HEADER_RE.match(command)
+    if match is None or command.count("<<") != 1:
         return None
-    out: list = []
-    bodies: list = []
-    n = len(command)
-    i = 0
-    seg_start = 0  # start of the current (header) line in `command`
-    quote = ""
-    pending = None  # (delimiter, quoted, dash) for the heredoc opened on this line
-    header_has_comment = False
-    while i < n:
-        ch = command[i]
-        if quote == "'":
-            if ch == "'":
-                quote = ""
-            i += 1
-            continue
-        if ch == "\\":
-            i += 2
-            continue
-        if ch in ("$", "`") and quote != "'":
-            if ch == "`" or command[i + 1 : i + 2] == "(":
-                return None
-        if quote == '"':
-            if ch == '"':
-                quote = ""
-            i += 1
-            continue
-        if ch in ("'", '"'):
-            quote = ch
-            i += 1
-            continue
-        if ch == "#" and (i == 0 or command[i - 1] in " \t\n;&|("):
-            header_has_comment = True
-            while i < n and command[i] != "\n":
-                i += 1
-            continue
-        if command.startswith("<<<", i):
-            i += 3
-            continue
-        if command.startswith("<<", i):
-            if pending is not None:
-                return None
-            j = i + 2
-            dash = False
-            if command[j : j + 1] == "-":
-                dash = True
-                j += 1
-            while command[j : j + 1] in (" ", "\t"):
-                j += 1
-            if command[j : j + 1] in ("'", '"'):
-                q = command[j]
-                end = command.find(q, j + 1)
-                if end < 0:
-                    return None
-                delim, quoted, j = command[j + 1 : end], True, end + 1
-            else:
-                k = j
-                while k < n and (command[k].isalnum() or command[k] == "_"):
-                    k += 1
-                delim, quoted, j = command[j:k], False, k
-            if not _HEREDOC_WORD_RE.match(delim):
-                return None
-            if j < n and command[j] not in " \t\n;&|)<>":
-                return None
-            pending = (delim, quoted, dash)
-            i = j
-            continue
-        if ch == "\n":
-            if pending is not None:
-                delim, quoted, dash = pending
-                header = command[seg_start:i]
-                body_start = i + 1
-                pos = body_start
-                term_end = -1
-                while pos <= n:
-                    nl = command.find("\n", pos)
-                    line_end = n if nl < 0 else nl
-                    line = command[pos:line_end]
-                    if (line.lstrip("\t") if dash else line) == delim:
-                        term_end = line_end + 1 if nl >= 0 else n
-                        body_end = pos
-                        break
-                    if nl < 0:
-                        break
-                    pos = nl + 1
-                if term_end < 0:
-                    return None
-                if quoted and not header_has_comment and _heredoc_header_strippable(header, command[:seg_start]):
-                    out.append(command[seg_start:body_start])
-                    bodies.append(command[body_start:body_end])
-                else:
-                    out.append(command[seg_start:term_end])
-                seg_start = term_end
-                i = term_end
-                pending = None
-                header_has_comment = False
-                continue
-            header_has_comment = False
-            i += 1
-            continue
-        i += 1
-    if pending is not None or quote:
+    dash = match.group("dash") is not None
+    word = match.group("word")
+    lines = command[match.end() :].split("\n")
+    # Whitespace-only lines after the terminator are inert; drop them.
+    while lines and lines[-1].strip(" \t") == "":
+        lines.pop()
+    if not lines:
         return None
-    out.append(command[seg_start:])
-    return "".join(out), bodies
+
+    def is_terminator(line: str) -> bool:
+        return (line.lstrip("\t") if dash else line) == word
+
+    if not is_terminator(lines[-1]):
+        return None
+    body_lines = lines[:-1]
+    if any(is_terminator(line) for line in body_lines):
+        return None
+    body = "".join(line + "\n" for line in body_lines)
+    return command[: match.end()], [body]
 
 
 def _wrapped_command_string(command_name: str, rest: list) -> str | None:

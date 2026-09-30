@@ -24704,44 +24704,42 @@ def test_safe_shell_strip_heredoc_bodies_unit() -> None:
         ("py spaced delimiter", "python3 - << 'EOF'\nx\nEOF", ("python3 - << 'EOF'\n", ["x\n"])),
         ("py dash tab terminator", "python3 - <<-'EOF'\n\t{1, 2}\n\tEOF", ("python3 - <<-'EOF'\n", ["\t{1, 2}\n"])),
         ("py bare, no dash arg", "python3 <<'EOF'\nx\nEOF", ("python3 <<'EOF'\n", ["x\n"])),
-        ("py script arg", "python3 m.py --apply x <<'EOF'\n{\"a\": 1}\nEOF",
-         ("python3 m.py --apply x <<'EOF'\n", ["{\"a\": 1}\n"])),
-        ("sudo wrapper", "sudo python3 - <<'EOF'\nx\nEOF", ("sudo python3 - <<'EOF'\n", ["x\n"])),
-        ("env assignment prefix not stripped", "env X=1 python3 - <<'EOF'\nx\nEOF", ("env X=1 python3 - <<'EOF'\nx\nEOF", [])),
-        ("PATH assignment not stripped", "PATH=/tmp python3 <<'EOF'\nx\nEOF", ("PATH=/tmp python3 <<'EOF'\nx\nEOF", [])),
-        ("earlier line not stripped", "alias python3=bash\npython3 <<'EOF'\nx\nEOF", ("alias python3=bash\npython3 <<'EOF'\nx\nEOF", [])),
-        ("non-cd prefix subcommand not stripped", "ln -s a b; python3 <<'EOF'\nx\nEOF", ("ln -s a b; python3 <<'EOF'\nx\nEOF", [])),
+        ("py safe script arg", "python3 m.py apply x <<'EOF'\n{\"a\": 1}\nEOF",
+         ("python3 m.py apply x <<'EOF'\n", ["{\"a\": 1}\n"])),
         ("cd prefix stripped", "cd x && python3 <<'EOF'\nx\nEOF", ("cd x && python3 <<'EOF'\n", ["x\n"])),
+        ("header catastrophic kept", "python3 - <<'EOF' && " + _HH3_RM + "\nprint(1)\nEOF", None),
+        ("post-terminator line kept", py + "print(1)\nEOF\n" + _HH3_RM, None),
+        # Everything below is NOT the strict shape: None => full tokenization
+        # (pre-PH3 behavior). REMFIX1 stripped some of these (sudo, `--flag`
+        # script args); the strict allowlist deliberately does not.
+        ("sudo wrapper not stripped", "sudo python3 - <<'EOF'\nx\nEOF", None),
+        ("dashed script arg not stripped", "python3 m.py --apply x <<'EOF'\nx\nEOF", None),
+        ("env assignment prefix not stripped", "env X=1 python3 - <<'EOF'\nx\nEOF", None),
+        ("PATH assignment not stripped", "PATH=/tmp python3 <<'EOF'\nx\nEOF", None),
+        ("earlier line not stripped", "alias python3=bash\npython3 <<'EOF'\nx\nEOF", None),
+        ("non-cd prefix subcommand not stripped", "ln -s a b; python3 <<'EOF'\nx\nEOF", None),
         ("ansi-c quote falls back", "echo $'a' ; python3 <<'EOF'\nx\nEOF", None),
         ("locale quote falls back", "echo $\"a\" ; python3 <<'EOF'\nx\nEOF", None),
-        ("header catastrophic kept", "python3 - <<'EOF' && " + _HH3_RM + "\nprint(1)\nEOF",
-         ("python3 - <<'EOF' && " + _HH3_RM + "\n", ["print(1)\n"])),
-        ("post-terminator line kept", py + "print(1)\nEOF\n" + _HH3_RM, (py + _HH3_RM, ["print(1)\n"])),
-        ("unquoted delimiter not stripped", "python3 - <<EOF\nx\nEOF", ("python3 - <<EOF\nx\nEOF", [])),
-        ("bash not stripped", "bash <<'EOF'\n" + _HH3_RM + "\nEOF", ("bash <<'EOF'\n" + _HH3_RM + "\nEOF", [])),
-        ("cat not stripped", "cat <<'EOF'\nx\nEOF", ("cat <<'EOF'\nx\nEOF", [])),
-        ("perl not stripped", "perl <<'EOF'\n" + _HH3_BT + _HH3_RM + _HH3_BT + "\nEOF",
-         ("perl <<'EOF'\n" + _HH3_BT + _HH3_RM + _HH3_BT + "\nEOF", [])),
-        ("ruby not stripped", "ruby <<'EOF'\nx\nEOF", ("ruby <<'EOF'\nx\nEOF", [])),
-        ("node not stripped", "node <<'EOF'\nexecSync(" + _HH3_BT + _HH3_RM + _HH3_BT + ")\nEOF",
-         ("node <<'EOF'\nexecSync(" + _HH3_BT + _HH3_RM + _HH3_BT + ")\nEOF", [])),
-        ("pipe to bash not stripped", "python3 - <<'EOF' | bash\nx\nEOF", ("python3 - <<'EOF' | bash\nx\nEOF", [])),
-        ("pipe to sh not stripped", "python3 - <<'EOF' | sh\nx\nEOF", ("python3 - <<'EOF' | sh\nx\nEOF", [])),
-        ("pipe to eval not stripped", "python3 - <<'EOF' | eval\nx\nEOF", ("python3 - <<'EOF' | eval\nx\nEOF", [])),
-        ("pipe to xargs not stripped", "python3 - <<'EOF' | xargs\nx\nEOF", ("python3 - <<'EOF' | xargs\nx\nEOF", [])),
-        ("pipe to perl not stripped", "python3 - <<'EOF' | perl\nx\nEOF", ("python3 - <<'EOF' | perl\nx\nEOF", [])),
-        ("py -c not stripped", "python3 -c 'import sys' <<'EOF'\nx\nEOF", ("python3 -c 'import sys' <<'EOF'\nx\nEOF", [])),
-        ("py -m not stripped", "python3 -m json.tool <<'EOF'\nx\nEOF", ("python3 -m json.tool <<'EOF'\nx\nEOF", [])),
-        ("py combined -uc not stripped", "python3 -uc 'x' <<'EOF'\nx\nEOF", ("python3 -uc 'x' <<'EOF'\nx\nEOF", [])),
-        ("here-string ignored", "python3 <<< \"x\"", ("python3 <<< \"x\"", [])),
-        ("comment operator ignored", "python3 x.py # <<'EOF'\n" + _HH3_RM + "\nEOF",
-         ("python3 x.py # <<'EOF'\n" + _HH3_RM + "\nEOF", [])),
-        ("quoted operator arg ignored", "python3 -c 'print(1)' \"<<'EOF'\"\n" + _HH3_RM + "\nEOF",
-         ("python3 -c 'print(1)' \"<<'EOF'\"\n" + _HH3_RM + "\nEOF", [])),
-        ("header comment not stripped", "python3 - <<'EOF' # note\nx\nEOF\n" + _HH3_RM,
-         ("python3 - <<'EOF' # note\nx\nEOF\n" + _HH3_RM, [])),
-        ("header ending in ampersand not stripped", "python3 - <<'EOF' &\nx\nEOF\n" + _HH3_RM,
-         ("python3 - <<'EOF' &\nx\nEOF\n" + _HH3_RM, [])),
+        ("unquoted delimiter not stripped", "python3 - <<EOF\nx\nEOF", None),
+        ("bash not stripped", "bash <<'EOF'\n" + _HH3_RM + "\nEOF", None),
+        ("cat not stripped", "cat <<'EOF'\nx\nEOF", None),
+        ("perl not stripped", "perl <<'EOF'\n" + _HH3_BT + _HH3_RM + _HH3_BT + "\nEOF", None),
+        ("ruby not stripped", "ruby <<'EOF'\nx\nEOF", None),
+        ("node not stripped", "node <<'EOF'\nexecSync(" + _HH3_BT + _HH3_RM + _HH3_BT + ")\nEOF", None),
+        ("pipe to bash not stripped", "python3 - <<'EOF' | bash\nx\nEOF", None),
+        ("pipe to sh not stripped", "python3 - <<'EOF' | sh\nx\nEOF", None),
+        ("pipe to eval not stripped", "python3 - <<'EOF' | eval\nx\nEOF", None),
+        ("pipe to xargs not stripped", "python3 - <<'EOF' | xargs\nx\nEOF", None),
+        ("pipe to perl not stripped", "python3 - <<'EOF' | perl\nx\nEOF", None),
+        ("py -c not stripped", "python3 -c 'import sys' <<'EOF'\nx\nEOF", None),
+        ("py -m not stripped", "python3 -m json.tool <<'EOF'\nx\nEOF", None),
+        ("py combined -uc not stripped", "python3 -uc 'x' <<'EOF'\nx\nEOF", None),
+        ("py -u not stripped", "python3 -u <<'EOF'\nx\nEOF", None),
+        ("here-string not stripped", "python3 <<< \"x\"", None),
+        ("comment operator not stripped", "python3 x.py # <<'EOF'\n" + _HH3_RM + "\nEOF", None),
+        ("quoted operator arg not stripped", "python3 -c 'print(1)' \"<<'EOF'\"\n" + _HH3_RM + "\nEOF", None),
+        ("header comment not stripped", "python3 - <<'EOF' # note\nx\nEOF\n" + _HH3_RM, None),
+        ("header ending in ampersand not stripped", "python3 - <<'EOF' &\nx\nEOF\n" + _HH3_RM, None),
         ("backslash delimiter", "python3 <<\\EOF\nx\nEOF", None),
         ("split-quote delimiter", "python3 <<'E'OF\nx\nEOF", None),
         ("two heredocs on header", "python3 <<'A' <<'B'\nx\nA\ny\nB", None),
@@ -24782,7 +24780,9 @@ def test_safe_shell_allows_merge_apply_json_heredoc(tmp_dir: Path) -> None:
         "$5 on its own line\n"
         "EOF"
     )
-    _hh3_expect(tmp_dir, "safe-shell-guard/allows-merge-apply-json-heredoc", cmd, False)
+    # REMFIX2: `--apply` is a dashed argument, outside the strict allowlist, so
+    # the body is NOT stripped and the command stays denied exactly as pre-PH3.
+    _hh3_expect(tmp_dir, "safe-shell-guard/stays-denied-merge-apply-json-heredoc-nonstrict", cmd, True)
 
 
 def test_safe_shell_allows_python_double_quoted_delim_heredoc(tmp_dir: Path) -> None:
@@ -24797,7 +24797,9 @@ def test_safe_shell_allows_python_dash_heredoc_tab_terminator(tmp_dir: Path) -> 
 
 def test_safe_shell_allows_sudo_python_heredoc(tmp_dir: Path) -> None:
     cmd = "sudo python3 - <<'EOF'\n{1, 2}\nEOF"
-    _hh3_expect(tmp_dir, "safe-shell-guard/allows-sudo-python-heredoc", cmd, False)
+    # REMFIX2: wrapper prefixes (sudo/env/nohup/...) are outside the strict
+    # allowlist; the body is NOT stripped and the command stays denied as pre-PH3.
+    _hh3_expect(tmp_dir, "safe-shell-guard/stays-denied-sudo-python-heredoc-nonstrict", cmd, True)
 
 
 def test_safe_shell_denies_bash_quoted_heredoc_rm_root(tmp_dir: Path) -> None:
@@ -24957,6 +24959,220 @@ def test_safe_shell_allows_cd_and_python_heredoc(tmp_dir: Path) -> None:
 def test_safe_shell_allows_python_heredoc_dict_and_dollar_bodies(tmp_dir: Path) -> None:
     cmd = "python3 <<'EOF'\nd = {\"a\": 1}\ns = {1, 2}\n$5\nEOF"
     _hh3_expect(tmp_dir, "safe-shell-guard/allows-python-heredoc-dict-and-dollar-bodies", cmd, False)
+
+
+# ---------------------------------------------------------------------------
+# PH3-REMFIX2: heredoc-body stripping is a STRICT WHOLE-COMMAND ALLOWLIST.
+# Constructs where bash treats `<<'EOF'` as literal word text (parameter
+# expansion words, arithmetic, ...) must never be stripped: bash then runs the
+# "body" lines as shell. Each bypass below was denied pre-PH3.
+# ---------------------------------------------------------------------------
+
+_HH3R2_BYPASSES = [
+    ("param-default", "python3 ${x:-<<'EOF' }\n" + _HH3_RM + "\nEOF"),
+    ("param-default-after-cd", "cd /tmp && python3 ${x:-<<'EOF' } arg\n" + _HH3_RM + "\nEOF"),
+    ("param-alt", "python3 ${x:+<<'EOF' }\n" + _HH3_RM + "\nEOF"),
+    ("param-default-dash-delim", "python3 ${x:-<<-'EOF' }\n" + _HH3_RM + "\nEOF"),
+    ("param-default-dquote-delim", "python3 ${x:-<<\"EOF\" }\n" + _HH3_RM + "\nEOF"),
+    ("param-substitution", "python3 ${x/<<'EOF' /}\n" + _HH3_RM + "\nEOF"),
+    ("assign-word-param", "python3 a=${x:-<<'EOF' }\n" + _HH3_RM + "\nEOF"),
+    ("param-newline-inside", "python3 ${x:-<<'EOF'\n}\n" + _HH3_RM + "\nEOF"),
+    ("nested-param", "python3 ${x:-${y:-<<'EOF' }}\n" + _HH3_RM + "\nEOF"),
+    ("legacy-arith", "python3 $[ 1 <<'EOF' ]\n" + _HH3_RM + "\nEOF"),
+]
+
+
+def test_safe_shell_denies_param_expansion_heredoc_bypasses(tmp_dir: Path) -> None:
+    for label, cmd in _HH3R2_BYPASSES:
+        _hh3_expect(tmp_dir, "safe-shell-guard/denies-literal-heredoc-word-bypass-" + label, cmd, True)
+
+
+def test_safe_shell_unit_bypass_shapes_not_stripped() -> None:
+    name = "safe-shell-guard/strip-returns-none-for-literal-heredoc-word-bypasses"
+    import craftflow_safe_shell_guard as ssg
+
+    for label, cmd in _HH3R2_BYPASSES:
+        got = ssg._strip_heredoc_bodies(cmd)
+        if got is not None:
+            fail(name, f"[{label}] expected None (no strip) but got {got!r}")
+            return
+    ok(name)
+
+
+def test_safe_shell_denies_python_flag_and_wrapper_heredocs(tmp_dir: Path) -> None:
+    # REMFIX1 allowed these shapes; the strict allowlist must not strip them.
+    rm = _HH3_RM
+    cases = [
+        ("python-u-flag", "python3 -u - <<'EOF'\n" + rm + "\nEOF"),
+        ("python-X-flag", "python3 -X dev - <<'EOF'\n" + rm + "\nEOF"),
+        ("python-W-flag", "python3 -W ignore <<'EOF'\n" + rm + "\nEOF"),
+        ("python-I-flag", "python3 -I <<'EOF'\n" + rm + "\nEOF"),
+        ("sudo-wrapper", "sudo python3 - <<'EOF'\n" + rm + "\nEOF"),
+        ("nohup-wrapper", "nohup python3 - <<'EOF'\n" + rm + "\nEOF"),
+        ("env-wrapper", "env python3 - <<'EOF'\n" + rm + "\nEOF"),
+        ("name-assign", "FOO=1 python3 - <<'EOF'\n" + rm + "\nEOF"),
+        ("earlier-line", "true\npython3 - <<'EOF'\n" + rm + "\nEOF"),
+        ("continuation-header", "python3 \\\n- <<'EOF'\n" + rm + "\nEOF"),
+        ("stuff-after-terminator", "python3 - <<'EOF'\nprint(1)\nEOF\n" + rm),
+        ("terminator-in-body-then-rm", "python3 - <<'EOF'\nprint(1)\nEOF\n" + rm + "\nEOF"),
+        ("second-heredoc-in-body", "python3 - <<'EOF'\nx = 1 << 2\n" + rm + "\nEOF"),
+    ]
+    for label, cmd in cases:
+        _hh3_expect(tmp_dir, "safe-shell-guard/denies-nonstrict-python-heredoc-" + label, cmd, True)
+
+
+def test_safe_shell_allows_strict_shape_python_heredocs(tmp_dir: Path) -> None:
+    cases = [
+        ("dict-set-dollar", "python3 - <<'EOF'\nd = {\"a\": 1}\ns = {1, 2}\n$5\nEOF"),
+        ("bare-python", "python <<'EOF'\n{1, 2}\nEOF"),
+        ("cd-and", "cd x && python3 - <<'EOF'\n{1, 2}\n$HOME/y\nEOF"),
+        ("cd-and-nospace", "cd x/y-z&&python3 - <<'EOF'\n{1, 2}\nEOF"),
+        ("dquote-delim", "python3 <<\"EOF\"\n{1, 2}\nEOF"),
+        ("dash-tab-terminator", "python3 - <<-'EOF'\n\t{1, 2}\n\tEOF"),
+        ("trailing-newline", "python3 - <<'EOF'\n{1, 2}\nEOF\n"),
+        ("script-arg", "python3 tools/x_y.py sub-dir/f.json <<'EOF'\n{1, 2}\n$5\nEOF"),
+        ("leading-space", "  python3 - <<'EOF'\n{1, 2}\nEOF"),
+        ("empty-body", "python3 - <<'EOF'\nEOF"),
+    ]
+    for label, cmd in cases:
+        _hh3_expect(tmp_dir, "safe-shell-guard/allows-strict-shape-python-heredoc-" + label, cmd, False)
+
+
+def test_safe_shell_unit_strict_shape_strip_results() -> None:
+    name = "safe-shell-guard/strip-strict-shape-results"
+    import craftflow_safe_shell_guard as ssg
+
+    cases = [
+        ("basic", "python3 - <<'EOF'\n{1, 2}\nEOF", ("python3 - <<'EOF'\n", ["{1, 2}\n"])),
+        ("trailing newline", "python3 - <<'EOF'\nx\nEOF\n", ("python3 - <<'EOF'\n", ["x\n"])),
+        ("cd", "cd a/b && python3 <<\"EOF\"\nx\ny\nEOF", ("cd a/b && python3 <<\"EOF\"\n", ["x\ny\n"])),
+        ("dash tabs", "python3 - <<-'EOF'\n\tx\n\t\tEOF", ("python3 - <<-'EOF'\n", ["\tx\n"])),
+        ("empty body", "python3 <<'EOF'\nEOF", ("python3 <<'EOF'\n", [""])),
+        ("no heredoc", "echo hi", ("echo hi", [])),
+    ]
+    for label, cmd, want in cases:
+        got = ssg._strip_heredoc_bodies(cmd)
+        if got is not None:
+            got = (got[0], list(got[1]))
+        if got != want:
+            fail(name, f"[{label}] want {want!r} got {got!r}")
+            return
+    nones = [
+        ("terminator not last", "python3 - <<'EOF'\nx\nEOF\ny"),
+        ("terminator early dup", "python3 - <<'EOF'\nEOF\nx\nEOF"),
+        ("dash space terminator", "python3 - <<-'EOF'\n  x\n  EOF"),
+        ("plain leading tab terminator", "python3 - <<'EOF'\nx\n\tEOF"),
+        ("bad word", "python3 - <<'1EOF'\nx\n1EOF"),
+        ("unquoted delim", "python3 - <<EOF\nx\nEOF"),
+        ("mismatched quotes", "python3 - <<'EOF\"\nx\nEOF"),
+        ("python3.11", "python3.11 - <<'EOF'\nx\nEOF"),
+        ("fd redirect arg", "python3 3<<'EOF'\nx\nEOF"),
+        ("dollar arg", "python3 $x <<'EOF'\nx\nEOF"),
+        ("tilde arg", "python3 ~/x.py <<'EOF'\nx\nEOF"),
+        ("redirect after delim", "python3 - <<'EOF' > out\nx\nEOF"),
+        ("bare dash not first", "python3 x.py - <<'EOF'\nx\nEOF"),
+        ("second dash", "python3 - - <<'EOF'\nx\nEOF"),
+        ("cd with flag path", "cd -P x && python3 <<'EOF'\nx\nEOF"),
+        ("cd then semicolon", "cd x; python3 <<'EOF'\nx\nEOF"),
+        ("carriage return", "python3 - <<'EOF'\r\nx\r\nEOF\r\n"),
+    ]
+    for label, cmd in nones:
+        got = ssg._strip_heredoc_bodies(cmd)
+        if got is not None:
+            fail(name, f"[{label}] expected None but got {got!r}")
+            return
+    ok(name)
+
+
+def _hh3r2_oracle(cmd: str) -> bool:
+    """Independent statement of the strict whole-command shape (test-side
+    oracle). Anything it rejects must never be stripped by the guard."""
+    arg = r"[A-Za-z0-9_./][A-Za-z0-9_./-]*"
+    header_re = re.compile(
+        r"[ \t]*(?:cd[ \t]+" + arg + r"[ \t]*&&[ \t]*)?python3?"
+        r"(?:[ \t]+-(?=[ \t]))?(?:[ \t]+" + arg + r")*"
+        r"[ \t]+<<(-?)[ \t]*(['\"])([A-Za-z_][A-Za-z0-9_]*)\2[ \t]*\n",
+        re.DOTALL,
+    )
+    m = header_re.match(cmd)
+    if not m or cmd.count("<<") != 1:
+        return False
+    dash, word = m.group(1) == "-", m.group(3)
+    lines = cmd[m.end():].split("\n")
+    while lines and lines[-1].strip(" \t") == "":
+        lines.pop()
+    if not lines:
+        return False
+    def is_term(line: str) -> bool:
+        return (line.lstrip("\t") if dash else line) == word
+    return is_term(lines[-1]) and not any(is_term(line) for line in lines[:-1])
+
+
+def test_safe_shell_strip_heredoc_fuzz_matches_strict_shape_oracle() -> None:
+    name = "safe-shell-guard/strip-heredoc-fuzz-strict-shape-oracle"
+    import random
+
+    import craftflow_safe_shell_guard as ssg
+
+    rng = random.Random(20260930)
+    D = _HH3_RM
+    prefixes = ["", "", "cd /tmp && ", "cd x&&", "sudo ", "nohup ", "env ", "FOO=1 ", "true\n", "alias python3=bash\n",
+                " ", "cd x; ", "(", "{ ", "time ", "exec ", "command "]
+    interps = ["python3", "python", "python3", "python3.11", "bash", "cat", "perl", "node"]
+    flags = ["", "", "-", "-u", "-c", "-m", "-X dev", "-W ignore", "-I", "x.py", "sub/x.py --apply",
+             "${x:-", "$[", "$'a'", "$x", "'a'", "\"a\"", "\\", "#", "(", ";", "&&", "|", "&", "`x`", "$(x)", "~",
+             "a=b", "3", "*", ">", "<"]
+    tails = ["", "", " ", "  ", " # c", " | bash", " &", " ; ", " }", " )", " > o", " \\", " ${y}", " }}"]
+    delims = ["<<'EOF'", "<<\"EOF\"", "<<-'EOF'", "<<EOF", "<<'EOF' ", "<<'E'OF", "<<\\EOF", "<< 'EOF'", "<<-\"EOF\"",
+              "${x:-<<'EOF' }", "${x:+<<'EOF'\n}", "${x/<<'EOF' /}", "${x:-${y:-<<'EOF' }}", "$[ 1 <<'EOF' ]", "<<<'EOF'"]
+    bodies = [D, "x = {1, 2}", "$5", "{\"a\": 1}", "", "EOF", "\tEOF", "  EOF", "y = 1 << 2", "os.system('" + D + "')"]
+    terms = ["EOF", "EOF", "EOF", "\tEOF", " EOF", "EOF ", "E", ""]
+    trailers = ["", "", "\n", "  ", "\n\n", "\n" + D, " ; " + D, "\nEOF"]
+    # Each field is drawn from a benign (strict-shape-compatible) pool 75% of the
+    # time and from the hostile pool otherwise, so the corpus contains both
+    # strict-shape commands and near-misses that differ by one hostile field.
+    safe = {
+        "prefix": ["", "", "cd /tmp && ", "cd x&&", " "],
+        "interp": ["python3", "python"],
+        "flag": ["", "", "-", "x.py", "a/b.py c", "- x.py"],
+        "delim": ["<<'EOF'", "<<\"EOF\"", "<<-'EOF'", "<< 'EOF'"],
+        "tail": ["", " ", "  "],
+        "body": [D, "x = {1, 2}", "$5", "{\"a\": 1}", "y = 1", ""],
+        "term": ["EOF"],
+        "trailer": ["", "\n", "  "],
+    }
+    wild = {
+        "prefix": prefixes, "interp": interps, "flag": flags, "delim": delims,
+        "tail": tails, "body": bodies, "term": terms, "trailer": trailers,
+    }
+
+    def pick(field: str) -> str:
+        pool = safe[field] if rng.random() < 0.75 else wild[field]
+        return rng.choice(pool)
+
+    total = 900
+    strict_hits = 0
+    for idx in range(total):
+        header = pick("prefix") + pick("interp") + " " + pick("flag") + " " + pick("delim") + pick("tail")
+        body = "\n".join(pick("body") for _ in range(rng.randint(0, 3)))
+        cmd = header + "\n" + (body + "\n" if body else "") + pick("term") + pick("trailer")
+        got = ssg._strip_heredoc_bodies(cmd)
+        want_strict = _hh3r2_oracle(cmd)
+        if want_strict:
+            strict_hits += 1
+        if want_strict and got is None:
+            fail(name, f"[#{idx}] strict shape not stripped: {cmd!r}")
+            return
+        if "<<" in cmd and not want_strict and got is not None:
+            fail(name, f"[#{idx}] non-strict command was stripped: {cmd!r} -> {got!r}")
+            return
+        if want_strict and D in got[0]:
+            fail(name, f"[#{idx}] stripped text kept destructive body line: {cmd!r}")
+            return
+    if strict_hits < 20:
+        fail(name, f"fuzz corpus produced only {strict_hits} strict-shape commands; generator too narrow")
+        return
+    ok(name)
 
 
 def main() -> int:
@@ -26280,6 +26496,12 @@ def main() -> int:
         test_safe_shell_denies_node_quoted_heredoc_backtick_line(hh_tmp / "hh-3-23")
         test_safe_shell_denies_perl_quoted_heredoc_backtick_after_set_literal_line(hh_tmp / "hh-3-24")
         test_safe_shell_denies_python_c_stdin_read_heredoc_rm_root(hh_tmp / "hh-3-25")
+        test_safe_shell_denies_param_expansion_heredoc_bypasses(hh_tmp / "hh-3r2-1")
+        test_safe_shell_unit_bypass_shapes_not_stripped()
+        test_safe_shell_denies_python_flag_and_wrapper_heredocs(hh_tmp / "hh-3r2-2")
+        test_safe_shell_allows_strict_shape_python_heredocs(hh_tmp / "hh-3r2-3")
+        test_safe_shell_unit_strict_shape_strip_results()
+        test_safe_shell_strip_heredoc_fuzz_matches_strict_shape_oracle()
 
     print()
     if _errors:
