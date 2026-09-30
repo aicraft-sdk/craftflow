@@ -1108,6 +1108,20 @@ def normalize_bullet(line: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
+def assert_memory_file_ok(text: str) -> None:
+    """Raise ValueError unless `text` looks like a memory markdown file.
+
+    Guards the memory-file write path against the JSON-envelope failure
+    mode: a file that is empty, starts with `{` (after whitespace), or has no
+    `## ` section heading is never valid memory markdown. Pure: no I/O."""
+    if text.strip() == "":
+        raise ValueError("memory file text is empty")
+    if text.lstrip().startswith("{"):
+        raise ValueError("memory file text starts with '{' (JSON envelope, not markdown)")
+    if not any(line.startswith("## ") for line in text.splitlines()):
+        raise ValueError("memory file text has no '## ' section heading")
+
+
 # ---------------------------------------------------------------------------
 # Memory finalization permit
 # ---------------------------------------------------------------------------

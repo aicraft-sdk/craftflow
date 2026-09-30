@@ -7,6 +7,19 @@ Deterministic, confidence-aware markdown bullet merger.
 Usage (CLI mode):
     python3 craftflow_memory_merge.py < payload.json
 
+Usage (--apply mode; the safe write path for memory files):
+    python3 craftflow_memory_merge.py --apply <project>/.craftflow/state/project/patterns.md < payload.json
+    The payload is the same JSON as below but WITHOUT "file_text"/"section_text"
+    (rejected): the script reads the target itself, merges in-process, and never
+    emits an envelope on stdout. It requires the memory-finalize permit, refuses
+    symlinked / non-memory targets (only activeContext.md, patterns.md,
+    progress.md under .craftflow/state/{,project/,workflows/<wf>/}), validates
+    the "archive" fields, writes the archive file FIRST (append + fsync + verify)
+    when bullets are evicted, then replaces the target atomically under a flock
+    lock. A result that is empty, starts with "{", or has no "## " heading is
+    refused (exit 1, target untouched). "archive.dir_rel" resolves against the
+    project root derived from the target path, never the cwd.
+
 Input JSON (stdin) — section-anchored mode (preferred; Python owns the
 section boundary instead of trusting an LLM-supplied span):
     {
@@ -66,10 +79,21 @@ within the same string as the bullet's text, not a structural defect worth fixin
 Exit 0 on success, 1 on error.
 """
 import json
+import os
 import re
+import stat
 import sys
+import tempfile
+from pathlib import Path
 
-from craftflow_hooklib import extract_bullets, normalize_bullet
+from craftflow_hooklib import (
+    WORKSPACE_MEMORY_FILES,
+    _project_root_from_cwd,
+    assert_memory_file_ok,
+    extract_bullets,
+    has_memory_finalize_permit,
+    normalize_bullet,
+)
 
 
 def parse_confidence(line: str) -> float:
@@ -733,6 +757,212 @@ def _reject_json_constant(constant: str):
     raise ValueError(f"invalid numeric literal in JSON: {constant}")
 
 
+_APPLY_USAGE = "Usage: craftflow_memory_merge.py [--apply <memory-file>]  (payload JSON on stdin)\n"
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
+
+
+def _apply_error(message: str) -> int:
+    sys.stderr.write(f"Error: {message}\n")
+    return 1
+
+
+def _resolve_apply_target(target_arg: str):
+    """Validate the --apply target. Returns (target, project_root, workflow_id_or_None).
+
+    Raises ValueError with a reason unless the target is a regular, non-symlinked
+    activeContext.md/patterns.md/progress.md at <root>/.craftflow/state/,
+    .../project/ or .../workflows/<wf>/."""
+    if os.path.islink(target_arg):
+        raise ValueError("target must not be a symlink")
+    target = Path(target_arg).resolve()
+    if not target.is_file():
+        raise ValueError("target must be an existing regular file")
+    if target.name not in WORKSPACE_MEMORY_FILES:
+        raise ValueError(f"target name must be one of {', '.join(WORKSPACE_MEMORY_FILES)}")
+    root = _project_root_from_cwd(target.parent)
+    state = root / ".craftflow" / "state"
+    try:
+        rel = target.relative_to(state).parts
+    except ValueError:
+        raise ValueError("target must live under <project>/.craftflow/state/")
+    if len(rel) == 1:
+        return target, root, None
+    if len(rel) == 2 and rel[0] == "project":
+        return target, root, None
+    if len(rel) == 3 and rel[0] == "workflows":
+        return target, root, rel[1]
+    raise ValueError("target must be in state/, state/project/ or state/workflows/<wf>/")
+
+
+def _validate_archive_spec(archive_spec, root: Path):
+    """Returns (dir_rel, slug, month, resolved_archive_dir). Raises ValueError."""
+    if not isinstance(archive_spec, dict):
+        raise ValueError("'archive' must be an object")
+    dir_rel = archive_spec.get("dir_rel")
+    slug = archive_spec.get("section_slug")
+    month = archive_spec.get("month")
+    if not all(isinstance(v, str) and v for v in (dir_rel, slug, month)):
+        raise ValueError("'archive' must include string 'dir_rel', 'section_slug', and 'month'")
+    if os.path.isabs(dir_rel) or ".." in Path(dir_rel).parts:
+        raise ValueError("archive 'dir_rel' must be relative with no '..' part")
+    if not _SLUG_RE.match(slug):
+        raise ValueError("archive 'section_slug' must match ^[a-z0-9][a-z0-9-]*$")
+    if not _MONTH_RE.match(month):
+        raise ValueError("archive 'month' must match ^\\d{4}-\\d{2}$")
+    state = (root / ".craftflow" / "state").resolve()
+    resolved_dir = (root / dir_rel).resolve()
+    if state not in resolved_dir.parents:
+        raise ValueError("archive 'dir_rel' must resolve under <project>/.craftflow/state/")
+    return dir_rel, slug, month, resolved_dir
+
+
+def _compute_apply_merge(payload: dict, file_text: str, archive_path):
+    """In-process merge for --apply. Returns (result_text, archived_items, unit).
+    Raises ValueError on a bad payload or a missing section."""
+    section = payload.get("section")
+    if not isinstance(section, str) or not section.strip():
+        raise ValueError("'section' must be a non-empty string")
+    unit = payload.get("unit", "bullets")
+    if unit not in ("bullets", "entries"):
+        raise ValueError(f"'unit' must be 'bullets' or 'entries', got {unit!r}")
+    raw_notes = payload.get("notes", [])
+    retractions = payload.get("retractions", [])
+    max_bullets = payload.get("max_bullets")
+    if unit == "entries":
+        if retractions:
+            sys.stderr.write(
+                "Warning: 'retractions' is not supported in 'entries' unit mode; ignoring\n"
+            )
+        if archive_path:
+            result, archived = merge_section_anchored_entries_with_archive(
+                file_text, section, raw_notes, max_bullets, archive_path
+            )
+        else:
+            result = merge_section_anchored_entries(file_text, section, raw_notes, max_bullets)
+            archived = []
+    elif archive_path:
+        result, archived = merge_section_anchored_with_archive(
+            file_text, section, raw_notes, retractions, max_bullets, archive_path
+        )
+    else:
+        result = merge_section_anchored(file_text, section, raw_notes, retractions, max_bullets)
+        archived = []
+    if result is None:
+        raise ValueError(f"section '{section}' not found in target file")
+    return result, archived, unit
+
+
+def _append_archive(archive_file: Path, header: str, chunks: list) -> None:
+    """Append chunks to archive_file (header first when new/empty), fsync, then verify
+    the appended bytes read back identically. Raises OSError/ValueError on failure."""
+    archive_file.parent.mkdir(parents=True, exist_ok=True)
+    if os.path.islink(archive_file):
+        raise ValueError("archive file must not be a symlink")
+    size_before = archive_file.stat().st_size if archive_file.exists() else 0
+    data = ((header if size_before == 0 else "") + "".join(chunks)).encode("utf-8")
+    fd = os.open(str(archive_file), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    with open(archive_file, "rb") as handle:
+        handle.seek(size_before)
+        if handle.read() != data:
+            raise ValueError("archive verification failed: appended bytes do not match")
+
+
+def _atomic_replace(target: Path, text: str) -> None:
+    """Write text to a same-dir temp file, fsync, restore mode, os.replace onto target."""
+    mode = stat.S_IMODE(target.stat().st_mode)
+    fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_name, mode)
+        os.replace(tmp_name, str(target))
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _apply_to_file(target_arg: str, raw_stdin: str) -> int:
+    """--apply mode: compute the merge in-process and write the target safely.
+
+    Order: validate target -> parse payload -> permit -> lock -> read target -> validate
+    archive spec -> merge -> validate result -> archive append (fsync) -> atomic replace.
+    Any failure exits 1 with the target left byte-identical."""
+    try:
+        import fcntl
+    except ImportError:
+        return _apply_error("file locking (fcntl) is unavailable; refusing to write")
+    try:
+        target, root, workflow_id = _resolve_apply_target(target_arg)
+    except (ValueError, OSError) as exc:
+        return _apply_error(str(exc))
+    if not raw_stdin.strip():
+        return _apply_error("empty input")
+    try:
+        payload = json.loads(raw_stdin, parse_constant=_reject_json_constant)
+    except (json.JSONDecodeError, ValueError) as exc:
+        return _apply_error(f"invalid JSON: {exc}")
+    if not isinstance(payload, dict):
+        return _apply_error("payload must be a JSON object")
+    if "file_text" in payload or "section_text" in payload:
+        return _apply_error(
+            "--apply reads the target file itself; payload must not carry 'file_text' or 'section_text'"
+        )
+    if not has_memory_finalize_permit(workflow_id, project_root=root):
+        return _apply_error("no valid memory-finalize permit for this project/workflow")
+
+    try:
+        lock_fd = os.open(str(target) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as exc:
+        return _apply_error(f"cannot open lock file: {exc}")
+    archived = []
+    archived_to = "none"
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        except (OSError, AttributeError) as exc:
+            return _apply_error(f"cannot acquire lock: {exc}")
+        try:
+            file_text = target.read_text(encoding="utf-8")
+            archive_spec = payload.get("archive")
+            archive_path = None
+            archive_dir = None
+            slug = month = None
+            if archive_spec:
+                dir_rel, slug, month, archive_dir = _validate_archive_spec(archive_spec, root)
+                archive_path = f"{dir_rel}/{slug}-{month}.md"
+            result, archived, unit = _compute_apply_merge(payload, file_text, archive_path)
+            text = result if result.endswith("\n") else result + "\n"
+            assert_memory_file_ok(text)
+            if archived:
+                sep = "\n\n" if unit == "entries" else "\n"
+                header = f"# Archived {payload['section']} -- {month}\n\n"
+                _append_archive(
+                    archive_dir / f"{slug}-{month}.md", header, [item + sep for item in archived]
+                )
+                archived_to = archive_path
+            _atomic_replace(target, text)
+        except (ValueError, TypeError, OSError) as exc:
+            return _apply_error(str(exc))
+    finally:
+        os.close(lock_fd)
+    print(f"craftflow_memory_merge: applied {target} (archived {len(archived)} item(s) to {archived_to})")
+    return 0
+
+
 def main() -> int:
     """
     CLI entry point: read JSON from stdin, write merged output to stdout.
@@ -749,6 +979,13 @@ def main() -> int:
     Optional "max_bullets" caps the bullet list post-merge (oldest-first
     eviction) in either mode.
     """
+    argv = sys.argv[1:]
+    if argv:
+        if len(argv) == 2 and argv[0] == "--apply":
+            return _apply_to_file(argv[1], sys.stdin.read())
+        sys.stderr.write(_APPLY_USAGE)
+        return 1
+
     raw = sys.stdin.read()
     if not raw.strip():
         sys.stderr.write("Error: empty input\n")

@@ -18091,6 +18091,372 @@ def test_memory_merge_entries_unit_progress_completed_fixture_bullets_mode_cap()
 
 
 # ---------------------------------------------------------------------------
+# PH4: craftflow_memory_merge.py --apply (archive-first, atomic, permit-checked,
+# envelope-proof) + hooklib.assert_memory_file_ok.
+# ---------------------------------------------------------------------------
+
+_APPLY_SCRIPT = SCRIPTS / "craftflow_memory_merge.py"
+_APPLY_GOTCHAS = "## Common Gotchas\n- g1 (conf: 0.9)\n- g2 (conf: 0.9)\n- g3 (conf: 0.9)\n\n## Last Updated\nx\n"
+_APPLY_ARCHIVE = {"dir_rel": ".craftflow/state/project/archive", "section_slug": "common-gotchas", "month": "2026-09"}
+
+
+def _apply_payload(**over: object) -> dict:
+    payload: dict = {
+        "section": "Common Gotchas",
+        "notes": [{"text": "g4", "confidence": 0.9}],
+        "max_bullets": 2,
+        "archive": dict(_APPLY_ARCHIVE),
+    }
+    payload.update(over)
+    return payload
+
+
+def _apply_seed(
+    base: Path,
+    text: str = _APPLY_GOTCHAS,
+    permit: str | None = "wf-test",
+    rel: str = ".craftflow/state/project/patterns.md",
+) -> tuple[Path, Path]:
+    """Create a temp project under `base`; return (project_root, target)."""
+    proj = base.resolve() / "proj"
+    target = proj / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    if permit is not None:
+        (proj / ".craftflow" / "state" / ".memory-finalize").write_text(permit, encoding="utf-8")
+    return proj, target
+
+
+def _apply_run(target: object, payload: object, cwd: Path | None = None, argv: list[str] | None = None):
+    raw = payload if isinstance(payload, str) else json.dumps(payload)
+    args = argv if argv is not None else ["--apply", str(target)]
+    return subprocess.run(
+        [sys.executable, str(_APPLY_SCRIPT), *args],
+        input=raw, capture_output=True, text=True, cwd=str(cwd) if cwd else None,
+    )
+
+
+def _apply_case(name: str, body) -> None:
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            body(Path(td), name)
+        except Exception as exc:  # noqa: BLE001 - test harness reports any failure
+            fail(name, f"exception: {exc!r}")
+
+
+def test_hooklib_assert_memory_file_ok_cases() -> None:
+    name = "hooklib/assert_memory_file_ok/cases"
+    bad = ['{"file_text": "## X\\n"}', '  \n{\n## X\n', "", "   \n", "# Title\nno heading here\n"]
+    for text in bad:
+        try:
+            hooklib.assert_memory_file_ok(text)
+        except ValueError:
+            continue
+        fail(name, f"expected ValueError for {text!r}")
+        return
+    if hooklib.assert_memory_file_ok("# T\n\n## Common Gotchas\n- a\n") is not None:
+        fail(name, "valid text must return None")
+        return
+    ok(name)
+
+
+def test_memory_merge_apply_archives_then_replaces() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base)
+        r = _apply_run(target, _apply_payload())
+        if r.returncode != 0:
+            fail(name, f"exit {r.returncode}: {r.stderr}")
+            return
+        archive = proj / ".craftflow/state/project/archive/common-gotchas-2026-09.md"
+        if not archive.is_file():
+            fail(name, "archive file missing")
+            return
+        atext = archive.read_text(encoding="utf-8")
+        if not atext.startswith("# Archived Common Gotchas -- 2026-09") or "- g1 (conf: 0.9)" not in atext:
+            fail(name, f"bad archive content: {atext!r}")
+            return
+        ttext = target.read_text(encoding="utf-8")
+        if not ttext.startswith("#") or "## Common Gotchas" not in ttext or ttext.lstrip().startswith("{"):
+            fail(name, f"bad target: {ttext!r}")
+            return
+        if "- g4 (conf: 0.9)" not in ttext or "- g1 (conf: 0.9)" in ttext or "## Last Updated" not in ttext:
+            fail(name, f"unexpected merged target: {ttext!r}")
+            return
+        if r.stdout.lstrip().startswith("{") or "applied" not in r.stdout:
+            fail(name, f"unexpected stdout: {r.stdout!r}")
+            return
+        ok(name)
+    _apply_case("memory-merge/apply/archives-then-replaces", body)
+
+
+def test_memory_merge_apply_refuses_without_permit() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base, permit=None)
+        before = target.read_bytes()
+        r = _apply_run(target, _apply_payload())
+        if r.returncode != 1 or target.read_bytes() != before or (proj / ".craftflow/state/project/archive").exists():
+            fail(name, f"exit {r.returncode}, target changed or archive created: {r.stderr}")
+            return
+        ok(name)
+    _apply_case("memory-merge/apply/refuses-without-permit", body)
+
+
+def test_memory_merge_apply_refuses_workflow_tier_permit_mismatch() -> None:
+    def body(base: Path, name: str) -> None:
+        text = "## Verification\n- a (conf: 0.9)\n"
+        proj, target = _apply_seed(base, text=text, permit="wf-other", rel=".craftflow/state/workflows/wf-x/progress.md")
+        before = target.read_bytes()
+        r = _apply_run(target, {"section": "Verification", "notes": [{"text": "b", "confidence": 0.9}]})
+        if r.returncode != 1 or target.read_bytes() != before:
+            fail(name, f"exit {r.returncode}, changed={target.read_bytes() != before}")
+            return
+        ok(name)
+    _apply_case("memory-merge/apply/refuses-workflow-tier-permit-mismatch", body)
+
+
+def test_memory_merge_apply_workflow_tier_valid() -> None:
+    def body(base: Path, name: str) -> None:
+        text = "## Verification\n- a (conf: 0.9)\n"
+        proj, target = _apply_seed(base, text=text, permit="wf-x", rel=".craftflow/state/workflows/wf-x/progress.md")
+        r = _apply_run(target, {"section": "Verification", "notes": [{"text": "b", "confidence": 0.9}]})
+        ttext = target.read_text(encoding="utf-8")
+        if r.returncode != 0 or "- b (conf: 0.9)" not in ttext:
+            fail(name, f"exit {r.returncode}: {r.stderr} / {ttext!r}")
+            return
+        ok(name)
+    _apply_case("memory-merge/apply/workflow-tier-valid", body)
+
+
+def test_memory_merge_apply_refuses_symlink_target() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, real = _apply_seed(base)
+        link = real.parent / "progress.md"
+        link.symlink_to(real)
+        before = real.read_bytes()
+        r = _apply_run(link, _apply_payload())
+        if r.returncode != 1 or real.read_bytes() != before or not link.is_symlink():
+            fail(name, f"exit {r.returncode}: {r.stderr}")
+            return
+        ok(name)
+    _apply_case("memory-merge/apply/refuses-symlink-target", body)
+
+
+def test_memory_merge_apply_refuses_non_memory_target() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base)
+        readme = proj / "README.md"
+        readme.write_text(_APPLY_GOTCHAS, encoding="utf-8")
+        notes = target.parent / "notes.md"
+        notes.write_text(_APPLY_GOTCHAS, encoding="utf-8")
+        outside = proj / "patterns.md"  # right name, but not under .craftflow/state
+        outside.write_text(_APPLY_GOTCHAS, encoding="utf-8")
+        for path in (readme, notes, outside):
+            before = path.read_bytes()
+            r = _apply_run(path, _apply_payload())
+            if r.returncode != 1 or path.read_bytes() != before:
+                fail(name, f"{path.name}: exit {r.returncode}")
+                return
+        ok(name)
+    _apply_case("memory-merge/apply/refuses-non-memory-target", body)
+
+
+def test_memory_merge_apply_refuses_payload_file_text() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base)
+        before = target.read_bytes()
+        for key in ("file_text", "section_text"):
+            r = _apply_run(target, _apply_payload(**{key: "## Common Gotchas\n- stale\n"}))
+            if r.returncode != 1 or target.read_bytes() != before:
+                fail(name, f"{key}: exit {r.returncode}")
+                return
+        ok(name)
+    _apply_case("memory-merge/apply/refuses-payload-file-text", body)
+
+
+def test_memory_merge_apply_refuses_archive_dir_traversal() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base)
+        before = target.read_bytes()
+        bad_specs = [
+            dict(_APPLY_ARCHIVE, dir_rel="../../outside"),
+            dict(_APPLY_ARCHIVE, dir_rel="/abs/outside"),
+            dict(_APPLY_ARCHIVE, dir_rel="."),
+            dict(_APPLY_ARCHIVE, section_slug="../evil"),
+            dict(_APPLY_ARCHIVE, month="2026-9"),
+        ]
+        for spec in bad_specs:
+            r = _apply_run(target, _apply_payload(archive=spec))
+            if r.returncode != 1 or target.read_bytes() != before:
+                fail(name, f"{spec}: exit {r.returncode}")
+                return
+        if (base / "outside").exists() or (proj.parent / "outside").exists():
+            fail(name, "archive written outside state tree")
+            return
+        ok(name)
+    _apply_case("memory-merge/apply/refuses-archive-dir-traversal", body)
+
+
+def test_memory_merge_apply_archive_write_failure_leaves_target_untouched() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base)
+        blocker = proj / ".craftflow/state/project/archive"
+        blocker.write_text("i am a file", encoding="utf-8")
+        before = target.read_bytes()
+        r = _apply_run(target, _apply_payload())
+        if r.returncode != 1 or target.read_bytes() != before:
+            fail(name, f"exit {r.returncode}: {r.stderr}")
+            return
+        ok(name)
+    _apply_case("memory-merge/apply/archive-write-failure-leaves-target-untouched", body)
+
+
+def test_memory_merge_apply_replace_failure_leaves_target_untouched() -> None:
+    name = "memory-merge/apply/replace-failure-leaves-target-untouched"
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        ok(name)  # root ignores directory permissions; cannot inject the failure
+        return
+
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base)
+        archive_dir = proj / ".craftflow/state/project/archive"
+        archive_dir.mkdir()
+        (target.parent / "patterns.md.lock").write_text("", encoding="utf-8")
+        before = target.read_bytes()
+        target.parent.chmod(0o500)
+        try:
+            r = _apply_run(target, _apply_payload())
+        finally:
+            target.parent.chmod(0o700)
+        if r.returncode != 1 or target.read_bytes() != before:
+            fail(name, f"exit {r.returncode}: {r.stderr}")
+            return
+        ok(name)
+    _apply_case(name, body)
+
+
+def test_memory_merge_apply_refuses_envelope_shaped_result() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base, text="{\n## Common Gotchas\n- a (conf: 0.9)\n")
+        before = target.read_bytes()
+        r = _apply_run(target, _apply_payload())
+        if r.returncode != 1 or target.read_bytes() != before or (proj / ".craftflow/state/project/archive").exists():
+            fail(name, f"exit {r.returncode}: {r.stderr}")
+            return
+        ok(name)
+    _apply_case("memory-merge/apply/refuses-envelope-shaped-result", body)
+
+
+def test_memory_merge_apply_refuses_headingless_result() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base, text="# Title\nno sections at all\n")
+        before = target.read_bytes()
+        r = _apply_run(target, _apply_payload())
+        if r.returncode != 1 or target.read_bytes() != before:
+            fail(name, f"exit {r.returncode}: {r.stderr}")
+            return
+        ok(name)
+    _apply_case("memory-merge/apply/refuses-headingless-result", body)
+
+
+def test_memory_merge_apply_without_archive_preserves_mode() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base)
+        target.chmod(0o644)
+        r = _apply_run(target, _apply_payload(archive=None, max_bullets=None))
+        mode = target.stat().st_mode & 0o777
+        if r.returncode != 0 or mode != 0o644 or "- g4 (conf: 0.9)" not in target.read_text(encoding="utf-8"):
+            fail(name, f"exit {r.returncode} mode {oct(mode)}: {r.stderr}")
+            return
+        ok(name)
+    _apply_case("memory-merge/apply/without-archive-preserves-mode", body)
+
+
+def test_memory_merge_apply_entries_mode_archive_format() -> None:
+    def body(base: Path, name: str) -> None:
+        text = "## Last Updated\nentry one\n\nentry two\n\nentry three\n\n## Other\nx\n"
+        proj, target = _apply_seed(base, text=text, rel=".craftflow/state/project/activeContext.md")
+        r = _apply_run(target, {
+            "section": "Last Updated", "unit": "entries", "notes": [], "max_bullets": 1,
+            "archive": dict(_APPLY_ARCHIVE, section_slug="last-updated"),
+        })
+        archive = proj / ".craftflow/state/project/archive/last-updated-2026-09.md"
+        if r.returncode != 0 or not archive.is_file():
+            fail(name, f"exit {r.returncode}: {r.stderr}")
+            return
+        atext = archive.read_text(encoding="utf-8")
+        if not atext.startswith("# Archived Last Updated -- 2026-09\n\n") or "entry two\n\nentry three\n\n" not in atext:
+            fail(name, f"bad entries archive: {atext!r}")
+            return
+        ok(name)
+    _apply_case("memory-merge/apply/entries-mode-archive-format", body)
+
+
+def test_memory_merge_apply_no_eviction_creates_no_archive() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base)
+        r = _apply_run(target, _apply_payload(max_bullets=50))
+        if r.returncode != 0 or (proj / ".craftflow/state/project/archive").exists():
+            fail(name, f"exit {r.returncode}, archive dir exists")
+            return
+        if "- g4 (conf: 0.9)" not in target.read_text(encoding="utf-8"):
+            fail(name, "note not merged")
+            return
+        ok(name)
+    _apply_case("memory-merge/apply/no-eviction-creates-no-archive", body)
+
+
+def test_memory_merge_apply_bad_argv() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base)
+        before = target.read_bytes()
+        for argv in (["--apply"], ["--apply", str(target), "extra"], ["--bogus", str(target)]):
+            r = _apply_run(target, _apply_payload(), argv=argv)
+            if r.returncode != 1 or "usage" not in r.stderr.lower() or target.read_bytes() != before:
+                fail(name, f"{argv}: exit {r.returncode} stderr {r.stderr!r}")
+                return
+        ok(name)
+    _apply_case("memory-merge/apply/bad-argv", body)
+
+
+def test_memory_merge_apply_sequential_runs_release_lock() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base)
+        r1 = _apply_run(target, _apply_payload(archive=None, max_bullets=None))
+        r2 = _apply_run(target, _apply_payload(archive=None, max_bullets=None, notes=[{"text": "g5", "confidence": 0.9}]))
+        ttext = target.read_text(encoding="utf-8")
+        if r1.returncode != 0 or r2.returncode != 0 or "g4" not in ttext or "g5" not in ttext:
+            fail(name, f"exits {r1.returncode}/{r2.returncode}: {r2.stderr}")
+            return
+        ok(name)
+    _apply_case("memory-merge/apply/sequential-runs-release-lock", body)
+
+
+def test_memory_merge_apply_drifted_cwd_resolves_archive_under_project_root() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base)
+        r = _apply_run(target, _apply_payload(), cwd=proj / ".craftflow/state/project")
+        archive = proj / ".craftflow/state/project/archive/common-gotchas-2026-09.md"
+        doubled = proj / ".craftflow/state/project/.craftflow"
+        if r.returncode != 0 or not archive.is_file() or doubled.exists():
+            fail(name, f"exit {r.returncode}: {r.stderr}; doubled={doubled.exists()}")
+            return
+        ok(name)
+    _apply_case("memory-merge/apply/drifted-cwd-archive-under-project-root", body)
+
+
+def test_memory_merge_stdin_mode_output_unchanged_golden() -> None:
+    name = "memory-merge/stdin-mode/golden-output-unchanged"
+    payload = {"file_text": _APPLY_GOTCHAS, "section": "Common Gotchas", "notes": [{"text": "g4", "confidence": 0.9}]}
+    r = subprocess.run([sys.executable, str(_APPLY_SCRIPT)], input=json.dumps(payload), capture_output=True, text=True)
+    golden = "## Common Gotchas\n- g1 (conf: 0.9)\n- g2 (conf: 0.9)\n- g3 (conf: 0.9)\n- g4 (conf: 0.9)\n## Last Updated\nx\n\n"
+    if r.returncode != 0 or r.stdout != golden:
+        fail(name, f"exit {r.returncode}; stdout {r.stdout!r}")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
 # REM-FIX cycle 4 (silent-failure-hunter, live-reproduced 8x CRITICAL): the
 # same root-cause class already fixed twice for the `workflow` variable
 # (latest_workflow_payload() only guarantees valid JSON, not that the top
@@ -26086,6 +26452,29 @@ def main() -> int:
     test_memory_merge_entries_unit_default_unit_still_bullets_backward_compatible()
     test_memory_merge_entries_unit_rejects_unknown_unit_value()
     test_memory_merge_entries_unit_progress_completed_fixture_bullets_mode_cap()
+
+    print()
+    print("[ memory-merge --apply / hooklib.assert_memory_file_ok (PH4) ]")
+    test_hooklib_assert_memory_file_ok_cases()
+    test_memory_merge_apply_archives_then_replaces()
+    test_memory_merge_apply_refuses_without_permit()
+    test_memory_merge_apply_refuses_workflow_tier_permit_mismatch()
+    test_memory_merge_apply_workflow_tier_valid()
+    test_memory_merge_apply_refuses_symlink_target()
+    test_memory_merge_apply_refuses_non_memory_target()
+    test_memory_merge_apply_refuses_payload_file_text()
+    test_memory_merge_apply_refuses_archive_dir_traversal()
+    test_memory_merge_apply_archive_write_failure_leaves_target_untouched()
+    test_memory_merge_apply_replace_failure_leaves_target_untouched()
+    test_memory_merge_apply_refuses_envelope_shaped_result()
+    test_memory_merge_apply_refuses_headingless_result()
+    test_memory_merge_apply_without_archive_preserves_mode()
+    test_memory_merge_apply_entries_mode_archive_format()
+    test_memory_merge_apply_no_eviction_creates_no_archive()
+    test_memory_merge_apply_bad_argv()
+    test_memory_merge_apply_sequential_runs_release_lock()
+    test_memory_merge_apply_drifted_cwd_resolves_archive_under_project_root()
+    test_memory_merge_stdin_mode_output_unchanged_golden()
 
     print()
     print("[ pretooluse-guard / pretooluse-bash-guard: REM-FIX cycle 4 (non-dict JSON top-level crash class) ]")
