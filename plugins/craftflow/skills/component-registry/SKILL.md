@@ -20,7 +20,7 @@ NO NEW UI COMPONENT BEFORE A REGISTRY SEARCH
 
 ## Protocol
 
-1. Call `registry_search({ query, kind, framework: 'react' })` with 2-4 domain words from the request.
+1. Call `registry_search({ query, kind, framework: 'react' })` with 2-4 domain words from the request. Pass `framework: 'react'` only for `component`, `pattern` or `ui-flow`; omit `framework` for `token-set` and `agent-flow` (their framework is `none`, so combining them with `framework: 'react'` returns no hits).
 2. If a hit's `whenToUse` matches, call `registry_get` for it AND for its `x-craft.tokens` token set.
 3. Check `x-craft.framework` and `x-craft.styling` against the target `package.json` and DESIGN.md. Adapt token names only through a wrapper; never edit registry token names.
 4. Copy the entry's files to its `target` paths (or the project's component dir), keep the spec, and run it.

@@ -172,9 +172,8 @@ node "$REGISTRY_ROOT/../../dist/packages/registry/cli.js" promote \
   --source <this repo name> --workflow <wf id or manual>
 ```
 
-- If `cli.js` is missing: tell the user to run `pnpm exec nx run registry:build` in ai-craft, and stop.
-- Exit 2 (duplicate slug): report the existing path and stop.
-- On success: print the created path and the warning lines, and remind the user that `pnpm registry build` fails until `usage.md` and a spec are completed.
+- If `cli.js` is missing: tell the user to run `pnpm exec nx run registry:build-cli` in ai-craft, and stop.
+- Exit codes: `0` created (print the created path and the warning lines, and remind the user that `pnpm registry build` fails until `usage.md` and a spec are completed); `1` validation or write failure (the partially created entry is removed; show the message and stop); `2` duplicate slug (report the existing path and stop); `3` usage error (missing flag, unknown kind, non-kebab name, duplicate or reserved `--from` basename, `--from` not a regular file, `--root` not a directory; show the message and stop).
 - Then re-present options 1-4 (1-3 on detached HEAD). Do not clean up the worktree.
 
 ### Step 6: Cleanup Workspace
