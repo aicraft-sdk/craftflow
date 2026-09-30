@@ -612,10 +612,18 @@ def _extract_embedded_calls(code: str) -> list:
     return [m.group(2) for m in DANGEROUS_CALL_RE.finditer(code)]
 
 
-def _heredoc_header_strippable(header: str) -> bool:
+def _heredoc_header_strippable(header: str, prefix: str = "") -> bool:
     """True when the heredoc header line's consumer is a python/python3 that
     reads the body as DATA or as its stdin script (never `-c`/`-m`), and no
-    other command on the line is a shell/code-reading sink."""
+    other command on the line is a shell/code-reading sink.
+
+    Consumer-name shadowing guard (allowlist, fail closed): `prefix` (all text
+    before the header line) must be blank -- earlier text could `alias
+    python3=bash` or symlink a shell over `python3` -- and every subcommand
+    BEFORE the consumer on the header must be a plain `cd`. Any `NAME=value`
+    assignment ahead of the interpreter (`PATH=...`, `env X=1`) disqualifies."""
+    if prefix.strip():
+        return False
     if header.rstrip()[-1:] in ("(", ")", ";", "<", ">", "|", "&"):
         # A trailing punctuation run would merge with the following line's
         # first token once the body is removed (shlex quirk), hiding it.
@@ -627,7 +635,12 @@ def _heredoc_header_strippable(header: str) -> bool:
     if len(consumers) != 1:
         return False
     consumer = consumers[0]
+    for sub in subcommands[: subcommands.index(consumer)]:
+        if not sub or sub[0] != "cd":
+            return False
     idx = _skip_wrapper_prefixes(consumer)
+    if any("=" in tok for tok in consumer[:idx]):
+        return False
     if idx >= len(consumer) or os.path.basename(consumer[idx]) not in HEREDOC_DATA_INTERPRETERS:
         return False
     for tok in consumer[idx + 1 :]:
@@ -662,6 +675,11 @@ def _strip_heredoc_bodies(command: str) -> tuple | None:
     """
     if "<<" not in command:
         return command, []
+    if "$'" in command or '$"' in command:
+        # ANSI-C / locale quoting: a backslash-escaped quote inside `$'..'` is
+        # not modelled by this scanner, so its quote state would desync from
+        # bash. Fall back to full tokenization.
+        return None
     out: list = []
     bodies: list = []
     n = len(command)
@@ -748,7 +766,7 @@ def _strip_heredoc_bodies(command: str) -> tuple | None:
                     pos = nl + 1
                 if term_end < 0:
                     return None
-                if quoted and not header_has_comment and _heredoc_header_strippable(header):
+                if quoted and not header_has_comment and _heredoc_header_strippable(header, command[:seg_start]):
                     out.append(command[seg_start:body_start])
                     bodies.append(command[body_start:body_end])
                 else:

