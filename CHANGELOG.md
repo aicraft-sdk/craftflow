@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.20.1] - 2026-09-30
+
+### Fixes
+
+- correct registry skill search example and promote exit-code docs
+
 ## [1.20.0] - 2026-09-29
 
 ### Features
