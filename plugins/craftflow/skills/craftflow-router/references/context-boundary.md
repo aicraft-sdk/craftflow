@@ -23,9 +23,11 @@ python3 {plugin_root}/scripts/craftflow_context_nudge.py --boundary --wf {workfl
 
 Parse the single stdout JSON line. Branch ONLY on `relay` being literally `true`:
 - `relay` is literally `true` and `level == "warn"` → include `advisory` verbatim in your next
-  user-facing message and continue the workflow.
+  user-facing message, putting its trailing ready-to-paste `/compact ...` command on its own line in a
+  fenced code block, and continue the workflow.
 - `relay` is literally `true` and `level == "critical"` → persist the workflow artifact first, show
-  `advisory` verbatim plus "Run /compact, then say continue to resume from the workflow artifact", and end
+  `advisory` verbatim with its trailing ready-to-paste `/compact ...` command on its own line in a fenced
+  code block, plus "Run that /compact command, then say continue to resume from the workflow artifact", and end
   the turn (do not start the next phase or agent in this turn).
 - Anything else (`relay` false/missing, `mode` `audit`/`off`, `outcome` `already_advised`) → say
   nothing about context; continue.

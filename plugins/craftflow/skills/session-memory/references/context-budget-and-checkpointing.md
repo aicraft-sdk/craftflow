@@ -78,4 +78,4 @@ That is better than silently continuing with fuzzy recall.
 
 The `UserPromptSubmit` hook `craftflow_context_nudge.py` and the router phase-boundary check (`skills/craftflow-router/references/context-boundary.md`) measure context from the transcript instead of guessing.
 Defaults (60%/80% of an assumed 200k window) are deliberately earlier than the 70%/90% tiers above because the nudge is a lead indicator.
-No tokentracker is needed; audit by default, enable with `"contextNudge": "on"`.
+No tokentracker is needed; audit by default, enable durably with `{"contextNudge": "on"}` in `~/.claude/craftflow/context-nudge.json`. Advisories end with a ready-to-paste `/compact` command that names the active workflow.

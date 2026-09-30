@@ -96,7 +96,7 @@ class HookResponse(TypedDict, total=False):
 | `posttool_context(message)` | `"PostToolUse"` | `additionalContext` | non-blocking nudge after a tool already ran (no `permissionDecision` — too late to deny) |
 | `session_context(message)` | `"SessionStart"` | `additionalContext` | injecting context at session boot/resume/compact |
 | `craftflow_jev_prompt_hint.py` (inline `json_print`) | `"UserPromptSubmit"` | `additionalContext` | advisory routing/skill hint injected before the model sees the prompt (never a decision) |
-| `craftflow_context_nudge.py` (inline `json_print`) | `"UserPromptSubmit"` | `additionalContext` + top-level `systemMessage` | one-line context-size advisory, once per threshold crossing, only when `contextNudge` is `on` (never a decision) |
+| `craftflow_context_nudge.py` (inline `json_print`) | `"UserPromptSubmit"` | `additionalContext` + top-level `systemMessage` | one-line context-size advisory ending with a ready-to-paste `/compact` command, once per threshold crossing, only when `contextNudge` is `on` (never a decision) |
 
 `craftflow_context_nudge.py` additionally sets a top-level `systemMessage` (user-visible copy of the advisory); it is not part of the `HookResponse` TypedDict above.
 
@@ -224,7 +224,7 @@ Shape (abridged):
 - No `event` key in the payload (ADR-0048 DD-2).
 - `schema`: integer, currently `1`.
 - `source`: `hook`, `reset`, or `boundary`.
-- `mode`: `audit`, `on`, or `audit-unrecognized-config-value`.
+- `mode`: `audit`, `on`, or `audit-unrecognized-config-value`; reflects the user override when one applies.
 - `session_id`: string or `null`.
 - `level`: `none`, `warn`, `critical`, or `null`.
 - `tokens`: measured context tokens, or `null`.
@@ -239,6 +239,18 @@ Shape (abridged):
   `workflow_missing`, `workflow_unreadable`, `bad_wf`, `bad_args`, `remeasure_failed`, or
   `unexpected:<Type>`.
 - Boundary only: `wf`, `phase`, `session_source`, `relay`, `checkpoint_path`.
+- `override`, `override_error`, `override_keys` (all rows): result of reading the durable user override
+  `~/.claude/craftflow/context-nudge.json` (or the file named by `CRAFTFLOW_CONTEXT_NUDGE_USER_CONFIG`).
+  `override` is `absent`, `applied`, `partial` or `error`; `override_error` is `null` or one of `corrupt`,
+  `unreadable`, `too_large`, `home_unresolved`, `invalid_value`, `unknown_key`, `inconsistent_thresholds`;
+  `override_keys` lists the keys that took effect.
+- `compact_source`, `compact_reason`, `compact_wf` (hook `nudged`/`would_nudge` rows and boundary rows;
+  `null` elsewhere): `compact_source` is `workflow` when the advisory's `/compact` line names a workflow,
+  else `generic`. `compact_reason` is one of `session_match`, `single_candidate`, `mention_mtime_agree`,
+  `ambiguous`, `no_mention`, `no_live_candidate`, `lookup_error` (hook lookup), or `explicit_wf`,
+  `workflow_missing`, `workflow_unreadable`, `bad_wf` (boundary, from `--wf`). `compact_wf` is the bound
+  workflow id or `null`. A workflow whose artifact `session_id` differs from the current session belongs to
+  another session and is never bound; the line stays generic.
 
 ```json
 {
@@ -252,7 +264,13 @@ Shape (abridged):
   "threshold": 120000,
   "last_level": "none",
   "outcome": "nudged",
-  "error": null
+  "error": null,
+  "override": "absent",
+  "override_error": null,
+  "override_keys": [],
+  "compact_source": "generic",
+  "compact_reason": "no_mention",
+  "compact_wf": null
 }
 ```
 

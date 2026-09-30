@@ -2193,6 +2193,44 @@ def test_env_seam_beats_real_home():
 
 
 # ---------------------------------------------------------------------------
+# Phase 5: docs describe the /compact line and the durable user override
+# ---------------------------------------------------------------------------
+
+_USER_FILE_DOC = "~/.claude/craftflow/context-nudge.json"
+
+
+def test_contract_doc_documents_override_and_compact_fields():
+    doc = _read(PLUGIN_ROOT / "docs" / "craftflow-event-contract.md")
+    section = doc.split("### Log event: `context_nudge`", 1)[1]
+    needles = ["`override`", "`override_error`", "`override_keys`", "`compact_source`",
+               "`compact_reason`", "`compact_wf`", "`inconsistent_thresholds`",
+               "`mention_mtime_agree`", "`explicit_wf`", _USER_FILE_DOC]
+    needles += ["`" + r + "`" for r in ("session_match", "single_candidate", "ambiguous", "no_mention",
+                                        "no_live_candidate", "lookup_error", "workflow_missing",
+                                        "workflow_unreadable", "bad_wf")]
+    for needle in needles:
+        assert needle in section, needle
+    assert "another session" in section, "other-session workflow never bound must be documented"
+
+
+def test_context_boundary_reference_ready_to_paste_line():
+    flat = " ".join(_read(REFS / "context-boundary.md").split())
+    assert "ready-to-paste" in flat and "on its own line" in flat
+    for needle in ("`relay` is literally `true`", "end the turn", "never run /compact yourself",
+                   "Run that /compact command, then say continue", "include `advisory` verbatim"):
+        assert needle in flat, needle
+
+
+def test_docs_name_user_override_path():
+    for path in (PLUGIN_ROOT / "README.md", PLUGIN_ROOT / "hooks" / "README.md",
+                 PLUGIN_ROOT / "skills" / "session-memory" / "references" / "context-budget-and-checkpointing.md",
+                 REFS / "workflow-artifact-and-hook-policy.md"):
+        assert _USER_FILE_DOC in _read(path), str(path)
+    readme = _read(PLUGIN_ROOT / "README.md")
+    assert "CRAFTFLOW_CONTEXT_NUDGE_USER_CONFIG" in readme and "survives plugin updates" in readme
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
