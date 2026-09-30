@@ -1821,6 +1821,95 @@ def test_resolve_survives_malformed_artifact_and_ghost_flood():
         shutil.rmtree(str(root), ignore_errors=True)
 
 
+def test_wf_mentions_escape_parity():
+    # an escaped boundary needs an ODD backslash run: "\\n" is an escaped backslash then a literal n
+    assert cc.wf_mentions(b"a\\nwf-odd-1") == ["wf-odd-1"]
+    assert cc.wf_mentions(b"a\\\\nwf-even-1") == []
+    assert cc.wf_mentions(b"a\\\\\\nwf-odd-3") == ["wf-odd-3"]
+    assert cc.wf_mentions(b"a\\\\\\\\twf-even-4") == []
+    assert cc.wf_mentions(b"\\nwf-start-1") == ["wf-start-1"]
+    assert cc.wf_mentions(b"nwf-bare-1") == []
+
+
+def test_resolve_stale_and_terminal_mentions_do_not_fill_candidate_slots():
+    now = time.time()
+    root = _wf_env()
+    try:
+        wdir = str(root / "workflows")
+        _put_wf(root, "wf-live", now - 50)
+        rows = ["wf-live"]
+        for i in range(4):
+            _put_wf(root, "wf-stale-%d" % i, now - 13 * 3600)
+            rows.append("wf-stale-%d" % i)
+        for i in range(4):
+            _put_wf(root, "wf-term-%d" % i, now, worktree_mode="merged_and_removed")
+            rows.append("wf-term-%d" % i)
+        t = _put_transcript(root, rows)
+        snap, reason, wf = cc.resolve_active_workflow(wdir, str(t), "s1", "/tmp/proj", now)
+        assert (wf, reason) == ("wf-live", "single_candidate"), (snap, reason, wf)
+        assert snap["wf"] == "wf-live"
+        # with nothing live the outcome stays no_live_candidate
+        _put_wf(root, "wf-live", now - 13 * 3600)
+        assert cc.resolve_active_workflow(wdir, str(t), "s1", "/tmp/proj", now) == (None, "no_live_candidate", None)
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
+def test_resolve_unstamped_artifacts_fall_back_best_effort():
+    # the router does not stamp session_id into artifacts today: the session filter is inert and binding
+    # is best-effort (single candidate, or newest-mention-equals-newest-mtime), else generic (SPEC-0017)
+    now = time.time()
+    root = _wf_env()
+    try:
+        wdir = str(root / "workflows")
+        _put_wf(root, "wf-a-1", now - 100)
+        t = _put_transcript(root, ["wf-a-1"])
+        r = cc.resolve_active_workflow(wdir, str(t), "sess-now", "/tmp/proj", now)
+        assert (r[1], r[2]) == ("single_candidate", "wf-a-1"), r
+        _put_wf(root, "wf-b-2", now - 10)
+        t2 = _put_transcript(root, ["wf-a-1", "wf-b-2"])
+        r = cc.resolve_active_workflow(wdir, str(t2), "sess-now", "/tmp/proj", now)
+        assert (r[1], r[2]) == ("mention_mtime_agree", "wf-b-2"), r
+        _put_wf(root, "wf-a-1", now - 5)
+        r = cc.resolve_active_workflow(wdir, str(t2), "sess-now", "/tmp/proj", now)
+        assert r == (None, "ambiguous", None), r
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
+def test_resolve_fifo_artifact_does_not_block_and_fails_open():
+    now = time.time()
+    root = _wf_env()
+    try:
+        wdir = str(root / "workflows")
+        os.mkfifo(str(root / "workflows" / "wf-fifo.json"))
+        _put_wf(root, "wf-good", now - 5)
+        t = _put_transcript(root, ["wf-good", "wf-fifo"])
+        t0 = time.time()
+        snap, reason, wf = cc.resolve_active_workflow(wdir, str(t), "s1", "/tmp/proj", now)
+        assert time.time() - t0 < 5
+        assert (wf, reason) == ("wf-good", "single_candidate"), (snap, reason, wf)
+        t2 = _put_transcript(root, ["wf-fifo"])
+        assert cc.resolve_active_workflow(wdir, str(t2), "s1", "/tmp/proj", now)[2] is None
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
+def test_resolve_symlink_artifact_is_not_followed():
+    now = time.time()
+    root = _wf_env()
+    try:
+        wdir = str(root / "workflows")
+        target = _put_wf(root, "wf-real", now - 5)
+        os.symlink(str(target), str(root / "workflows" / "wf-link.json"))
+        t = _put_transcript(root, ["wf-link"])
+        assert cc.resolve_active_workflow(wdir, str(t), "s1", "/tmp/proj", now)[2] is None
+        t2 = _put_transcript(root, ["wf-real", "wf-link"])
+        assert cc.resolve_active_workflow(wdir, str(t2), "s1", "/tmp/proj", now)[2] == "wf-real"
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
 def test_bound_line_names_relative_plan_under_worktree_root():
     wt = "/tmp/some-worktree/proj"
     snap = cc.workflow_snapshot({"workflow_type": "build", "phase_cursor": "P2", "plan_file": "docs/plans/x.md",

@@ -58,8 +58,19 @@ _BOUND_TAIL = (". Preserve its decisions, open questions, failing checks and nex
 
 
 def _after_json_escape(data, i):
-    """True when the byte before ``i`` is the letter of a raw JSON newline/tab/CR escape."""
-    return i >= 2 and data[i - 1] in _ESCAPE_LETTERS and data[i - 2] == _BACKSLASH
+    """True when the bytes before ``i`` are a raw JSON newline/tab/CR escape.
+
+    The letter must be preceded by an odd run of backslashes: an even run is escaped backslashes followed
+    by a literal letter.
+    """
+    if i < 2 or data[i - 1] not in _ESCAPE_LETTERS:
+        return False
+    run = 0
+    j = i - 2
+    while j >= 0 and data[j] == _BACKSLASH:
+        run += 1
+        j -= 1
+    return run % 2 == 1
 
 
 def wf_mentions(data, accept=None):
@@ -275,40 +286,71 @@ def _read_tail(path):
         return fh.read(MENTION_TAIL_BYTES)
 
 
+def _load_artifact(path):
+    """``(mtime, size, payload)`` of a regular workflow artifact, else None (fail open).
+
+    Opened O_NONBLOCK|O_NOFOLLOW and checked with fstat, so a FIFO cannot block the read and a symlink
+    cannot redirect it. Oversize or unparseable artifacts are reported with payload None (exist, never live).
+    """
+    fd = -1
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+        st = os.fstat(fd)
+        if (st.st_mode & 0o170000) != 0o100000:
+            return None
+        if st.st_size > MAX_ARTIFACT_BYTES:
+            return st.st_mtime, st.st_size, None
+        chunks = []
+        total = 0
+        while total <= MAX_ARTIFACT_BYTES:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        if total > MAX_ARTIFACT_BYTES:
+            return st.st_mtime, total, None
+        try:
+            return st.st_mtime, st.st_size, json.loads(b"".join(chunks).decode("utf-8"))
+        except Exception:  # noqa: BLE001 - corrupt artifact (bad JSON, RecursionError): exists, never live
+            return st.st_mtime, st.st_size, None
+    except Exception:  # noqa: BLE001 - missing/symlink/FIFO/unreadable artifact: not a candidate
+        return None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 def resolve_active_workflow(workflows_dir, transcript_path, session_id, project_root, now):
     """Bind the session to one live workflow (DD-8). Returns ``(snapshot|None, reason, wf|None)``."""
     try:
-        found = {}
+        live = {}
+        existed = []
 
-        def has_artifact(wf):
+        def is_live(wf):
+            # fresh, non-terminal artifact: folded into the accept predicate so stale/terminal mentions
+            # never occupy one of the MAX_CANDIDATES slots
             if not WF_ID_RE.fullmatch(wf):
                 return False
-            path = os.path.join(workflows_dir, wf + ".json")
-            try:
-                st = os.stat(path)
-            except OSError:
+            loaded = _load_artifact(os.path.join(workflows_dir, wf + ".json"))
+            if loaded is None:
                 return False
-            if (st.st_mode & 0o170000) != 0o100000:
+            existed.append(wf)
+            mtime, size, payload = loaded
+            if now - mtime > WORKFLOW_FRESH_S or size > MAX_ARTIFACT_BYTES:
                 return False
-            found[wf] = (path, st)
+            if not isinstance(payload, dict) or payload_terminal(payload):
+                return False
+            live[wf] = {"wf": wf, "mtime": mtime, "payload": payload}
             return True
 
-        ids = wf_mentions(_read_tail(transcript_path), accept=has_artifact)
-        existing = [(wf,) + found[wf] for wf in ids]
-        if not existing:
+        ids = wf_mentions(_read_tail(transcript_path), accept=is_live)
+        if not ids and not existed:
             return None, "no_mention", None
-        cands = []
-        for wf, path, st in existing:
-            if now - st.st_mtime > WORKFLOW_FRESH_S or st.st_size > MAX_ARTIFACT_BYTES:
-                continue
-            try:
-                with open(path, "rb") as fh:
-                    payload = json.loads(fh.read(MAX_ARTIFACT_BYTES + 1).decode("utf-8"))
-            except Exception:  # noqa: BLE001 - one bad artifact (RecursionError, ...) must not stop the lookup
-                continue
-            if not isinstance(payload, dict) or payload_terminal(payload):
-                continue
-            cands.append({"wf": wf, "mtime": st.st_mtime, "payload": payload})
+        cands = [live[wf] for wf in ids]
         chosen, reason = choose_workflow(cands, session_id)
         if chosen is None:
             return None, reason, None
