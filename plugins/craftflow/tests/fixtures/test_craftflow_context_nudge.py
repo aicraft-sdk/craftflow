@@ -23,6 +23,7 @@ SCRIPTS = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import craftflow_context_nudge as cn  # noqa: E402
+import craftflow_context_nudge_compact as cc  # noqa: E402
 
 # DD-15: never read the developer's real ~/.claude/craftflow/context-nudge.json (absent path by default)
 os.environ["CRAFTFLOW_CONTEXT_NUDGE_USER_CONFIG"] = str(
@@ -1418,6 +1419,344 @@ def test_user_override_path_independent_of_plugin_root():
     src = Path(cn.__file__).read_text(encoding="utf-8")
     assert (".claude/" + "craftflow") not in src
     assert ('.claude" / "' + "craftflow") not in src
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: compact module (SPEC-0017 / ADR-0052)
+# ---------------------------------------------------------------------------
+
+_LIVE_PAYLOAD = {"workflow_type": "build", "phase_cursor": "P1", "worktree_mode": "active",
+                 "status_history": [{"event": "phase_started"}], "pending_gate": None}
+_BOUND_TAIL = ("Preserve its decisions, open questions, failing checks and next step; "
+               "after compaction resume from .craftflow/state/workflows/%s.json.")
+
+
+def test_wf_mentions_backward_scan():
+    data = b'x wf-a-1 y "wf-b-2" zwf-c-3 wf-a-1 wf-d-4- wf-id'
+    assert cc.wf_mentions(data) == ["wf-id", "wf-d-4", "wf-a-1", "wf-b-2"]
+    many = b" ".join(b"wf-id-%d" % i for i in range(50))
+    got = cc.wf_mentions(many)
+    assert got == ["wf-id-%d" % i for i in range(49, 29, -1)], got
+    assert len(got) <= 20
+    # only the 40 most recent raw hits are examined: the older distinct id is never reached
+    assert cc.wf_mentions(b"wf-old-1 " + b" wf-same" * 100) == ["wf-same"]
+    assert cc.wf_mentions(b"") == [] and cc.wf_mentions(None) == []
+
+
+def test_payload_terminal_matrix():
+    live = dict(_LIVE_PAYLOAD)
+    assert cc.payload_terminal(live) is False
+    for mode in ("merged_and_removed", "removed_no_merge_needed", "removed_after_pr_merge", "merged"):
+        assert cc.payload_terminal(dict(live, worktree_mode=mode)) is True, mode
+    for ev in ("workflow_completed", "memory_finalized", "workflow_merged", "merged_to_main",
+               "plan_closed", "debug_complete"):
+        assert cc.payload_terminal(dict(live, status_history=[{"event": "x"}, {"event": ev}])) is True, ev
+    # only the last history element counts
+    assert cc.payload_terminal(dict(live, status_history=[{"event": "workflow_completed"}, {"event": "x"}])) is False
+    for cur in ("complete", "done"):
+        assert cc.payload_terminal(dict(live, phase_cursor=cur)) is True, cur
+    gone = dict(live, worktree_path="/some/gone")
+    assert cc.payload_terminal(gone, isdir=lambda p: False) is True
+    assert cc.payload_terminal(gone, isdir=lambda p: True) is False
+    assert cc.payload_terminal(dict(live, worktree_path=""), isdir=lambda p: False) is False
+    done = dict(live, worktree_mode="merged")
+    for gate in ("user_build_approval", {"kind": "plan_approval"}):
+        assert cc.payload_terminal(dict(done, pending_gate=gate)) is False, gate
+    for gate in ("none", "", None, "null"):
+        assert cc.payload_terminal(dict(done, pending_gate=gate)) is True, gate
+    for junk in (None, [], "x", 3):
+        assert cc.payload_terminal(junk) is True, junk
+
+
+def _cand(wf, mtime, **payload):
+    return {"wf": wf, "mtime": mtime, "payload": dict(_LIVE_PAYLOAD, **payload)}
+
+
+def test_choose_workflow_rules():
+    assert cc.choose_workflow([], "s1") == (None, "no_live_candidate")
+    assert cc.choose_workflow([_cand("wf-a", 10)], "s1") == ("wf-a", "single_candidate")
+    # agree: the most recent mention (first) also has the strictly newest mtime
+    two = [_cand("wf-b", 20), _cand("wf-a", 10)]
+    assert cc.choose_workflow(two, "s1") == ("wf-b", "mention_mtime_agree")
+    assert cc.choose_workflow([_cand("wf-b", 10), _cand("wf-a", 20)], "s1") == (None, "ambiguous")
+    assert cc.choose_workflow([_cand("wf-b", 10), _cand("wf-a", 10)], "s1") == (None, "ambiguous")
+    # session match wins over disagreeing mtimes; exactly one match required
+    sm = [_cand("wf-b", 10), _cand("wf-a", 20, session_id="s1")]
+    assert cc.choose_workflow(sm, "s1") == ("wf-a", "session_match")
+    two_sm = [_cand("wf-b", 20, session_id="s1"), _cand("wf-a", 10, session_id="s1")]
+    assert cc.choose_workflow(two_sm, "s1") == ("wf-b", "mention_mtime_agree")
+    two_sm_dis = [_cand("wf-b", 10, session_id="s1"), _cand("wf-a", 20, session_id="s1")]
+    assert cc.choose_workflow(two_sm_dis, "s1") == (None, "ambiguous")
+    assert cc.choose_workflow(sm, None) == (None, "ambiguous")
+    assert cc.choose_workflow("junk", "s1") == (None, "ambiguous")
+
+
+def test_workflow_snapshot_sanitizes():
+    root = "/tmp/proj"
+    keys = {"wf", "workflow_type", "phase_cursor", "pending_gate", "plan_file", "design_file"}
+    full = cc.workflow_snapshot(
+        {"workflow_type": "build", "phase_cursor": "P3", "pending_gate": None,
+         "plan_file": "docs/plans/a-plan.md", "design_file": "docs/plans/a-design.md",
+         "user_request": "sk-ant-SECRET", "intent": "line1\nline2", "workflow_uuid": "wf-other"},
+        "wf-demo-1", root)
+    assert full == {"wf": "wf-demo-1", "workflow_type": "BUILD", "phase_cursor": "P3", "pending_gate": None,
+                    "plan_file": "docs/plans/a-plan.md", "design_file": "docs/plans/a-design.md"}, full
+    assert "SECRET" not in repr(full)
+
+    def snap(**kw):
+        s = cc.workflow_snapshot(kw, "wf-t-1", root)
+        assert set(s) == keys, s
+        return s
+
+    assert snap(phase_cursor=3)["phase_cursor"] == "3"
+    assert snap(phase_cursor=True)["phase_cursor"] is None
+    assert snap(phase_cursor=1.5)["phase_cursor"] is None
+    assert snap(phase_cursor="P 1")["phase_cursor"] is None
+    assert snap(phase_cursor="P1\n")["phase_cursor"] is None
+    assert snap(pending_gate={"kind": "plan_approval"})["pending_gate"] == "plan_approval"
+    assert snap(pending_gate="plan_approval")["pending_gate"] == "plan_approval"
+    for g in ("none", "None", "NULL", "", None, {"kind": 3}, {"kind": "a b"}, ["x"], "x y"):
+        assert snap(pending_gate=g)["pending_gate"] is None, g
+    for bad in ("docs/plans/x.md\nrm", "../x.md", "/abs/out.md", "docs//p.md", "docs/p.txt", "docs/../p.md",
+                "`x`.md", "docs/a b.md", "$(id).md", "/tmp/other/docs/p.md", "docs/p.md/", 7, ["docs/p.md"],
+                "docs/" + "d" * 250 + ".md"):
+        assert snap(plan_file=bad)["plan_file"] is None, bad
+        assert snap(design_file=bad)["design_file"] is None, bad
+    assert snap(plan_file="/tmp/proj/docs/p.md")["plan_file"] == "docs/p.md"
+    assert snap(design_file="docs/p.md")["design_file"] == "docs/p.md"
+    assert snap(workflow_type="weird")["workflow_type"] is None
+    assert snap(workflow_type=["build"])["workflow_type"] is None
+    assert snap(workflow_type="review")["workflow_type"] == "REVIEW"
+    assert cc.workflow_snapshot({}, "bad wf", root) is None
+    assert cc.workflow_snapshot({}, "wf-x\n", root) is None
+    assert cc.workflow_snapshot("junk", "wf-x", root) is None
+
+
+def test_build_compact_line_bound_and_generic():
+    snap = cc.workflow_snapshot(
+        {"workflow_type": "build", "phase_cursor": "P3", "pending_gate": None,
+         "plan_file": "docs/plans/a-plan.md", "design_file": "docs/plans/a-design.md",
+         "user_request": "sk-ant-SECRET"}, "wf-demo-1", "/nonexistent")
+    want = ("/compact Keep craftflow workflow wf-demo-1 (BUILD; phase P3; plan docs/plans/a-plan.md; "
+            "design docs/plans/a-design.md). " + _BOUND_TAIL % "wf-demo-1")
+    assert cc.build_compact_line(snap) == want
+    assert cc.build_compact_line({"wf": "wf-x"}) == "/compact Keep craftflow workflow wf-x. " + _BOUND_TAIL % "wf-x"
+    gated = cc.build_compact_line({"wf": "wf-x", "pending_gate": "plan_approval"})
+    assert gated == ("/compact Keep craftflow workflow wf-x (pending gate plan_approval). " + _BOUND_TAIL % "wf-x")
+    generic = cc.GENERIC_COMPACT_LINE
+    assert generic.startswith("/compact ") and len(generic) <= 600 and generic.isascii() and "\n" not in generic
+    for bad in (None, {}, [], "wf-x", {"wf": None}, {"wf": "bad wf"}, {"wf": "wf-x\n"}, {"wf": "wf-" + "a" * 161},
+                {"workflow_type": "BUILD"}):
+        assert cc.build_compact_line(bad) == generic, bad
+
+
+def _expected_parts(s):
+    """Independent oracle for the allowlisted parts (mirrors DD-10/DD-11, not the implementation)."""
+    import re
+    parts = []
+    if s.get("workflow_type") in ("BUILD", "PLAN", "DEBUG", "REVIEW"):
+        parts.append(s["workflow_type"])
+    ph = s.get("phase_cursor")
+    if isinstance(ph, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,39}", ph):
+        parts.append("phase " + ph)
+    g = s.get("pending_gate")
+    if isinstance(g, str) and g.lower() not in ("", "none", "null") \
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}", g):
+        parts.append("pending gate " + g)
+    for key, label in (("plan_file", "plan "), ("design_file", "design ")):
+        p = s.get(key)
+        if isinstance(p, str) and re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,199}", p) and p.endswith(".md") \
+                and ".." not in p.split("/") and "" not in p.split("/"):
+            parts.append(label + p)
+    return parts
+
+
+def _expected_line(s, generic):
+    import re
+    if not isinstance(s, dict):
+        return generic
+    wf = s.get("wf")
+    if not (isinstance(wf, str) and re.fullmatch(r"wf-[A-Za-z0-9-]{1,160}", wf)):
+        return generic
+    parts = _expected_parts(s)
+    for n in range(len(parts), -1, -1):
+        paren = (" (" + "; ".join(parts[:n]) + ")") if n else ""
+        line = "/compact Keep craftflow workflow " + wf + paren + ". " + _BOUND_TAIL % wf
+        if len(line) <= 600:
+            return line
+    return generic
+
+
+def test_build_compact_line_cap_degrades_in_order():
+    wf = "wf-" + "a" * 160
+    plan = "docs/" + "p" * 190 + ".md"
+    design = "docs/" + "d" * 190 + ".md"
+    snap = {"wf": wf, "workflow_type": "BUILD", "phase_cursor": "P" * 40, "pending_gate": "g" * 64,
+            "plan_file": plan, "design_file": design}
+    line = cc.build_compact_line(snap)
+    assert len(line) <= 600 and line.startswith("/compact "), len(line)
+    assert design not in line, "design is dropped first"
+    assert wf in line and line.endswith(_BOUND_TAIL % wf)
+    kept_prefix_lengths = set()
+    for wf_len in (5, 60, 120, 160):
+        for plan_len in (10, 60, 120, 190):
+            for gate_len in (5, 64):
+                w = "wf-" + "a" * wf_len
+                s = {"wf": w, "workflow_type": "BUILD", "phase_cursor": "P" * 40, "pending_gate": "g" * gate_len,
+                     "plan_file": "docs/" + "p" * plan_len + ".md", "design_file": "docs/" + "d" * 190 + ".md"}
+                out = cc.build_compact_line(s)
+                assert out == _expected_line(s, cc.GENERIC_COMPACT_LINE), (wf_len, plan_len, gate_len)
+                assert len(out) <= 600 and w in out
+                markers = ["BUILD", "phase P", "pending gate g", "plan docs/p", "design docs/d"]
+                present = [m in out for m in markers]
+                k = sum(present)
+                assert present == [True] * k + [False] * (5 - k), ("kept parts must be a prefix", present)
+                kept_prefix_lengths.add(k)
+    assert 5 in kept_prefix_lengths and min(kept_prefix_lengths) <= 3, kept_prefix_lengths
+
+
+def test_compact_line_shape_fuzz():
+    rng = random.Random(4242)
+    hostile = ["", "x", "wf-ok-1", "P1", "P" * 60, "a b", "x\ny", "`id`", "$(id)", '"q"', "'q'", "docs/../x.md",
+               "docs//x.md", "/abs/x.md", "docs/x.md", "docs/plans/a-plan.md", "docs/x.txt", "é.md", "x" * 300,
+               "../x.md", "BUILD", "build", "none", "None", "plan_approval", "wf-demo-1", "wf-" + "a" * 160,
+               "wf-" + "a" * 161, "wf-bad\n", "docs/" + "d" * 250 + ".md", "P1\n", "docs/x.md\n"]
+    vals = hostile + [None, True, 3, 1.5, [], {}, {"kind": "plan_approval"}, {"kind": "x y"}, ["a"]]
+    keys = ["wf", "workflow_type", "phase_cursor", "pending_gate", "plan_file", "design_file", "user_request",
+            "workflow_uuid", "worktree_path", "status_history", "session_id"]
+    generic = cc.GENERIC_COMPACT_LINE
+
+    def rand_dict():
+        return {k: rng.choice(vals) for k in rng.sample(keys, rng.randrange(0, len(keys) + 1))}
+
+    for _ in range(300):
+        d = rand_dict()
+        d["wf"] = rng.choice(["wf-demo-1", "wf-" + "b" * 160, "bad wf", None, "wf-x\n", "wf-ok"])
+        blob = bytes(rng.getrandbits(8) for _ in range(rng.randrange(0, 40))) + rng.choice(
+            [b"wf-", b"wf-a", b" wf-a-1 ", b"zwf-q", b"wf--"]) + bytes(rng.getrandbits(8) for _ in range(20))
+        for m in cc.wf_mentions(blob):
+            assert cc.WF_ID_RE.fullmatch(m), m
+        assert isinstance(cc.payload_terminal(d), bool)
+        cands = [{"wf": rng.choice(vals), "mtime": rng.choice([1, 2.5, None, "x", True]), "payload": rand_dict()}
+                 for _ in range(rng.randrange(0, 4))]
+        r = cc.choose_workflow(cands, rng.choice(vals))
+        assert isinstance(r, tuple) and len(r) == 2
+        snap = cc.workflow_snapshot(d, rng.choice(["wf-demo-1", "bad wf", None]), rng.choice(["/tmp/proj", None, 3]))
+        assert snap is None or (isinstance(snap, dict) and len(snap) == 6), snap
+        for candidate in (d, snap, rng.choice(vals)):
+            line = cc.build_compact_line(candidate)
+            assert line.startswith("/compact "), line
+            assert "\n" not in line and "\r" not in line and len(line) <= 600 and line.isascii(), line
+            assert line == _expected_line(candidate, generic), (candidate, line)
+
+
+def _wf_env():
+    root = Path(tempfile.mkdtemp(prefix="cn-p3-"))
+    (root / "workflows").mkdir()
+    return root
+
+
+def _put_wf(root, wf, mtime=None, raw=None, **payload):
+    p = root / "workflows" / (wf + ".json")
+    if raw is None:
+        raw = json.dumps(dict({"workflow_type": "build", "phase_cursor": "P1", "plan_file": "docs/plans/x.md"},
+                              **payload)).encode("utf-8")
+    p.write_bytes(raw)
+    if mtime is not None:
+        os.utime(str(p), (mtime, mtime))
+    return p
+
+
+def _put_transcript(root, text_by_line, pad=0):
+    p = root / "t.jsonl"
+    rows = [json.dumps({"type": "user", "message": {"content": t}}) for t in text_by_line]
+    body = "\n".join(rows) + "\n"
+    if pad:
+        body += ("z" * 999 + "\n") * (pad // 1000)
+    p.write_text(body, encoding="utf-8")
+    return p
+
+
+def test_resolve_active_workflow_real_files():
+    now = time.time()
+    root = _wf_env()
+    try:
+        wdir = str(root / "workflows")
+
+        def run(tp, sid="s1"):
+            return cc.resolve_active_workflow(wdir, str(tp), sid, "/tmp/proj", now)
+
+        _put_wf(root, "wf-a-1", now)
+        t = _put_transcript(root, ["Parent Workflow ID: wf-a-1"])
+        snap, reason, wf = run(t)
+        assert reason == "single_candidate" and wf == "wf-a-1", (snap, reason, wf)
+        assert snap == {"wf": "wf-a-1", "workflow_type": "BUILD", "phase_cursor": "P1", "pending_gate": None,
+                        "plan_file": "docs/plans/x.md", "design_file": None}, snap
+        # stale
+        _put_wf(root, "wf-a-1", now - 13 * 3600)
+        assert run(t) == (None, "no_live_candidate", None)
+        # terminal
+        _put_wf(root, "wf-a-1", now, worktree_mode="merged_and_removed")
+        assert run(t) == (None, "no_live_candidate", None)
+        # oversize
+        _put_wf(root, "wf-a-1", now, raw=b'{"workflow_type":"build","pad":"' + b"x" * 1100000 + b'"}')
+        assert run(t) == (None, "no_live_candidate", None)
+        # corrupt / non-dict
+        _put_wf(root, "wf-a-1", now, raw=b"{not json")
+        assert run(t) == (None, "no_live_candidate", None)
+        _put_wf(root, "wf-a-1", now, raw=b"[1]")
+        assert run(t) == (None, "no_live_candidate", None)
+        # two live: latest mention (wf-b-2) is also the newest mtime -> agree
+        _put_wf(root, "wf-a-1", now - 100)
+        _put_wf(root, "wf-b-2", now - 10)
+        t2 = _put_transcript(root, ["first wf-a-1", "later wf-b-2"])
+        snap, reason, wf = run(t2)
+        assert (reason, wf) == ("mention_mtime_agree", "wf-b-2") and snap["wf"] == "wf-b-2", (snap, reason, wf)
+        # disagreeing
+        _put_wf(root, "wf-a-1", now - 5)
+        assert run(t2) == (None, "ambiguous", None)
+        # no mention / placeholder ids / artifact absent
+        t3 = _put_transcript(root, ["nothing here", "see wf-<id> and wf-unknown-9"])
+        assert run(t3) == (None, "no_mention", None)
+        # missing transcript never raises
+        r = cc.resolve_active_workflow(wdir, str(root / "missing.jsonl"), "s1", "/tmp/proj", now)
+        assert r[0] is None and r[1] in ("lookup_error", "no_mention") and r[2] is None, r
+        assert cc.resolve_active_workflow(None, None, None, None, None) == (None, "lookup_error", None)
+        # only mention is older than the last MiB window
+        _put_wf(root, "wf-a-1", now)
+        t4 = _put_transcript(root, ["old mention wf-a-1"], pad=1200000)
+        assert t4.stat().st_size > 1048576
+        assert run(t4) == (None, "no_mention", None)
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
+def test_compact_wf_regex_matches_main_script():
+    assert cc.WF_ID_RE.pattern == cn._WF_RE.pattern
+    assert cc.MAX_COMPACT_CHARS == 600
+    assert cc.WORKFLOW_FRESH_S == 43200
+    assert cc.MENTION_TAIL_BYTES == 1048576
+    assert cc.MAX_CANDIDATES == 5
+    assert cc.MAX_ARTIFACT_BYTES == 1048576
+    src = Path(cc.__file__).read_text(encoding="utf-8")
+    assert (".claude/" + "craftflow") not in src
+    assert ('.claude" / "' + "craftflow") not in src
+
+
+def test_compact_module_import_cheap():
+    box = _Box("audit")
+    env = dict(os.environ)
+    env.pop("CLAUDE_CODE_SESSION_ID", None)
+    env.update(CLAUDE_PLUGIN_ROOT=str(box.plugin), CLAUDE_PROJECT_DIR=str(box.project),
+               PYTHONPATH=str(SCRIPTS))
+    t0 = time.perf_counter()
+    proc = subprocess.run([sys.executable, "-c", "import craftflow_context_nudge_compact"], env=env,
+                          cwd=str(box.root), capture_output=True, timeout=10)
+    elapsed = time.perf_counter() - t0
+    assert proc.returncode == 0 and proc.stdout == b"", (proc.returncode, proc.stdout, proc.stderr)
+    assert elapsed < 0.5, elapsed
+    assert not (box.project / ".craftflow").exists()
+    assert not (box.root / ".craftflow").exists()
 
 
 # ---------------------------------------------------------------------------
