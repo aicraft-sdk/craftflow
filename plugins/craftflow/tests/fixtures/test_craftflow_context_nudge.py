@@ -24,6 +24,10 @@ sys.path.insert(0, str(SCRIPTS))
 
 import craftflow_context_nudge as cn  # noqa: E402
 
+# DD-15: never read the developer's real ~/.claude/craftflow/context-nudge.json (absent path by default)
+os.environ["CRAFTFLOW_CONTEXT_NUDGE_USER_CONFIG"] = str(
+    Path(tempfile.gettempdir()) / ("cn-test-no-user-override-%d-absent.json" % os.getpid()))
+
 _passes = 0
 _errors = []
 
@@ -1238,6 +1242,182 @@ def test_hook_inventory_docs_mention_context_nudge():
     policy = _read(REFS / "workflow-artifact-and-hook-policy.md")
     assert "craftflow_context_nudge.py" in policy
     assert "`UserPromptSubmit` for the optional Jev" in policy
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: user override settings (SPEC-0017 / ADR-0052), pure core + loader
+# ---------------------------------------------------------------------------
+
+_OVR_ENV = "CRAFTFLOW_CONTEXT_NUDGE_USER_CONFIG"
+_OVR_REL = "/".join((".claude", "craftflow", "context-nudge.json"))
+
+
+def test_user_override_path_resolution():
+    p = cn.user_override_path({_OVR_ENV: "/x/y.json", "HOME": "/h"})
+    assert p == Path("/x/y.json"), p
+    for blank in ("  ", ""):
+        assert cn.user_override_path({_OVR_ENV: blank, "HOME": "/h"}) == Path("/h/" + _OVR_REL)
+    assert cn.user_override_path({"HOME": "relative"}) is None
+    assert cn.user_override_path({"HOME": ""}) is None
+    # never touches the file system: a nonexistent HOME still resolves
+    assert cn.user_override_path({"HOME": "/nonexistent-cn-home"}) == Path("/nonexistent-cn-home/" + _OVR_REL)
+
+
+def test_parse_user_override_per_key_matrix():
+    def chk(obj, values, status, error, keys):
+        r = cn.parse_user_override(obj)
+        got = (r["values"], r["status"], r["error"], r["keys"])
+        assert got == (values, status, error, keys), (obj, got)
+
+    chk({"contextNudge": "on"}, {"contextNudge": "on"}, "applied", None, ["contextNudge"])
+    for bad in ("On", True, 1):
+        chk({"contextNudge": bad}, {}, "ignored", "invalid_value", [])
+    for bad in (True, 1.5, "1000", 0, -5):
+        chk({"warnTokens": bad}, {}, "ignored", "invalid_value", [])
+    chk({"warnTokens": 1000, "x": 1}, {"warnTokens": 1000}, "partial", "unknown_key", ["warnTokens"])
+    chk({"mode": "on"}, {}, "ignored", "unknown_key", [])
+    chk({}, {}, "ignored", None, [])
+    full = {"warnTokens": 1, "criticalTokens": 2, "assumedWindow": 3, "contextNudge": "audit"}
+    chk(full, full, "applied", None, ["assumedWindow", "contextNudge", "criticalTokens", "warnTokens"])
+    # invalid_value outranks unknown_key
+    chk({"warnTokens": 0, "zzz": 1}, {}, "ignored", "invalid_value", [])
+
+
+def test_merge_thresholds_and_mode_precedence():
+    # Q4: user mode wins when valid; else exactly the plugin resolution
+    for u in ("off", "audit", "on", None, "bad"):
+        for p in ("off", "audit", "on", None, "weird"):
+            ov = cn.parse_user_override({} if u is None else {"contextNudge": u})
+            eff, logged, from_user = cn.resolve_mode_with_override(p, ov)
+            if u in ("off", "audit", "on"):
+                assert (eff, logged, from_user) == (u, u, True), (u, p)
+            else:
+                assert (eff, logged) == cn.resolve_mode(p) and from_user is False, (u, p)
+    base = dict(cn.DEFAULTS)
+    # partial user thresholds layered on a valid plugin config
+    ov = cn.parse_user_override({"warnTokens": 1000})
+    assert cn.merge_thresholds(base, None, ov) == (dict(base, warnTokens=1000), None, False)
+    # no threshold keys -> plugin cfg untouched
+    assert cn.merge_thresholds(base, None, cn.parse_user_override({"contextNudge": "on"})) == (base, None, False)
+    # O12 merged triple inconsistent -> plugin thresholds, user mode kept
+    ov = cn.parse_user_override({"contextNudge": "on", "warnTokens": 190000})
+    m = cn.merge_thresholds(base, None, ov)
+    assert m == (base, None, True), m
+    assert cn.override_fields(ov, m) == ("partial", "inconsistent_thresholds", ["contextNudge"])
+    # ... with no mode key -> ignored
+    ov2 = cn.parse_user_override({"warnTokens": 190000})
+    m2 = cn.merge_thresholds(base, None, ov2)
+    assert cn.override_fields(ov2, m2) == ("ignored", "inconsistent_thresholds", [])
+    # O13 plugin invalid + full valid user triple -> user triple
+    trip = {"warnTokens": 10, "criticalTokens": 20, "assumedWindow": 30}
+    ov3 = cn.parse_user_override(trip)
+    assert cn.merge_thresholds(None, "config_invalid", ov3) == (trip, None, False)
+    # O14 plugin invalid + partial user -> config_invalid preserved
+    ov4 = cn.parse_user_override({"warnTokens": 10})
+    r4 = cn.merge_thresholds(None, "config_invalid", ov4)
+    assert r4[0] is None and r4[1] == "config_invalid", r4
+    # plugin invalid + inconsistent full user triple -> config_invalid
+    ov5 = cn.parse_user_override({"warnTokens": 30, "criticalTokens": 20, "assumedWindow": 10})
+    r5 = cn.merge_thresholds(None, "config_invalid", ov5)
+    assert r5[0] is None and r5[1] == "config_invalid", r5
+    # priority: inconsistent_thresholds > invalid_value > unknown_key
+    ov6 = cn.parse_user_override({"warnTokens": 190000, "criticalTokens": "x", "q": 1})
+    assert cn.override_fields(ov6, cn.merge_thresholds(base, None, ov6))[1] == "inconsistent_thresholds"
+    ov7 = cn.parse_user_override({"criticalTokens": "x", "q": 1})
+    assert cn.override_fields(ov7, cn.merge_thresholds(base, None, ov7))[1] == "invalid_value"
+    # exit-criterion example
+    o = cn.parse_user_override({"contextNudge": "on", "warnTokens": 1000, "mode": "on"})
+    t = cn.merge_thresholds(dict(cn.DEFAULTS), None, o)
+    assert t[0] == {"warnTokens": 1000, "criticalTokens": 160000, "assumedWindow": 200000}
+    assert cn.override_fields(o, t) == ("partial", "unknown_key", ["contextNudge", "warnTokens"])
+
+
+def test_load_user_override_file_states():
+    d = Path(tempfile.mkdtemp(prefix="cn-ovr-"))
+    _BOXES.append(d)
+
+    def put(name, data):
+        p = d / name
+        p.write_bytes(data)
+        return p
+
+    r = cn.load_user_override(d / "missing.json")
+    assert (r["status"], r["error"]) == ("absent", None), r
+    (d / "adir").mkdir()
+    r = cn.load_user_override(d / "adir")
+    assert (r["status"], r["error"]) == ("error", "unreadable"), r
+    r = cn.load_user_override(put("big.json", b" " * 70000))
+    assert (r["status"], r["error"]) == ("error", "too_large"), r
+    r = cn.load_user_override(put("bad.json", b"{not json"))
+    assert (r["status"], r["error"]) == ("error", "corrupt"), r
+    r = cn.load_user_override(put("bin.json", b"\xff\xfe"))
+    assert (r["status"], r["error"]) == ("error", "corrupt"), r
+    r = cn.load_user_override(put("bom.json", b"\xef\xbb\xbf{\"contextNudge\":\"on\"}"))
+    assert (r["status"], r["values"]) == ("applied", {"contextNudge": "on"}), r
+    for i, raw in enumerate((b"[1]", b"\"x\"", b"3", b"null")):
+        r = cn.load_user_override(put("nonobj%d.json" % i, raw))
+        assert (r["status"], r["error"]) == ("error", "not_object"), (raw, r)
+    if os.geteuid() != 0:
+        p = put("noperm.json", b"{}")
+        os.chmod(p, 0)
+        r = cn.load_user_override(p)
+        assert (r["status"], r["error"]) == ("error", "unreadable"), r
+    ok_file = put("real.json", b"{\"warnTokens\": 5}")
+    link = d / "link.json"
+    os.symlink(str(ok_file), str(link))
+    r = cn.load_user_override(link)
+    assert (r["status"], r["values"]) == ("applied", {"warnTokens": 5}), r
+    r = cn.load_user_override(None)
+    assert (r["status"], r["error"]) == ("absent", "home_unresolved"), r
+
+
+def test_override_totality_fuzz():
+    rng = random.Random(4242)
+
+    def val(depth=0):
+        k = rng.randrange(9 if depth < 2 else 7)
+        if k == 0:
+            return None
+        if k == 1:
+            return rng.choice((True, False))
+        if k == 2:
+            return rng.randrange(-5, 300000)
+        if k == 3:
+            return rng.random() * 1e6
+        if k == 4:
+            return rng.choice(("on", "off", "audit", "On", "", "x" * 50))
+        if k == 5:
+            return rng.choice(("warnTokens", "mode", "contextNudge"))
+        if k == 6:
+            return rng.choice((0, 1, -1, 2 ** 70))
+        if k == 7:
+            return [val(depth + 1) for _ in range(rng.randrange(3))]
+        keys = ("contextNudge", "warnTokens", "criticalTokens", "assumedWindow", "mode", "z")
+        return {rng.choice(keys): val(depth + 1) for _ in range(rng.randrange(5))}
+
+    for _ in range(300):
+        a, b, c = val(), val(), val()
+        ov = cn.parse_user_override(a)
+        assert isinstance(ov, dict) and "status" in ov
+        cn.resolve_mode_with_override(b, ov)
+        m = cn.merge_thresholds(b, c, ov)
+        cn.override_fields(ov, m)
+        cn.override_fields(a, b)
+        cn.merge_thresholds(a, b, c)
+        cn.resolve_mode_with_override(a, b)
+
+
+def test_user_override_path_independent_of_plugin_root():
+    a = cn.user_override_path({"HOME": "/h", "CLAUDE_PLUGIN_ROOT": "/p1"})
+    b = cn.user_override_path({"HOME": "/h", "CLAUDE_PLUGIN_ROOT": "/p2"})
+    assert a == b == Path("/h/" + _OVR_REL)
+    assert cn.USER_OVERRIDE_ENV == _OVR_ENV
+    assert cn.USER_OVERRIDE_MAX_BYTES == 65536
+    assert cn.USER_OVERRIDE_KEYS == ("contextNudge", "warnTokens", "criticalTokens", "assumedWindow")
+    assert cn.USER_OVERRIDE_SEGMENTS == (".claude", "craftflow", "context-nudge.json")
+    src = Path(cn.__file__).read_text(encoding="utf-8")
+    assert (".claude/" + "craftflow") not in src
+    assert ('.claude" / "' + "craftflow") not in src
 
 
 # ---------------------------------------------------------------------------

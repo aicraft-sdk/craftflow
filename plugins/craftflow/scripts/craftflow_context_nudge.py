@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 import time
@@ -36,6 +37,13 @@ _SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _WF_RE = re.compile(r"^wf-[A-Za-z0-9-]{1,160}$")
 _BOUNDARY_KEYS = ("mode", "level", "tokens", "threshold", "assumed_window", "relay", "advisory",
                   "checkpoint_path", "session_id", "session_source", "phase", "outcome", "error")
+# User-level override (SPEC-0017 / ADR-0052). The path is only ever built from these segments under
+# HOME (DD-21), so it survives plugin updates and never depends on the plugin root.
+USER_OVERRIDE_ENV = "CRAFTFLOW_CONTEXT_NUDGE_USER_CONFIG"
+USER_OVERRIDE_MAX_BYTES = 65536
+USER_OVERRIDE_KEYS = ("contextNudge", "warnTokens", "criticalTokens", "assumedWindow")
+USER_OVERRIDE_SEGMENTS = (".claude", "craftflow", "context-nudge.json")
+USER_MODES = ("off", "audit", "on")
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +136,122 @@ def validate_config(obj):
         return None, "config_invalid"
 
 
+def user_override_path(environ):
+    """Path of the user-level context-nudge.json (DD-4), or None when HOME is unresolved. No I/O."""
+    try:
+        forced = environ.get(USER_OVERRIDE_ENV)
+        if isinstance(forced, str) and forced.strip():
+            return Path(os.path.expanduser(forced))
+        if "HOME" in environ:
+            home = environ.get("HOME")
+        else:
+            try:
+                import pwd  # lazy: only when HOME is absent
+                home = pwd.getpwuid(os.getuid()).pw_dir
+            except Exception:  # noqa: BLE001 - fail-open: unresolved home
+                return None
+        if isinstance(home, str) and os.path.isabs(home):
+            return Path(os.path.join(home, *USER_OVERRIDE_SEGMENTS))
+    except Exception:  # noqa: BLE001 - totality
+        pass
+    return None
+
+
+def _override(values, status, error, keys):
+    return {"values": values, "status": status, "error": error, "keys": keys}
+
+
+def _valid_override_value(key, value):
+    if key == "contextNudge":
+        return isinstance(value, str) and value in USER_MODES
+    return type(value) is int and value > 0
+
+
+def parse_user_override(obj):
+    """Per-key validation of a parsed override object (DD-5). Never raises."""
+    try:
+        if not isinstance(obj, dict):
+            return _override({}, "error", "not_object", [])
+        values = {}
+        invalid = unknown = False
+        for key, value in obj.items():
+            if key not in USER_OVERRIDE_KEYS:
+                unknown = True
+            elif _valid_override_value(key, value):
+                values[key] = value
+            else:
+                invalid = True
+        keys = sorted(values)
+        error = "invalid_value" if invalid else ("unknown_key" if unknown else None)
+        if not keys:
+            status = "ignored"
+        else:
+            status = "partial" if error else "applied"
+        return _override(values, status, error, keys)
+    except Exception:  # noqa: BLE001 - totality
+        return _override({}, "absent", None, [])
+
+
+def _override_values(override):
+    values = override.get("values") if isinstance(override, dict) else None
+    return values if isinstance(values, dict) else {}
+
+
+def resolve_mode_with_override(plugin_raw, override):
+    """(effective, logged, from_user): a valid user contextNudge beats the plugin value (DD-5)."""
+    try:
+        user = _override_values(override).get("contextNudge")
+        if isinstance(user, str) and user in USER_MODES:
+            return user, user, True
+        effective, logged = resolve_mode(plugin_raw)
+        return effective, logged, False
+    except Exception:  # noqa: BLE001 - totality
+        return "audit", "audit", False
+
+
+def merge_thresholds(plugin_cfg, plugin_err, override):
+    """(cfg|None, err|None, dropped): layer valid user thresholds over the plugin config (DD-5).
+
+    `dropped` is True when the user supplied threshold keys that were not used."""
+    try:
+        user = {k: v for k, v in _override_values(override).items() if k in DEFAULTS}
+        if plugin_cfg is not None and not plugin_err:
+            if not user:
+                return plugin_cfg, None, False
+            merged, _err = validate_config({**plugin_cfg, **user})
+            if merged is not None:
+                return merged, None, False
+            return plugin_cfg, None, True
+        if len(user) == len(DEFAULTS):
+            triple, _err = validate_config(user)
+            if triple is not None:
+                return triple, None, False
+        return None, plugin_err or "config_invalid", bool(user)
+    except Exception:  # noqa: BLE001 - totality
+        return plugin_cfg, plugin_err, False
+
+
+def override_fields(override, merge_result):
+    """(override, override_error, override_keys) log fields (DD-7). Never raises."""
+    try:
+        if not isinstance(override, dict):
+            return "absent", None, []
+        status = override.get("status")
+        error = override.get("error")
+        if status in ("absent", "error"):
+            return status, error, []
+        dropped = bool(merge_result[2]) if isinstance(merge_result, tuple) and len(merge_result) > 2 else False
+        keys = list(override.get("keys") or [])
+        if dropped:
+            keys = [k for k in keys if k not in DEFAULTS]
+            error = "inconsistent_thresholds"
+        if not keys:
+            return "ignored", error, []
+        return ("partial" if error else "applied"), error, keys
+    except Exception:  # noqa: BLE001 - totality
+        return "absent", None, []
+
+
 def safe_session_id(value):
     return value if isinstance(value, str) and _SESSION_RE.match(value) else None
 
@@ -188,6 +312,35 @@ def load_config(path):
             return validate_config(json.load(handle))
     except Exception:  # noqa: BLE001 - fail-open contract: invalid config, never raise
         return None, "config_invalid"
+
+
+def load_user_override(path):
+    """Read + parse the user-level context-nudge.json (DD-4). No cache; never raises."""
+    if path is None:
+        return _override({}, "absent", "home_unresolved", [])
+    try:
+        try:
+            st = os.stat(str(path))
+        except FileNotFoundError:
+            return _override({}, "absent", None, [])
+        except OSError:
+            return _override({}, "error", "unreadable", [])
+        if not stat.S_ISREG(st.st_mode):
+            return _override({}, "error", "unreadable", [])
+        if st.st_size > USER_OVERRIDE_MAX_BYTES:
+            return _override({}, "error", "too_large", [])
+        try:
+            with open(str(path), "rb") as handle:
+                raw = handle.read(USER_OVERRIDE_MAX_BYTES + 1)
+        except OSError:
+            return _override({}, "error", "unreadable", [])
+        try:
+            obj = json.loads(raw.decode("utf-8-sig"))
+        except ValueError:  # UnicodeDecodeError and JSONDecodeError are both ValueError
+            return _override({}, "error", "corrupt", [])
+        return parse_user_override(obj)
+    except Exception:  # noqa: BLE001 - fail-open contract
+        return _override({}, "error", "unreadable", [])
 
 
 def read_tail_lines(path, max_bytes):
