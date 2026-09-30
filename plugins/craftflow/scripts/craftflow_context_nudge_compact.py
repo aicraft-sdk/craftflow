@@ -44,7 +44,9 @@ _TERMINAL_EVENTS = frozenset(
     ("workflow_completed", "memory_finalized", "workflow_merged", "merged_to_main", "plan_closed",
      "debug_complete"))
 _TERMINAL_PHASES = frozenset(("complete", "done"))
-_EMPTY_GATES = frozenset(("", "none", "null"))
+_EMPTY_GATES = frozenset(("", "none", "null", "n/a", "false", "-"))
+_ESCAPE_LETTERS = frozenset(b"ntr")  # JSON newline/tab/CR in raw JSONL: backslash + letter
+_BACKSLASH = 0x5C
 
 GENERIC_COMPACT_LINE = (
     "/compact Preserve the current goal, key decisions, files being edited, open questions, failing "
@@ -55,22 +57,33 @@ _BOUND_TAIL = (". Preserve its decisions, open questions, failing checks and nex
                "compaction resume from .craftflow/state/workflows/")
 
 
-def wf_mentions(data):
-    """Distinct wf ids mentioned in ``data`` (bytes), most recent first. Never raises."""
+def _after_json_escape(data, i):
+    """True when the byte before ``i`` is the letter of a raw JSON newline/tab/CR escape."""
+    return i >= 2 and data[i - 1] in _ESCAPE_LETTERS and data[i - 2] == _BACKSLASH
+
+
+def wf_mentions(data, accept=None):
+    """Distinct wf ids mentioned in ``data`` (bytes), most recent first. Never raises.
+
+    ``accept`` (optional predicate) is applied to each distinct id once during the backward scan; only
+    accepted ids are returned and the scan stops after MAX_CANDIDATES of them. Without it the scan stops
+    after MAX_DISTINCT_MENTIONS ids. Either way at most MAX_MENTION_HITS raw hits are examined.
+    """
     try:
         if not isinstance(data, (bytes, bytearray)) or not data:
             return []
+        limit = MAX_CANDIDATES if accept is not None else MAX_DISTINCT_MENTIONS
         out = []
         seen = set()
         hits = 0
         end = len(data)
-        while hits < MAX_MENTION_HITS and len(out) < MAX_DISTINCT_MENTIONS:
+        while hits < MAX_MENTION_HITS and len(out) < limit:
             i = data.rfind(b"wf-", 0, end)
             if i < 0:
                 break
             end = i
             hits += 1
-            if i > 0 and data[i - 1] in _ID_BYTES:
+            if i > 0 and data[i - 1] in _ID_BYTES and not _after_json_escape(data, i):
                 continue
             m = _MENTION_RE.match(data, i)
             if not m:
@@ -80,24 +93,33 @@ def wf_mentions(data):
             wf = m.group(0).rstrip(b"-").decode("ascii")
             if wf not in seen:
                 seen.add(wf)
-                out.append(wf)
+                if accept is None or accept(wf):
+                    out.append(wf)
         return out
     except Exception:  # noqa: BLE001 - pure helper must be total
         return []
 
 
+def _has_gate(gate):
+    """A real pending gate: dict gates count by their ``kind``; empty/placeholder values do not count."""
+    if isinstance(gate, dict):
+        gate = gate.get("kind")
+        if not isinstance(gate, str):
+            return False
+    if isinstance(gate, str):
+        return gate.strip().lower() not in _EMPTY_GATES
+    return bool(gate)
+
+
 def payload_terminal(payload, isdir=os.path.isdir):
-    """True when the workflow artifact is finished (DD-9). A truthy pending_gate keeps it live."""
+    """True when the workflow artifact is finished (DD-9).
+
+    Terminal signals (worktree mode, last history event, terminal phase) always win; a real pending gate
+    only keeps an otherwise non-terminal workflow live (it overrides just the missing-worktree signal).
+    """
     try:
         if not isinstance(payload, dict):
             return True
-        gate = payload.get("pending_gate")
-        if isinstance(gate, str):
-            waiting = gate.strip().lower() not in _EMPTY_GATES
-        else:
-            waiting = bool(gate)
-        if waiting:
-            return False
         if payload.get("worktree_mode") in _TERMINAL_MODES:
             return True
         history = payload.get("status_history")
@@ -108,6 +130,8 @@ def payload_terminal(payload, isdir=os.path.isdir):
         cursor = payload.get("phase_cursor")
         if isinstance(cursor, str) and cursor.strip().lower() in _TERMINAL_PHASES:
             return True
+        if _has_gate(payload.get("pending_gate")):
+            return False
         wt = payload.get("worktree_path")
         if isinstance(wt, str) and wt and not isdir(wt):
             return True
@@ -126,15 +150,24 @@ def choose_workflow(cands, session_id):
             return None, "ambiguous"
         if not cands:
             return None, "no_live_candidate"
+        pool = cands
         if isinstance(session_id, str) and session_id:
-            matched = [c for c in cands if c["payload"].get("session_id") == session_id]
+            # never bind another session's workflow; a candidate without a session_id stays a fallback
+            pool = [c for c in cands
+                    if not (isinstance(c["payload"].get("session_id"), str) and c["payload"]["session_id"]
+                            and c["payload"]["session_id"] != session_id)]
+            if not pool:
+                return None, "no_live_candidate"
+            matched = [c for c in pool if c["payload"].get("session_id") == session_id]
             if len(matched) == 1:
                 return matched[0]["wf"], "session_match"
-        if len(cands) == 1:
-            return cands[0]["wf"], "single_candidate"
-        newest = cands[0]["mtime"]
-        if all(newest > c["mtime"] for c in cands[1:]):
-            return cands[0]["wf"], "mention_mtime_agree"
+            if len(matched) > 1:
+                pool = matched
+        if len(pool) == 1:
+            return pool[0]["wf"], "single_candidate"
+        newest = pool[0]["mtime"]
+        if all(newest > c["mtime"] for c in pool[1:]):
+            return pool[0]["wf"], "mention_mtime_agree"
         return None, "ambiguous"
     except Exception:  # noqa: BLE001 - pure helper must be total
         return None, "ambiguous"
@@ -166,6 +199,8 @@ def _clean_path(value, project_root):
     if not isinstance(value, str) or "//" in value or ".." in value.split("/"):
         return None
     if value.startswith("/"):
+        # Absolute paths are kept only when they sit under the project root (made project-relative);
+        # an absolute path outside it is intentionally dropped rather than leaked into the line.
         if not isinstance(project_root, str) or not project_root.startswith("/"):
             return None
         value = os.path.relpath(value, project_root)
@@ -243,21 +278,23 @@ def _read_tail(path):
 def resolve_active_workflow(workflows_dir, transcript_path, session_id, project_root, now):
     """Bind the session to one live workflow (DD-8). Returns ``(snapshot|None, reason, wf|None)``."""
     try:
-        ids = wf_mentions(_read_tail(transcript_path))
-        existing = []
-        for wf in ids:
-            if len(existing) >= MAX_CANDIDATES:
-                break
+        found = {}
+
+        def has_artifact(wf):
             if not WF_ID_RE.fullmatch(wf):
-                continue
+                return False
             path = os.path.join(workflows_dir, wf + ".json")
             try:
                 st = os.stat(path)
             except OSError:
-                continue
+                return False
             if (st.st_mode & 0o170000) != 0o100000:
-                continue
-            existing.append((wf, path, st))
+                return False
+            found[wf] = (path, st)
+            return True
+
+        ids = wf_mentions(_read_tail(transcript_path), accept=has_artifact)
+        existing = [(wf,) + found[wf] for wf in ids]
         if not existing:
             return None, "no_mention", None
         cands = []
@@ -267,7 +304,7 @@ def resolve_active_workflow(workflows_dir, transcript_path, session_id, project_
             try:
                 with open(path, "rb") as fh:
                     payload = json.loads(fh.read(MAX_ARTIFACT_BYTES + 1).decode("utf-8"))
-            except (OSError, ValueError):
+            except Exception:  # noqa: BLE001 - one bad artifact (RecursionError, ...) must not stop the lookup
                 continue
             if not isinstance(payload, dict) or payload_terminal(payload):
                 continue

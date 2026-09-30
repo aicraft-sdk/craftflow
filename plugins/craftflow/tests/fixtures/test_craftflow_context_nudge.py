@@ -1416,9 +1416,10 @@ def test_user_override_path_independent_of_plugin_root():
     assert cn.USER_OVERRIDE_MAX_BYTES == 65536
     assert cn.USER_OVERRIDE_KEYS == ("contextNudge", "warnTokens", "criticalTokens", "assumedWindow")
     assert cn.USER_OVERRIDE_SEGMENTS == (".claude", "craftflow", "context-nudge.json")
-    src = Path(cn.__file__).read_text(encoding="utf-8")
-    assert (".claude/" + "craftflow") not in src
-    assert ('.claude" / "' + "craftflow") not in src
+    for mod in (cn, cc):
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        assert (".claude/" + "craftflow") not in src, mod.__file__
+        assert ('.claude" / "' + "craftflow") not in src, mod.__file__
 
 
 # ---------------------------------------------------------------------------
@@ -1443,6 +1444,32 @@ def test_wf_mentions_backward_scan():
     assert cc.wf_mentions(b"") == [] and cc.wf_mentions(None) == []
 
 
+def test_wf_mentions_json_escape_boundary():
+    # raw JSONL keeps a newline/tab/CR as backslash + letter: that is a boundary, not an id char
+    assert cc.wf_mentions(b'{"c":"line\\nwf-esc-1 x"}') == ["wf-esc-1"]
+    assert cc.wf_mentions(b'{"c":"a\\twf-esc-2\\rwf-esc-3\\nwf-esc-4"}') == ["wf-esc-4", "wf-esc-3", "wf-esc-2"]
+    # genuine longer tokens are still rejected
+    assert cc.wf_mentions(b"zwf-c-3 xnwf-c-4 wf-ok-1") == ["wf-ok-1"]
+    assert cc.wf_mentions(b"nwf-c-5") == []
+
+
+def test_wf_mentions_existing_filter_survives_flood():
+    real = b"wf-real-1 " + b" ".join(b"wf-ghost-%d" % i for i in range(30)) + b" end"
+    # unfiltered: the 20-distinct cap loses the real (oldest) id
+    assert "wf-real-1" not in cc.wf_mentions(real)
+    # filtered by artifact existence during the backward scan: the real id is kept
+    assert cc.wf_mentions(real, accept=lambda wf: wf == "wf-real-1") == ["wf-real-1"]
+    # the raw-hit cap still bounds the scan
+    far = b"wf-real-1 " + b" ".join(b"wf-ghost-%d" % i for i in range(60))
+    assert cc.wf_mentions(far, accept=lambda wf: wf == "wf-real-1") == []
+    # stops once MAX_CANDIDATES accepted ids are found
+    many = b" ".join(b"wf-ok-%d" % i for i in range(30))
+    assert cc.wf_mentions(many, accept=lambda wf: True) == ["wf-ok-%d" % i for i in range(29, 24, -1)]
+    calls = []
+    cc.wf_mentions(b"wf-a-1 wf-a-1 wf-a-1 wf-b-2", accept=lambda wf: calls.append(wf) or True)
+    assert calls == ["wf-b-2", "wf-a-1"], calls  # each distinct id is checked once
+
+
 def test_payload_terminal_matrix():
     live = dict(_LIVE_PAYLOAD)
     assert cc.payload_terminal(live) is False
@@ -1459,11 +1486,20 @@ def test_payload_terminal_matrix():
     assert cc.payload_terminal(gone, isdir=lambda p: False) is True
     assert cc.payload_terminal(gone, isdir=lambda p: True) is False
     assert cc.payload_terminal(dict(live, worktree_path=""), isdir=lambda p: False) is False
+    # terminal signals beat a pending gate; a gate only keeps a non-terminal workflow live
     done = dict(live, worktree_mode="merged")
     for gate in ("user_build_approval", {"kind": "plan_approval"}):
-        assert cc.payload_terminal(dict(done, pending_gate=gate)) is False, gate
-    for gate in ("none", "", None, "null"):
         assert cc.payload_terminal(dict(done, pending_gate=gate)) is True, gate
+        assert cc.payload_terminal(dict(live, phase_cursor="complete", pending_gate=gate)) is True, gate
+        assert cc.payload_terminal(dict(live, status_history=[{"event": "workflow_completed"}],
+                                        pending_gate=gate)) is True, gate
+        assert cc.payload_terminal(dict(live, pending_gate=gate)) is False, gate
+    gone_gated = dict(live, worktree_path="/some/gone", pending_gate="user_build_approval")
+    assert cc.payload_terminal(gone_gated, isdir=lambda p: False) is False
+    for gate in ("none", "", None, "null", "n/a", "N/A", "false", "-", {"kind": "none"}, {"kind": ""},
+                 {"kind": "n/a"}, {}, {"kind": None}):
+        assert cc.payload_terminal(dict(done, pending_gate=gate)) is True, gate
+        assert cc.payload_terminal(dict(live, pending_gate=gate)) is False, gate
     for junk in (None, [], "x", 3):
         assert cc.payload_terminal(junk) is True, junk
 
@@ -1489,6 +1525,20 @@ def test_choose_workflow_rules():
     assert cc.choose_workflow(two_sm_dis, "s1") == (None, "ambiguous")
     assert cc.choose_workflow(sm, None) == (None, "ambiguous")
     assert cc.choose_workflow("junk", "s1") == (None, "ambiguous")
+    # H1: another session's workflow is never bound when our session id is known
+    other = [_cand("wf-other", 10, session_id="OTHER")]
+    assert cc.choose_workflow(other, "MINE") == (None, "no_live_candidate")
+    assert cc.choose_workflow(other + [_cand("wf-plain", 5)], "MINE") == ("wf-plain", "single_candidate")
+    # H2: an unmatched other-session candidate never wins the tie-break
+    trio = [_cand("wf-other", 30, session_id="OTHER"), _cand("wf-a", 20, session_id="MINE"),
+            _cand("wf-b", 10, session_id="MINE")]
+    assert cc.choose_workflow(trio, "MINE") == ("wf-a", "mention_mtime_agree")
+    trio_dis = [_cand("wf-other", 30, session_id="OTHER"), _cand("wf-a", 10, session_id="MINE"),
+                _cand("wf-b", 20, session_id="MINE")]
+    assert cc.choose_workflow(trio_dis, "MINE") == (None, "ambiguous")
+    # a session-less candidate is only a fallback; a matching one beats it
+    mixed = [_cand("wf-plain", 30), _cand("wf-mine", 10, session_id="MINE")]
+    assert cc.choose_workflow(mixed, "MINE") == ("wf-mine", "session_match")
 
 
 def test_workflow_snapshot_sanitizes():
@@ -1731,6 +1781,89 @@ def test_resolve_active_workflow_real_files():
         shutil.rmtree(str(root), ignore_errors=True)
 
 
+def test_resolve_never_binds_other_session_workflow():
+    now = time.time()
+    root = _wf_env()
+    try:
+        wdir = str(root / "workflows")
+        _put_wf(root, "wf-other", now, session_id="OTHER")
+        t = _put_transcript(root, ["about wf-other"])
+        assert cc.resolve_active_workflow(wdir, str(t), "MINE", "/tmp/proj", now) == (None, "no_live_candidate", None)
+        _put_wf(root, "wf-a", now - 30, session_id="MINE")
+        _put_wf(root, "wf-b", now - 20, session_id="MINE")
+        t2 = _put_transcript(root, ["wf-a", "wf-b", "wf-other"])
+        snap, reason, wf = cc.resolve_active_workflow(wdir, str(t2), "MINE", "/tmp/proj", now)
+        # wf-other (newest mention, other session) is ignored; the tie-break runs among ours only
+        assert (wf, reason) == ("wf-b", "mention_mtime_agree"), (wf, reason)
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
+def test_resolve_survives_malformed_artifact_and_ghost_flood():
+    now = time.time()
+    root = _wf_env()
+    try:
+        wdir = str(root / "workflows")
+        _put_wf(root, "wf-bad", now, raw=b"[" * 300000)
+        _put_wf(root, "wf-good", now - 5)
+        t = _put_transcript(root, ["wf-good", "wf-bad"])
+        snap, reason, wf = cc.resolve_active_workflow(wdir, str(t), "s1", "/tmp/proj", now)
+        assert wf == "wf-good" and reason == "single_candidate", (snap, reason, wf)
+        # a real workflow older than 25 nonexistent ids is still found
+        rows = ["wf-good"] + ["wf-ghost-%d" % i for i in range(25)]
+        t2 = _put_transcript(root, rows)
+        assert cc.resolve_active_workflow(wdir, str(t2), "s1", "/tmp/proj", now)[2] == "wf-good"
+        # ids after an escaped newline inside one JSON string are seen
+        t3 = root / "t3.jsonl"
+        t3.write_text(json.dumps({"c": "intro\nParent: wf-good"}) + "\n", encoding="utf-8")
+        assert cc.resolve_active_workflow(wdir, str(t3), "s1", "/tmp/proj", now)[2] == "wf-good"
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
+def test_bound_line_names_relative_plan_under_worktree_root():
+    wt = "/tmp/some-worktree/proj"
+    snap = cc.workflow_snapshot({"workflow_type": "build", "phase_cursor": "P2", "plan_file": "docs/plans/x.md",
+                                 "design_file": "docs/plans/d.md"}, "wf-demo-1", wt)
+    line = cc.build_compact_line(snap)
+    assert "plan docs/plans/x.md" in line and "design docs/plans/d.md" in line, line
+    # absolute plan paths outside the project root are intentionally dropped
+    out = cc.workflow_snapshot({"workflow_type": "build", "plan_file": "/elsewhere/docs/plans/x.md"},
+                               "wf-demo-1", wt)
+    assert out["plan_file"] is None
+    inside = cc.workflow_snapshot({"workflow_type": "build", "plan_file": wt + "/docs/plans/x.md"}, "wf-demo-1", wt)
+    assert inside["plan_file"] == "docs/plans/x.md"
+
+
+def _run_timing_driver(argv):
+    import contextlib
+    import importlib.util
+    import io
+    spec = importlib.util.spec_from_file_location("cn_timing_driver", str(PLUGIN_ROOT / "tests" / "live" / "context_nudge_timing.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = mod.main(argv)
+    return rc, buf.getvalue().strip()
+
+
+def test_timing_driver_rejects_bad_counts_and_new_baseline():
+    root = Path(tempfile.mkdtemp(prefix="cn-drv-"))
+    try:
+        tr = root / "t.jsonl"
+        tr.write_text(json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n", encoding="utf-8")
+        rc, out = _run_timing_driver(["--transcript", str(tr), "--runs", "0"])
+        assert rc == 2 and json.loads(out)["error"] == "invalid_runs", (rc, out)
+        rc, out = _run_timing_driver(["--transcript", str(tr), "--ab-pairs", "2", "--baseline-ref", "HEAD"])
+        assert rc == 2 and json.loads(out)["error"] == "invalid_ab_pairs", (rc, out)
+        # HEAD already carries the compact-module import: it is not the old code, so it must not pass as baseline
+        rc, out = _run_timing_driver(["--transcript", str(tr), "--baseline-ref", "HEAD"])
+        assert rc == 2 and json.loads(out)["error"] == "baseline_not_old_code", (rc, out)
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
 def test_compact_wf_regex_matches_main_script():
     assert cc.WF_ID_RE.pattern == cn._WF_RE.pattern
     assert cc.MAX_COMPACT_CHARS == 600
@@ -1738,9 +1871,10 @@ def test_compact_wf_regex_matches_main_script():
     assert cc.MENTION_TAIL_BYTES == 1048576
     assert cc.MAX_CANDIDATES == 5
     assert cc.MAX_ARTIFACT_BYTES == 1048576
-    src = Path(cc.__file__).read_text(encoding="utf-8")
-    assert (".claude/" + "craftflow") not in src
-    assert ('.claude" / "' + "craftflow") not in src
+    for mod in (cn, cc):
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        assert (".claude/" + "craftflow") not in src, mod.__file__
+        assert ('.claude" / "' + "craftflow") not in src, mod.__file__
 
 
 def test_compact_module_import_cheap():

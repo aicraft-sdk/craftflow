@@ -169,7 +169,10 @@ def boundary_timing(path, runs):
 
 
 def prepare_baseline(ref, tmp):
-    """Write the shipped script at `ref` (via `git show`) next to the current helpers; return its path or None."""
+    """Write the shipped script at `ref` (via `git show`) next to the current helpers; return its path or None.
+
+    Raises ValueError("baseline_not_old_code") when the blob is the working-tree script or already imports
+    the compact module, so an A/B against the new code can never pass by comparing it with itself."""
     try:
         top = subprocess.run(["git", "-C", str(SCRIPTS), "rev-parse", "--show-toplevel"],
                              capture_output=True, timeout=30, check=True).stdout.decode("utf-8").strip()
@@ -177,6 +180,8 @@ def prepare_baseline(ref, tmp):
                               capture_output=True, timeout=30, check=True).stdout
     except (OSError, subprocess.SubprocessError):
         return None
+    if blob == SCRIPT.read_bytes() or b"craftflow_context_nudge_compact" in blob:
+        raise ValueError("baseline_not_old_code")
     base = Path(tmp) / "base_scripts"
     base.mkdir(parents=True, exist_ok=True)
     (base / "craftflow_context_nudge.py").write_bytes(blob)
@@ -260,7 +265,11 @@ def ab_timing(path, pairs, variant, base_script):
             base_ms.append(got["base"])
             new_ms.append(got["new"])
         deltas = [n - b for n, b in zip(new_ms, base_ms)]
+        q1, _q2, q3 = statistics.quantiles(deltas, n=4)
         return {"ab_%s_median_ms" % variant: round(statistics.median(deltas), 3),
+                "ab_%s_delta_iqr_ms" % variant: round(q3 - q1, 3),
+                "ab_%s_delta_min_ms" % variant: round(min(deltas), 3),
+                "ab_%s_delta_max_ms" % variant: round(max(deltas), 3),
                 "ab_%s_base_median_ms" % variant: round(statistics.median(base_ms), 3),
                 "ab_%s_new_median_ms" % variant: round(statistics.median(new_ms), 3)}
     finally:
@@ -297,9 +306,31 @@ def main(argv=None):
     ap.add_argument("--baseline-ref", default=None)
     ap.add_argument("--transcript", default=None)
     args = ap.parse_args(argv)
+    if args.runs < 1:
+        print(json.dumps({"error": "invalid_runs", "detail": "--runs must be >= 1"}))
+        return 2
+    if args.ab_pairs < 3:
+        print(json.dumps({"error": "invalid_ab_pairs", "detail": "--ab-pairs must be >= 3"}))
+        return 2
     path = Path(args.transcript) if args.transcript else largest_transcript()
     if path is None or not path.is_file():
         print(json.dumps({"error": "no_transcript_found"}))
+        return 2
+    base_tmp = Path(tempfile.mkdtemp(prefix="cn-base-"))
+    try:
+        return _run(args, path, base_tmp)
+    finally:
+        shutil.rmtree(base_tmp, ignore_errors=True)
+
+
+def _run(args, path, base_tmp):
+    try:
+        base_script = prepare_baseline(args.baseline_ref, base_tmp) if args.baseline_ref else None
+    except ValueError as exc:
+        print(json.dumps({"error": str(exc)}))
+        return 2
+    if args.baseline_ref and base_script is None:
+        print(json.dumps({"error": "baseline_ref_unresolved"}))
         return 2
     samples, last = [], None
     for _ in range(INPROC_ITERATIONS):
@@ -320,21 +351,14 @@ def main(argv=None):
     result.update(boundary_timing(path, BOUNDARY_RUNS))
     result["gate_ms"] = GATE_MS
     ab_keys = ["ab_%s_median_ms" % v for v in AB_VARIANTS] + ["lookup_median_ms", "lookup_max_ms"]
-    base_tmp = Path(tempfile.mkdtemp(prefix="cn-base-"))
-    try:
-        base_script = prepare_baseline(args.baseline_ref, base_tmp) if args.baseline_ref else None
-        if args.baseline_ref and base_script is None:
-            print(json.dumps({"error": "baseline_ref_unresolved"}))
-            return 2
-        if base_script is not None:
-            for variant in AB_VARIANTS:
-                result.update(ab_timing(path, args.ab_pairs, variant, base_script))
-            result.update(lookup_timing(path, args.ab_pairs))
-        else:
-            result.update({k: None for k in ab_keys})
-            result["error"] = "baseline_ref_required"
-    finally:
-        shutil.rmtree(base_tmp, ignore_errors=True)
+    if base_script is not None:
+        result["load_avg_ab_start_1m"] = round(os.getloadavg()[0], 2)
+        for variant in AB_VARIANTS:
+            result.update(ab_timing(path, args.ab_pairs, variant, base_script))
+        result.update(lookup_timing(path, args.ab_pairs))
+    else:
+        result.update({k: None for k in ab_keys})
+        result["error"] = "baseline_ref_required"
     load = os.getloadavg()[0]
     cpus = os.cpu_count() or 1
     result.update(load_avg_1m=round(load, 2), cpu_count=cpus,
