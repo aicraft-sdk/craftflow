@@ -24667,6 +24667,239 @@ def test_pretooluse_guard_structural_escalation_wording_unchanged(tmp_dir: Path)
     ok(name)
 
 
+# ---------------------------------------------------------------------------
+# Hook hardening PH3: quoted python heredoc bodies are data, not shell, for
+# the safe-shell guard. Destructive literals are assembled by concatenation
+# so the live hook does not block this file's own commands.
+# ---------------------------------------------------------------------------
+
+_HH3_RM = "rm " + "-rf /"
+_HH3_BT = "`"
+
+
+def _hh3_expect(tmp_dir: Path, name: str, command: str, want_deny: bool) -> None:
+    env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_dir), "tool_input": {"command": command}}
+    _, out = run_hook("craftflow_safe_shell_guard.py", payload, env)
+    denied = '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out
+    if denied != want_deny:
+        fail(name, f"want_deny={want_deny} but denied={denied}; command={command!r}; out={out[:200]!r}")
+        return
+    ok(name)
+
+
+def test_safe_shell_strip_heredoc_bodies_unit() -> None:
+    name = "safe-shell-guard/strip-heredoc-bodies-unit"
+    import craftflow_safe_shell_guard as ssg
+
+    strip = getattr(ssg, "_strip_heredoc_bodies", None)
+    if strip is None:
+        fail(name, "_strip_heredoc_bodies is not defined")
+        return
+    py = "python3 - <<'EOF'\n"
+    cases = [
+        ("no heredoc", "echo hi", ("echo hi", [])),
+        ("py single-quoted", py + "x = {1, 2}\nEOF", (py, ["x = {1, 2}\n"])),
+        ("py double-quoted", "python3 - <<\"EOF\"\n{1, 2}\nEOF", ("python3 - <<\"EOF\"\n", ["{1, 2}\n"])),
+        ("py spaced delimiter", "python3 - << 'EOF'\nx\nEOF", ("python3 - << 'EOF'\n", ["x\n"])),
+        ("py dash tab terminator", "python3 - <<-'EOF'\n\t{1, 2}\n\tEOF", ("python3 - <<-'EOF'\n", ["\t{1, 2}\n"])),
+        ("py bare, no dash arg", "python3 <<'EOF'\nx\nEOF", ("python3 <<'EOF'\n", ["x\n"])),
+        ("py script arg", "python3 m.py --apply x <<'EOF'\n{\"a\": 1}\nEOF",
+         ("python3 m.py --apply x <<'EOF'\n", ["{\"a\": 1}\n"])),
+        ("sudo wrapper", "sudo python3 - <<'EOF'\nx\nEOF", ("sudo python3 - <<'EOF'\n", ["x\n"])),
+        ("env wrapper", "env X=1 python3 - <<'EOF'\nx\nEOF", ("env X=1 python3 - <<'EOF'\n", ["x\n"])),
+        ("header catastrophic kept", "python3 - <<'EOF' && " + _HH3_RM + "\nprint(1)\nEOF",
+         ("python3 - <<'EOF' && " + _HH3_RM + "\n", ["print(1)\n"])),
+        ("post-terminator line kept", py + "print(1)\nEOF\n" + _HH3_RM, (py + _HH3_RM, ["print(1)\n"])),
+        ("unquoted delimiter not stripped", "python3 - <<EOF\nx\nEOF", ("python3 - <<EOF\nx\nEOF", [])),
+        ("bash not stripped", "bash <<'EOF'\n" + _HH3_RM + "\nEOF", ("bash <<'EOF'\n" + _HH3_RM + "\nEOF", [])),
+        ("cat not stripped", "cat <<'EOF'\nx\nEOF", ("cat <<'EOF'\nx\nEOF", [])),
+        ("perl not stripped", "perl <<'EOF'\n" + _HH3_BT + _HH3_RM + _HH3_BT + "\nEOF",
+         ("perl <<'EOF'\n" + _HH3_BT + _HH3_RM + _HH3_BT + "\nEOF", [])),
+        ("ruby not stripped", "ruby <<'EOF'\nx\nEOF", ("ruby <<'EOF'\nx\nEOF", [])),
+        ("node not stripped", "node <<'EOF'\nexecSync(" + _HH3_BT + _HH3_RM + _HH3_BT + ")\nEOF",
+         ("node <<'EOF'\nexecSync(" + _HH3_BT + _HH3_RM + _HH3_BT + ")\nEOF", [])),
+        ("pipe to bash not stripped", "python3 - <<'EOF' | bash\nx\nEOF", ("python3 - <<'EOF' | bash\nx\nEOF", [])),
+        ("pipe to sh not stripped", "python3 - <<'EOF' | sh\nx\nEOF", ("python3 - <<'EOF' | sh\nx\nEOF", [])),
+        ("pipe to eval not stripped", "python3 - <<'EOF' | eval\nx\nEOF", ("python3 - <<'EOF' | eval\nx\nEOF", [])),
+        ("pipe to xargs not stripped", "python3 - <<'EOF' | xargs\nx\nEOF", ("python3 - <<'EOF' | xargs\nx\nEOF", [])),
+        ("pipe to perl not stripped", "python3 - <<'EOF' | perl\nx\nEOF", ("python3 - <<'EOF' | perl\nx\nEOF", [])),
+        ("py -c not stripped", "python3 -c 'import sys' <<'EOF'\nx\nEOF", ("python3 -c 'import sys' <<'EOF'\nx\nEOF", [])),
+        ("py -m not stripped", "python3 -m json.tool <<'EOF'\nx\nEOF", ("python3 -m json.tool <<'EOF'\nx\nEOF", [])),
+        ("py combined -uc not stripped", "python3 -uc 'x' <<'EOF'\nx\nEOF", ("python3 -uc 'x' <<'EOF'\nx\nEOF", [])),
+        ("here-string ignored", "python3 <<< \"x\"", ("python3 <<< \"x\"", [])),
+        ("comment operator ignored", "python3 x.py # <<'EOF'\n" + _HH3_RM + "\nEOF",
+         ("python3 x.py # <<'EOF'\n" + _HH3_RM + "\nEOF", [])),
+        ("quoted operator arg ignored", "python3 -c 'print(1)' \"<<'EOF'\"\n" + _HH3_RM + "\nEOF",
+         ("python3 -c 'print(1)' \"<<'EOF'\"\n" + _HH3_RM + "\nEOF", [])),
+        ("header comment not stripped", "python3 - <<'EOF' # note\nx\nEOF\n" + _HH3_RM,
+         ("python3 - <<'EOF' # note\nx\nEOF\n" + _HH3_RM, [])),
+        ("header ending in ampersand not stripped", "python3 - <<'EOF' &\nx\nEOF\n" + _HH3_RM,
+         ("python3 - <<'EOF' &\nx\nEOF\n" + _HH3_RM, [])),
+        ("backslash delimiter", "python3 <<\\EOF\nx\nEOF", None),
+        ("split-quote delimiter", "python3 <<'E'OF\nx\nEOF", None),
+        ("two heredocs on header", "python3 <<'A' <<'B'\nx\nA\ny\nB", None),
+        ("missing terminator", py + "{1, 2}", None),
+        ("terminator with trailing space", py + "x\nEOF ", None),
+        ("command substitution on header", "python3 $(echo x) <<'EOF'\nx\nEOF", None),
+        ("backtick on header", "python3 " + _HH3_BT + "echo x" + _HH3_BT + " <<'EOF'\nx\nEOF", None),
+        ("unbalanced header quote", "python3 'x <<'EOF'\nx\nEOF", None),
+    ]
+    for label, cmd, want in cases:
+        try:
+            got = strip(cmd)
+        except Exception as exc:  # noqa: BLE001 - surface any crash as a test failure
+            fail(name, f"[{label}] raised {exc!r}")
+            return
+        if got is not None:
+            got = (got[0], list(got[1]))
+        if got != want:
+            fail(name, f"[{label}] want {want!r} got {got!r}")
+            return
+    ok(name)
+
+
+def test_safe_shell_allows_python_heredoc_set_literal_line(tmp_dir: Path) -> None:
+    cmd = "python3 - <<'EOF'\nx = {1, 2}\n{3, 4}\nprint(x)\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/allows-python-heredoc-set-literal-line", cmd, False)
+
+
+def test_safe_shell_allows_python_heredoc_dollar_line(tmp_dir: Path) -> None:
+    cmd = "python3 - <<'EOF'\nx = 1\n$HOME/x.txt\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/allows-python-heredoc-dollar-line", cmd, False)
+
+
+def test_safe_shell_allows_merge_apply_json_heredoc(tmp_dir: Path) -> None:
+    cmd = (
+        "python3 craftflow_memory_merge.py --apply x <<'EOF'\n"
+        "{\"section\": \"A\", \"notes\": [{\"text\": \"cost $5\", \"confidence\": 0.9}]}\n"
+        "$5 on its own line\n"
+        "EOF"
+    )
+    _hh3_expect(tmp_dir, "safe-shell-guard/allows-merge-apply-json-heredoc", cmd, False)
+
+
+def test_safe_shell_allows_python_double_quoted_delim_heredoc(tmp_dir: Path) -> None:
+    cmd = "python3 - <<\"EOF\"\n{1, 2}\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/allows-python-double-quoted-delim-heredoc", cmd, False)
+
+
+def test_safe_shell_allows_python_dash_heredoc_tab_terminator(tmp_dir: Path) -> None:
+    cmd = "python3 - <<-'EOF'\n\t{1, 2}\n\tEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/allows-python-dash-heredoc-tab-terminator", cmd, False)
+
+
+def test_safe_shell_allows_sudo_python_heredoc(tmp_dir: Path) -> None:
+    cmd = "sudo python3 - <<'EOF'\n{1, 2}\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/allows-sudo-python-heredoc", cmd, False)
+
+
+def test_safe_shell_denies_bash_quoted_heredoc_rm_root(tmp_dir: Path) -> None:
+    cmd = "bash <<'EOF'\n" + _HH3_RM + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-bash-quoted-heredoc-rm-root", cmd, True)
+
+
+def test_safe_shell_denies_sh_heredoc_rm_root(tmp_dir: Path) -> None:
+    cmd = "sh <<'EOF'\n" + _HH3_RM + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-sh-heredoc-rm-root", cmd, True)
+
+
+def test_safe_shell_denies_cat_heredoc_piped_to_bash(tmp_dir: Path) -> None:
+    cmd = "cat <<'EOF' | bash\n" + _HH3_RM + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-cat-heredoc-piped-to-bash", cmd, True)
+
+
+def test_safe_shell_denies_unquoted_cat_heredoc_substitution(tmp_dir: Path) -> None:
+    cmd = "cat <<EOF\n$(" + _HH3_RM + ")\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-unquoted-cat-heredoc-substitution", cmd, True)
+
+
+def test_safe_shell_denies_unquoted_python_heredoc_substitution(tmp_dir: Path) -> None:
+    cmd = "python3 <<EOF\n$(" + _HH3_RM + ")\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-unquoted-python-heredoc-substitution", cmd, True)
+
+
+def test_safe_shell_denies_python_heredoc_os_system_rm_root(tmp_dir: Path) -> None:
+    # D-2 tightening: allowed before PH3 (only the -c form was scanned).
+    cmd = "python3 - <<'EOF'\nimport os\nos.system('" + _HH3_RM + "')\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-python-heredoc-os-system-rm-root", cmd, True)
+
+
+def test_safe_shell_denies_rm_root_on_heredoc_header_line(tmp_dir: Path) -> None:
+    cmd = "python3 - <<'EOF' && " + _HH3_RM + "\nprint(1)\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-rm-root-on-heredoc-header-line", cmd, True)
+
+
+def test_safe_shell_denies_rm_root_after_heredoc_terminator(tmp_dir: Path) -> None:
+    cmd = "python3 - <<'EOF'\nprint(1)\nEOF\n" + _HH3_RM
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-rm-root-after-heredoc-terminator", cmd, True)
+
+
+def test_safe_shell_denies_python_heredoc_missing_terminator_with_set_line(tmp_dir: Path) -> None:
+    cmd = "python3 - <<'EOF'\n{1, 2}\nprint(1)"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-python-heredoc-missing-terminator-with-set-line", cmd, True)
+
+
+def test_safe_shell_denies_rm_after_terminator_of_commented_header_heredoc(tmp_dir: Path) -> None:
+    # A `#` comment on the header would swallow the newline after stripping and
+    # merge the next line into the header; such headers must stay unstripped.
+    cmd = "python3 - <<'EOF' # note\nprint(1)\nEOF\n" + _HH3_RM
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-rm-after-terminator-of-commented-header-heredoc", cmd, True)
+
+
+def test_safe_shell_denies_rm_after_terminator_of_ampersand_header_heredoc(tmp_dir: Path) -> None:
+    # A header ending in a punctuation run (`&`) would merge with the next line
+    # after stripping; such headers must stay unstripped.
+    cmd = "python3 - <<'EOF' &\nprint(1)\nEOF\n" + _HH3_RM
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-rm-after-terminator-of-ampersand-header-heredoc", cmd, True)
+
+
+def test_safe_shell_denies_quoted_heredoc_operator_arg_hiding_rm(tmp_dir: Path) -> None:
+    cmd = "python3 -c 'print(1)' \"<<'EOF'\"\n" + _HH3_RM + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-quoted-heredoc-operator-arg-hiding-rm", cmd, True)
+
+
+def test_safe_shell_denies_python_heredoc_piped_to_bash_with_set_line(tmp_dir: Path) -> None:
+    cmd = "python3 - <<'EOF' | bash\n{1, 2}\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-python-heredoc-piped-to-bash-with-set-line", cmd, True)
+
+
+def test_safe_shell_denies_fork_bomb_inside_python_heredoc(tmp_dir: Path) -> None:
+    cmd = "python3 - <<'EOF'\n:(){ :|:& };:\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-fork-bomb-inside-python-heredoc", cmd, True)
+
+
+def test_safe_shell_denies_perl_quoted_heredoc_backtick_rm_root(tmp_dir: Path) -> None:
+    cmd = "perl <<'EOF'\n" + _HH3_BT + _HH3_RM + _HH3_BT + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-perl-quoted-heredoc-backtick-rm-root", cmd, True)
+
+
+def test_safe_shell_denies_ruby_quoted_heredoc_backtick_rm_root(tmp_dir: Path) -> None:
+    cmd = "ruby <<'EOF'\n" + _HH3_BT + _HH3_RM + _HH3_BT + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-ruby-quoted-heredoc-backtick-rm-root", cmd, True)
+
+
+def test_safe_shell_denies_node_quoted_heredoc_backtick_line(tmp_dir: Path) -> None:
+    # A body line that STARTS with a backtick is denied today via argv0
+    # `_looks_dynamic`; node bodies are never stripped so this stays denied.
+    # (`execSync(<backtick>rm -rf /<backtick>)` is NOT denied today and is
+    # intentionally not claimed here; the unit table asserts it stays unstripped.)
+    cmd = "node <<'EOF'\n" + _HH3_BT + _HH3_RM + _HH3_BT + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-node-quoted-heredoc-backtick-line", cmd, True)
+
+
+def test_safe_shell_denies_perl_quoted_heredoc_backtick_after_set_literal_line(tmp_dir: Path) -> None:
+    cmd = "perl <<'EOF'\n{1, 2}\n" + _HH3_BT + _HH3_RM + _HH3_BT + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-perl-quoted-heredoc-backtick-after-set-literal-line", cmd, True)
+
+
+def test_safe_shell_denies_python_c_stdin_read_heredoc_rm_root(tmp_dir: Path) -> None:
+    # Errata item 2: denied today because the body is tokenized; must stay
+    # unstripped (python -c header) so it is still denied after PH3.
+    cmd = "python3 -c 'import os,sys; os.system(sys.stdin.read())' <<'EOF'\n" + _HH3_RM + "\nEOF"
+    _hh3_expect(tmp_dir, "safe-shell-guard/denies-python-c-stdin-read-heredoc-rm-root", cmd, True)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -25953,6 +26186,32 @@ def main() -> int:
         test_pretooluse_guard_denies_redirect_memory(hh_tmp / "hh-2-12")
         test_pretooluse_guard_heuristic_only_escalation_wording(hh_tmp / "hh-2-13")
         test_pretooluse_guard_structural_escalation_wording_unchanged(hh_tmp / "hh-2-14")
+        test_safe_shell_strip_heredoc_bodies_unit()
+        test_safe_shell_allows_python_heredoc_set_literal_line(hh_tmp / "hh-3-2")
+        test_safe_shell_allows_python_heredoc_dollar_line(hh_tmp / "hh-3-3")
+        test_safe_shell_allows_merge_apply_json_heredoc(hh_tmp / "hh-3-4")
+        test_safe_shell_allows_python_double_quoted_delim_heredoc(hh_tmp / "hh-3-5")
+        test_safe_shell_allows_python_dash_heredoc_tab_terminator(hh_tmp / "hh-3-6")
+        test_safe_shell_allows_sudo_python_heredoc(hh_tmp / "hh-3-7")
+        test_safe_shell_denies_bash_quoted_heredoc_rm_root(hh_tmp / "hh-3-8")
+        test_safe_shell_denies_sh_heredoc_rm_root(hh_tmp / "hh-3-9")
+        test_safe_shell_denies_cat_heredoc_piped_to_bash(hh_tmp / "hh-3-10")
+        test_safe_shell_denies_unquoted_cat_heredoc_substitution(hh_tmp / "hh-3-11")
+        test_safe_shell_denies_unquoted_python_heredoc_substitution(hh_tmp / "hh-3-12")
+        test_safe_shell_denies_python_heredoc_os_system_rm_root(hh_tmp / "hh-3-13")
+        test_safe_shell_denies_rm_root_on_heredoc_header_line(hh_tmp / "hh-3-14")
+        test_safe_shell_denies_rm_root_after_heredoc_terminator(hh_tmp / "hh-3-15")
+        test_safe_shell_denies_python_heredoc_missing_terminator_with_set_line(hh_tmp / "hh-3-16")
+        test_safe_shell_denies_rm_after_terminator_of_commented_header_heredoc(hh_tmp / "hh-3-17")
+        test_safe_shell_denies_rm_after_terminator_of_ampersand_header_heredoc(hh_tmp / "hh-3-26")
+        test_safe_shell_denies_quoted_heredoc_operator_arg_hiding_rm(hh_tmp / "hh-3-18")
+        test_safe_shell_denies_python_heredoc_piped_to_bash_with_set_line(hh_tmp / "hh-3-19")
+        test_safe_shell_denies_fork_bomb_inside_python_heredoc(hh_tmp / "hh-3-20")
+        test_safe_shell_denies_perl_quoted_heredoc_backtick_rm_root(hh_tmp / "hh-3-21")
+        test_safe_shell_denies_ruby_quoted_heredoc_backtick_rm_root(hh_tmp / "hh-3-22")
+        test_safe_shell_denies_node_quoted_heredoc_backtick_line(hh_tmp / "hh-3-23")
+        test_safe_shell_denies_perl_quoted_heredoc_backtick_after_set_literal_line(hh_tmp / "hh-3-24")
+        test_safe_shell_denies_python_c_stdin_read_heredoc_rm_root(hh_tmp / "hh-3-25")
 
     print()
     if _errors:

@@ -139,6 +139,14 @@ docstring characterized it):
     non-whitespace-padded) bodies. Fixing this properly would require
     either stripping comments before matching or a materially different
     detection strategy -- out of scope for this round.
+  - Heredocs: the body of a QUOTED-delimiter heredoc (`<<'EOF'`/`<<"EOF"`)
+    consumed by a bare `python`/`python3` (no `-c`/`-m`, no shell/interpreter
+    sink elsewhere on the header line) is treated as data, not shell, so
+    dict/set literals and `$` in it are not mis-scanned; the body is still
+    scanned for the fixed `os.system(...)`-style shell-out shapes. Every other
+    heredoc (perl/ruby/node/cat/bash/sh, unquoted or `<<-` delimiter, unparseable
+    or unterminated) keeps full tokenization, unchanged from before. Python
+    bodies are NOT a real parse: obfuscated shell-outs inside them are not resolved.
   - Any wrapper/interpreter/shell construct not explicitly named above
     (e.g. `awk`/`perl` one-liners without `-e`, arbitrary custom scripts,
     other language runtimes) is NOT unwrapped.
@@ -212,6 +220,18 @@ INTERPRETER_INLINE_FLAGS = {
     "node": ("-e", "--eval"),
 }
 SCRIPTING_INTERPRETERS = set(INTERPRETER_INLINE_FLAGS)
+# Heredoc-body stripping (see `_strip_heredoc_bodies`): the ONLY consumers whose
+# quoted-delimiter heredoc body is treated as data. Deliberately NOT
+# SCRIPTING_INTERPRETERS: perl/ruby/node bodies stay fully tokenized so their
+# decision is unchanged from today.
+HEREDOC_DATA_INTERPRETERS = {"python", "python3"}
+# Any OTHER command on the heredoc header line whose name is here means the
+# heredoc-bearing command's output (or the heredoc itself) may reach a shell or
+# code-reading interpreter, so the body is not stripped.
+HEREDOC_SHELL_SINKS = INTERPRETER_C_SHELLS | {
+    "eval", "xargs", "ssh", "su", "source", ".", "perl", "ruby", "node", "python", "python3",
+}
+_HEREDOC_WORD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # Best-effort, fixed list of common OS-command-execution call shapes to
 # regex-extract a shell-command string argument from within interpreter
 # code (CRITICAL-C) -- NOT a real language parser, see module docstring.
@@ -592,6 +612,162 @@ def _extract_embedded_calls(code: str) -> list:
     return [m.group(2) for m in DANGEROUS_CALL_RE.finditer(code)]
 
 
+def _heredoc_header_strippable(header: str) -> bool:
+    """True when the heredoc header line's consumer is a python/python3 that
+    reads the body as DATA or as its stdin script (never `-c`/`-m`), and no
+    other command on the line is a shell/code-reading sink."""
+    if header.rstrip()[-1:] in ("(", ")", ";", "<", ">", "|", "&"):
+        # A trailing punctuation run would merge with the following line's
+        # first token once the body is removed (shlex quirk), hiding it.
+        return False
+    subcommands = _split_subcommands(header)
+    if not subcommands:
+        return False
+    consumers = [sub for sub in subcommands if "<<" in sub]
+    if len(consumers) != 1:
+        return False
+    consumer = consumers[0]
+    idx = _skip_wrapper_prefixes(consumer)
+    if idx >= len(consumer) or os.path.basename(consumer[idx]) not in HEREDOC_DATA_INTERPRETERS:
+        return False
+    for tok in consumer[idx + 1 :]:
+        # `-c`/`-m` (alone or bundled, e.g. `-uc`) make stdin/argv code.
+        if tok.startswith("-") and not tok.startswith("--") and ("c" in tok or "m" in tok):
+            return False
+    for sub in subcommands:
+        if sub is consumer:
+            continue
+        sub_idx = _skip_wrapper_prefixes(sub)
+        # Wrapper prefixes (e.g. a bare `xargs`) are skipped by
+        # `_skip_wrapper_prefixes`, so check the prefix region and the
+        # resolved command name.
+        if any(os.path.basename(t) in HEREDOC_SHELL_SINKS for t in sub[: sub_idx + 1]):
+            return False
+    return True
+
+
+def _strip_heredoc_bodies(command: str) -> tuple | None:
+    """Remove the bodies of quoted-delimiter (`<<'W'`/`<<"W"`) heredocs whose
+    consumer is python/python3 so data lines in them (dict/set literals, `$`)
+    are not mis-scanned as shell. Returns `(stripped_text, [body, ...])`, with
+    `stripped_text == command` when nothing was stripped, or None on any parse
+    doubt (the caller then scans the original command exactly as before).
+
+    Bodies of every other heredoc (perl/ruby/node/cat/bash/sh, unquoted
+    delimiter, `-c`/`-m` python headers, sink on the header line, header with
+    a `#` comment or trailing punctuation) are kept verbatim, so their
+    decision is unchanged from today. Header lines and everything after the
+    terminator stay in `stripped_text`. Single left-to-right scan that tracks
+    quotes, backslash escapes and `#` comments outside heredoc bodies.
+    """
+    if "<<" not in command:
+        return command, []
+    out: list = []
+    bodies: list = []
+    n = len(command)
+    i = 0
+    seg_start = 0  # start of the current (header) line in `command`
+    quote = ""
+    pending = None  # (delimiter, quoted, dash) for the heredoc opened on this line
+    header_has_comment = False
+    while i < n:
+        ch = command[i]
+        if quote == "'":
+            if ch == "'":
+                quote = ""
+            i += 1
+            continue
+        if ch == "\\":
+            i += 2
+            continue
+        if ch in ("$", "`") and quote != "'":
+            if ch == "`" or command[i + 1 : i + 2] == "(":
+                return None
+        if quote == '"':
+            if ch == '"':
+                quote = ""
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            continue
+        if ch == "#" and (i == 0 or command[i - 1] in " \t\n;&|("):
+            header_has_comment = True
+            while i < n and command[i] != "\n":
+                i += 1
+            continue
+        if command.startswith("<<<", i):
+            i += 3
+            continue
+        if command.startswith("<<", i):
+            if pending is not None:
+                return None
+            j = i + 2
+            dash = False
+            if command[j : j + 1] == "-":
+                dash = True
+                j += 1
+            while command[j : j + 1] in (" ", "\t"):
+                j += 1
+            if command[j : j + 1] in ("'", '"'):
+                q = command[j]
+                end = command.find(q, j + 1)
+                if end < 0:
+                    return None
+                delim, quoted, j = command[j + 1 : end], True, end + 1
+            else:
+                k = j
+                while k < n and (command[k].isalnum() or command[k] == "_"):
+                    k += 1
+                delim, quoted, j = command[j:k], False, k
+            if not _HEREDOC_WORD_RE.match(delim):
+                return None
+            if j < n and command[j] not in " \t\n;&|)<>":
+                return None
+            pending = (delim, quoted, dash)
+            i = j
+            continue
+        if ch == "\n":
+            if pending is not None:
+                delim, quoted, dash = pending
+                header = command[seg_start:i]
+                body_start = i + 1
+                pos = body_start
+                term_end = -1
+                while pos <= n:
+                    nl = command.find("\n", pos)
+                    line_end = n if nl < 0 else nl
+                    line = command[pos:line_end]
+                    if (line.lstrip("\t") if dash else line) == delim:
+                        term_end = line_end + 1 if nl >= 0 else n
+                        body_end = pos
+                        break
+                    if nl < 0:
+                        break
+                    pos = nl + 1
+                if term_end < 0:
+                    return None
+                if quoted and not header_has_comment and _heredoc_header_strippable(header):
+                    out.append(command[seg_start:body_start])
+                    bodies.append(command[body_start:body_end])
+                else:
+                    out.append(command[seg_start:term_end])
+                seg_start = term_end
+                i = term_end
+                pending = None
+                header_has_comment = False
+                continue
+            header_has_comment = False
+            i += 1
+            continue
+        i += 1
+    if pending is not None or quote:
+        return None
+    out.append(command[seg_start:])
+    return "".join(out), bodies
+
+
 def _wrapped_command_string(command_name: str, rest: list) -> str | None:
     """If this invocation is `eval <string>`, an interpreter `-c` wrapper
     (`bash -c "..."` / `sh -c "..."` / `zsh -c "..."` / `dash -c "..."`), a
@@ -819,7 +995,13 @@ def main() -> int:
     if _matches_fork_bomb(command):
         catastrophic.append("shell fork-bomb pattern detected")
 
-    subcommands = _split_subcommands(command)
+    # Fork-bomb detection above always runs on the ORIGINAL command. Subcommand
+    # checks run on the heredoc-stripped text (python data bodies removed) when
+    # the strip succeeded; each stripped body is still scanned for embedded
+    # shell-out calls so `os.system('rm -rf /')` in a heredoc is denied.
+    stripped = _strip_heredoc_bodies(command)
+    scan_text, heredoc_bodies = stripped if stripped is not None else (command, [])
+    subcommands = _split_subcommands(scan_text)
     if subcommands is None:
         # CRITICAL-2 fix: a command shlex cannot tokenize (e.g. an unbalanced
         # quote) must fail closed -- treated as catastrophic -- instead of
@@ -832,6 +1014,18 @@ def main() -> int:
     else:
         for tokens in subcommands:
             _check_tokens(tokens, recursive_grep_mode, catastrophic, recgrep)
+
+    for body in heredoc_bodies:
+        for call_str in _extract_embedded_calls(body):
+            call_subcommands = _split_subcommands(call_str)
+            if call_subcommands is None:
+                catastrophic.append(
+                    "could not safely parse a command string embedded in a heredoc body "
+                    "(malformed/unterminated quoting) -- failing closed"
+                )
+                continue
+            for call_tokens in call_subcommands:
+                _check_tokens(call_tokens, recursive_grep_mode, catastrophic, recgrep, depth=1)
 
     if not catastrophic and not recgrep:
         return 0
