@@ -20,6 +20,7 @@ from craftflow_hooklib import (
     log_event,
     now_iso,
     plugin_config_dir,
+    project_dir,
     read_workflow_state,
     state_root,
 )
@@ -267,23 +268,47 @@ def _fmt(n):
         return "?"
 
 
-def render_advisory(level, tokens, cfg):
-    """Single-line advisory text (DD-10); empty string for level none / unknown."""
+def _compact_mod():
+    """The compact-line module, or None when it cannot be imported (lazy: keeps the hot path cheap)."""
+    try:
+        import craftflow_context_nudge_compact as mod
+        return mod
+    except Exception:  # noqa: BLE001 - fail-open: advisory falls back to a bare /compact
+        return None
+
+
+def _advisory_line(compact_line):
+    """The command appended to the advisory (DD-12): the given /compact line, else the generic one."""
+    if isinstance(compact_line, str) and compact_line.startswith("/compact "):
+        return compact_line
+    mod = _compact_mod()
+    generic = getattr(mod, "GENERIC_COMPACT_LINE", None) if mod is not None else None
+    return generic if isinstance(generic, str) and generic else "/compact"
+
+
+def render_advisory(level, tokens, cfg, compact_line=None):
+    """Single-line advisory text (DD-10/DD-12); empty string for level none / unknown.
+
+    The ready-to-paste /compact command is always the final segment."""
     try:
         cfg = cfg if isinstance(cfg, dict) else DEFAULTS
         window = _fmt(cfg.get("assumedWindow", DEFAULTS["assumedWindow"]))
+        text = ""
         if level == "warn":
-            return (f"CRAFTFLOW context advisory: this session's context is about {_fmt(tokens)} tokens "
+            text = (f"CRAFTFLOW context advisory: this session's context is about {_fmt(tokens)} tokens "
                     f"(warn threshold {_fmt(cfg.get('warnTokens', DEFAULTS['warnTokens']))}; "
                     f"assumed window {window}). Tell the user once, in one sentence, that running "
                     "/compact at the next natural pause (for example a craftflow phase boundary) keeps "
                     "answer quality up; craftflow workflow state survives compaction. Do not stop the "
                     "current task because of this note.")
-        if level == "critical":
-            return (f"CRAFTFLOW context advisory: this session's context is about {_fmt(tokens)} tokens "
+        elif level == "critical":
+            text = (f"CRAFTFLOW context advisory: this session's context is about {_fmt(tokens)} tokens "
                     f"(critical threshold {_fmt(cfg.get('criticalTokens', DEFAULTS['criticalTokens']))}; "
                     f"assumed window {window}). Auto-compaction may fire soon: finish the current step, "
                     "checkpoint durable state, and ask the user to run /compact before starting new work.")
+        if text:
+            return (text + " Show the user this ready-to-paste command verbatim on its own line "
+                    "(do not run it): " + _advisory_line(compact_line))
     except Exception:  # noqa: BLE001 - totality (P3)
         pass
     return ""
@@ -427,19 +452,62 @@ def save_state(path, state):
 # Entry points (each returns 0; nothing propagates out)
 # ---------------------------------------------------------------------------
 
+def _effective_settings(read_thresholds):
+    """DD-6: effective mode (user override over plugin) and, when asked, the merged thresholds.
+
+    Never raises; on an unexpected failure it degrades to the plugin-only behavior."""
+    out = {"effective": "audit", "logged": "audit", "cfg": None, "cfg_error": None,
+           "override": "absent", "override_error": None, "override_keys": []}
+    try:
+        override = load_user_override(user_override_path(os.environ))
+        effective, logged, _from_user = resolve_mode_with_override(load_mode().get("contextNudge"), override)
+        out.update(effective=effective, logged=logged)
+        merge = (None, None, False)
+        if effective != "off" and read_thresholds:
+            plugin_cfg, plugin_err = load_config(plugin_config_dir() / "context-nudge.json")
+            merge = merge_thresholds(plugin_cfg, plugin_err, override)
+            out.update(cfg=merge[0], cfg_error=merge[1])
+        out["override"], out["override_error"], out["override_keys"] = override_fields(override, merge)
+    except Exception:  # noqa: BLE001 - fail-open contract
+        try:
+            effective, logged = resolve_mode(load_mode().get("contextNudge"))
+            out.update(effective=effective, logged=logged)
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
+
+def _compact_binding(sid, transcript_path):
+    """(snapshot|None, reason, wf|None, line): the /compact command for a session's nudge (DD-8/DD-13).
+
+    A failing lookup degrades to the generic line and never reaches the caller's handler."""
+    mod = _compact_mod()
+    if mod is None:
+        return None, "lookup_error", None, "/compact"
+    try:
+        snap, reason, cwf = mod.resolve_active_workflow(
+            state_root() / "workflows", transcript_path, sid, str(project_dir()), time.time())
+        return snap, reason, cwf, mod.build_compact_line(snap)
+    except Exception:  # noqa: BLE001 - never suppress the advisory
+        return None, "lookup_error", None, mod.GENERIC_COMPACT_LINE
+
 def hook_main(data):
     """UserPromptSubmit hook. Check order: event guard, mode, config, session_id, transcript."""
     row = {"schema": SCHEMA_VERSION, "source": "hook", "mode": None, "session_id": None, "level": None,
            "tokens": None, "token_source": None, "threshold": None, "last_level": None,
-           "outcome": "error", "error": None}
+           "outcome": "error", "error": None, "override": None, "override_error": None,
+           "override_keys": None, "compact_source": None, "compact_reason": None, "compact_wf": None}
     try:
         data = data if isinstance(data, dict) else {}
         if data.get("hook_event_name") not in (None, "UserPromptSubmit"):
             return 0
-        effective, row["mode"] = resolve_mode(load_mode().get("contextNudge"))
+        settings = _effective_settings(True)  # skips the threshold read itself when the mode is off
+        effective, row["mode"] = settings["effective"], settings["logged"]
         if effective == "off":
             return 0
-        cfg, cerr = load_config(plugin_config_dir() / "context-nudge.json")
+        cfg, cerr = settings["cfg"], settings["cfg_error"]
+        row.update(override=settings["override"], override_error=settings["override_error"],
+                   override_keys=settings["override_keys"])
         if cerr:
             row["error"] = cerr
             log_event("context_nudge", row)
@@ -472,6 +540,11 @@ def hook_main(data):
                                     "last_level": d["new_last_level"], "boundary_level": new_b,
                                     "last_tokens": m["tokens"], "transcript_path": tpath,
                                     "updated_at": now_iso()})
+        line = None
+        if d["action"] in ("nudge", "would_nudge"):  # DD-13: look up only once per crossing
+            snap, creason, cwf, line = _compact_binding(sid, data.get("transcript_path"))
+            row.update(compact_source="workflow" if snap else "generic", compact_reason=creason,
+                       compact_wf=cwf if snap else None)
         if d["action"] in ("nudge", "would_nudge", "rearmed") or not saved:
             threshold = (cfg["criticalTokens"] if level == "critical"
                          else cfg["warnTokens"] if level == "warn" else None)
@@ -481,7 +554,7 @@ def hook_main(data):
                        error=None if saved else "state_write_failed")
             log_event("context_nudge", row)
         if d["action"] == "nudge":
-            msg = render_advisory(level, m["tokens"], cfg)
+            msg = render_advisory(level, m["tokens"], cfg, line)
             json_print({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
                                                "additionalContext": msg},
                         "systemMessage": msg})
@@ -498,10 +571,14 @@ def hook_main(data):
 def reset_main(data):
     """SessionStart(compact): drop this session's dedup state and prune stale state files."""
     row = {"schema": SCHEMA_VERSION, "source": "reset", "mode": None, "session_id": None,
-           "outcome": "error", "had_state": False, "error": None}
+           "outcome": "error", "had_state": False, "error": None, "override": None,
+           "override_error": None, "override_keys": None}
     try:
         data = data if isinstance(data, dict) else {}
-        effective, row["mode"] = resolve_mode(load_mode().get("contextNudge"))
+        settings = _effective_settings(False)
+        effective, row["mode"] = settings["effective"], settings["logged"]
+        row.update(override=settings["override"], override_error=settings["override_error"],
+                   override_keys=settings["override_keys"])
         if effective == "off" or data.get("source") != "compact":
             return 0
         sid = safe_session_id(data.get("session_id"))
@@ -572,10 +649,11 @@ def write_checkpoint(path, snapshot):
     return save_state(path, snapshot)
 
 
-def _build_checkpoint(wf, phase, tokens, level, sid, cfg):
-    """Snapshot dict via the PreCompact builders, or (None, error). Lazy import (DD-3)."""
-    payload, path, perr = read_workflow_state(wf)
-    if path is None:
+def _build_checkpoint(payload, apath, perr, phase, tokens, level, sid, cfg, compact_line):
+    """Snapshot dict via the PreCompact builders, or (None, error). Lazy import (DD-3).
+
+    The caller reads the workflow artifact once (DD-13a) and passes `payload`, its path and parse error."""
+    if apath is None:
         return None, "workflow_missing"
     if perr or not isinstance(payload, dict):
         return None, "workflow_unreadable"
@@ -591,7 +669,7 @@ def _build_checkpoint(wf, phase, tokens, level, sid, cfg):
                  "model_context": window, "source": "transcript"}
     snap = pcs._build_snapshot(payload, "phase_boundary", usage, digest)
     snap.update(source="phase_boundary", phase=phase, context_tokens=tokens, context_level=level,
-                session_id=sid)
+                session_id=sid, compact_command=compact_line)
     return snap, None
 
 
@@ -599,17 +677,22 @@ def boundary_main(args):
     """Router CLI: always prints exactly one JSON line, returns 0 (DD-11/12/13)."""
     res = boundary_result(outcome="error", error="unexpected")
     try:
+        extra = {"override": None, "override_error": None, "override_keys": None,
+                 "compact_source": None, "compact_reason": None, "compact_wf": None}
         if args.project_root:
             os.environ["CLAUDE_PROJECT_DIR"] = args.project_root
-        effective, logged = resolve_mode(load_mode().get("contextNudge"))
+        settings = _effective_settings(True)  # skips the threshold read itself when the mode is off
+        effective, logged = settings["effective"], settings["logged"]
         if effective == "off":
             res = boundary_result(mode="off", outcome="off")
             return 0
+        extra.update(override=settings["override"], override_error=settings["override_error"],
+                     override_keys=settings["override_keys"])
         res = boundary_result(mode=logged, phase=args.phase, outcome="error")
-        cfg, cerr = load_config(plugin_config_dir() / "context-nudge.json")
+        cfg, cerr = settings["cfg"], settings["cfg_error"]
         if cerr:
             res = boundary_result(mode=logged, phase=args.phase, outcome="error", error=cerr)
-            log_event("context_nudge", _boundary_row(res, args.wf))
+            log_event("context_nudge", _boundary_row(res, args.wf, extra))
             return 0
         error = None
         wf = safe_wf(args.wf)
@@ -627,10 +710,34 @@ def boundary_main(args):
                 last = state.get("last_tokens")
                 tokens = last if type(last) is int and last > 0 else None
             level = classify(tokens, cfg["warnTokens"], cfg["criticalTokens"])
+        payload, apath, perr = None, None, None
+        snapshot, compact_reason, line = None, "bad_wf", "/compact"
+        mod = _compact_mod()
+        if mod is None:
+            compact_reason = "lookup_error"
+        else:
+            line = mod.GENERIC_COMPACT_LINE
+            try:  # the line is best-effort: it must never suppress relay (same rule as E21)
+                if wf is not None:
+                    payload, apath, perr = read_workflow_state(wf)
+                    if apath is None:
+                        compact_reason = "workflow_missing"
+                    elif perr or not isinstance(payload, dict):
+                        compact_reason = "workflow_unreadable"
+                    else:
+                        snapshot = mod.workflow_snapshot(
+                            payload, wf, args.project_root or str(project_dir()))
+                        compact_reason = "explicit_wf"
+                    line = mod.build_compact_line(snapshot)
+            except Exception:  # noqa: BLE001
+                snapshot, compact_reason, line = None, "lookup_error", mod.GENERIC_COMPACT_LINE
+        extra.update(compact_source="workflow" if snapshot else "generic", compact_reason=compact_reason,
+                     compact_wf=wf if snapshot else None)
         checkpoint_path = None
         if wf is not None:
             try:  # a checkpoint failure must never suppress relay (E21)
-                snap, cerr2 = _build_checkpoint(wf, args.phase, tokens, level, sid, cfg)
+                snap, cerr2 = _build_checkpoint(payload, apath, perr, args.phase, tokens, level, sid,
+                                                cfg, line)
                 target = state_dir / ("checkpoint-" + wf + ".json")
                 if snap is not None and write_checkpoint(target, snap):
                     checkpoint_path = str(target)
@@ -652,10 +759,10 @@ def boundary_main(args):
         res = boundary_result(
             mode=logged, level=level if tokens is not None else None, tokens=tokens,
             threshold=threshold, assumed_window=cfg["assumedWindow"], relay=b["relay"],
-            advisory=render_advisory(level, tokens, cfg) if b["relay"] else None,
+            advisory=render_advisory(level, tokens, cfg, line) if b["relay"] else None,
             checkpoint_path=checkpoint_path, session_id=sid, session_source=session_source,
             phase=args.phase, outcome=b["outcome"], error=error)
-        log_event("context_nudge", _boundary_row(res, args.wf))
+        log_event("context_nudge", _boundary_row(res, args.wf, extra))
         return 0
     except Exception as exc:  # noqa: BLE001 - fail-open contract
         res = boundary_result(phase=getattr(args, "phase", None), outcome="error",
@@ -665,10 +772,11 @@ def boundary_main(args):
         print(json.dumps(res))
 
 
-def _boundary_row(res, wf):
-    """Log row for a boundary invocation; no 'event' key (DD-8)."""
+def _boundary_row(res, wf, extra=None):
+    """Log row for a boundary invocation; no 'event' key (DD-8). `extra` adds the override/compact fields."""
     row = {k: res.get(k) for k in ("mode", "level", "tokens", "threshold", "relay", "checkpoint_path",
                                    "session_id", "session_source", "phase", "outcome", "error")}
+    row.update(extra or {})
     row.update(schema=SCHEMA_VERSION, source="boundary", wf=wf)
     return row
 

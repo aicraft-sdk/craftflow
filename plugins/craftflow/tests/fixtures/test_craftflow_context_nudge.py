@@ -1760,6 +1760,305 @@ def test_compact_module_import_cheap():
 
 
 # ---------------------------------------------------------------------------
+# Phase 4: user override + /compact line wired into hook, reset and boundary
+# ---------------------------------------------------------------------------
+
+_LINE_MARK = "(do not run it): "
+
+
+def _user_file(box, obj_or_bytes):
+    """Write the scratch user-override file and return the env_extra that points the seam at it."""
+    path = box.root / "user-override.json"
+    if isinstance(obj_or_bytes, bytes):
+        path.write_bytes(obj_or_bytes)
+    else:
+        path.write_text(json.dumps(obj_or_bytes), encoding="utf-8")
+    return {"CRAFTFLOW_CONTEXT_NUDGE_USER_CONFIG": str(path)}
+
+
+def _transcript_with_mention(box, tokens, *wfs):
+    rows = [json.dumps({"type": "user", "message": {"content": "working on " + wf}}) for wf in wfs]
+    rows.append(_assistant_line(tokens))
+    path = box.tdir / "t.jsonl"
+    _write_lines(path, rows)
+    return path
+
+
+def _advisory_line(msg):
+    assert _LINE_MARK in msg, msg
+    return msg.split(_LINE_MARK, 1)[1]
+
+
+def _bound_line(wf=WF):
+    return ("/compact Keep craftflow workflow " + wf + " (BUILD; phase P1; plan docs/plans/x.md). "
+            "Preserve its decisions, open questions, failing checks and next step; after compaction "
+            "resume from .craftflow/state/workflows/" + wf + ".json.")
+
+
+def test_hook_user_on_beats_plugin_audit():
+    box = _Box("audit")
+    box.transcript(130000)
+    env = _user_file(box, {"contextNudge": "on"})
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box, env_extra=env)
+    assert code == 0, code
+    payload = json.loads(out)
+    msg = payload["systemMessage"]
+    assert msg == payload["hookSpecificOutput"]["additionalContext"], payload
+    assert _advisory_line(msg).startswith("/compact "), msg
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert row["outcome"] == "nudged" and row["override"] == "applied", row
+    assert row["override_keys"] == ["contextNudge"] and row["mode"] == "on", row
+
+
+def test_hook_user_off_beats_plugin_on_inert():
+    box = _Box("on", config={"warnTokens": 1000, "criticalTokens": 100000, "assumedWindow": 200000})
+    box.transcript(130000)
+    env = _user_file(box, {"contextNudge": "off"})
+    before = _fs_snapshot(box.project)
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box, env_extra=env)
+    assert code == 0 and out == "" and rows == [], (code, out, rows)
+    assert _fs_snapshot(box.project) == before
+
+
+def test_hook_user_thresholds_layer_over_plugin():
+    box = _Box("on")
+    box.transcript(5000)
+    env = _user_file(box, {"warnTokens": 1000})
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box, env_extra=env)
+    assert code == 0 and json.loads(out)["systemMessage"], (code, out)
+    assert len(rows) == 1 and rows[0]["outcome"] == "nudged" and rows[0]["level"] == "warn", rows
+    assert rows[0]["threshold"] == 1000 and rows[0]["override_keys"] == ["warnTokens"], rows
+
+
+def test_hook_user_corrupt_falls_back_and_logs():
+    box = _Box("on", config={"warnTokens": 1000, "criticalTokens": 100000, "assumedWindow": 200000})
+    box.transcript(5000)
+    env = _user_file(box, b"{not json")
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box, env_extra=env)
+    assert code == 0 and json.loads(out)["systemMessage"], (code, out)
+    assert len(rows) == 1 and rows[0]["outcome"] == "nudged" and rows[0]["threshold"] == 1000, rows
+    assert rows[0]["override"] == "error" and rows[0]["override_error"] == "corrupt", rows[0]
+
+
+def test_hook_user_partial_invalid_value():
+    box = _Box("audit")
+    box.transcript(130000)
+    env = _user_file(box, {"contextNudge": "on", "warnTokens": True})
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box, env_extra=env)
+    assert code == 0 and json.loads(out)["systemMessage"], (code, out)
+    row = rows[0]
+    assert row["outcome"] == "nudged" and row["override"] == "partial", row
+    assert row["override_error"] == "invalid_value" and row["override_keys"] == ["contextNudge"], row
+
+
+def test_hook_user_inconsistent_thresholds_fall_back():
+    box = _Box("on")
+    box.transcript(130000)
+    env = _user_file(box, {"warnTokens": 200000, "criticalTokens": 150000})
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box, env_extra=env)
+    assert code == 0 and json.loads(out)["systemMessage"], (code, out)
+    row = rows[0]
+    assert row["outcome"] == "nudged" and row["level"] == "warn" and row["threshold"] == 120000, row
+    assert row["override_error"] == "inconsistent_thresholds", row
+
+
+def test_hook_nudge_line_bound_to_mentioned_workflow():
+    box = _Box("on")
+    _seed_wf(box)
+    _transcript_with_mention(box, 130000, WF)
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box)
+    assert code == 0, code
+    msg = json.loads(out)["systemMessage"]
+    assert msg.endswith(_LINE_MARK + _bound_line()), msg
+    assert "\n" not in msg
+    row = rows[0]
+    assert row["compact_source"] == "workflow" and row["compact_reason"] == "single_candidate", row
+    assert row["compact_wf"] == WF, row
+
+
+def test_hook_nudge_generic_line_without_workflow():
+    box = _Box("on")
+    box.transcript(130000)
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box)
+    assert code == 0, code
+    msg = json.loads(out)["systemMessage"]
+    assert msg.endswith(_LINE_MARK + cc.GENERIC_COMPACT_LINE), msg
+    row = rows[0]
+    assert row["compact_source"] == "generic" and row["compact_reason"] == "no_mention", row
+    assert row["compact_wf"] is None, row
+
+
+def test_hook_nudge_ambiguous_two_live_generic():
+    box = _Box("on")
+    _seed_wf(box, "wf-t-0001")
+    _seed_wf(box, "wf-t-0002")
+    wdir = box.project / ".craftflow" / "state" / "workflows"
+    now = time.time()
+    os.utime(str(wdir / "wf-t-0001.json"), (now - 10, now - 10))
+    os.utime(str(wdir / "wf-t-0002.json"), (now - 100, now - 100))
+    _transcript_with_mention(box, 130000, "wf-t-0001", "wf-t-0002")  # latest mention = older mtime
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box)
+    assert code == 0, code
+    assert json.loads(out)["systemMessage"].endswith(_LINE_MARK + cc.GENERIC_COMPACT_LINE)
+    row = rows[0]
+    assert row["compact_source"] == "generic" and row["compact_reason"] == "ambiguous", row
+    assert row["compact_wf"] is None, row
+
+
+def test_hook_audit_would_nudge_logs_binding_no_stdout():
+    box = _Box("audit")
+    _seed_wf(box)
+    _transcript_with_mention(box, 130000, WF)
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box)
+    assert code == 0 and out == "", (code, out)
+    row = rows[0]
+    assert row["outcome"] == "would_nudge" and row["compact_source"] == "workflow", row
+    assert row["compact_reason"] == "single_candidate" and row["compact_wf"] == WF, row
+
+
+def test_hook_no_change_path_never_looks_up():
+    import contextlib
+    import io
+    box = _Box("on")
+    tpath = box.transcript(130000)
+    assert cn.save_state(box.state_dir / "s1.json", {
+        "schema": 1, "session_id": "s1", "last_level": "warn", "boundary_level": "warn",
+        "last_tokens": 130000, "transcript_path": str(tpath), "updated_at": "2026-01-01T00:00:00Z"})
+    original = cc.resolve_active_workflow
+    saved_env = {k: os.environ.get(k) for k in ("CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR")}
+
+    def boom(*_a, **_k):
+        raise RuntimeError("lookup must not run")
+
+    try:
+        os.environ["CLAUDE_PLUGIN_ROOT"] = str(box.plugin)
+        os.environ["CLAUDE_PROJECT_DIR"] = str(box.project)
+        cc.resolve_active_workflow = boom
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            assert cn.hook_main(_prompt(box)) == 0
+        assert buf.getvalue() == "" and log_rows(box) == [], (buf.getvalue(), log_rows(box))
+        # a fresh crossing does look up; a raising lookup degrades to the generic line, never suppresses
+        assert cn.save_state(box.state_dir / "s1.json", {
+            "schema": 1, "session_id": "s1", "last_level": "none", "boundary_level": "none",
+            "last_tokens": 1, "transcript_path": str(tpath), "updated_at": "2026-01-01T00:00:00Z"})
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            assert cn.hook_main(_prompt(box)) == 0
+        rows = log_rows(box)
+        assert len(rows) == 1 and rows[0]["compact_reason"] == "lookup_error", rows
+        assert rows[0]["compact_source"] == "generic" and rows[0]["compact_wf"] is None, rows
+        assert json.loads(buf.getvalue())["systemMessage"].endswith(_LINE_MARK + cc.GENERIC_COMPACT_LINE)
+    finally:
+        cc.resolve_active_workflow = original
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def test_reset_honors_user_off():
+    box = _Box("audit")
+    box.transcript(130000)
+    run_script(_prompt(box), box=box)
+    assert (box.state_dir / "s1.json").exists()
+    env = _user_file(box, {"contextNudge": "off"})
+    reset = {"hook_event_name": "SessionStart", "source": "compact", "session_id": "s1"}
+    code, out, _err, rows, _ = run_script(reset, box=box, args=("--reset",), env_extra=env)
+    assert code == 0 and out == "", (code, out)
+    assert [r for r in rows if r.get("source") == "reset"] == [], rows
+    assert (box.state_dir / "s1.json").exists()
+
+
+def test_boundary_user_override_mode_and_thresholds():
+    box = _Box("audit")
+    _seed_wf(box)
+    _seed_session(box, "s1", 5000)
+    env = _user_file(box, {"contextNudge": "on", "warnTokens": 1000})
+    r = _bnd(box, env_extra=env)
+    assert r["relay"] is True and r["level"] == "warn" and r["threshold"] == 1000, r
+    assert r["mode"] == "on" and r["outcome"] == "advised", r
+
+
+def test_boundary_advisory_and_checkpoint_carry_line():
+    box = _Box("on")
+    _seed_wf(box)
+    _seed_session(box, "s1", 130000)
+    r = _bnd(box, "--phase", "P1")
+    assert set(r.keys()) == {"schema", *cn._BOUNDARY_KEYS}, sorted(r)
+    line = _bound_line()
+    assert r["advisory"].endswith(_LINE_MARK + line), r["advisory"]
+    snap = json.loads(_checkpoint(box).read_text(encoding="utf-8"))
+    assert snap["compact_command"] == line, snap.get("compact_command")
+    row = log_rows(box)[-1]
+    assert row["compact_reason"] == "explicit_wf" and row["compact_source"] == "workflow", row
+    assert row["compact_wf"] == WF, row
+
+
+def test_boundary_missing_or_bad_wf_generic_line():
+    box = _Box("on")
+    _seed_session(box, "s1", 130000)
+    r = _bnd(box)
+    assert r["advisory"].endswith(_LINE_MARK + cc.GENERIC_COMPACT_LINE), r
+    row = log_rows(box)[-1]
+    assert row["compact_reason"] == "workflow_missing" and row["compact_source"] == "generic", row
+    assert row["compact_wf"] is None, row
+    box2 = _Box("on")
+    _seed_session(box2, "s1", 130000)
+    r2 = _bnd(box2, wf="../x")
+    assert r2["error"] == "bad_wf" and r2["advisory"].endswith(_LINE_MARK + cc.GENERIC_COMPACT_LINE), r2
+    assert log_rows(box2)[-1]["compact_reason"] == "bad_wf"
+    box3 = _Box("on")
+    _seed_session(box3, "s1", 130000)
+    wdir = box3.project / ".craftflow" / "state" / "workflows"
+    wdir.mkdir(parents=True)
+    (wdir / (WF + ".json")).write_text("{bad", encoding="utf-8")
+    r3 = _bnd(box3)
+    assert r3["advisory"].endswith(_LINE_MARK + cc.GENERIC_COMPACT_LINE), r3
+    assert log_rows(box3)[-1]["compact_reason"] == "workflow_unreadable"
+
+
+def test_rows_carry_override_fields_no_event_key():
+    box = _Box("on")
+    _seed_wf(box)
+    _transcript_with_mention(box, 130000, WF)
+    run_script(_prompt(box), box=box)
+    _bnd(box, "--phase", "P1")
+    reset = {"hook_event_name": "SessionStart", "source": "compact", "session_id": "s1"}
+    run_script(reset, box=box, args=("--reset",))
+    rows = log_rows(box)
+    assert sorted(r["source"] for r in rows) == ["boundary", "hook", "reset"], rows
+    for r in rows:
+        assert r["event"] == "context_nudge", r
+        for key in ("override", "override_error", "override_keys"):
+            assert key in r, (key, r)
+        if r["source"] in ("hook", "boundary"):
+            for key in ("compact_source", "compact_reason", "compact_wf"):
+                assert key in r, (key, r)
+
+
+def test_env_seam_beats_real_home():
+    fake_home = Path(tempfile.mkdtemp(prefix="cn-home-"))
+    _BOXES.append(fake_home)
+    target = Path(fake_home, *cn.USER_OVERRIDE_SEGMENTS)
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps({"contextNudge": "on"}), encoding="utf-8")
+    box = _Box("audit")
+    box.transcript(130000)
+    code, out, _err, rows, _ = run_script(_prompt(box), box=box, env_extra={"HOME": str(fake_home)})
+    assert code == 0 and out == "", (code, out)  # the inherited absent seam beats the HOME file
+    assert rows[0]["outcome"] == "would_nudge" and rows[0]["override"] == "absent", rows
+    box2 = _Box("audit")
+    box2.transcript(130000)
+    code, out, _err, rows, _ = run_script(_prompt(box2), box=box2, env_extra={
+        "HOME": str(fake_home), "CRAFTFLOW_CONTEXT_NUDGE_USER_CONFIG": ""})
+    assert code == 0 and json.loads(out)["systemMessage"], (code, out)
+    assert rows[0]["outcome"] == "nudged" and rows[0]["override"] == "applied", rows
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
