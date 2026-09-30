@@ -24241,6 +24241,252 @@ def test_subagent_stop_audit_contract_fields(tmp_dir: Path) -> None:
     ok(name)
 
 
+# ---------------------------------------------------------------------------
+# hook-hardening 2026-09-30 -- PH1: drifted-cwd anchoring
+# ---------------------------------------------------------------------------
+
+def test_hooklib_project_root_from_cwd_cases() -> None:
+    name = "hooklib/project-root-from-cwd-cases"
+    cases = [
+        ("/r/p/.craftflow/state", "/r/p"),
+        ("/r/p/.craftflow/state/project", "/r/p"),
+        ("/r/p/.craftflow/state/workflows/wf-x", "/r/p"),
+        ("/r/p/.craftflow", "/r/p/.craftflow"),
+        ("/r/p/src/state", "/r/p/src/state"),
+        ("/r/p/x/.craftflow/y/state", "/r/p/x/.craftflow/y/state"),
+        ("/a/.craftflow/state/b/.craftflow/state/c", "/a"),
+        ("/.craftflow/state", "/"),
+        ("/r/p", "/r/p"),
+    ]
+    try:
+        for given, want in cases:
+            got = hooklib._project_root_from_cwd(Path(given))
+            if got != Path(want):
+                fail(name, f"_project_root_from_cwd({given!r}) = {str(got)!r}; expected {want!r}")
+                return
+    except Exception as exc:  # RED: symbol missing -> clean failure
+        fail(name, f"raised {exc!r}")
+        return
+    ok(name)
+
+
+def test_hooklib_resolve_confinement_bound_root(tmp_dir: Path) -> None:
+    name = "hooklib/resolve-confinement-bound-root"
+    root = (tmp_dir / "project")
+    drift = root / ".craftflow" / "state" / "project"
+    (root / "docs").mkdir(parents=True)
+    drift.mkdir(parents=True)
+    root = root.resolve()
+    drift = drift.resolve()
+    unrelated = (tmp_dir / "unrelated")
+    unrelated.mkdir(parents=True)
+    unrelated = unrelated.resolve()
+    try:
+        # (a) relative target joined to cwd, not bound_root
+        _c, res = hooklib.resolve_confinement("x.md", drift, None, bound_root=root)
+        if res != drift / "x.md":
+            fail(name, f"(a) relative target must join to cwd; got {res}")
+            return
+        # (b) root/docs/x confined only with bound_root
+        target = root / "docs" / "x.md"
+        if hooklib.resolve_confinement(target, drift, None)[0]:
+            fail(name, "(b) root/docs/x must NOT be confined without bound_root")
+            return
+        if not hooklib.resolve_confinement(target, drift, None, bound_root=root)[0]:
+            fail(name, "(b) root/docs/x must be confined with bound_root=root")
+            return
+        # (c) unrelated bound_root ignored
+        other = unrelated / "y.md"
+        if hooklib.resolve_confinement(other, drift, None, bound_root=unrelated)[0]:
+            fail(name, "(c) unrelated bound_root must be ignored")
+            return
+        # (d) None equals 4-arg
+        for t in (target, drift / "z.md", other):
+            if hooklib.resolve_confinement(t, drift, None, None, bound_root=None) != hooklib.resolve_confinement(t, drift, None):
+                fail(name, f"(d) bound_root=None must equal 4-arg result for {t}")
+                return
+        # (e) D-8a own-memory-dir exemption follows the anchored boundary
+        own = hooklib.claude_code_own_memory_root(root) / "memory" / "m.md"
+        if hooklib.resolve_confinement(own, drift, None)[0]:
+            fail(name, "(e) anchor-keyed own-memory path must not be confined without bound_root")
+            return
+        if not hooklib.resolve_confinement(own, drift, None, bound_root=root)[0]:
+            fail(name, "(e) anchor-keyed own-memory path must be confined with bound_root")
+            return
+    except Exception as exc:
+        fail(name, f"raised {exc!r}")
+        return
+    ok(name)
+
+
+def _hh1_project(tmp_dir: Path) -> tuple:
+    project = (tmp_dir / "project")
+    drift = project / ".craftflow" / "state" / "project"
+    drift.mkdir(parents=True)
+    (drift / "progress.md").write_text("## A\n", encoding="utf-8")
+    (drift.parent / "activeContext.md").write_text("## A\n", encoding="utf-8")
+    project = project.resolve()
+    drift = drift.resolve()
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    return project, drift, env
+
+
+def _hh1_is_deny(out: str) -> bool:
+    return '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out
+
+
+def test_pretooluse_guard_drift_cwd_dot_slash_progress_denied(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/drift-cwd-dot-slash-progress-denied"
+    project, drift, env = _hh1_project(tmp_dir)
+    payload = {"tool_name": "Bash", "cwd": str(drift), "tool_input": {"command": "printf x > ./progress.md"}}
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _hh1_is_deny(out):
+        fail(name, f"expected deny for ./progress.md from drifted cwd; got: {out!r}")
+        return
+    if str(drift / "progress.md") not in out:
+        fail(name, f"expected deny text to name the real protected path; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_drift_cwd_no_doubled_path_in_deny(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/drift-cwd-no-doubled-path-in-deny"
+    project, drift, env = _hh1_project(tmp_dir)
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(drift),
+        "tool_input": {"command": "printf x > .craftflow/state/project/progress.md"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if ".craftflow/state/project/.craftflow/state" in out:
+        fail(name, f"deny text carries a doubled path; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_drift_cwd_state_root_parent_denied(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/drift-cwd-state-root-parent-denied"
+    project, drift, env = _hh1_project(tmp_dir)
+    payload = {"tool_name": "Bash", "cwd": str(drift), "tool_input": {"command": "printf x > ../activeContext.md"}}
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _hh1_is_deny(out):
+        fail(name, f"expected deny for ../activeContext.md from drifted cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_drift_cwd_dot_slash_progress_denied(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/drift-cwd-dot-slash-progress-denied"
+    project, drift, env = _hh1_project(tmp_dir)
+    payload = {"tool_name": "Bash", "cwd": str(drift), "tool_input": {"command": "printf x > ./progress.md"}}
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if not _hh1_is_deny(out):
+        fail(name, f"expected deny for ./progress.md from drifted cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_drift_cwd_rm_git_still_denied(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/drift-cwd-rm-git-still-denied"
+    project, drift, env = _hh1_project(tmp_dir)
+    (project / ".git").mkdir()
+    payload = {"tool_name": "Bash", "cwd": str(drift), "tool_input": {"command": "rm -rf ../../../.git"}}
+    _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
+    if not _hh1_is_deny(out):
+        fail(name, f"expected deny for rm -rf ../../../.git from drifted cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_drift_cwd_repo_file_allowed(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/edit-write-drift-cwd-repo-file-allowed"
+    project, drift, env = _hh1_project(tmp_dir)
+    (project / "docs").mkdir()
+    payload = {"tool_name": "Write", "cwd": str(drift), "tool_input": {"file_path": str(project / "docs" / "x.md")}}
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if out:
+        fail(name, f"expected allow for repo file from drifted cwd; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_drift_cwd_memory_file_denied(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/edit-write-drift-cwd-memory-file-denied"
+    project, drift, env = _hh1_project(tmp_dir)
+    payload = {"tool_name": "Write", "cwd": str(drift), "tool_input": {"file_path": str(drift / "progress.md")}}
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _hh1_is_deny(out):
+        fail(name, f"expected deny for memory file Write without permit; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_edit_write_drift_cwd_sibling_denied(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/edit-write-drift-cwd-sibling-denied"
+    project, drift, env = _hh1_project(tmp_dir)
+    outside = project.parent / "outside"
+    outside.mkdir()
+    payload = {"tool_name": "Write", "cwd": str(drift), "tool_input": {"file_path": str(outside / "x.md")}}
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _hh1_is_deny(out):
+        fail(name, f"expected deny for a sibling of the project root; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_bash_guard_drift_cwd_rm_in_worktree_allowed_like_root(tmp_dir: Path) -> None:
+    name = "pretooluse-bash-guard/drift-cwd-rm-in-worktree-allowed-like-root"
+    project, drift, env = _hh1_project(tmp_dir)
+    wt = project.parent / "wt-sibling"
+    (wt / "build").mkdir(parents=True)
+    wt = wt.resolve()
+    (project / ".git").mkdir()
+    _write_workflow_json_fixture(project, str(wt))
+    cmd = f"rm -rf {wt / 'build'}"
+    _, out_root = run_hook(
+        "craftflow_pretooluse_bash_guard.py",
+        {"tool_name": "Bash", "cwd": str(project), "tool_input": {"command": cmd}},
+        env,
+    )
+    _, out_drift = run_hook(
+        "craftflow_pretooluse_bash_guard.py",
+        {"tool_name": "Bash", "cwd": str(drift), "tool_input": {"command": cmd}},
+        env,
+    )
+    if _hh1_is_deny(out_root) != _hh1_is_deny(out_drift):
+        fail(name, f"drifted verdict must match root verdict; root={out_root!r} drift={out_drift!r}")
+        return
+    if _hh1_is_deny(out_drift):
+        fail(name, f"expected allow for rm inside worktree grant from drifted cwd; got: {out_drift!r}")
+        return
+    _, out_git = run_hook(
+        "craftflow_pretooluse_bash_guard.py",
+        {"tool_name": "Bash", "cwd": str(drift), "tool_input": {"command": "rm -rf ../../../.git"}},
+        env,
+    )
+    if not _hh1_is_deny(out_git):
+        fail(name, f"rm -rf ../../../.git must still be denied with a worktree grant; got: {out_git!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_non_state_subdir_cwd_unchanged(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/non-state-subdir-cwd-unchanged"
+    project = (tmp_dir / "project")
+    sub = project / "src" / "state"
+    (project / "docs").mkdir(parents=True)
+    sub.mkdir(parents=True)
+    project = project.resolve()
+    sub = sub.resolve()
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {"tool_name": "Write", "cwd": str(sub), "tool_input": {"file_path": str(project / "docs" / "x.md")}}
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if not _hh1_is_deny(out):
+        fail(name, f"non-.craftflow/state subdir drift must stay denied (today's behavior); got: {out!r}")
+        return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -25496,6 +25742,23 @@ def main() -> int:
         test_subagent_stop_audit_unrecognized_toggle_audits(sa_tmp / "sa8")
         test_subagent_stop_audit_event_name_not_clobbered(sa_tmp / "sa9")
         test_subagent_stop_audit_contract_fields(sa_tmp / "sa10")
+
+    print()
+    print("[ hook-hardening 2026-09-30 ]")
+    with tempfile.TemporaryDirectory(prefix="craftflow_hook_test_hh_") as hh_tmpdir:
+        hh_tmp = Path(hh_tmpdir)
+        test_hooklib_project_root_from_cwd_cases()
+        test_hooklib_resolve_confinement_bound_root(hh_tmp / "hh-1-2")
+        test_pretooluse_guard_drift_cwd_dot_slash_progress_denied(hh_tmp / "hh-1-3")
+        test_pretooluse_guard_drift_cwd_no_doubled_path_in_deny(hh_tmp / "hh-1-4")
+        test_pretooluse_guard_drift_cwd_state_root_parent_denied(hh_tmp / "hh-1-5")
+        test_bash_guard_drift_cwd_dot_slash_progress_denied(hh_tmp / "hh-1-6")
+        test_bash_guard_drift_cwd_rm_git_still_denied(hh_tmp / "hh-1-7")
+        test_pretooluse_guard_edit_write_drift_cwd_repo_file_allowed(hh_tmp / "hh-1-8")
+        test_pretooluse_guard_edit_write_drift_cwd_memory_file_denied(hh_tmp / "hh-1-9")
+        test_pretooluse_guard_edit_write_drift_cwd_sibling_denied(hh_tmp / "hh-1-10")
+        test_bash_guard_drift_cwd_rm_in_worktree_allowed_like_root(hh_tmp / "hh-1-11")
+        test_pretooluse_guard_non_state_subdir_cwd_unchanged(hh_tmp / "hh-1-12")
 
     print()
     if _errors:

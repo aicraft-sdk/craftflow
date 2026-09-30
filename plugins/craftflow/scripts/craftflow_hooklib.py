@@ -120,6 +120,22 @@ def workflows_dir(project_root: "Path | None" = None) -> Path:
     return path
 
 
+def _project_root_from_cwd(cwd: Path) -> Path:
+    """Anchor a (possibly drifted) trusted cwd to its project root.
+
+    If `cwd` sits at or under `<root>/.craftflow/state`, return `<root>`
+    (first adjacent `.craftflow`,`state` pair); otherwise return `cwd`
+    unchanged. Pure: no filesystem access. The result is always `cwd` or an
+    ancestor of `cwd` (P-2). Derived only from the trusted payload cwd,
+    never from env (ADR 0035).
+    """
+    parts = cwd.parts
+    for i in range(1, len(parts) - 1):
+        if parts[i] == ".craftflow" and parts[i + 1] == "state":
+            return Path(*parts[:i])
+    return cwd
+
+
 def project_state_dir() -> Path:
     """Long-lived cross-workflow state: .craftflow/state/project/"""
     path = state_root() / "project"
@@ -1229,6 +1245,8 @@ def resolve_confinement(
     cwd: Path,
     worktree_path: str | None,
     extra_exact_paths: "frozenset[Path] | None" = None,
+    *,
+    bound_root: "Path | None" = None,
 ) -> tuple[bool, Path]:
     """Return (is_confined, resolved_path). Confined if resolved_path == cwd,
     is a descendant of cwd, (when worktree_path is set) is cwd/worktree_path
@@ -1257,12 +1275,24 @@ def resolve_confinement(
     deterministic, non-spoofable path computed only from `cwd` (never from
     `path`/tool-call input), so a directory-prefix grant here carries none
     of the sibling-repo-escape-hatch risk extra_exact_paths' docstring
-    warns about."""
+    warns about.
+
+    `bound_root` (keyword-only, default None) widens ONLY the confinement
+    boundary (not relative-path joining, which always uses `cwd`) for a
+    session whose cwd drifted into `<root>/.craftflow/state/**`. It is
+    honored only when it is `cwd` itself or an ANCESTOR of `cwd` (P-2);
+    any other value is ignored, so it can never extend confinement beyond
+    the project that contains cwd. The Claude Code own-memory-dir exemption
+    is judged against the same boundary. `bound_root=None` reproduces the
+    pre-existing behavior exactly."""
     candidate = Path(os.path.expanduser(str(path)))
     if not candidate.is_absolute():
         candidate = cwd / candidate
     resolved = candidate.resolve()
-    within_cwd = resolved == cwd or cwd in resolved.parents
+    boundary = cwd
+    if bound_root is not None and (bound_root == cwd or bound_root in cwd.parents):
+        boundary = bound_root
+    within_cwd = resolved == boundary or boundary in resolved.parents
     if within_cwd:
         return True, resolved
     if worktree_path:
@@ -1270,7 +1300,7 @@ def resolve_confinement(
         within_wt = resolved == wt or wt in resolved.parents
         if within_wt:
             return True, resolved
-    if _within_claude_code_own_memory_dir(resolved, cwd):
+    if _within_claude_code_own_memory_dir(resolved, boundary):
         return True, resolved
     if extra_exact_paths and resolved in extra_exact_paths:
         return True, resolved

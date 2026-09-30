@@ -33,6 +33,7 @@ from craftflow_hooklib import (
     memory_finalize_permit_path,
     pretool_deny,
     project_state_dir,
+    _project_root_from_cwd,
     resolve_confinement,
     resolve_toggle_decision,
     split_subcommands,
@@ -1641,6 +1642,14 @@ def main() -> int:
         cwd = None
         cwd_unresolved = True
 
+    # PH1 (DD-1/DD-2/D-8): identity lookups (workflow, permit path, protected
+    # redirect set) use the anchored project root so a cwd drifted into
+    # <root>/.craftflow/state/** protects the same real files as a root
+    # session. The destructive lane's resolve_confinement()/_is_in_cwd_critical()
+    # stay cwd-relative on purpose: widening only the boundary would let
+    # `rm -rf ../../../.git` from a drifted cwd pass as confined-not-critical.
+    anchor = _project_root_from_cwd(cwd) if cwd is not None else None
+
     mode = load_mode()
     # REM-FIX (HIGH, doubt-verify cycle 2): the identical unvalidated
     # `mode.get(...) == "block"` pattern already fixed for `memoryWrites`/
@@ -1691,7 +1700,7 @@ def main() -> int:
             # trusted PreToolUse payload `cwd`, mirroring the sibling
             # craftflow_pretooluse_guard.py call sites.
             worktree_path = latest_live_workflow_payload(
-                data.get("session_id"), project_root=cwd
+                data.get("session_id"), project_root=anchor
             ).get("worktree_path")
         except Exception as exc:
             # REM-FIX cycle 4 (consistency, MEDIUM): mirrors the equivalent
@@ -1846,7 +1855,7 @@ def main() -> int:
         # compute once, degrade to `None` on failure, and guard the
         # comparison below with `permit_path is not None`.
         try:
-            permit_path = memory_finalize_permit_path(cwd).resolve()
+            permit_path = memory_finalize_permit_path(anchor).resolve()
         except Exception:
             permit_path = None
         try:
@@ -1879,7 +1888,7 @@ def main() -> int:
                         )
                         protected_redirect_escapes.append(str(target))
                         continue
-                    if not _is_protected_redirect_target(resolved, project_root=cwd):
+                    if not _is_protected_redirect_target(resolved, project_root=anchor):
                         continue
                     if (
                         permit_path is not None

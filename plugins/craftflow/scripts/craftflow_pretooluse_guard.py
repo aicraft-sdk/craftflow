@@ -54,6 +54,7 @@ from craftflow_hooklib import (
     pretool_deny,
     project_dir,
     project_state_dir,
+    _project_root_from_cwd,
     record_denial,
     resolve_confinement,
     resolve_workspace_memory_paths,
@@ -1709,7 +1710,10 @@ def _edit_write_escapes_confinement(data: dict, path: Path) -> bool:
     # (project_root=cwd), exactly like the has_memory_finalize_permit() call
     # below -- otherwise the worktree_path grant fed into resolve_confinement()
     # comes from an UNRELATED project's live workflow.
-    workflow = latest_live_workflow_payload(data.get("session_id"), project_root=cwd)
+    # PH1 (DD-1): identity lookups use the anchored project root so a cwd
+    # drifted into <root>/.craftflow/state/** behaves like the root session.
+    anchor = _project_root_from_cwd(cwd)
+    workflow = latest_live_workflow_payload(data.get("session_id"), project_root=anchor)
     worktree_path = workflow.get("worktree_path")
     if worktree_path is not None and not isinstance(worktree_path, str):
         worktree_path = None
@@ -1734,8 +1738,8 @@ def _edit_write_escapes_confinement(data: dict, path: Path) -> bool:
     # extra_exact_paths remains EXACT-EQUALITY ONLY -- see
     # docs/2026-08-13-craftflow-workspace-root-allowlist-decision.md.
     try:
-        if has_memory_finalize_permit(None, project_root=cwd):
-            workspace_writable_paths = workspace_writable_paths | resolve_workspace_memory_paths(cwd)
+        if has_memory_finalize_permit(None, project_root=anchor):
+            workspace_writable_paths = workspace_writable_paths | resolve_workspace_memory_paths(anchor)
     except Exception as exc:
         log_event(
             "plugin_pretooluse_guard",
@@ -1747,7 +1751,9 @@ def _edit_write_escapes_confinement(data: dict, path: Path) -> bool:
             },
         )
 
-    confined, _resolved = resolve_confinement(path, cwd, worktree_path, workspace_writable_paths)
+    confined, _resolved = resolve_confinement(
+        path, cwd, worktree_path, workspace_writable_paths, bound_root=anchor
+    )
     return not confined
 
 
@@ -2121,7 +2127,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
         # identity fallback) instead of silently substituting this process's
         # own project identity.
         try:
-            trusted_root = Path(cwd_raw).resolve()
+            trusted_root = _project_root_from_cwd(Path(cwd_raw).resolve())
         except Exception as exc:
             log_event(
                 "plugin_pretooluse_guard",
@@ -2555,6 +2561,10 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         cwd = Path(cwd_raw).resolve()
     except Exception as exc:
         return _handle_bash_unresolvable_cwd(data, command, cwd_raw, exc)
+    # PH1 (DD-1/DD-2): identity lookups use `anchor`; relative-path joining
+    # keeps the real `cwd`; bound_root is applied only in the protected-path
+    # confinement lane below.
+    anchor = _project_root_from_cwd(cwd)
 
     # REM-FIX (live-reproduced CRITICAL): latest_live_workflow_payload() only guarantees
     # valid JSON was parsed -- NOT that the top level is a dict. Wrap the derived reads in
@@ -2568,7 +2578,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     # ADR 0033 deferred-sibling fix: anchored to THIS SAME trusted `cwd` (resolved
     # just above), never an env-derived project identity.
     try:
-        workflow = latest_live_workflow_payload(data.get("session_id"), project_root=cwd)
+        workflow = latest_live_workflow_payload(data.get("session_id"), project_root=anchor)
         worktree_path = workflow.get("worktree_path")
         if worktree_path is not None and not isinstance(worktree_path, str):
             worktree_path = None
@@ -2586,9 +2596,9 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         worktree_path = None
         workspace_writable_paths = frozenset()
 
-    protected_paths = _protected_bash_write_paths(cwd)
+    protected_paths = _protected_bash_write_paths(anchor)
     try:
-        permit_path = memory_finalize_permit_path(cwd).resolve()
+        permit_path = memory_finalize_permit_path(anchor).resolve()
     except Exception:
         permit_path = None
 
@@ -2729,7 +2739,9 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
             # closed: an unresolvable target's own confinement cannot be
             # verified, so it is treated as an escape.
             try:
-                _confined, resolved = resolve_confinement(target, cwd, worktree_path, workspace_writable_paths)
+                _confined, resolved = resolve_confinement(
+                    target, cwd, worktree_path, workspace_writable_paths, bound_root=anchor
+                )
             except Exception as exc:
                 log_event(
                     "plugin_pretooluse_guard",
@@ -2799,7 +2811,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 )
                 skill_promotion_violations.append(str(target))
                 continue
-            if _is_protected_skill_promotion_path(resolved, project_root=cwd):
+            if _is_protected_skill_promotion_path(resolved, project_root=anchor):
                 skill_promotion_violations.append(str(resolved))
 
         # `open(...)`/`Path(...).write_text(...)` targets (`-c` one-liners
@@ -2820,7 +2832,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 )
                 skill_promotion_violations.append(str(target))
                 continue
-            if _is_protected_skill_promotion_path(resolved, project_root=cwd):
+            if _is_protected_skill_promotion_path(resolved, project_root=anchor):
                 skill_promotion_violations.append(str(resolved))
 
         # `os.system(`/`subprocess.*(`/`shutil.*(`/`os.rename|replace(` (and
@@ -2838,7 +2850,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
         # python-suspicious-mechanism lane from `project_dir()`, so the
         # in-flight set it built belonged to an UNRELATED project whenever
         # CLAUDE_PROJECT_DIR and the payload `cwd` diverged.
-        inflight_skill_paths, _ledger_corrupt_unused = _inflight_skill_promotion_paths(cwd)
+        inflight_skill_paths, _ledger_corrupt_unused = _inflight_skill_promotion_paths(anchor)
         if inflight_skill_paths:
             skill_promotion_violations.extend(
                 _python_suspicious_mechanism_targets(command, inflight_skill_paths, cwd)
@@ -2889,7 +2901,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 )
                 skill_ledger_violations.append(str(target))
                 continue
-            if _is_protected_skill_ledger_or_proposal_path(resolved, project_root=cwd):
+            if _is_protected_skill_ledger_or_proposal_path(resolved, project_root=anchor):
                 skill_ledger_violations.append(str(resolved))
 
         for target in _python_script_write_targets(command):
@@ -2907,13 +2919,13 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 )
                 skill_ledger_violations.append(str(target))
                 continue
-            if _is_protected_skill_ledger_or_proposal_path(resolved, project_root=cwd):
+            if _is_protected_skill_ledger_or_proposal_path(resolved, project_root=anchor):
                 skill_ledger_violations.append(str(resolved))
 
         # ADR 0033 deferred-sibling fix (D10): the literal ledger path fed to
         # the python-suspicious-mechanism lane must be the CALLER's own, not
         # CLAUDE_PROJECT_DIR's.
-        ledger_path, _proposals_dir_unused = _protected_skill_ledger_and_proposal_paths(cwd)
+        ledger_path, _proposals_dir_unused = _protected_skill_ledger_and_proposal_paths(anchor)
         skill_ledger_violations.extend(
             _python_suspicious_mechanism_targets(command, {ledger_path}, cwd)
         )
@@ -2953,7 +2965,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 )
                 reliability_gates_violations.append(str(target))
                 continue
-            if _is_protected_reliability_gates_path(resolved, project_root=cwd):
+            if _is_protected_reliability_gates_path(resolved, project_root=anchor):
                 reliability_gates_violations.append(str(resolved))
 
         for target in _python_script_write_targets(command):
@@ -2971,14 +2983,14 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                 )
                 reliability_gates_violations.append(str(target))
                 continue
-            if _is_protected_reliability_gates_path(resolved, project_root=cwd):
+            if _is_protected_reliability_gates_path(resolved, project_root=anchor):
                 reliability_gates_violations.append(str(resolved))
 
         # ADR 0033 deferred-sibling fix (D11): this root derivation fed the
         # python-suspicious-mechanism lane from `project_dir()`, so the literal
         # path it matched against belonged to an UNRELATED project whenever
         # CLAUDE_PROJECT_DIR and the payload `cwd` diverged.
-        gates_path = _protected_reliability_gates_path(cwd)
+        gates_path = _protected_reliability_gates_path(anchor)
         reliability_gates_violations.extend(
             _python_suspicious_mechanism_targets(command, {gates_path}, cwd)
         )
@@ -3034,11 +3046,11 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                     continue
                 if resolved in protected_paths:
                     protected_write_violations.append(str(resolved))
-                if _is_protected_skill_promotion_path(resolved, project_root=cwd):
+                if _is_protected_skill_promotion_path(resolved, project_root=anchor):
                     skill_promotion_violations.append(str(resolved))
-                if _is_protected_skill_ledger_or_proposal_path(resolved, project_root=cwd):
+                if _is_protected_skill_ledger_or_proposal_path(resolved, project_root=anchor):
                     skill_ledger_violations.append(str(resolved))
-                if _is_protected_reliability_gates_path(resolved, project_root=cwd):
+                if _is_protected_reliability_gates_path(resolved, project_root=anchor):
                     reliability_gates_violations.append(str(resolved))
     except Exception as exc:
         log_event(
