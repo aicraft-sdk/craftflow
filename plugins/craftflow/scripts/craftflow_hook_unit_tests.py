@@ -15426,6 +15426,113 @@ def test_memory_finalize_instruction_sites_document_entries_unit() -> None:
     ok(name)
 
 
+_MEMORY_FINALIZE_DOC_EXPECTED_COUNTS = {
+    "plan-workflow.md": 1,
+    "build-workflow.md": 2,
+    "debug-workflow.md": 1,
+    "review-workflow.md": 1,
+}
+
+_MEMORY_FINALIZE_APPLY_MARKER = "craftflow_memory_merge.py --apply <destination_file_path>"
+_MEMORY_FINALIZE_ENVELOPE_MARKER = "its stdout is a JSON envelope -- never write it raw"
+_MEMORY_FINALIZE_LEGACY_MARKER = (
+    "use the FULL stdout as the replacement file content ONLY in this no-archive legacy mode"
+)
+_MEMORY_FINALIZE_PROTECTED_MARKERS = (
+    "write archive_path FIRST",
+    "unit mode, notes are prepended as new raw-text entries",
+    "craftflow_state_query.py <destination_file_path> --mode full",
+)
+# An inline heredoc opener (<<EOF, <<'EOF', <<"EOF", <<-EOF, <<\EOF); the
+# doc's "< <payload_file>" redirect (space between the two <) never matches.
+_HEREDOC_OPENER_RE = re.compile(r"<<-?\s*['\"\\A-Za-z_]")
+
+
+def _memory_finalize_doc_problems(filename: str, content: str) -> "list[str]":
+    """Pure doc-contract check for one router reference doc; returns the list
+    of contract violations (empty list == the doc satisfies the contract)."""
+    expected = _MEMORY_FINALIZE_DOC_EXPECTED_COUNTS[filename]
+    problems: "list[str]" = []
+    for marker in (_MEMORY_FINALIZE_APPLY_MARKER, _MEMORY_FINALIZE_ENVELOPE_MARKER,
+                   _MEMORY_FINALIZE_LEGACY_MARKER) + _MEMORY_FINALIZE_PROTECTED_MARKERS:
+        actual = content.count(marker)
+        if actual != expected:
+            problems.append(f"expected {expected} of {marker!r}, found {actual}")
+    if "Phase 3 of this plan" in content:
+        problems.append("dangling 'Phase 3 of this plan' reference")
+    if _HEREDOC_OPENER_RE.search(content):
+        problems.append("inline heredoc opener (<<DELIM) instruction present")
+    if content.count("do NOT use a heredoc for this call") != expected:
+        problems.append("missing 'do NOT use a heredoc for this call' guidance")
+    if content.count("--apply <destination_file_path> < <payload_file>") != expected:
+        problems.append("--apply payload is not fed via '< <payload_file>'")
+    return problems
+
+
+def _memory_finalize_doc_check(name: str, predicate) -> None:
+    """Run `predicate(problem)` over each router doc's problems; fail on the
+    first doc that has a matching problem."""
+    for filename in _MEMORY_FINALIZE_DOC_EXPECTED_COUNTS:
+        path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / filename
+        if not path.exists():
+            fail(name, f"{filename} not found at {path}")
+            return
+        bad = [p for p in _memory_finalize_doc_problems(filename, path.read_text(encoding="utf-8"))
+               if predicate(p)]
+        if bad:
+            fail(name, f"{filename}: {bad}")
+            return
+    ok(name)
+
+
+def test_memory_finalize_instruction_sites_prefer_apply() -> None:
+    _memory_finalize_doc_check(
+        "craftflow-router/references/memory-finalize-prefers-merge-apply",
+        lambda p: "--apply <destination_file_path>" in p and "< <payload_file>" not in p,
+    )
+
+
+def test_memory_finalize_instruction_sites_forbid_raw_envelope() -> None:
+    _memory_finalize_doc_check(
+        "craftflow-router/references/memory-finalize-forbids-raw-envelope",
+        lambda p: "JSON envelope" in p or "no-archive legacy mode" in p,
+    )
+
+
+def test_memory_finalize_instruction_sites_drop_dangling_phase3_reference() -> None:
+    _memory_finalize_doc_check(
+        "craftflow-router/references/memory-finalize-drops-phase3-reference",
+        lambda p: "Phase 3" in p,
+    )
+
+
+def test_memory_finalize_instruction_sites_have_no_inline_heredoc_instruction() -> None:
+    _memory_finalize_doc_check(
+        "craftflow-router/references/memory-finalize-no-inline-heredoc",
+        lambda p: "heredoc" in p or "payload_file" in p,
+    )
+
+
+def test_memory_finalize_instruction_sites_preserve_protected_marker_counts() -> None:
+    _memory_finalize_doc_check(
+        "craftflow-router/references/memory-finalize-preserves-protected-markers",
+        lambda p: any(m in p for m in _MEMORY_FINALIZE_PROTECTED_MARKERS),
+    )
+
+
+def test_cursor_router_memory_finalize_parity_mentions_apply() -> None:
+    name = "cursor-router/skill-md/memory-finalize-parity-mentions-apply"
+    path = PLUGIN_ROOT / "skills" / "cursor-router" / "SKILL.md"
+    if not path.exists():
+        fail(name, f"cursor-router SKILL.md not found at {path}")
+        return
+    content = path.read_text(encoding="utf-8")
+    if "craftflow_memory_merge.py --apply" not in content:
+        fail(name, "cursor-router SKILL.md does not name craftflow_memory_merge.py --apply")
+        return
+    ok(name)
+
+
 def test_skill_md_wires_project_tier_last_updated_and_completed_caps() -> None:
     name = "craftflow-router/skill-md/wires-project-tier-last-updated-and-completed-caps"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
@@ -26587,6 +26694,12 @@ def main() -> int:
     print()
     print("[ craftflow-router: project-tier ## Last Updated / ## Completed cap+archive wiring (bug-investigator DEBUG) ]")
     test_memory_finalize_instruction_sites_document_entries_unit()
+    test_memory_finalize_instruction_sites_prefer_apply()
+    test_memory_finalize_instruction_sites_forbid_raw_envelope()
+    test_memory_finalize_instruction_sites_drop_dangling_phase3_reference()
+    test_memory_finalize_instruction_sites_have_no_inline_heredoc_instruction()
+    test_memory_finalize_instruction_sites_preserve_protected_marker_counts()
+    test_cursor_router_memory_finalize_parity_mentions_apply()
     test_skill_md_wires_project_tier_last_updated_and_completed_caps()
     test_cursor_router_skill_md_wires_completed_cap()
 
