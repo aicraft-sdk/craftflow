@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.22.0] - 2026-09-30
+
+### Features
+
+- wire /compact line and user override into nudge hook, reset and boundary
+- code-generated /compact line bound to the session's active workflow
+- context-nudge user override loader and precedence (pure core)
+
+### Fixes
+
+- nudge compact binding liveness, fifo/symlink safety, escape parity, document best-effort session binding
+- scope compact binding to the owning session and harden lookup/timing driver
+
+### Documentation
+
+- renumber context-nudge ADR to 0054 (0052/0053 taken on main)
+- document /compact line and durable user override for the context nudge
+
+### Tests
+
+- live proof for /compact line + user override; ADR-0052 stays proposed
+
 ## [1.21.0] - 2026-09-30
 
 ### Features
