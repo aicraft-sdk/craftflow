@@ -18445,6 +18445,28 @@ def test_memory_merge_apply_drifted_cwd_resolves_archive_under_project_root() ->
     _apply_case("memory-merge/apply/drifted-cwd-archive-under-project-root", body)
 
 
+def test_memory_merge_apply_rejects_newline_and_unicode_slug_month() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, target = _apply_seed(base)
+        before = target.read_bytes()
+        archive_dir = proj / ".craftflow/state/project/archive"
+        bad_specs = [
+            dict(_APPLY_ARCHIVE, section_slug="learn\n"),
+            dict(_APPLY_ARCHIVE, month="2026-09\n"),
+            dict(_APPLY_ARCHIVE, month="\u0662\u0660\u0662\u0666-\u0660\u0669"),
+        ]
+        for spec in bad_specs:
+            r = _apply_run(target, _apply_payload(archive=spec))
+            if r.returncode != 1 or target.read_bytes() != before:
+                fail(name, f"{spec!r}: exit {r.returncode}")
+                return
+            if archive_dir.exists() and list(archive_dir.iterdir()):
+                fail(name, f"{spec!r}: archive file created: {sorted(p.name for p in archive_dir.iterdir())}")
+                return
+        ok(name)
+    _apply_case("memory-merge/apply/rejects-newline-and-unicode-slug-month", body)
+
+
 def test_memory_merge_stdin_mode_output_unchanged_golden() -> None:
     name = "memory-merge/stdin-mode/golden-output-unchanged"
     payload = {"file_text": _APPLY_GOTCHAS, "section": "Common Gotchas", "notes": [{"text": "g4", "confidence": 0.9}]}
@@ -26474,6 +26496,7 @@ def main() -> int:
     test_memory_merge_apply_bad_argv()
     test_memory_merge_apply_sequential_runs_release_lock()
     test_memory_merge_apply_drifted_cwd_resolves_archive_under_project_root()
+    test_memory_merge_apply_rejects_newline_and_unicode_slug_month()
     test_memory_merge_stdin_mode_output_unchanged_golden()
 
     print()

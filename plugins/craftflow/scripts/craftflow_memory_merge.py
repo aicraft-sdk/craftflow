@@ -758,8 +758,9 @@ def _reject_json_constant(constant: str):
 
 
 _APPLY_USAGE = "Usage: craftflow_memory_merge.py [--apply <memory-file>]  (payload JSON on stdin)\n"
-_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
+# Used with fullmatch: `$` would accept a trailing newline and `\d` Unicode digits.
+_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
+_MONTH_RE = re.compile(r"[0-9]{4}-[0-9]{2}")
 
 
 def _apply_error(message: str) -> int:
@@ -806,10 +807,10 @@ def _validate_archive_spec(archive_spec, root: Path):
         raise ValueError("'archive' must include string 'dir_rel', 'section_slug', and 'month'")
     if os.path.isabs(dir_rel) or ".." in Path(dir_rel).parts:
         raise ValueError("archive 'dir_rel' must be relative with no '..' part")
-    if not _SLUG_RE.match(slug):
+    if not _SLUG_RE.fullmatch(slug):
         raise ValueError("archive 'section_slug' must match ^[a-z0-9][a-z0-9-]*$")
-    if not _MONTH_RE.match(month):
-        raise ValueError("archive 'month' must match ^\\d{4}-\\d{2}$")
+    if not _MONTH_RE.fullmatch(month):
+        raise ValueError("archive 'month' must match ^[0-9]{4}-[0-9]{2}$")
     state = (root / ".craftflow" / "state").resolve()
     resolved_dir = (root / dir_rel).resolve()
     if state not in resolved_dir.parents:
