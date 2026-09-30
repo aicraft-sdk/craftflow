@@ -32,14 +32,24 @@
       "timeout_seconds": 1800
     },
     {
+      "name": "Compact line + user override LVC-1..LVC-5",
+      "mode": "proof",
+      "given": "the worktree plugin loaded via --plugin-dir with its shipped audit config UNCHANGED, a scratch plugin copy with contextNudge on for the corrupt/off cases, scratch user override files (on, corrupt, off) reached through CRAFTFLOW_CONTEXT_NUDGE_USER_CONFIG, and a seeded live workflow artifact without session_id",
+      "when": "context_nudge_compact_roundtrip.py drives real haiku sessions: a user file turns the nudge on and the bound /compact line reaches the model (LVC-1), the generic line when no workflow is mentioned (LVC-2), a corrupt user file falls back to the plugin values (LVC-3), a user file off silences an on plugin (LVC-4), and the --boundary relay carries the same line into the checkpoint (LVC-5)",
+      "then": "the driver prints the summary JSON with load_probe PASS, lvc1..lvc5 PASS (lvc1 may be LIMITATION:env_not_propagated_to_hooks), second_copy_detected false, plugin_config_unchanged true and evidence_class A, and exits 0",
+      "command": "python3 plugins/craftflow/tests/live/context_nudge_compact_roundtrip.py --plugin-dir plugins/craftflow",
+      "expected": "exit 0; {\"load_probe\":\"PASS\",\"lvc1\":\"PASS\",\"lvc2\":\"PASS\",\"lvc3\":\"PASS\",\"lvc4\":\"PASS\",\"lvc5\":\"PASS\",\"second_copy_detected\":false,\"plugin_config_unchanged\":true,\"evidence_class\":\"A\"}",
+      "timeout_seconds": 1800
+    },
+    {
       "name": "Timing on the largest real transcript",
       "mode": "stress",
-      "given": "the largest *.jsonl under ~/.claude/projects (hundreds of MB), a temp plugin root and project in audit mode, and a real-size activeContext.md",
-      "when": "context_nudge_timing.py times in-process current_context_tokens x50, 20 interleaved bare-vs-hook subprocess runs and 10 --boundary audit runs",
-      "then": "delta_median_ms < 50, inproc_median_ms < 50, boundary_median_ms < 1000 and boundary_max_ms < 2600; the driver exits 0 and never prints transcript content",
-      "command": "python3 plugins/craftflow/tests/live/context_nudge_timing.py --runs 20",
-      "expected": "exit 0; gate_pass true with all four gate numbers under budget",
-      "timeout_seconds": 600
+      "given": "the largest *.jsonl under ~/.claude/projects (hundreds of MB), a temp plugin root and project in audit mode, a real-size activeContext.md, and the v1.19.0 release script (a70b49a08c5731021261ca1fe7d6c7c260ed50d2) as pinned A/B baseline",
+      "when": "context_nudge_timing.py times in-process current_context_tokens x50, 20 interleaved bare-vs-hook subprocess runs, 10 --boundary audit runs, and 30 interleaved A/B pairs per variant (no-change with the user file absent, no-change with a valid four-key user file, nudge) plus the in-process workflow lookup",
+      "then": "inproc_median_ms < 50, boundary_median_ms < 1000, boundary_max_ms < 2600, ab_nochange_absent_median_ms <= 8, ab_nochange_override_median_ms <= 8, ab_nudge_median_ms <= 15, lookup_median_ms <= 10, lookup_max_ms <= 40, and absolute_gate is not fail (delta_median_ms < 50 is enforced only when the 1-minute load is at most the CPU count, else inconclusive_load); the driver exits 0 and never prints transcript content. Limitation: the scenario always measures current vs v1.19.0, so later releases fold into the number; the next change to the nudge hot path re-pins the SHA",
+      "command": "python3 plugins/craftflow/tests/live/context_nudge_timing.py --runs 20 --baseline-ref a70b49a08c5731021261ca1fe7d6c7c260ed50d2",
+      "expected": "exit 0; gate_pass true; every relative gate under budget; absolute_gate pass or inconclusive_load",
+      "timeout_seconds": 900
     }
   ]
 }

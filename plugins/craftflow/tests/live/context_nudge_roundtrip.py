@@ -46,6 +46,10 @@ def log(msg):
 def nested_env(project):
     env = {k: v for k, v in os.environ.items() if k not in STRIPPED_ENV}
     env["CLAUDE_PROJECT_DIR"] = str(project)
+    # SPEC-0017 seam: point the durable user override at a path that never exists so a real
+    # ~/.claude/craftflow/context-nudge.json cannot leak into the SPEC-0016 scenarios
+    env["CRAFTFLOW_CONTEXT_NUDGE_USER_CONFIG"] = str(
+        Path(tempfile.gettempdir()) / "cf-nudge-live-no-user-override-absent.json")
     return env
 
 
