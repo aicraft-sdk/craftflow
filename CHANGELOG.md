@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.21.0] - 2026-09-30
+
+### Features
+
+- allow Edit/Write to the exact session scratchpad directory
+- add memory_merge --apply (archive-first, atomic, permit-checked) and memory-file validator
+
+### Fixes
+
+- make --apply archive slug/month validation strict
+- restrict heredoc body stripping to a strict whole-command python shape
+- close $'..' quote-desync and consumer-shadowing bypasses in heredoc stripping
+- treat quoted python heredoc bodies as data in the safe-shell guard
+- treat read-only python open() of protected files as a read, soften heuristic-only escalation wording
+- anchor guard identity to project root when cwd drifts into .craftflow/state
+
+### Documentation
+
+- prefer memory_merge --apply in memory-finalize instructions and fix contradictory stdout guidance
+
+### Tests
+
+- add doc-contract tests for the memory-finalize --apply instructions
+
 ## [1.20.1] - 2026-09-30
 
 ### Fixes
