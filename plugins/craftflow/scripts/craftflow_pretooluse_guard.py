@@ -1589,6 +1589,30 @@ def _denial_escalation_suffix(count: int) -> str:
     )
 
 
+_HEURISTIC_DENY_NOTE = (
+    " (Detected by the static python-source heuristic, which scans the whole "
+    "command text: open() with no mode or a plain 'r'/'rb'/'rt' mode is not "
+    "flagged; any other mode, a non-literal mode, Path(...).write_text(...), "
+    "or an os.system/subprocess/shutil/os.rename-style call naming the file "
+    "in the same statement is.)"
+)
+
+
+def _heuristic_denial_escalation_suffix(count: int) -> str:
+    """Wording-only sibling of `_denial_escalation_suffix()` for denials whose
+    every hit came from the static python-source heuristic: it must not claim
+    the agent is working around a restriction, since the heuristic can be a
+    false positive. Decisions and thresholds are unchanged."""
+    return (
+        f" ESCALATED: this is the {count}th consecutive denial on this exact "
+        "target within this session, and every hit came from the static "
+        "python-source heuristic. STOP and ask the user before retrying -- do "
+        "not attempt an equivalent write through Bash, a different tool, or a "
+        "workaround. If the command only needs to READ the file, use the Read "
+        "tool or open() with no mode / mode 'r'."
+    )
+
+
 def _record_multi_target_denial(session_id: str | None, targets: list) -> Tuple[int, bool]:
     """Bash-path variant of `record_denial()` (Item B fix): a single Bash
     command's deny decision can involve MULTIPLE distinct violating target
@@ -1850,13 +1874,104 @@ def _dd_write_targets(tokens: list) -> list:
     return paths
 
 
+_OPEN_ALLOWED_KWARGS = frozenset({"encoding", "errors", "newline", "buffering", "closefd"})
+_OPEN_KWARG_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)")
+_OPEN_STRING_LITERAL_RE = re.compile(r"""^(?:'[^'\\]*'|"[^"\\]*")$""")
+_OPEN_READ_MODE_RE = re.compile(r"""^(?:'[rbt]+'|"[rbt]+")$""")
+
+
+def _scan_call_args(text: str, open_paren_idx: int):
+    """Quote-aware scan of the call whose `(` is at `open_paren_idx`. Returns
+    the top-level argument source slices (stripped; a trailing empty arg from
+    a trailing comma is dropped), or None when the parens never balance."""
+    args: list = []
+    depth = 0
+    quote = ""
+    arg_start = open_paren_idx + 1
+    i = arg_start
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+        elif ch in "'\"":
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            if depth == 0:
+                if ch != ")":
+                    return None
+                last = text[arg_start:i].strip()
+                if last:
+                    args.append(last)
+                return args
+            depth -= 1
+        elif ch == "," and depth == 0:
+            args.append(text[arg_start:i].strip())
+            arg_start = i + 1
+        i += 1
+    return None
+
+
+def _is_plain_read_mode_literal(src: str) -> bool:
+    """True only for a bare '...'/"..." literal (no prefix, no concatenation)
+    whose characters are a non-empty subset of {r, b, t}."""
+    return bool(_OPEN_READ_MODE_RE.match(src))
+
+
+def _is_read_only_open_call(text: str, match) -> bool:
+    """DD-3: a bare `open(` / exactly `io.open(` with a literal first arg and
+    either no mode or a positional plain r/b/t-only literal mode. Anything
+    else -- including any scan failure -- is NOT read-only (fail closed)."""
+    start = match.start()
+    prev = text[start - 1] if start > 0 else ""
+    if prev == "." and text[max(0, start - 3):start] == "io.":
+        before_io = text[start - 4] if start >= 4 else ""
+        if before_io == "." or before_io.isalnum() or before_io == "_":
+            return False
+    elif prev == "." or prev.isalnum() or prev == "_":
+        return False
+    args = _scan_call_args(text, start + len("open"))
+    if not args or not _OPEN_STRING_LITERAL_RE.match(args[0]):
+        return False
+    positional: list = []
+    seen_kwarg = False
+    for arg in args[1:]:
+        if arg.startswith("*"):
+            return False
+        kwarg = _OPEN_KWARG_RE.match(arg)
+        if kwarg:
+            seen_kwarg = True
+            if kwarg.group(1) not in _OPEN_ALLOWED_KWARGS:
+                return False
+        elif seen_kwarg:
+            return False
+        else:
+            positional.append(arg)
+    if len(positional) > 1:
+        return False
+    return not positional or _is_plain_read_mode_literal(positional[0])
+
+
+def _open_write_targets(text: str) -> list:
+    """Literal first args of every `open(` call `_OPEN_CALL_RE` matches, minus
+    DD-3 read-only calls. Pure; a subset of `_OPEN_CALL_RE.findall(text)`."""
+    return [m.group(1) for m in _OPEN_CALL_RE.finditer(text) if not _is_read_only_open_call(text, m)]
+
+
 def _python_script_write_targets(command: str) -> list:
     """Detect file-write targets from ANY python(3) invocation shape --
     `-c` one-liners AND heredoc/stdin-fed scripts
     (`python3 - <<'EOF' ... open(...) ... EOF`) -- by scanning the ENTIRE
     raw command text, rather than a single subcommand's own tokens
-    (CRITICAL 2, HIGH 2). Covers `open(<literal-string>, ...)` (any
-    argument order/count after the literal first positional arg) and
+    (CRITICAL 2, HIGH 2). Covers `open(<literal-string>, ...)` EXCEPT a
+    read-only call (DD-3: bare `open(`/`io.open(` with no mode or a
+    positional r/b/t-only literal mode, see `_open_write_targets()`), and
     `Path('...').write_text(...)`. Does NOT resolve a variable-held path
     (`open(path, 'w')`) or a kwarg-first call (`open(mode='w',
     file='...')`) from static text -- a disclosed, narrow residual gap
@@ -1878,7 +1993,7 @@ def _python_script_write_targets(command: str) -> list:
     security boundary for genuinely untrusted Python execution."""
     if not _PYTHON_INVOCATION_RE.search(command):
         return []
-    targets = list(_OPEN_CALL_RE.findall(command))
+    targets = _open_write_targets(command)
     targets.extend(_PATH_WRITE_TEXT_RE.findall(command))
     return targets
 
@@ -2610,6 +2725,10 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     # permit-write shape to `.memory-finalize`. Shipped unconditionally in
     # this phase (not yet gated by `protectedWrites` -- Phase 5 wires that
     # toggle without altering this decision's shape).
+    # BC-4: set True at every violation append that is NOT from a python-
+    # heuristic extractor; if it stays False, any deny is heuristic-only and
+    # gets the softer wording (decisions/thresholds unchanged).
+    structural_hit = False
     protected_write_violations: list = []
     try:
         for tokens in split_subcommands(command):
@@ -2642,6 +2761,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                             "reason": "fail_closed_unresolvable_bash_write_target",
                         },
                     )
+                    structural_hit = True
                     protected_write_violations.append(str(target))
                     continue
                 if resolved not in protected_paths:
@@ -2657,6 +2777,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                     # a path-spelling literal (see its docstring).
                     if matches_memory_finalize_permit_shape(tokens):
                         continue
+                structural_hit = True
                 protected_write_violations.append(str(resolved))
 
         # CRITICAL 2 / HIGH 1 / HIGH 2 (REM-FIX): python-script write
@@ -2752,11 +2873,13 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                         "reason": "fail_closed_unresolvable_confinement_target",
                     },
                 )
+                structural_hit = True
                 confinement_violations.append(str(target))
                 continue
             if resolved not in protected_paths:
                 continue
             if not _confined:
+                structural_hit = True
                 confinement_violations.append(str(resolved))
     except Exception as exc:
         log_event(
@@ -2809,9 +2932,11 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                         "reason": "fail_closed_unresolvable_skill_promotion_redirect_target",
                     },
                 )
+                structural_hit = True
                 skill_promotion_violations.append(str(target))
                 continue
             if _is_protected_skill_promotion_path(resolved, project_root=anchor):
+                structural_hit = True
                 skill_promotion_violations.append(str(resolved))
 
         # `open(...)`/`Path(...).write_text(...)` targets (`-c` one-liners
@@ -2899,9 +3024,11 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                         "reason": "fail_closed_unresolvable_skill_ledger_redirect_target",
                     },
                 )
+                structural_hit = True
                 skill_ledger_violations.append(str(target))
                 continue
             if _is_protected_skill_ledger_or_proposal_path(resolved, project_root=anchor):
+                structural_hit = True
                 skill_ledger_violations.append(str(resolved))
 
         for target in _python_script_write_targets(command):
@@ -2963,9 +3090,11 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                         "reason": "fail_closed_unresolvable_reliability_gates_redirect_target",
                     },
                 )
+                structural_hit = True
                 reliability_gates_violations.append(str(target))
                 continue
             if _is_protected_reliability_gates_path(resolved, project_root=anchor):
+                structural_hit = True
                 reliability_gates_violations.append(str(resolved))
 
         for target in _python_script_write_targets(command):
@@ -3042,15 +3171,20 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
                             "reason": "fail_closed_unresolvable_cp_mv_dd_target",
                         },
                     )
+                    structural_hit = True
                     protected_write_violations.append(str(target))
                     continue
                 if resolved in protected_paths:
+                    structural_hit = True
                     protected_write_violations.append(str(resolved))
                 if _is_protected_skill_promotion_path(resolved, project_root=anchor):
+                    structural_hit = True
                     skill_promotion_violations.append(str(resolved))
                 if _is_protected_skill_ledger_or_proposal_path(resolved, project_root=anchor):
+                    structural_hit = True
                     skill_ledger_violations.append(str(resolved))
                 if _is_protected_reliability_gates_path(resolved, project_root=anchor):
+                    structural_hit = True
                     reliability_gates_violations.append(str(resolved))
     except Exception as exc:
         log_event(
@@ -3063,6 +3197,7 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
             },
         )
 
+    heuristic_only = not structural_hit
     if (
         not protected_write_violations
         and not confinement_violations
@@ -3152,8 +3287,14 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
             f"CRAFTFLOW plugin hook blocked a Bash write to a protected path (reason: {reason}). "
             + explanation
         )
+        if heuristic_only:
+            message += _HEURISTIC_DENY_NOTE
         if denial_escalated:
-            message += _denial_escalation_suffix(denial_count)
+            message += (
+                _heuristic_denial_escalation_suffix(denial_count)
+                if heuristic_only
+                else _denial_escalation_suffix(denial_count)
+            )
         pretool_deny(message)
         return 0
 
@@ -3211,8 +3352,14 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
             f"CRAFTFLOW plugin hook blocked a Bash write to a protected path (reason: {reason}). "
             "If this is intentional, run it manually outside the agent session."
         )
+        if heuristic_only:
+            message += _HEURISTIC_DENY_NOTE
         if denial_escalated:
-            message += _denial_escalation_suffix(denial_count)
+            message += (
+                _heuristic_denial_escalation_suffix(denial_count)
+                if heuristic_only
+                else _denial_escalation_suffix(denial_count)
+            )
         pretool_deny(message)
     return 0
 

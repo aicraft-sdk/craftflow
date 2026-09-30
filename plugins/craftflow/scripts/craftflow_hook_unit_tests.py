@@ -24487,6 +24487,186 @@ def test_pretooluse_guard_non_state_subdir_cwd_unchanged(tmp_dir: Path) -> None:
     ok(name)
 
 
+# ---------------------------------------------------------------------------
+# hook-hardening 2026-09-30 -- PH2: read-only open() allowed; heuristic wording
+# ---------------------------------------------------------------------------
+
+_HH2_PM = ".craftflow/state/project/progress.md"
+
+
+def test_pretooluse_guard_open_write_targets_classification() -> None:
+    name = "pretooluse-guard/open-write-targets-classification"
+    # (text, is_write). Write rows must equal the legacy `_OPEN_CALL_RE`
+    # findall result; read rows must be empty (P-3 monotonicity).
+    rows = [
+        ("open('p')", False),
+        ("open('p', 'r')", False),
+        ("open('p','rb')", False),
+        ("open('p', 'rt')", False),
+        ('open("p", "r")', False),
+        ("open('p', encoding='utf-8')", False),
+        ("open('p', 'r', encoding='utf-8', errors='ignore')", False),
+        ("io.open('p')", False),
+        ("io.open('p', 'rb')", False),
+        ("open('a,b)c')", False),
+        ("json.load(open('p'))", False),
+        ("open('p', 'w')", True),
+        ("open('p', 'a')", True),
+        ("open('p', 'x')", True),
+        ("open('p', 'r+')", True),
+        ("open('p', 'rb+')", True),
+        ("open('p', 'wb')", True),
+        ("open('p', '')", True),
+        ("open('p', 'U')", True),
+        ("open('p', mode='w')", True),
+        ("open('p', mode='r')", True),
+        ("open('p', opener=f)", True),
+        ("open('p', m)", True),
+        ("open('p', *a)", True),
+        ("open('p', **kw)", True),
+        ("open('p', 'r' if x else 'w')", True),
+        ("open('p', f'r')", True),
+        ("open('p', r'r')", True),
+        ("open('p', b'r')", True),
+        ("open('p', 'r' 'w')", True),
+        ("open('p', 'r'", True),
+        ("open('p'", True),
+        ("os.open('p', os.O_WRONLY)", True),
+        ("dbm.open('p', 'c')", True),
+        ("shelve.open('p')", True),
+        ("gzip.open('p', 'rt')", True),
+        ("builtins.open('p')", True),
+        ("xopen('p')", True),
+        ("open('a,b)c', 'w')", True),
+    ]
+    try:
+        for text, is_write in rows:
+            legacy = pretooluse_guard._OPEN_CALL_RE.findall(text)
+            got = pretooluse_guard._open_write_targets(text)
+            if not set(got) <= set(legacy):
+                fail(name, f"P-3 violated for {text!r}: {got!r} not subset of {legacy!r}")
+                return
+            want = legacy if is_write else []
+            if got != want:
+                fail(name, f"{text!r}: expected {want!r}; got {got!r}")
+                return
+        mixed = "open('a'); open('b', 'w'); open('c', 'rb')"
+        if pretooluse_guard._open_write_targets(mixed) != ["b"]:
+            fail(name, f"mixed row: got {pretooluse_guard._open_write_targets(mixed)!r}")
+            return
+    except Exception as exc:  # RED: symbol missing -> clean failure
+        fail(name, f"raised {exc!r}")
+        return
+    ok(name)
+
+
+def _hh2_run(tmp_dir: Path, command: str, session_id: str = "sess-hh2") -> tuple:
+    project, _drift, env = _hh1_project(tmp_dir)
+    (project / ".craftflow" / "state" / "project" / "reliability-gates.json").write_text("{}", encoding="utf-8")
+    payload = {"tool_name": "Bash", "session_id": session_id, "cwd": str(project), "tool_input": {"command": command}}
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    return payload, env, out
+
+
+def _hh2_expect(tmp_dir: Path, name: str, command: str, want_deny: bool) -> None:
+    _payload, _env, out = _hh2_run(tmp_dir, command)
+    if want_deny and not _hh1_is_deny(out):
+        fail(name, f"expected deny for {command!r}; got: {out!r}")
+        return
+    if not want_deny and out != "":
+        fail(name, f"expected allow (empty stdout) for {command!r}; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_python_c_json_load_open_protected(tmp_dir: Path) -> None:
+    cmd = "python3 -c \"import json; print(json.load(open('.craftflow/state/project/reliability-gates.json')))\""
+    _hh2_expect(tmp_dir, "pretooluse-guard/allows-python-c-json-load-open-protected", cmd, False)
+
+
+def test_pretooluse_guard_allows_python_c_open_rb_memory(tmp_dir: Path) -> None:
+    cmd = f"python3 -c \"print(len(open('{_HH2_PM}', 'rb').read()))\""
+    _hh2_expect(tmp_dir, "pretooluse-guard/allows-python-c-open-rb-memory", cmd, False)
+
+
+def test_pretooluse_guard_allows_python_heredoc_read_open_memory(tmp_dir: Path) -> None:
+    cmd = f"python3 - <<'EOF'\nprint(open('{_HH2_PM}').read())\nEOF"
+    _hh2_expect(tmp_dir, "pretooluse-guard/allows-python-heredoc-read-open-memory", cmd, False)
+
+
+def test_pretooluse_guard_denies_open_append_memory(tmp_dir: Path) -> None:
+    cmd = f"python3 -c \"open('{_HH2_PM}', 'a').write('x')\""
+    _hh2_expect(tmp_dir, "pretooluse-guard/denies-open-append-memory", cmd, True)
+
+
+def test_pretooluse_guard_denies_open_rplus_memory(tmp_dir: Path) -> None:
+    cmd = f"python3 -c \"open('{_HH2_PM}', 'r+').write('x')\""
+    _hh2_expect(tmp_dir, "pretooluse-guard/denies-open-rplus-memory", cmd, True)
+
+
+def test_pretooluse_guard_denies_open_mode_kwarg_w_memory(tmp_dir: Path) -> None:
+    cmd = f"python3 -c \"open('{_HH2_PM}', mode='w').write('x')\""
+    _hh2_expect(tmp_dir, "pretooluse-guard/denies-open-mode-kwarg-w-memory", cmd, True)
+
+
+def test_pretooluse_guard_denies_open_mode_kwarg_r_memory(tmp_dir: Path) -> None:
+    cmd = f"python3 -c \"print(open('{_HH2_PM}', mode='r').read())\""
+    _hh2_expect(tmp_dir, "pretooluse-guard/denies-open-mode-kwarg-r-memory", cmd, True)
+
+
+def test_pretooluse_guard_denies_open_variable_mode_memory(tmp_dir: Path) -> None:
+    cmd = f"python3 -c \"m='r'; print(open('{_HH2_PM}', m).read())\""
+    _hh2_expect(tmp_dir, "pretooluse-guard/denies-open-variable-mode-memory", cmd, True)
+
+
+def test_pretooluse_guard_denies_dbm_open_c_memory(tmp_dir: Path) -> None:
+    cmd = f"python3 -c \"import dbm; dbm.open('{_HH2_PM}', 'c')\""
+    _hh2_expect(tmp_dir, "pretooluse-guard/denies-dbm-open-c-memory", cmd, True)
+
+
+def test_pretooluse_guard_denies_path_write_text_memory(tmp_dir: Path) -> None:
+    cmd = f"python3 -c \"from pathlib import Path; Path('{_HH2_PM}').write_text('x')\""
+    _hh2_expect(tmp_dir, "pretooluse-guard/denies-path-write-text-memory", cmd, True)
+
+
+def test_pretooluse_guard_denies_redirect_memory(tmp_dir: Path) -> None:
+    _hh2_expect(tmp_dir, "pretooluse-guard/denies-redirect-memory", f"echo x > {_HH2_PM}", True)
+
+
+def test_pretooluse_guard_heuristic_only_escalation_wording(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/heuristic-only-escalation-wording"
+    cmd = f"python3 -c \"open('{_HH2_PM}', 'w').write('x')\""
+    payload, env, out1 = _hh2_run(tmp_dir, cmd, "sess-hh2-heur")
+    if not _hh1_is_deny(out1) or "static python-source heuristic" not in out1:
+        fail(name, f"1st deny must carry the heuristic note; got: {out1!r}")
+        return
+    _, out2 = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    for needle in ("ESCALATED", "STOP", "static python-source heuristic"):
+        if needle not in out2:
+            fail(name, f"2nd deny missing {needle!r}; got: {out2!r}")
+            return
+    if "work around a legitimate restriction" in out2:
+        fail(name, f"heuristic-only escalation must not use the structural wording; got: {out2!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_structural_escalation_wording_unchanged(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/structural-escalation-wording-unchanged"
+    payload, env, out1 = _hh2_run(tmp_dir, f"printf x > {_HH2_PM}", "sess-hh2-struct")
+    if not _hh1_is_deny(out1) or "static python-source heuristic" in out1:
+        fail(name, f"structural deny must not carry the heuristic note; got: {out1!r}")
+        return
+    _, out2 = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if "work around a legitimate restriction" not in out2:
+        fail(name, f"structural escalation wording changed; got: {out2!r}")
+        return
+    if "static python-source heuristic" in out2:
+        fail(name, f"structural escalation must not carry heuristic wording; got: {out2!r}")
+        return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -25759,6 +25939,20 @@ def main() -> int:
         test_pretooluse_guard_edit_write_drift_cwd_sibling_denied(hh_tmp / "hh-1-10")
         test_bash_guard_drift_cwd_rm_in_worktree_allowed_like_root(hh_tmp / "hh-1-11")
         test_pretooluse_guard_non_state_subdir_cwd_unchanged(hh_tmp / "hh-1-12")
+        test_pretooluse_guard_open_write_targets_classification()
+        test_pretooluse_guard_allows_python_c_json_load_open_protected(hh_tmp / "hh-2-2")
+        test_pretooluse_guard_allows_python_c_open_rb_memory(hh_tmp / "hh-2-3")
+        test_pretooluse_guard_allows_python_heredoc_read_open_memory(hh_tmp / "hh-2-4")
+        test_pretooluse_guard_denies_open_append_memory(hh_tmp / "hh-2-5")
+        test_pretooluse_guard_denies_open_rplus_memory(hh_tmp / "hh-2-6")
+        test_pretooluse_guard_denies_open_mode_kwarg_w_memory(hh_tmp / "hh-2-7")
+        test_pretooluse_guard_denies_open_mode_kwarg_r_memory(hh_tmp / "hh-2-8")
+        test_pretooluse_guard_denies_open_variable_mode_memory(hh_tmp / "hh-2-9")
+        test_pretooluse_guard_denies_dbm_open_c_memory(hh_tmp / "hh-2-10")
+        test_pretooluse_guard_denies_path_write_text_memory(hh_tmp / "hh-2-11")
+        test_pretooluse_guard_denies_redirect_memory(hh_tmp / "hh-2-12")
+        test_pretooluse_guard_heuristic_only_escalation_wording(hh_tmp / "hh-2-13")
+        test_pretooluse_guard_structural_escalation_wording_unchanged(hh_tmp / "hh-2-14")
 
     print()
     if _errors:
