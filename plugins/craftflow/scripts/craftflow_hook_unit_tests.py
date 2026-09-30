@@ -3256,6 +3256,247 @@ def test_pretooluse_guard_edit_write_worktree_confinement_allows_inside_worktree
     ok(name)
 
 
+_SCRATCH_SID_A = "11111111-2222-4333-8444-555555555555"
+_SCRATCH_SID_B = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+
+
+def _scratchpad_slug(root: Path) -> str:
+    return "".join("-" if c in "/." else c for c in str(root))
+
+
+def _scratchpad_fixture(tmp_dir: Path, sid: str = _SCRATCH_SID_A):
+    """Mimic /tmp/claude-<uid>/<slug>/<sid>/{scratchpad,tasks} under a fake
+    temp base inside `tmp_dir` (never the real /tmp). Returns
+    (fake_tmp, project, scratch, sid_dir)."""
+    fake_tmp = tmp_dir / "fake_tmp"
+    project = tmp_dir / "proj.x"
+    project.mkdir(parents=True)
+    fake_tmp.mkdir(parents=True)
+    project = project.resolve()
+    sid_dir = fake_tmp.resolve() / f"claude-{os.getuid()}" / _scratchpad_slug(project) / sid
+    scratch = sid_dir / "scratchpad"
+    scratch.mkdir(parents=True)
+    (sid_dir / "tasks").mkdir()
+    return fake_tmp, project, scratch, sid_dir
+
+
+_UNSET = object()
+
+
+def _with_fake_scratchpad_base(fake_tmp: Path, fn, override=_UNSET):
+    """Run fn() with the guard's session_scratchpad_dir bound to `fake_tmp`
+    (or to `override(sid, root)`); restores the guard module afterwards."""
+    orig = getattr(pretooluse_guard, "session_scratchpad_dir", _UNSET)
+    if override is _UNSET:
+        pretooluse_guard.session_scratchpad_dir = (
+            lambda sid, root: hooklib.session_scratchpad_dir(sid, root, tmp_base=fake_tmp)
+        )
+    else:
+        pretooluse_guard.session_scratchpad_dir = override
+    try:
+        return fn()
+    finally:
+        if orig is _UNSET:
+            del pretooluse_guard.session_scratchpad_dir
+        else:
+            pretooluse_guard.session_scratchpad_dir = orig
+
+
+def _scratch_escapes(fake_tmp: Path, cwd: Path, target, session_id) -> bool:
+    data = {"tool_name": "Write", "cwd": str(cwd), "tool_input": {"file_path": str(target)}}
+    if session_id is not _UNSET:
+        data["session_id"] = session_id
+    return _with_fake_scratchpad_base(
+        fake_tmp, lambda: pretooluse_guard._edit_write_escapes_confinement(data, Path(target))
+    )
+
+
+def test_hooklib_session_scratchpad_dir_cases(tmp_dir: Path) -> None:
+    name = "hooklib/session-scratchpad-dir-cases"
+    fake_tmp, project, scratch, sid_dir = _scratchpad_fixture(tmp_dir)
+    fn = hooklib.session_scratchpad_dir
+    got = fn(_SCRATCH_SID_A, project, tmp_base=fake_tmp)
+    if got != scratch:
+        fail(name, f"valid uuid: expected {scratch}, got {got}")
+        return
+    for bad in ("../x", "", None, "not-a-uuid", 123, _SCRATCH_SID_A + "\n", _SCRATCH_SID_A + "/..",
+                _SCRATCH_SID_A[:-1]):
+        got = fn(bad, project, tmp_base=fake_tmp)
+        if got is not None:
+            fail(name, f"session_id {bad!r}: expected None, got {got}")
+            return
+    if fn(_SCRATCH_SID_A, project, tmp_base=tmp_dir / "no_such_base") is not None:
+        fail(name, "missing tmp_base directory must return None")
+        return
+    if fn(_SCRATCH_SID_A, project, tmp_base=tmp_dir / "no_such_base" / "x") is not None:
+        fail(name, "missing claude-<uid> base must return None")
+        return
+    # Missing scratchpad (project with no such layout) still yields the
+    # derived candidate path, which grants nothing unless the path is used.
+    other_project = (tmp_dir / "other.proj")
+    other_project.mkdir()
+    cand = fn(_SCRATCH_SID_A, other_project.resolve(), tmp_base=fake_tmp)
+    expect = (fake_tmp.resolve() / f"claude-{os.getuid()}" / _scratchpad_slug(other_project.resolve())
+              / _SCRATCH_SID_A / "scratchpad")
+    if cand != expect:
+        fail(name, f"nonexistent scratchpad: expected candidate {expect}, got {cand}")
+        return
+    # Symlinked claude-<uid> base.
+    sym_tmp = tmp_dir / "sym_tmp"
+    sym_tmp.mkdir()
+    real_base = tmp_dir / "real_base"
+    (real_base / _scratchpad_slug(project) / _SCRATCH_SID_A / "scratchpad").mkdir(parents=True)
+    os.symlink(real_base, sym_tmp / f"claude-{os.getuid()}")
+    if fn(_SCRATCH_SID_A, project, tmp_base=sym_tmp) is not None:
+        fail(name, "symlinked claude-<uid> base must return None")
+        return
+    # Symlinked scratchpad component.
+    sym2_tmp = tmp_dir / "sym2_tmp"
+    sid2_dir = sym2_tmp / f"claude-{os.getuid()}" / _scratchpad_slug(project) / _SCRATCH_SID_A
+    sid2_dir.mkdir(parents=True)
+    (tmp_dir / "elsewhere").mkdir()
+    os.symlink(tmp_dir / "elsewhere", sid2_dir / "scratchpad")
+    if fn(_SCRATCH_SID_A, project, tmp_base=sym2_tmp) is not None:
+        fail(name, "symlinked scratchpad component must return None")
+        return
+    # Base owned by another uid: simulate by making the function see a
+    # different uid than the directory owner.
+    fake_uid = os.getuid() + 1
+    owned_tmp = tmp_dir / "owned_tmp"
+    (owned_tmp / f"claude-{fake_uid}" / _scratchpad_slug(project) / _SCRATCH_SID_A / "scratchpad").mkdir(parents=True)
+    real_getuid = os.getuid
+    os.getuid = lambda: fake_uid  # type: ignore[assignment]
+    try:
+        got = fn(_SCRATCH_SID_A, project, tmp_base=owned_tmp)
+    finally:
+        os.getuid = real_getuid  # type: ignore[assignment]
+    if got is not None:
+        fail(name, f"base not owned by the current uid must return None, got {got}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_write_scratchpad_file_and_nested_allowed(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/write-scratchpad-file-and-nested-allowed"
+    fake_tmp, project, scratch, _ = _scratchpad_fixture(tmp_dir)
+    (scratch / "sub" / "deeper").mkdir(parents=True)
+    for target in (scratch / "probe.py", scratch / "sub" / "deeper" / "x.py", scratch / "new" / "dir" / "y.py"):
+        if _scratch_escapes(fake_tmp, project, target, _SCRATCH_SID_A):
+            fail(name, f"expected Write to {target} to be allowed inside the session scratchpad")
+            return
+    ok(name)
+
+
+def test_pretooluse_guard_write_scratchpad_boundary_denied(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/write-scratchpad-boundary-denied"
+    fake_tmp, project, scratch, sid_dir = _scratchpad_fixture(tmp_dir)
+    # another session's scratchpad, created under the SAME slug/base
+    (fake_tmp.resolve() / f"claude-{os.getuid()}" / _scratchpad_slug(project) / _SCRATCH_SID_B / "scratchpad").mkdir(parents=True)
+    other = fake_tmp.resolve() / f"claude-{os.getuid()}" / _scratchpad_slug(project) / _SCRATCH_SID_B / "scratchpad"
+    outside = tmp_dir / "outside"
+    outside.mkdir()
+    os.symlink(outside, scratch / "link")
+    cases = (
+        ("sibling tasks dir", sid_dir / "tasks" / "x", _SCRATCH_SID_A),
+        ("the scratchpad's parent (session dir)", sid_dir, _SCRATCH_SID_A),
+        ("file in the session dir beside scratchpad", sid_dir / "x", _SCRATCH_SID_A),
+        ("another session's scratchpad", other / "probe.py", _SCRATCH_SID_A),
+        ("traversal out of the scratchpad", scratch / ".." / "tasks" / "x", _SCRATCH_SID_A),
+        ("symlink escape", scratch / "link" / "f", _SCRATCH_SID_A),
+        ("bad session_id '../x'", scratch / "probe.py", "../x"),
+        ("non-uuid session_id", scratch / "probe.py", "not-a-uuid"),
+        ("empty session_id", scratch / "probe.py", ""),
+        ("missing session_id", scratch / "probe.py", _UNSET),
+        ("None session_id", scratch / "probe.py", None),
+        ("session_id of another session for this session's path", scratch / "probe.py", _SCRATCH_SID_B),
+    )
+    for label, target, sid in cases:
+        if not _scratch_escapes(fake_tmp, project, target, sid):
+            fail(name, f"expected DENY (confinement escape) for {label}: {target}")
+            return
+    ok(name)
+
+
+def test_pretooluse_guard_write_scratchpad_grant_is_exact_to_anchored_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/write-scratchpad-grant-is-exact-to-anchored-cwd"
+    fake_tmp, project, scratch, _ = _scratchpad_fixture(tmp_dir)
+    sub = project / "sub"
+    sub.mkdir()
+    # cwd is a subdirectory: the anchor slug differs from the launch-dir
+    # slug, so the grant is silently absent (fail closed) ...
+    if not _scratch_escapes(fake_tmp, sub, scratch / "probe.py", _SCRATCH_SID_A):
+        fail(name, "subdirectory cwd must not receive the scratchpad grant (fail closed)")
+        return
+    # ... and an ordinary repo file outside that subdir cwd stays denied.
+    (project / "other.txt").write_text("x", encoding="utf-8")
+    if not _scratch_escapes(fake_tmp, sub, project / "other.txt", _SCRATCH_SID_A):
+        fail(name, "repo file outside a subdirectory cwd must stay denied")
+        return
+    # ordinary in-cwd write is unaffected.
+    if _scratch_escapes(fake_tmp, project, project / "in_cwd.txt", _SCRATCH_SID_A):
+        fail(name, "in-cwd write must stay allowed")
+        return
+    # unrelated absolute path outside everything stays denied with a valid grant present.
+    if not _scratch_escapes(fake_tmp, project, tmp_dir / "elsewhere.txt", _SCRATCH_SID_A):
+        fail(name, "unrelated outside path must stay denied")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_write_scratchpad_grant_never_unlocks_protected_memory(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/write-scratchpad-grant-never-unlocks-protected-memory"
+    fake_tmp, project, _scratch, _ = _scratchpad_fixture(tmp_dir)
+    memory = project / ".craftflow" / "state" / "project" / "progress.md"
+    memory.parent.mkdir(parents=True)
+    memory.write_text("## Done\n", encoding="utf-8")
+    # Worst case: pretend the grant covers the whole project (it never does).
+    data = {
+        "tool_name": "Write",
+        "session_id": _SCRATCH_SID_A,
+        "cwd": str(project),
+        "tool_input": {"file_path": str(memory), "content": "x"},
+    }
+    saved_env = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(project)
+    buf = io.StringIO()
+    real_stdout = sys.stdout
+    sys.stdout = buf
+    try:
+        _with_fake_scratchpad_base(
+            fake_tmp,
+            lambda: pretooluse_guard._handle_edit_write(data, hooklib.load_mode(), data["tool_input"]),
+            override=lambda sid, root: project,
+        )
+    finally:
+        sys.stdout = real_stdout
+        if saved_env is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = saved_env
+    out = buf.getvalue()
+    if not _deny_out(out):
+        fail(name, f"protected memory file must stay denied even under a widened grant; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_scratchpad_grant_is_edit_write_only(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/scratchpad-grant-is-edit-write-only"
+    # Structural: Bash confinement / resolve_confinement never consult the grant.
+    import inspect
+
+    for label, obj in (
+        ("hooklib.resolve_confinement", hooklib.resolve_confinement),
+        ("bash_guard", bash_guard),
+        ("pretooluse_guard._handle_bash", pretooluse_guard._handle_bash),
+        ("pretooluse_guard._handle_edit_write", pretooluse_guard._handle_edit_write),
+    ):
+        if "session_scratchpad_dir" in inspect.getsource(obj):
+            fail(name, f"{label} must not reference session_scratchpad_dir (grant is Edit/Write-only)")
+            return
+    ok(name)
+
+
 def test_pretooluse_guard_worktree_confinement_degrades_when_no_workflow_json(tmp_dir: Path) -> None:
     name = "pretooluse-guard/worktree-confinement-degrades-when-no-workflow-json"
     project_root = tmp_dir / "project"
@@ -25751,6 +25992,12 @@ def main() -> int:
         test_pretooluse_guard_edit_write_worktree_confinement_denies_outside(tmp / "g16")
         test_pretooluse_guard_edit_write_worktree_confinement_allows_inside_worktree(tmp / "g17")
         test_pretooluse_guard_worktree_confinement_degrades_when_no_workflow_json(tmp / "g18")
+        test_hooklib_session_scratchpad_dir_cases(tmp / "sp1")
+        test_pretooluse_guard_write_scratchpad_file_and_nested_allowed(tmp / "sp2")
+        test_pretooluse_guard_write_scratchpad_boundary_denied(tmp / "sp3")
+        test_pretooluse_guard_write_scratchpad_grant_is_exact_to_anchored_cwd(tmp / "sp4")
+        test_pretooluse_guard_write_scratchpad_grant_never_unlocks_protected_memory(tmp / "sp5")
+        test_pretooluse_guard_scratchpad_grant_is_edit_write_only(tmp / "sp6")
         test_pretooluse_guard_edit_write_allows_claude_code_own_memory_dir(tmp / "g18b")
         test_pretooluse_guard_edit_write_allows_claude_code_own_memory_md_exact_file(tmp / "g18c")
         test_pretooluse_guard_edit_write_denies_other_project_claude_code_memory_dir(tmp / "g18d")

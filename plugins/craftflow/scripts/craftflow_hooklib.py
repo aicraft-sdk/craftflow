@@ -334,7 +334,9 @@ def log_event(name: str, payload: Dict[str, Any]) -> None:
 # if its JSON file's mtime was bumped later for an unrelated reason (e.g. a
 # memory-notes append), leaking its stale/removed `worktree_path` into an
 # unrelated invocation's write-confinement check and fail-OPENing writes to
-# the wrong worktree instead of fail-CLOSING to cwd/scratchpad. That
+# the wrong worktree instead of fail-CLOSING to cwd-only confinement (the
+# session scratchpad is a separate Edit/Write-only grant derived by
+# `session_scratchpad_dir()`, never a fallback boundary). That
 # staleness risk is real ONLY for write-confinement decisions -- the
 # non-security consumers above only ever read/report workflow state, so the
 # pre-existing "true newest by mtime" semantic remains correct for them.
@@ -498,8 +500,9 @@ def latest_live_workflow_file(session_id: str | None = None, project_root: "Path
 
     Returns None if there are zero live candidates (even when non-live
     files exist) -- callers already degrade a None workflow to cwd-only
-    confinement (fail CLOSED to cwd/scratchpad, see
-    `resolve_confinement()`), which is exactly the desired posture when no
+    confinement (fail CLOSED to cwd-only, see `resolve_confinement()`; the
+    Edit/Write-only scratchpad grant is derived separately by
+    `session_scratchpad_dir()`), which is exactly the desired posture when no
     confidently-resolvable active workflow exists for this invocation,
     rather than fail-OPEN to a stale `worktree_path`.
 
@@ -1252,6 +1255,44 @@ def _within_claude_code_own_memory_dir(resolved: Path, cwd: Path) -> bool:
     if leaf == "MEMORY.md" and len(rel_parts) == 2:
         return True
     return False
+
+
+_SESSION_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def session_scratchpad_dir(session_id, project_root: Path, tmp_base: Path = Path("/tmp")):
+    """Exact per-session scratchpad directory Claude Code creates at
+    `<tmp>/claude-<uid>/<slug>/<session_id>/scratchpad`, or None (fail
+    CLOSED: the Edit/Write grant is silently absent) when any check is unmet.
+
+    Derived ONLY from the payload `session_id` (must be UUID-shaped), the
+    trusted anchored `project_root` (slug = absolute path with every '/' and
+    '.' replaced by '-', the same rule as `claude_code_own_memory_root`), the
+    uid, and `tmp_base` -- never from tool input. `tmp_base` is resolved
+    first (macOS /tmp -> /private/tmp). Refused: a non-UUID session id, a
+    missing/symlinked `claude-<uid>` base, a base not owned by the uid, and a
+    candidate whose existing components resolve elsewhere (symlink).
+
+    Callers grant Edit/Write only (never Bash) to the returned directory and
+    its descendants, comparing RESOLVED paths. The candidate itself may not
+    exist yet: a grant over a non-existent directory only matters if a
+    resolved target already lies beneath it."""
+    try:
+        if not isinstance(session_id, str) or _SESSION_UUID_RE.fullmatch(session_id) is None:
+            return None
+        uid = os.getuid()
+        base = Path(tmp_base).resolve() / f"claude-{uid}"
+        if base.is_symlink() or not base.is_dir() or base.stat().st_uid != uid:
+            return None
+        slug = "".join("-" if c in "/." else c for c in str(project_root))
+        cand = base / slug / session_id / "scratchpad"
+        if cand.exists() and cand.resolve() != cand:
+            return None
+        return cand
+    except Exception:
+        return None
 
 
 def resolve_confinement(
