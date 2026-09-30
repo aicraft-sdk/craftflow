@@ -1246,7 +1246,7 @@ def test_hook_inventory_docs_mention_context_nudge():
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: user override settings (SPEC-0017 / ADR-0052), pure core + loader
+# Phase 2: user override settings (SPEC-0017 / ADR-0054), pure core + loader
 # ---------------------------------------------------------------------------
 
 _OVR_ENV = "CRAFTFLOW_CONTEXT_NUDGE_USER_CONFIG"
@@ -1423,7 +1423,7 @@ def test_user_override_path_independent_of_plugin_root():
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: compact module (SPEC-0017 / ADR-0052)
+# Phase 3: compact module (SPEC-0017 / ADR-0054)
 # ---------------------------------------------------------------------------
 
 _LIVE_PAYLOAD = {"workflow_type": "build", "phase_cursor": "P1", "worktree_mode": "active",

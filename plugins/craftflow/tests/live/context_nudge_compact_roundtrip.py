@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Class-A live proof driver for the /compact line and the durable user override (SPEC-0017 / ADR-0052).
+"""Class-A live proof driver for the /compact line and the durable user override (SPEC-0017 / ADR-0054).
 
 Runs real `claude -p --plugin-dir <plugin> --model haiku` sessions in scratch projects:
   load probe  hard precondition: `--plugin-dir` must override the installed craftflow (one nudge writer only)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CRAFTFLOW context nudge: session-bound /compact line (SPEC-0017 / ADR-0052).
+"""CRAFTFLOW context nudge: session-bound /compact line (SPEC-0017 / ADR-0054).
 
 Builds the ready-to-paste ``/compact ...`` command that the context nudge appends to its advisory.
 When the session can be tied to exactly one live workflow artifact, the line names that workflow

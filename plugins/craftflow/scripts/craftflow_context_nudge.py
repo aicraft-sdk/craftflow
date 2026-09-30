@@ -38,7 +38,7 @@ _SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _WF_RE = re.compile(r"^wf-[A-Za-z0-9-]{1,160}$")
 _BOUNDARY_KEYS = ("mode", "level", "tokens", "threshold", "assumed_window", "relay", "advisory",
                   "checkpoint_path", "session_id", "session_source", "phase", "outcome", "error")
-# User-level override (SPEC-0017 / ADR-0052). The path is only ever built from these segments under
+# User-level override (SPEC-0017 / ADR-0054). The path is only ever built from these segments under
 # HOME (DD-21), so it survives plugin updates and never depends on the plugin root.
 USER_OVERRIDE_ENV = "CRAFTFLOW_CONTEXT_NUDGE_USER_CONFIG"
 USER_OVERRIDE_MAX_BYTES = 65536
