@@ -677,8 +677,9 @@ In v1 Cursor Task-Dispatch Mode, the following Claude Code features are NOT supp
   no domain-glossary context and no router-selected skill hints at all, unlike Claude
   Code-dispatched agents. Deferred to v2 for the same reason as the items above.
 - Full memory-finalization safety hardening (deferred to v2) — § 8 below writes memory markdown
-  directly instead of invoking `craftflow_memory_merge.py` (the routing-table-driven,
-  confidence-filtered, dedup-capped, retraction-aware merge Claude Code's real memory-finalize task
+  directly instead of invoking `craftflow_memory_merge.py --apply` (the routing-table-driven,
+  confidence-filtered, dedup-capped, retraction-aware, archive-first, atomic, permit-checked
+  merge-and-write Claude Code's real memory-finalize task
   runs, per `craftflow-router/SKILL.md` § 13 and every workflow reference file's
   `phase:memory-finalize` task description). Cursor's § 8 also skips the skill-candidate ledger
   `--observe`/`--prune` calls, the `.memory-finalize` permit-token guard, and the cross-workflow
