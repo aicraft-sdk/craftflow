@@ -4031,6 +4031,49 @@ def test_hooklib_latest_live_workflow_file_stays_bounded_when_window_lacks_sessi
     if selected is None or selected.name != "wf-real-0.json":
         fail(name, f"expected the newest live candidate (wf-real-0) to be selected; got: {selected!r}")
         return
+
+    # Router stamping (P3): a null/empty-string `session_id` stamp (env absent at creation) is not a
+    # populated producer, so it must NOT trigger the widen scan; a non-empty stamp that does not match
+    # the invoking session still must.
+    def _scanned_for(stamp_value, label: str) -> int:
+        root = tmp_dir / f"project-{label}"
+        root.mkdir(parents=True)
+        wf_dir = root / ".craftflow" / "state" / "workflows"
+        wf_dir.mkdir(parents=True)
+        for i in range(total_files):
+            wf_path = wf_dir / f"wf-{label}-{i}.json"
+            wf_path.write_text(json.dumps({"workflow_uuid": f"wf-{label}-{i}", "worktree_path": None,
+                                           "session_id": stamp_value}), encoding="utf-8")
+            os.utime(wf_path, (now - i, now - i))
+        counts: list[int] = []
+
+        def _counting(paths):
+            paths_list = list(paths)
+            counts.append(len(paths_list))
+            return original_live_candidates(paths_list)
+
+        saved = os.environ.get("CLAUDE_PROJECT_DIR")
+        os.environ["CLAUDE_PROJECT_DIR"] = str(root)
+        hooklib._live_workflow_candidates = _counting
+        try:
+            hooklib.latest_live_workflow_file(session_id="sess-real-invocation")
+        finally:
+            hooklib._live_workflow_candidates = original_live_candidates
+            if saved is None:
+                os.environ.pop("CLAUDE_PROJECT_DIR", None)
+            else:
+                os.environ["CLAUDE_PROJECT_DIR"] = saved
+        return sum(counts)
+
+    for null_like in (None, ""):
+        scanned = _scanned_for(null_like, f"nullstamp{'none' if null_like is None else 'empty'}")
+        if scanned > hooklib._LATEST_WORKFLOW_SCAN_WINDOW:
+            fail(name, f"session_id={null_like!r} stamps must not widen the scan; scanned {scanned}")
+            return
+    scanned = _scanned_for("0123abcd-4567", "realstamp")
+    if scanned <= hooklib._LATEST_WORKFLOW_SCAN_WINDOW:
+        fail(name, f"non-empty non-matching session_id stamps must still widen the scan; scanned {scanned}")
+        return
     ok(name)
 
 
@@ -16891,22 +16934,29 @@ def test_router_template_stamps_session_id(tmp_dir: Path) -> None:
     policy = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "workflow-artifact-and-hook-policy.md").read_text(encoding="utf-8")
     # The artifact template is a JSON string literal inside SKILL.md, so its quotes are backslash-escaped.
     template = skill.replace('\\"', '"')
-    if '"session_id":"{session_id}",' not in template:
-        fail(name, "router artifact template does not stamp session_id")
+    if '"workflow_type":"{WORKFLOW}","session_id":{session_id_json},' not in template:
+        fail(name, "artifact template must paste the helper's session_id_json fragment directly after workflow_type")
         return
-    if '"workflow_type":"{WORKFLOW}","session_id":"{session_id}",' not in template:
-        fail(name, "session_id must directly follow workflow_type in the artifact template")
+    if "session_id_json=$(printf '%s' \"$WF_INFO\"" not in skill:
+        fail(name, "router parse step lacks the literal session_id_json=$(printf '%s' \"$WF_INFO\" line")
         return
-    if "session_id=" not in skill or "--json" not in skill or "session_id" not in skill.split("worktree_branch=", 1)[-1][:800]:
-        fail(name, "router parse step lacks session_id= line after worktree_branch=")
+    if "Paste `{session_id_json}` verbatim" not in skill:
+        fail(name, "router must be told to paste session_id_json verbatim (no quote editing; null handled by the helper)")
         return
     # Anchor on the heading line itself; the title is also mentioned inline in earlier sections.
     resume = skill.split("\n## 4. Resume And Hydration\n", 1)
-    if len(resume) != 2 or "session_rebound" not in resume[1].split("\n## ", 1)[0]:
-        fail(name, "Resume And Hydration lacks session_rebound re-stamp rule")
-        return
-    if "session_id" not in policy or "checkpoint_type" not in policy or "no_live_candidate" not in policy:
-        fail(name, "policy doc must document session_id, checkpoint_type and no_live_candidate-until-restamp")
+    resume_body = resume[1].split("\n## ", 1)[0] if len(resume) == 2 else ""
+    for needle in ("session_rebound", "15 minutes", "explicitly resum", "never rebind"):
+        if needle not in resume_body:
+            fail(name, f"Resume And Hydration re-stamp rule lacks {needle!r}")
+            return
+    for needle in ("`session_id`", "no_live_candidate", "context-nudge", "latest_live_workflow_file",
+                   "session_rebound", "plan-then-build"):
+        if needle not in policy:
+            fail(name, f"policy doc must document {needle!r}")
+            return
+    if "checkpoint_type" not in policy:
+        fail(name, "policy doc normalized_phases list must include checkpoint_type")
         return
     ok(name)
 

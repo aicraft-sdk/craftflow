@@ -405,7 +405,8 @@ def _live_workflow_candidates(paths) -> List[Tuple[Path, Dict[str, Any]]]:
 
 def _any_session_id_key_present(paths) -> bool:
     """True if at least one candidate JSON payload in `paths` -- LIVE OR
-    NOT -- carries a `session_id` key at all (regardless of its value).
+    NOT -- carries a non-empty string `session_id` (a null/"" stamp, e.g. the
+    router ran without a session env var, does not count as populated).
     Deliberately not restricted to live candidates: this answers "does the
     producer side populate session_id for anything in this window", not
     "does a live, session-scoping-eligible candidate exist" -- a window
@@ -418,8 +419,10 @@ def _any_session_id_key_present(paths) -> bool:
             payload = json.loads(candidate.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if isinstance(payload, dict) and "session_id" in payload:
-            return True
+        if isinstance(payload, dict):
+            value = payload.get("session_id")
+            if isinstance(value, str) and value:
+                return True
     return False
 
 

@@ -275,7 +275,7 @@ def test_workflow_id_session_id() -> None:
         fail("session-id-absent", f"rc={r.returncode} out={r.stdout!r}")
 
     # invalid env values -> empty line
-    for bad in ("short", "-leadingdash123", "has space 12345", "a" * 129, "bad/slash1234"):
+    for bad in ("short", "-leadingdash123", "has space 12345", "a" * 129, "bad/slash1234", "valid1234\n"):
         r = run(bad, "--session-id")
         if r.returncode == 0 and r.stdout == "\n":
             ok(f"--session-id rejects invalid {bad[:12]!r}")
@@ -301,6 +301,21 @@ def test_workflow_id_session_id() -> None:
             fail("json-session-id-null", f"got {d.get('session_id', '<missing>')!r}")
     except json.JSONDecodeError as exc:
         fail("json-session-id-null-parse", str(exc))
+
+    # session_id_json is a ready-to-paste JSON fragment: json.loads of the template-equivalent
+    # document must be valid for valid / absent / invalid env and round-trip the value.
+    for env_val, expect in (("0123abcd-4567", "0123abcd-4567"), (None, None), ("bad", None),
+                            ("valid1234\n", None)):
+        r = run(env_val, "--request", "Add login", "--branch", "main", "--json")
+        try:
+            d = json.loads(r.stdout)
+            doc = json.loads('{"workflow_type":"BUILD","session_id":' + d["session_id_json"] + ',"state_root":"x"}')
+            if doc["session_id"] == expect and doc["state_root"] == "x":
+                ok(f"session_id_json valid JSON for {env_val!r}")
+            else:
+                fail("session_id_json", f"{env_val!r}: got {doc['session_id']!r}")
+        except (json.JSONDecodeError, KeyError) as exc:
+            fail("session_id_json", f"{env_val!r}: {type(exc).__name__}: {exc} out={r.stdout!r}")
 
     # --request still required without --session-id
     r = run("0123abcd-4567", "--branch", "main")

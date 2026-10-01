@@ -29,7 +29,8 @@ Output (--json)   : JSON object:
     "iso_timestamp":   "2026-07-06T14:03:12Z",
     "worktree_dir":    "auth-refactor-d4e5f6a7",
     "worktree_branch": "wf-auth-refactor-d4e5f6a7",
-    "session_id":      "0123abcd-4567" | null
+    "session_id":      "0123abcd-4567" | null,
+    "session_id_json": "\"0123abcd-4567\"" | "null"   (ready-to-paste JSON fragment)
   }
 
 Concurrency & uniqueness:
@@ -156,14 +157,14 @@ def _slug_from_branch(branch: str) -> str:
 # Session id
 # ---------------------------------------------------------------------------
 
-SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$")
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$")  # use fullmatch: `$` accepts a trailing newline
 
 
 def current_session_id(environ=None) -> str | None:
     """Return the Claude session id from env if it is well-formed, else None."""
     env = os.environ if environ is None else environ
     value = env.get("CLAUDE_CODE_SESSION_ID", "")
-    if SESSION_ID_RE.match(value):
+    if SESSION_ID_RE.fullmatch(value):
         return value
     return None
 
@@ -243,6 +244,7 @@ def mint_workflow_id(
         "worktree_dir":    worktree_dir,
         "worktree_branch": worktree_branch,
         "session_id":      current_session_id(),
+        "session_id_json": json.dumps(current_session_id()),
     }
 
 
