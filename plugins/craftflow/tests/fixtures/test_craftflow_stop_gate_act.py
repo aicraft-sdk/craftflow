@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the stop gate ACT slice (SPEC-0019 / ADR-0056): off fast path (P2) and later phases.
+"""Tests for the stop gate ACT slice (SPEC-0020 / ADR-0057): off fast path (P2) and later phases.
 
 Run: python3 tests/fixtures/test_craftflow_stop_gate_act.py
 """
@@ -1250,6 +1250,8 @@ def test_p6_stop_verify_enabled_means_no_block():
 
 
 def test_p6_jev_endpoint_override_means_no_block():
+    # The Jev client now ignores this env var (endpoint override is the user-level jev-endpoint.json only);
+    # blocker A09 is intentionally kept as defence in depth, so a set value must still withhold ACT.
     act_quiet(act_run(env_extra={"CRAFTFLOW_JEV_ENDPOINT": "http://127.0.0.1:9/x"}), "A09")
 
 

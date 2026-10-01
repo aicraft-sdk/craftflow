@@ -1088,7 +1088,7 @@ def session_update(state, verdict, head, cursor, tail_sha, relayed, now, last_hu
     return record
 
 
-# --- continue-ACT: arm status, blockers, reason, decision (SPEC-0019 / ADR-0056, DD-4..DD-8) ---------
+# --- continue-ACT: arm status, blockers, reason, decision (SPEC-0020 / ADR-0057, DD-4..DD-8) ---------
 ACT_CONTINUE_TEMPLATE = (
     "craftflow stop-gate: auto-continue %d/%d (armed by the user). "
     "The approved plan of workflow %s continues with phase %s. "

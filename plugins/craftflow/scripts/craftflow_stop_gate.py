@@ -601,7 +601,7 @@ def relay_followup_row(settings, tags, payload, session_id, transcript_path, t0)
         hook_ms=int((time.monotonic() - t0) * 1000), settings_tags=tags)
 
 
-# --- ACT facts (SPEC-0019 / ADR-0056) ----------------------------------------------------------------
+# --- ACT facts (SPEC-0020 / ADR-0057) ----------------------------------------------------------------
 def stop_verify_enabled():
     """Exact bool for blocker A07: True when ``config/stop-verify.json`` exists and is enabled or unreadable
     (an unusable file fails closed)."""
@@ -616,7 +616,12 @@ def stop_verify_enabled():
 
 
 def jev_endpoint_override_set(env):
-    """Exact bool for blocker A09: ``CRAFTFLOW_JEV_ENDPOINT`` is set (non-empty) in the hook environment."""
+    """Exact bool for blocker A09: ``CRAFTFLOW_JEV_ENDPOINT`` is set (non-empty) in the hook environment.
+
+    The Jev client no longer reads this variable (DD-14), so it cannot redirect
+    the classifier. A09 is kept as a belt-and-braces refusal (defence in depth):
+    ACT still declines while the variable is present.
+    """
     return bool(env.get("CRAFTFLOW_JEV_ENDPOINT"))
 
 

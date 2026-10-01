@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Terminal-only arm CLI for the stop-gate continue-ACT (SPEC-0019 / ADR-0056, DD-8..DD-10).
+"""Terminal-only arm CLI for the stop-gate continue-ACT (SPEC-0020 / ADR-0057, DD-8..DD-10).
 
   craftflow_stop_gate_arm.py arm --workflow WF [--hours 1..24]   (default 8; needs a TTY on stdin AND stdout)
   craftflow_stop_gate_arm.py disarm

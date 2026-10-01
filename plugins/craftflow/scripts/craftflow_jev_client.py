@@ -15,16 +15,28 @@ Design constraints (see docs/plans/2026-09-19-plan-optional-jev-typesafe-routi-p
   A retry happens only on `HTTPError` with a status in `RETRY_STATUSES`
   (429/529) -- never on `socket.timeout`/`URLError` -- and only when at
   least 1.0s of budget remains after a 0.3s backoff sleep.
-- DD-14 No endpoint override in production: `ENDPOINT` is a constant. The
-  `CRAFTFLOW_JEV_ENDPOINT` env override exists for tests only and is
-  honored solely when its host is loopback (127.0.0.1, localhost, ::1).
-  Any other value is ignored and logged as `endpoint_override_ignored`.
+- DD-14 No env/repo-controlled endpoint: `ENDPOINT` is the default. The
+  `CRAFTFLOW_JEV_ENDPOINT` env var is NOT consulted (a repo
+  `.claude/settings.json` env block could otherwise redirect the bearer key
+  to a local listener). The only override is the user-level file
+  `~/.claude/craftflow/jev-endpoint.json` (`{"endpoint": "<url>"}`), located
+  via the passwd-database home (never `$HOME`), read only on the network
+  path (after a cache miss), and honored solely when its host is loopback
+  (127.0.0.1, localhost, ::1). The file must be a regular file (no FIFO,
+  no symlink) of at most 4096 bytes. The URL must be http or https with a
+  loopback host. Redirects are never followed, so a loopback listener cannot
+  bounce the bearer key elsewhere. A non-loopback or invalid value is
+  ignored and logged as `endpoint_override_ignored`; an unreadable file is
+  logged as `endpoint_file_unreadable`; an unresolved passwd home is logged
+  as `endpoint_home_unresolved`. In every such case the client uses
+  `ENDPOINT` (fail open). The file is a test seam, not for production use.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import stat
 import time
 import urllib.error
 import urllib.parse
@@ -40,21 +52,145 @@ RETRY_STATUSES = (429, 529)
 _RETRY_BACKOFF_SECONDS = 0.3
 _MIN_REMAINING_AFTER_BACKOFF_SECONDS = 1.0
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+_MAX_ENDPOINT_FILE_BYTES = 4096
 
 
-def _resolve_endpoint(env: Dict[str, str], log) -> str:
-    """Return ENDPOINT unless a loopback-only test override is present (DD-14)."""
-    override = env.get("CRAFTFLOW_JEV_ENDPOINT")
+def _passwd_home() -> Optional[str]:
+    """Home from the passwd database; ignores $HOME. None when unavailable."""
+    try:
+        import pwd  # lazy: POSIX only
+
+        return pwd.getpwuid(os.getuid()).pw_dir
+    except Exception:  # fail open: unresolved home
+        return None
+
+
+def _default_endpoint_path() -> Optional[Path]:
+    home = _passwd_home()
+    if not home:
+        return None
+    return Path(home) / ".claude" / "craftflow" / "jev-endpoint.json"
+
+
+class _UnreadableEndpointFile(Exception):
+    """Internal: carries a non-sensitive reason token (never file contents)."""
+
+
+def _log_safely(log, decision: str, error: Optional[str] = None) -> None:
+    payload: Dict[str, Any] = {"event": "jev_call", "decision": decision}
+    if error is not None:
+        payload["error"] = error
+    try:
+        log("plugin_jev_client", payload)
+    except Exception:
+        pass  # a hostile log callable must never break endpoint resolution
+
+
+def _read_endpoint_file(path: Optional[Path], log=None) -> Optional[str]:
+    """Return the `endpoint` string from the user file, or None on any problem.
+
+    A missing file is silent. Any other problem (non-regular file, oversized,
+    unreadable, malformed, wrong shape) logs exactly one
+    `endpoint_file_unreadable` event carrying only an exception type name or
+    reason token -- never the path contents or value.
+    """
+    if path is None:
+        return None
+    try:
+        try:
+            st = os.stat(path)
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISREG(st.st_mode):
+            raise _UnreadableEndpointFile("not_regular_file")
+        # O_NONBLOCK: never block on a FIFO swapped in after the stat;
+        # O_NOFOLLOW: refuse a symlink swapped in after the stat.
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise _UnreadableEndpointFile("not_regular_file")
+            raw = b""
+            while len(raw) <= _MAX_ENDPOINT_FILE_BYTES:
+                chunk = os.read(fd, _MAX_ENDPOINT_FILE_BYTES + 1 - len(raw))
+                if not chunk:
+                    break
+                raw += chunk
+        finally:
+            os.close(fd)
+        if len(raw) > _MAX_ENDPOINT_FILE_BYTES:
+            raise _UnreadableEndpointFile("too_large")
+        data = json.loads(raw.decode("utf-8"))
+        if not isinstance(data, dict):
+            raise _UnreadableEndpointFile("not_object")
+        value = data.get("endpoint")
+        if not isinstance(value, str) or not value:
+            raise _UnreadableEndpointFile("endpoint_not_string")
+        return value
+    except _UnreadableEndpointFile as exc:
+        reason = str(exc)
+    except Exception as exc:  # unreadable/malformed -> fail open, token only
+        reason = type(exc).__name__
+    if log is not None:
+        _log_safely(log, "endpoint_file_unreadable", reason)
+    return None
+
+
+def _is_safe_loopback_url(url: str) -> bool:
+    """True only for an unambiguous http(s) loopback URL (DD-14).
+
+    urlsplit and urllib.request.Request must agree on the host, and anything
+    parser-differential bait (userinfo, backslash, whitespace, control chars)
+    is rejected outright.
+    """
+    try:
+        if any(ch == "\\" or ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in url):
+            return False
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme not in ("http", "https"):
+            return False
+        if "@" in parts.netloc or parts.username is not None or parts.password is not None:
+            return False
+        hostname = parts.hostname
+        if hostname not in _LOOPBACK_HOSTS:
+            return False
+        req_host = urllib.request.Request(url).host
+        if req_host.startswith("["):
+            req_host = req_host[1:].split("]", 1)[0]
+        else:
+            req_host = req_host.rsplit(":", 1)[0] if ":" in req_host else req_host
+        return req_host.lower() == hostname
+    except Exception:
+        return False
+
+
+def _resolve_endpoint(log, config_path: Optional[Path] = None) -> str:
+    """Return ENDPOINT unless the user-level file names a loopback URL (DD-14)."""
+    path = config_path if config_path is not None else _default_endpoint_path()
+    if path is None:
+        _log_safely(log, "endpoint_home_unresolved")
+        return ENDPOINT
+    override = _read_endpoint_file(path, log)
     if not override:
         return ENDPOINT
-    try:
-        hostname = urllib.parse.urlsplit(override).hostname
-    except Exception:
-        hostname = None
-    if hostname in _LOOPBACK_HOSTS:
+    if _is_safe_loopback_url(override):
         return override
-    log("plugin_jev_client", {"event": "jev_call", "decision": "endpoint_override_ignored"})
+    _log_safely(log, "endpoint_override_ignored")
     return ENDPOINT
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Fail any 3xx so the bearer key can never be forwarded to a redirect target."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirectHandler)
+
+
+def _urlopen(req, timeout=None):
+    return _OPENER.open(req, timeout=timeout)
 
 
 def _cache_key(state: Any, questions: Any, model: str) -> str:
@@ -115,6 +251,7 @@ def call(
     log=log_event,
     total_budget_seconds: float = TOTAL_BUDGET_SECONDS,
     failure_reason_out: Optional[Dict[str, Any]] = None,
+    endpoint_config_path: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
     """Call the Jev endpoint and return {"answers","usage","model","latency_ms","cache_hit"} or None.
 
@@ -156,7 +293,7 @@ def call(
                     "cache_hit": True,
                 }
 
-        endpoint = _resolve_endpoint(os.environ, log)
+        endpoint = _resolve_endpoint(log, endpoint_config_path)
         req = _build_request(endpoint, state, questions, model, api_key)
 
         start = time.monotonic()
@@ -164,7 +301,7 @@ def call(
             try:
                 remaining = total_budget_seconds - (time.monotonic() - start)
                 attempt_timeout = min(timeout, remaining)
-                with urllib.request.urlopen(req, timeout=attempt_timeout) as resp:
+                with _urlopen(req, timeout=attempt_timeout) as resp:
                     body = resp.read()
                 data = json.loads(body)
                 if not isinstance(data, dict) or "answers" not in data:

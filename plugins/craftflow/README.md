@@ -363,7 +363,7 @@ the router's Intent Routing table always win over any Jev hint (see `router-prot
 
 ## Optional: Stop gate (shadow, plus armed continue)
 
-`craftflow_stop_gate.py` is an opt-in `Stop` hook that classifies each end-of-turn stop and logs what it *would* do (continue to the next approved phase, local commit, or wait for you). Slice 1 (SPEC-0018, ADR-0055) is shadow only. Slice 2 (SPEC-0019, ADR-0056) adds exactly one action: when mode is `on` AND you have armed it (below), it blocks the stop with a constant reason so the agent continues to the next already-approved phase. It never pushes, opens a PR, merges, commits or picks backlog work. It always exits 0 (fail open: any error means no output) and does nothing unless `hook_event_name` is `Stop`.
+`craftflow_stop_gate.py` is an opt-in `Stop` hook that classifies each end-of-turn stop and logs what it *would* do (continue to the next approved phase, local commit, or wait for you). Slice 1 (SPEC-0018, ADR-0055) is shadow only. Slice 2 (SPEC-0020, ADR-0057) adds exactly one action: when mode is `on` AND you have armed it (below), it blocks the stop with a constant reason so the agent continues to the next already-approved phase. It never pushes, opens a PR, merges, commits or picks backlog work. It always exits 0 (fail open: any error means no output) and does nothing unless `hook_event_name` is `Stop`.
 
 Modes (`mode` key, shipped default `off` in `config/stop-gate.json`):
 
@@ -388,7 +388,7 @@ Enable durably with `~/.claude/craftflow/stop-gate.json`, e.g. `{"mode": "audit"
 
 **Consent file.** `~/.claude/craftflow/stop-gate.json` read from the passwd home (not `$HOME`, not the env seam), without following symlinks, owned by you and at most 64 KiB, is the only place `jevText: true` and `notify: "push"` are honoured. The same path serves as the user settings file; a seam or `HOME`-redirected copy can set `mode`, `notify: "desktop"` and thresholds (local logging and banners only) but is ignored for `jevText` (tag `jev_text_seam_ignored`) and `push` (tag `notify_push_seam_ignored`, falls back to `desktop`). Accepted risk: an agent with file-write access can edit this file, so treat it as your consent, not a security boundary against the agent.
 
-**Arming continue ACT (SPEC-0019).** `on` never acts by itself. Run the arm CLI in your own terminal:
+**Arming continue ACT (SPEC-0020).** `on` never acts by itself. Run the arm CLI in your own terminal:
 
 ```bash
 python3 scripts/craftflow_stop_gate_arm.py status                       # read-only; caveat human_turn_unchecked
@@ -409,7 +409,7 @@ python3 scripts/craftflow_stop_gate_arm.py disarm                       # works 
 
 **Hard rules H16-H19** (every mode, after H15): H16 `no_progress`; H17 `continue_budget` (applies only when `maxAutoContinuesPerSession >= 1`); H18 `checkpoint_phase` (the next or just-completed phase has a `checkpoint_type` other than `none`); H19 `stop_reason_not_end_turn` (a string `stop_reason` other than `end_turn`).
 
-**Act blockers A01-A17** (logged on every stop in `act_blockers`, consulted only for ACT): A01 mode not `on`; A02 not armed; A03 binding not exact (`binding_reason == session_match`, artifact `session_id` equals the payload `session_id`, and no newer `session_rebound`); A04 `checkpoint_type` missing; A05 not a Jev verdict; A06 human turn unknown; A07 stop-verify enabled; A08 disarmed after a negative reply; A09 `CRAFTFLOW_JEV_ENDPOINT` set; A10 no session id; A11 tail already acted on; A12 phase or workflow id unrenderable; A13 session record unreliable; A14 settings not from the user layer; A15 budget zero or spent; A16 `stop_reason` not an explicit string (H19 needs an explicit `end_turn`); A17 tail truncated (1 MiB) after an act.
+**Act blockers A01-A17** (logged on every stop in `act_blockers`, consulted only for ACT): A01 mode not `on`; A02 not armed; A03 binding not exact (`binding_reason == session_match`, artifact `session_id` equals the payload `session_id`, and no newer `session_rebound`); A04 `checkpoint_type` missing; A05 not a Jev verdict; A06 human turn unknown; A07 stop-verify enabled; A08 disarmed after a negative reply; A09 `CRAFTFLOW_JEV_ENDPOINT` set (defence in depth: the Jev client no longer reads that variable); A10 no session id; A11 tail already acted on; A12 phase or workflow id unrenderable; A13 session record unreliable; A14 settings not from the user layer; A15 budget zero or spent; A16 `stop_reason` not an explicit string (H19 needs an explicit `end_turn`); A17 tail truncated (1 MiB) after an act.
 
 **Limits and accepted residuals (friction, not security).** The TTY check and typed confirmation are friction; an agent shell can bypass a TTY (for example with `script`), `events.jsonl` is repo-writable so seeded rows could fake a GO, and the consent file is agent-writable. Accepted residuals:
 
@@ -419,7 +419,7 @@ python3 scripts/craftflow_stop_gate_arm.py disarm                       # works 
 - residual self-arm at the next human turn (R2/F8): an agent that arms itself before your next prompt is stopped only by the ctime rule, the 24 h maximum and project scoping;
 - negative-reply detection reads a tail window, and a 1 MiB truncated transcript trips the truncation blockers (A17), which fail closed;
 - the push relay is skipped under `stop_hook_active`, so a push user is not notified when an auto-continue chain ends (relay at chain end, A9, is deferred);
-- a repository `.claude/settings.json` env block can set `CRAFTFLOW_JEV_ENDPOINT`; ACT only refuses while it is set (A09), the Jev client fix is out of scope;
+- the repository-set endpoint issue is fixed: the Jev client no longer reads `CRAFTFLOW_JEV_ENDPOINT`, and A09 stays only as defence in depth. The sole override is the user-level file `~/.claude/craftflow/jev-endpoint.json` (`{"endpoint": "<url>"}`), resolved from the passwd home (never `$HOME`). It must be a regular file of at most 4096 bytes, the URL must be http or https with a loopback host (127.0.0.1, localhost, ::1), and redirects are not followed. Invalid values fall back to the default endpoint and are logged (`endpoint_file_unreadable`, `endpoint_home_unresolved`, `endpoint_override_ignored`). The file is a test seam, not for production use;
 - after `/clear` or in a new session the binding is `no_live_candidate` until the router restamps `session_id`, so ACT waits (safe direction);
 - ACT is inert until shadow data exists: GO cannot be met with zero rows, so `arm` refuses.
 
