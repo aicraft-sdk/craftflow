@@ -16885,6 +16885,32 @@ def test_stop_gate_committed_config_off(tmp_dir: Path) -> None:
     ok(name)
 
 
+def test_router_template_stamps_session_id(tmp_dir: Path) -> None:
+    name = "stop-gate/router-template-stamps-session-id"
+    skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    policy = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "workflow-artifact-and-hook-policy.md").read_text(encoding="utf-8")
+    # The artifact template is a JSON string literal inside SKILL.md, so its quotes are backslash-escaped.
+    template = skill.replace('\\"', '"')
+    if '"session_id":"{session_id}",' not in template:
+        fail(name, "router artifact template does not stamp session_id")
+        return
+    if '"workflow_type":"{WORKFLOW}","session_id":"{session_id}",' not in template:
+        fail(name, "session_id must directly follow workflow_type in the artifact template")
+        return
+    if "session_id=" not in skill or "--json" not in skill or "session_id" not in skill.split("worktree_branch=", 1)[-1][:800]:
+        fail(name, "router parse step lacks session_id= line after worktree_branch=")
+        return
+    # Anchor on the heading line itself; the title is also mentioned inline in earlier sections.
+    resume = skill.split("\n## 4. Resume And Hydration\n", 1)
+    if len(resume) != 2 or "session_rebound" not in resume[1].split("\n## ", 1)[0]:
+        fail(name, "Resume And Hydration lacks session_rebound re-stamp rule")
+        return
+    if "session_id" not in policy or "checkpoint_type" not in policy or "no_live_candidate" not in policy:
+        fail(name, "policy doc must document session_id, checkpoint_type and no_live_candidate-until-restamp")
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # Hook trust/provenance gate tests (Workstream B — concept-ported from
 # xai-org/grok-build's xai-grok-hooks trust.rs, Apache-2.0)
@@ -26683,6 +26709,7 @@ def main() -> int:
         test_stop_verify_never_blocks_on_continuation_stop(tmp / "sv4")
         test_stop_gate_registered_under_stop(tmp / "sg1")
         test_stop_gate_committed_config_off(tmp / "sg2")
+        test_router_template_stamps_session_id(tmp / "sg3")
 
         print()
         print("[ hook-trust ]")

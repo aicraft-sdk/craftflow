@@ -10,10 +10,12 @@ Usage:
   python3 craftflow_workflow_id.py --request "Add auth refactor" [options]
 
 Options:
-  --request TEXT     User request text (required)
+  --request TEXT     User request text (required unless --session-id is used)
   --branch  NAME     Current git branch name (auto-detected via git if omitted)
   --project DIR      Project root for collision checking (optional)
   --json             Emit full JSON instead of the bare workflow_uuid
+  --session-id       Print the current Claude session id (from
+                     CLAUDE_CODE_SESSION_ID) or an empty line if absent/invalid
 
 Output (default)  : bare workflow_uuid string, e.g.
                       wf-auth-refactor-20260706-140312-d4e5f6a7
@@ -26,7 +28,8 @@ Output (--json)   : JSON object:
     "timestamp":       "20260706-140312",
     "iso_timestamp":   "2026-07-06T14:03:12Z",
     "worktree_dir":    "auth-refactor-d4e5f6a7",
-    "worktree_branch": "wf-auth-refactor-d4e5f6a7"
+    "worktree_branch": "wf-auth-refactor-d4e5f6a7",
+    "session_id":      "0123abcd-4567" | null
   }
 
 Concurrency & uniqueness:
@@ -150,6 +153,22 @@ def _slug_from_branch(branch: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Session id
+# ---------------------------------------------------------------------------
+
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$")
+
+
+def current_session_id(environ=None) -> str | None:
+    """Return the Claude session id from env if it is well-formed, else None."""
+    env = os.environ if environ is None else environ
+    value = env.get("CLAUDE_CODE_SESSION_ID", "")
+    if SESSION_ID_RE.match(value):
+        return value
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Git helpers
 # ---------------------------------------------------------------------------
 
@@ -223,6 +242,7 @@ def mint_workflow_id(
         "iso_timestamp":   iso_timestamp,
         "worktree_dir":    worktree_dir,
         "worktree_branch": worktree_branch,
+        "session_id":      current_session_id(),
     }
 
 
@@ -239,8 +259,9 @@ def main() -> int:
         ),
     )
     parser.add_argument(
-        "--request", required=True, metavar="TEXT",
-        help="User request text (slug source when not on a feature branch)",
+        "--request", default=None, metavar="TEXT",
+        help="User request text (slug source when not on a feature branch); "
+             "required unless --session-id is used",
     )
     parser.add_argument(
         "--branch", metavar="NAME", default=None,
@@ -254,7 +275,17 @@ def main() -> int:
         "--json", action="store_true",
         help="Emit full JSON instead of the bare workflow_uuid",
     )
+    parser.add_argument(
+        "--session-id", dest="session_id", action="store_true",
+        help="Print the current Claude session id, or an empty line if absent/invalid",
+    )
     args = parser.parse_args()
+
+    if args.session_id:
+        print(current_session_id() or "")
+        return 0
+    if args.request is None:
+        parser.error("the following arguments are required: --request")
 
     branch = args.branch
     if branch is None:

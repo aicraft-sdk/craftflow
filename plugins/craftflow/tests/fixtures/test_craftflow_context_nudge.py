@@ -1781,6 +1781,28 @@ def test_resolve_active_workflow_real_files():
         shutil.rmtree(str(root), ignore_errors=True)
 
 
+def test_resolve_binds_router_stamped_session_id():
+    """Slice-2 P3: an artifact stamped by the router (session id shape from craftflow_workflow_id.py)
+    binds to its own session, beating a newer unstamped artifact; a different session gets no binding."""
+    now = time.time()
+    root = _wf_env()
+    try:
+        wdir = str(root / "workflows")
+        sid = "0123abcd-4567"
+        _put_wf(root, "wf-stamped", now - 30, session_id=sid)
+        _put_wf(root, "wf-unstamped", now - 10)
+        t = _put_transcript(root, ["wf-stamped", "wf-unstamped"])
+        snap, reason, wf = cc.resolve_active_workflow(wdir, str(t), sid, "/tmp/proj", now)
+        assert (wf, reason) == ("wf-stamped", "session_match"), (wf, reason)
+        # another session never binds the stamped artifact; the unstamped one stays a fallback
+        other = cc.resolve_active_workflow(wdir, str(t), "ffffeeee-9999", "/tmp/proj", now)
+        assert other[2] == "wf-unstamped", other
+        # null stamp (env absent at creation) is a fallback, never a session_match
+        assert cc.choose_workflow([_cand("wf-null", 20, session_id=None)], sid) == ("wf-null", "single_candidate")
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
 def test_resolve_never_binds_other_session_workflow():
     now = time.time()
     root = _wf_env()

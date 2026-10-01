@@ -10,6 +10,7 @@ Artifact schema must include:
  - `workflow_uuid`
 - `workflow_id`
 - `workflow_type`
+- `session_id` (Claude session id stamped by the router at creation, or `null` when unavailable; re-stamped on resume in a new session with a `session_rebound` event. Hooks bind a payload `session_id` to the artifact whose `session_id` matches exactly. After `/clear` or a new session the binding is `no_live_candidate` until the router restamps.)
 - `state_root`
 - `user_request`
 - `plan_file`
@@ -65,6 +66,7 @@ Rules:
   - `objective`
   - `files`
   - `checks`
+  - `checkpoint_type`
   - `exit_criteria`
 - Bright Data MCP and Octocode MCP are optional accelerators. Base CRAFTFLOW installs must continue to work with built-in Claude Code tools only.
 - When optional user-configured Claude Code MCP servers are available, use the server names `brightdata` and `octocode` so the research agents can auto-detect them without prompt edits.

@@ -248,6 +248,68 @@ def test_workflow_id_cli() -> None:
         ok("cli fails cleanly without --request")
 
 
+def test_workflow_id_session_id() -> None:
+    print("\n[craftflow_workflow_id session_id]")
+    script = str(SCRIPTS / "craftflow_workflow_id.py")
+
+    def run(env_val, *extra):
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
+        if env_val is not None:
+            env["CLAUDE_CODE_SESSION_ID"] = env_val
+        return subprocess.run(
+            [sys.executable, script, *extra], capture_output=True, text=True, env=env,
+        )
+
+    # --session-id prints the id when env is valid (no --request needed)
+    r = run("0123abcd-4567", "--session-id")
+    if r.returncode == 0 and r.stdout == "0123abcd-4567\n":
+        ok("--session-id prints valid env id")
+    else:
+        fail("session-id-valid", f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
+
+    # absent env -> empty line
+    r = run(None, "--session-id")
+    if r.returncode == 0 and r.stdout == "\n":
+        ok("--session-id empty line when env absent")
+    else:
+        fail("session-id-absent", f"rc={r.returncode} out={r.stdout!r}")
+
+    # invalid env values -> empty line
+    for bad in ("short", "-leadingdash123", "has space 12345", "a" * 129, "bad/slash1234"):
+        r = run(bad, "--session-id")
+        if r.returncode == 0 and r.stdout == "\n":
+            ok(f"--session-id rejects invalid {bad[:12]!r}")
+        else:
+            fail("session-id-invalid", f"{bad[:12]!r}: rc={r.returncode} out={r.stdout!r}")
+
+    # --json gains session_id (valid -> str, invalid/absent -> null)
+    r = run("0123abcd-4567", "--request", "Add login", "--branch", "main", "--json")
+    try:
+        d = json.loads(r.stdout)
+        if d.get("session_id") == "0123abcd-4567":
+            ok("--json session_id set")
+        else:
+            fail("json-session-id", f"got {d.get('session_id', '<missing>')!r}")
+    except json.JSONDecodeError as exc:
+        fail("json-session-id-parse", str(exc))
+    r = run("bad", "--request", "Add login", "--branch", "main", "--json")
+    try:
+        d = json.loads(r.stdout)
+        if "session_id" in d and d["session_id"] is None:
+            ok("--json session_id null when invalid")
+        else:
+            fail("json-session-id-null", f"got {d.get('session_id', '<missing>')!r}")
+    except json.JSONDecodeError as exc:
+        fail("json-session-id-null-parse", str(exc))
+
+    # --request still required without --session-id
+    r = run("0123abcd-4567", "--branch", "main")
+    if r.returncode != 0:
+        ok("--request still required without --session-id")
+    else:
+        fail("request-required", "expected non-zero exit")
+
+
 # ---------------------------------------------------------------------------
 # craftflow_status_report: _display_label(), _compute_progress()
 # ---------------------------------------------------------------------------
@@ -437,6 +499,7 @@ def main() -> int:
     test_is_feature_branch()
     test_mint_workflow_id()
     test_workflow_id_cli()
+    test_workflow_id_session_id()
     test_display_label()
     test_compute_progress()
     test_statusline_output_format()
