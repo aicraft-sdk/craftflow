@@ -234,7 +234,7 @@ def build_report(rows, root, events_truncated=False, scope="all"):
     flags = set()
     selected = metric_rows(rows)
     if scope == "jev":
-        selected = [r for r in selected if r.get("schema") == GO_ROW_SCHEMA]
+        selected = [r for r in selected if type(r.get("schema")) is int and r.get("schema") == GO_ROW_SCHEMA]
     stops = label_rows(selected, root, flags)
     labeled = [r for r in stops if r["label"] != "unlabeled"]
     # a follow-up stop (stop_hook_active) is a consequence of an earlier stop, not an independent verdict

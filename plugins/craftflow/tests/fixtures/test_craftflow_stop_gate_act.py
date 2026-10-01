@@ -704,7 +704,8 @@ def arm_mod():
     return arm
 
 
-def run_arm(argv, root, home, troot=None, events=None, tty=True, confirm=None, now=None, cwd=None, env_extra=None):
+def run_arm(argv, root, home, troot=None, events=None, tty=True, confirm=None, now=None, cwd=None, env_extra=None,
+            streams=None):
     """(exit code, parsed stdout JSON) of arm.main in-process with a scratch home."""
     import io
     from contextlib import redirect_stdout
@@ -714,8 +715,8 @@ def run_arm(argv, root, home, troot=None, events=None, tty=True, confirm=None, n
     extra = (["--transcripts-root", troot] if troot else []) + (["--events", events] if events else [])
     buf = io.StringIO()
     with redirect_stdout(buf):
-        code = arm.main(argv + extra, env=env, home=home, tty=tty,
-                        confirm=confirm or (lambda _prompt: os.path.basename(root)), now=now, cwd=cwd)
+        code = arm.main(argv + extra, env=env, home=home, tty=None if streams else tty, streams=streams,
+                        confirm=confirm or (lambda _prompt: os.path.basename(root)), now=now, cwd=cwd or root)
     text = buf.getvalue().strip()
     return code, (json.loads(text) if text else None)
 
@@ -794,7 +795,8 @@ def test_arm_cli_arm_refuses_without_go_then_writes_entry_in_scratch_home():
     os.makedirs(os.path.join(repo, "sub"))
     arm = arm_mod()
     assert arm.project_root({}, os.path.join(repo, "sub")) == repo
-    assert arm.project_root({"CLAUDE_PROJECT_DIR": os.path.join(repo, "sub")}, "/") == os.path.join(repo, "sub")
+    sub = os.path.join(repo, "sub")
+    assert arm.project_root({"CLAUDE_PROJECT_DIR": sub}, sub) == sub
 
 
 def test_arm_cli_disarm_removes_only_the_entry():
@@ -817,15 +819,21 @@ def test_arm_cli_disarm_removes_only_the_entry():
 def test_arm_cli_status_reports_arm_status():
     root, events, troot = go_fixture()
     home = os.path.realpath(scratch_dir())
-    code, out = run_arm(["status", "--workflow", "wf-a-1"], root, home, tty=False, now=NOW)
+    on = {"CLAUDE_PLUGIN_ROOT": plugin_with_mode("on")}
+    code, out = run_arm(["status", "--workflow", "wf-a-1"], root, home, tty=False, now=NOW, env_extra=on)
     assert code == 0 and out["status"] == "not_armed", (code, out)
     assert run_arm(["arm", "--workflow", "wf-a-1"], root, home, troot, events, now=NOW)[0] == 0
-    code, out = run_arm(["status", "--workflow", "wf-a-1"], root, home, tty=False, now=NOW + 60)
+    code, out = run_arm(["status", "--workflow", "wf-a-1"], root, home, tty=False, now=NOW + 60, env_extra=on)
     assert code == 0 and out["status"] == "armed" and out["projectRoot"] == root, out
-    assert run_arm(["status", "--workflow", "wf-other"], root, home, tty=False, now=NOW + 60)[1]["status"] \
-        == "arm_other_workflow"
-    assert run_arm(["status", "--workflow", "wf-a-1"], root, home, tty=False, now=NOW + 9 * 3600)[1]["status"] \
-        == "arm_expired"
+    assert out["mode"] == "on" and out["effective_budget"] == 5, out
+    assert out["caveat"] == "human_turn_unchecked" and out["ctimeRule"] == "unchecked_until_next_prompt", out
+    # the shipped plugin mode is off: the hook would refuse, so status must not say "armed"
+    off = run_arm(["status", "--workflow", "wf-a-1"], root, home, tty=False, now=NOW + 60)[1]
+    assert off["status"] == "mode_not_on" and off["mode"] == "off", off
+    assert run_arm(["status", "--workflow", "wf-other"], root, home, tty=False, now=NOW + 60,
+                   env_extra=on)[1]["status"] == "arm_other_workflow"
+    assert run_arm(["status", "--workflow", "wf-a-1"], root, home, tty=False, now=NOW + 9 * 3600,
+                   env_extra=on)[1]["status"] == "arm_expired"
 
 
 def test_arm_cli_duration_bounds_one_to_twenty_four_hours_default_eight():
@@ -851,6 +859,100 @@ def test_arm_cli_duration_bounds_one_to_twenty_four_hours_default_eight():
     assert code == 0 and core.iso_epoch(obj["actContinue"]["expiresAt"]) - NOW == 8 * 3600
     code, out = run_arm(["arm", "--workflow", "bad id; rm"], root, home, troot, events, now=NOW)
     assert code == 2 and out["error"] == "bad_workflow", (code, out)
+
+
+def test_arm_cli_lock_stale_tmp_and_preserved_keys():
+    root, events, troot = go_fixture()
+    home = os.path.realpath(scratch_dir())
+    cdir = os.path.join(home, ".claude", "craftflow")
+    os.makedirs(cdir, mode=0o700)
+    path = os.path.join(cdir, "stop-gate.json")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        json.dump({"notify": "push", "jevText": True}, handle)
+    stale = "%s.tmp.%d" % (path, os.getpid())
+    Path(stale).write_text("stale", encoding="utf-8")  # a crashed earlier run left this behind
+    assert run_arm(["arm", "--workflow", "wf-a-1"], root, home, troot, events, now=NOW)[0] == 0
+    assert run_arm(["arm", "--workflow", "wf-a-1"], root, home, troot, events, now=NOW + 1)[0] == 0
+    obj = core.read_consent_file(home)[0]
+    assert obj["notify"] == "push" and obj["jevText"] is True and "actContinue" in obj, obj
+    lock = [n for n in os.listdir(cdir) if n.endswith(".lock")]
+    assert len(lock) == 1 and (os.stat(os.path.join(cdir, lock[0])).st_mode & 0o777) == 0o600, os.listdir(cdir)
+    assert Path(stale).read_text(encoding="utf-8") == "stale"
+    assert run_arm(["disarm"], root, home, tty=False)[1]["removed"] is True
+    assert core.read_consent_file(home)[0] == {"notify": "push", "jevText": True}
+    assert not [n for n in os.listdir(cdir) if ".tmp" in n and n != os.path.basename(stale)], os.listdir(cdir)
+
+
+def test_arm_cli_confirm_prompt_shows_go_stats_and_inputs():
+    root, events, troot = go_fixture()
+    home = os.path.realpath(scratch_dir())
+    seen = []
+
+    def confirm(prompt):
+        seen.append(prompt)
+        return os.path.basename(root)
+
+    assert run_arm(["arm", "--workflow", "wf-a-1", "--hours", "4"], root, home, troot, events, now=NOW,
+                   confirm=confirm)[0] == 0
+    text = seen[0]
+    for needle in ("50", "precision", "sessions", events, troot, "wf-a-1", root, "4"):
+        assert needle in text, (needle, text)
+
+
+def test_arm_cli_refuses_symlinked_dir_and_non_tty_stdout():
+    root, events, troot = go_fixture()
+    home = os.path.realpath(scratch_dir())
+    target = os.path.realpath(scratch_dir())
+    os.symlink(target, os.path.join(home, ".claude"))
+    code, out = run_arm(["arm", "--workflow", "wf-a-1"], root, home, troot, events, now=NOW)
+    assert code == 1 and out["error"] == "consent_file_refused", (code, out)
+    assert os.listdir(target) == []
+
+    class Stream:
+        def __init__(self, tty):
+            self.tty = tty
+
+        def isatty(self):
+            return self.tty
+
+    home2 = os.path.realpath(scratch_dir())
+    code, out = run_arm(["arm", "--workflow", "wf-a-1"], root, home2, troot, events, now=NOW,
+                        streams=(Stream(True), Stream(False)))
+    assert (code, out) == (2, {"error": "no_tty"}), (code, out)
+    code, _out = run_arm(["arm", "--workflow", "wf-a-1"], root, home2, troot, events, now=NOW,
+                         streams=(Stream(True), Stream(True)))
+    assert code == 0
+
+
+def test_arm_cli_project_root_worktree_and_bad_project_root():
+    arm = arm_mod()
+    repo = os.path.realpath(scratch_dir())
+    git = ["git", "-c", "user.email=t@example.com", "-c", "user.name=t"]
+    subprocess.run(git + ["init", "-q", repo], check=True, timeout=30)
+    subprocess.run(git + ["-C", repo, "commit", "-q", "--allow-empty", "-m", "x"], check=True, timeout=30)
+    wt = os.path.join(os.path.realpath(scratch_dir()), "wt")
+    subprocess.run(git + ["-C", repo, "worktree", "add", "-q", wt], check=True, timeout=30)
+    os.makedirs(os.path.join(wt, "deep"))
+    assert arm.project_root({}, os.path.join(wt, "deep")) == os.path.realpath(wt)
+    root, events, troot = go_fixture()
+    home = os.path.realpath(scratch_dir())
+    elsewhere = os.path.realpath(scratch_dir())
+    for env_dir, cwd in ((os.path.join(root, "missing"), root), (events, root), (root, elsewhere)):
+        code, out = run_arm(["status"], root, home, tty=False, cwd=cwd, env_extra={"CLAUDE_PROJECT_DIR": env_dir})
+        assert code == 2 and out["error"] == "bad_project_root", (env_dir, cwd, code, out)
+
+
+def test_arm_cli_bad_arguments_print_one_json_error_and_exit_2():
+    root, _events, _troot = go_fixture()
+    home = os.path.realpath(scratch_dir())
+    for argv in (["arm", "--hours", "abc"], ["bogus"], []):
+        code, out = run_arm(argv, root, home)
+        assert code == 2 and out["error"] == "bad_arguments", (argv, code, out)
+    import craftflow_stop_gate_report as report
+    rows = [core.build_row(row_kind="stop", ts="2026-10-01T08:00:00Z", session_id="s")]
+    assert report.build_report([dict(rows[0], schema=2.0), dict(rows[0], schema=True)], None, scope="jev")["rows"] == 0
+    assert report.build_report([dict(rows[0], schema=2)], None, scope="jev")["rows"] == 1
 
 
 def main():

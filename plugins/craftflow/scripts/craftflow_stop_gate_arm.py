@@ -14,12 +14,15 @@ network. Prints ONE JSON object. Python 3.9 stdlib only.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
+import fcntl
 import json
 import os
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -65,15 +68,20 @@ def build_arm_entry(now, hours, project_root, workflow, settings, go_report):
 
 
 def project_root(env, cwd):
-    """realpath of CLAUDE_PROJECT_DIR, else the git toplevel of ``cwd``, else ``cwd`` (as the hook does)."""
+    """realpath of CLAUDE_PROJECT_DIR (an existing directory containing ``cwd``), else the git toplevel of
+    ``cwd``, else ``cwd`` (as the hook does). A bad CLAUDE_PROJECT_DIR is ``bad_project_root``."""
     chosen = env.get("CLAUDE_PROJECT_DIR")
-    if not chosen:
-        try:
-            proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True,
-                                  text=True, timeout=10)
-            chosen = proc.stdout.strip() if proc.returncode == 0 else ""
-        except (OSError, subprocess.SubprocessError):
-            chosen = ""
+    if chosen:
+        real, here = os.path.realpath(chosen), os.path.realpath(cwd)
+        if not os.path.isdir(real) or os.path.commonpath([real, here]) != real:
+            raise CliError(2, "bad_project_root")
+        return real
+    try:
+        proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True,
+                              text=True, timeout=10)
+        chosen = proc.stdout.strip() if proc.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        chosen = ""
     return os.path.realpath(chosen or cwd)
 
 
@@ -103,18 +111,30 @@ def _ensure_dirs(home):
     return current
 
 
-def _write_consent(home, obj):
-    """Atomic 0600 replace of the consent file; the temp file is created O_EXCL|O_NOFOLLOW."""
+@contextlib.contextmanager
+def _locked(home):
+    """Exclusive flock on a 0600 sidecar in the 0700 consent directory for a whole read->replace span."""
     directory = _ensure_dirs(home)
+    fd = os.open(os.path.join(directory, core.USER_OVERRIDE_SEGMENTS[-1] + ".lock"),
+                 os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, FILE_MODE)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield directory
+    finally:
+        os.close(fd)  # closing releases the lock
+
+
+def _write_consent(directory, obj):
+    """Atomic 0600 replace of the consent file through a unique mkstemp file in the same directory."""
     path = os.path.join(directory, core.USER_OVERRIDE_SEGMENTS[-1])
-    tmp = "%s.tmp.%d" % (path, os.getpid())
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, FILE_MODE)
+    fd, tmp = tempfile.mkstemp(prefix=".stop-gate.", suffix=".tmp", dir=directory)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(obj, handle, indent=2, sort_keys=True)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
+        os.chmod(tmp, FILE_MODE)
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -129,12 +149,26 @@ def _settings(plugin_obj, consent_obj):
 
 
 def _go_report(root, args):
+    """(report, events path used)."""
     events = args.events or os.path.join(root, *EVENTS_SEGMENTS)
     try:
         rows, cut = report.load_events_ex(events)
-        return report.build_report(rows, args.transcripts_root, cut, scope=core.GO_SCOPE)
+        return report.build_report(rows, args.transcripts_root, cut, scope=core.GO_SCOPE), events
     except Exception as exc:  # noqa: BLE001 - report failure means no GO
         raise CliError(2, "report_failed", kind=type(exc).__name__)
+
+
+def confirm_prompt(args, root, go, events):
+    """What the user sees before typing the folder name: the GO evidence and every input actually used."""
+    stats = go.get("stats") or {}
+    return ("Arm stop-gate auto-continue\n"
+            "  workflow: %s\n  project: %s\n  hours: %d\n"
+            "  GO evidence: %s labelled would_continue rows, %s sessions, precision %s\n"
+            "  events: %s\n  transcripts root: %s\n"
+            "Type the project folder name (%s) to confirm: ") % (
+        args.workflow, root, args.hours, stats.get("would_continue_labeled"), stats.get("sessions"),
+        stats.get("precision"), events, args.transcripts_root or "(transcript_path of each row)",
+        os.path.basename(root))
 
 
 def cmd_arm(args, env, home, tty, confirm, now, cwd):
@@ -147,17 +181,18 @@ def cmd_arm(args, env, home, tty, confirm, now, cwd):
     root = project_root(env, cwd)
     consent, _ctime = _read_consent(home)
     settings = _settings(_plugin_config(env), consent)
-    go = _go_report(root, args)["go_criteria"]
+    full, events = _go_report(root, args)
+    go = full["go_criteria"]
     if go.get("met") is not True:
         raise CliError(2, "go_not_met", criteria=go.get("criteria"))
-    expected = os.path.basename(root)
-    if confirm("Type the project folder name (%s) to arm auto-continue for %d h: " % (expected, args.hours)) \
-            != expected:
+    if confirm(confirm_prompt(args, root, go, events)) != os.path.basename(root):
         raise CliError(2, "not_confirmed")
     entry = build_arm_entry(now, args.hours, root, args.workflow, settings, go)
-    updated = dict(consent or {})
-    updated["actContinue"] = entry
-    _write_consent(home, updated)
+    with _locked(home) as directory:
+        current, _ctime = _read_consent(home)  # re-read under the lock: no lost update
+        updated = dict(current or {})
+        updated["actContinue"] = entry
+        _write_consent(directory, updated)
     return {"armed": True, "expiresAt": entry["expiresAt"], "workflow": args.workflow, "projectRoot": root}
 
 
@@ -165,8 +200,11 @@ def cmd_disarm(args, env, home, tty, confirm, now, cwd):
     consent, _ctime = _read_consent(home)
     if not isinstance(consent, dict) or "actContinue" not in consent:
         return {"armed": False, "removed": False}
-    updated = {k: v for k, v in consent.items() if k != "actContinue"}
-    _write_consent(home, updated)
+    with _locked(home) as directory:
+        current, _ctime = _read_consent(home)
+        if not isinstance(current, dict) or "actContinue" not in current:
+            return {"armed": False, "removed": False}
+        _write_consent(directory, {k: v for k, v in current.items() if k != "actContinue"})
     return {"armed": False, "removed": True}
 
 
@@ -176,9 +214,13 @@ def cmd_status(args, env, home, tty, confirm, now, cwd):
     entry = consent.get("actContinue") if isinstance(consent, dict) else None
     wf = args.workflow or (entry.get("workflow") if isinstance(entry, dict) else None)
     settings = _settings(_plugin_config(env), consent)
-    # the last-human-line rule needs the transcript, so status treats the ctime as satisfied
+    # the last-human-line rule needs the transcript, so status treats the ctime as satisfied (caveat below)
     status = core.arm_status(consent, ctime, now, root, settings, ctime, wf)
-    out = {"status": status, "projectRoot": root, "workflow": wf}
+    if status == "armed" and settings.get("mode") != "on":
+        status = "mode_not_on"  # the hook would refuse (A01)
+    out = {"status": status, "projectRoot": root, "workflow": wf, "mode": settings.get("mode"),
+           "effective_budget": core.effective_budget(settings, core.arm_budget(consent)),
+           "caveat": "human_turn_unchecked", "ctimeRule": "unchecked_until_next_prompt"}
     if isinstance(entry, dict):
         out["expiresAt"] = entry.get("expiresAt")
     return out
@@ -193,20 +235,27 @@ def _stdin_confirm(prompt):
     return sys.stdin.readline().strip()
 
 
-def main(argv=None, env=None, home=None, tty=None, confirm=None, now=None, cwd=None):
-    """Seams ``env``, ``home``, ``tty``, ``confirm``, ``now``, ``cwd`` exist for tests; the defaults are the
-    process environment, the passwd home, a real TTY check and the stdin prompt."""
-    parser = argparse.ArgumentParser(description="Arm or disarm the stop-gate auto-continue (terminal only).")
-    parser.add_argument("command", choices=sorted(COMMANDS))
-    parser.add_argument("--workflow", default=None)
-    parser.add_argument("--hours", type=int, default=HOURS_DEFAULT)
-    parser.add_argument("--events", default=None)
-    parser.add_argument("--transcripts-root", default=None)
-    args = parser.parse_args(argv)
-    env = os.environ if env is None else env
-    if tty is None:
-        tty = sys.stdin.isatty() and sys.stdout.isatty()
+class _JsonParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise CliError(2, "bad_arguments")
+
+
+def main(argv=None, env=None, home=None, tty=None, confirm=None, now=None, cwd=None, streams=None):
+    """Seams ``env``, ``home``, ``tty``, ``confirm``, ``now``, ``cwd``, ``streams`` (stdin, stdout) exist for
+    tests; the defaults are the process environment, the passwd home, a real TTY check on stdin AND stdout and
+    the stdin prompt. Every failure prints one JSON object."""
     try:
+        parser = _JsonParser(description="Arm or disarm the stop-gate auto-continue (terminal only).")
+        parser.add_argument("command", choices=sorted(COMMANDS))
+        parser.add_argument("--workflow", default=None)
+        parser.add_argument("--hours", type=int, default=HOURS_DEFAULT)
+        parser.add_argument("--events", default=None)
+        parser.add_argument("--transcripts-root", default=None)
+        args = parser.parse_args(argv)
+        env = os.environ if env is None else env
+        if tty is None:
+            stdin, stdout = streams or (sys.stdin, sys.stdout)
+            tty = bool(stdin.isatty() and stdout.isatty())
         if home is None:
             home = core.passwd_home()
         if not (isinstance(home, str) and os.path.isabs(home)):
@@ -219,6 +268,8 @@ def main(argv=None, env=None, home=None, tty=None, confirm=None, now=None, cwd=N
         result, code = exc.payload, exc.code
     except OSError as exc:
         result, code = {"error": "io_error", "kind": type(exc).__name__}, 1
+    except Exception as exc:  # noqa: BLE001 - one JSON error object, never a traceback
+        result, code = {"error": "invalid_input", "kind": type(exc).__name__}, 2
     print(json.dumps(result, sort_keys=True))
     return code
 
