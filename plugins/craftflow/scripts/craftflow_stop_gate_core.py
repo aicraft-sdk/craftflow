@@ -705,3 +705,210 @@ def hard_rules(facts):
         if hit:
             hits.append(code)
     return hits
+
+
+# --- taxonomy heuristic and verdict combiner (DD-10) -------------------------------------------------
+STOP_KINDS = ("phase_done_awaiting_continue", "awaiting_commit", "awaiting_push_or_pr", "asking_decision",
+              "blocked_by_error", "work_complete", "other")
+HEURISTIC_WINDOW = 600
+HEURISTIC_PATTERNS = (
+    ("asking_decision", re.compile(r"(?i)\b(?:should|shall) i\b[^?.\n]{0,120}\bor\b")),
+    ("blocked_by_error", re.compile(
+        r"(?i)\btests? (?:fail|are failing)\b|\b(?:failed|failing|blocked|cannot|unable to)\b|"
+        r"\berrors? out\b|\b\w*Error:|\bTraceback\b")),
+    ("awaiting_commit", re.compile(r"(?i)\bcommit\b[^.!?\n]*\?")),
+    ("phase_done_awaiting_continue", re.compile(
+        r"(?i)\b(?:continue|proceed|move on|go ahead|next phase|next step)\b[^.!?\n]*\?")),
+    ("work_complete", re.compile(
+        r"(?i)\ball done\b|\ball phases (?:are )?(?:complete|done)\b|\bwork is complete\b|\bsummary\b\s*:|"
+        r"\bsummary of (?:the )?changes\b")),
+)
+
+
+def heuristic_kind(text):
+    """(kind, signals): the stop kind from the last 600 chars; CHOICE/OUTWARD first, then first match (DD-10)."""
+    if not isinstance(text, str) or not text.strip():
+        return "other", []
+    tail = text[-HEURISTIC_WINDOW:]
+    if has_choice(tail):
+        return "asking_decision", ["choice_re"]
+    if outward_question(tail):
+        return "awaiting_push_or_pr", ["outward_re"]
+    for kind, pattern in HEURISTIC_PATTERNS:
+        if pattern.search(tail):
+            return kind, [kind + "_re"]
+    return "other", []
+
+
+def _jev_pass(jev, settings):
+    """(kind, passed): the Jev kind and whether both thresholds hold; (None, None) when Jev did not answer."""
+    if not isinstance(jev, dict) or jev.get("status") != "ok":
+        return None, None
+    try:
+        conf, needs = float(jev["kind_conf"]), float(jev["needs_human"])
+    except (KeyError, TypeError, ValueError):
+        return None, None
+    passed = conf >= settings["jevKindThreshold"] and needs <= settings["jevNeedsHumanMax"]
+    return jev.get("kind"), passed
+
+
+def _verdict_for(kind, blockers):
+    if kind == "phase_done_awaiting_continue":
+        return "would_continue"
+    if kind == "awaiting_commit" and not blockers:
+        return "would_commit"
+    return "needs_human"
+
+
+_WOULD_ACTION = {"would_continue": "continue", "would_commit": "commit", "needs_human": "none"}
+
+
+def decide(rule_hits, commit_blockers, heuristic, jev, settings):
+    """Combine rule hits, Jev and the heuristic into a verdict dict (DD-10). Pure; never returns "done".
+
+    heuristic is the heuristic kind string; jev is None or {status, kind, kind_conf, needs_human}.
+    act_eligible is a candidate flag only (verdict came from a Jev answer); nothing in Slice 1 consumes it.
+    """
+    hits = list(rule_hits or [])
+    if hits:
+        return {"verdict": "needs_human", "verdict_source": "hard_rule", "act_eligible": False,
+                "would_action": "none", "reasons": hits}
+    jev_kind, passed = _jev_pass(jev, settings)
+    if passed is not None:
+        verdict = _verdict_for(jev_kind, commit_blockers) if passed else "needs_human"
+        source = "jev"
+    else:
+        verdict, source = _verdict_for(heuristic, commit_blockers), "heuristic"
+    return {"verdict": verdict, "verdict_source": source,
+            "act_eligible": source == "jev" and verdict != "needs_human",
+            "would_action": _WOULD_ACTION[verdict], "reasons": []}
+
+
+# --- notification text, push relay (DD-12) -----------------------------------------------------------
+NOTIFY_MAX_CHARS = 180
+PUSH_RELAY_TEMPLATE = (
+    "craftflow stop-gate: the user asked to be notified when you need them. "
+    "Call the PushNotification tool exactly once with this message: '%s'. "
+    "Do nothing else, then end your turn.")
+_VERDICT_LABELS = {"needs_human": "needs you", "would_continue": "would continue",
+                   "would_commit": "would commit"}
+_REASON_RE = re.compile(r"[A-Z][0-9]{1,2}_[a-z0-9_]{1,60}")
+
+
+def _allowed(value, pattern):
+    """The value when it is a string fully matching the allowlist pattern, else empty."""
+    if isinstance(value, str) and value.isascii() and pattern.fullmatch(value):
+        return value
+    return ""
+
+
+def notify_text(verdict, wf, phase, reasons):
+    """One-line ASCII notification text, built ONLY from allowlisted, regex-validated fields (DD-12)."""
+    wf_id = _allowed(wf, cc.WF_ID_RE)
+    parts = [p for p in (wf_id[-8:], _allowed(phase, cc._PHASE_RE)) if p]
+    first = _allowed(reasons[0], _REASON_RE) if isinstance(reasons, (list, tuple)) and reasons else ""
+    text = "Craftflow: " + _VERDICT_LABELS.get(verdict, "needs you")
+    if parts:
+        text += " - " + " ".join(parts)
+    if first:
+        text += " (" + first + ")"
+    return text[:NOTIFY_MAX_CHARS]
+
+
+def relay_decision(settings, verdict, stop_hook_active, session_state, tail_sha):
+    """True when a push relay block should be printed: once per tail, never inside a relay (DD-12, P5)."""
+    state = session_state if isinstance(session_state, dict) else {}
+    if stop_hook_active or not tail_sha or state.get("relay_pending"):
+        return False
+    if not isinstance(settings, dict) or settings.get("notify") != "push" or verdict != "needs_human":
+        return False
+    return state.get("last_notified_tail_sha") != tail_sha
+
+
+# --- loop guards and session state (DD-9a, DD-13) ----------------------------------------------------
+def _count_since_human(facts, session):
+    """would_continue_since_human, counted as 0 when a new genuine human turn was seen (DD-13)."""
+    if session.get("last_human_ts") != facts.get("last_human_ts"):
+        return 0
+    count = session.get("would_continue_since_human")
+    return count if isinstance(count, int) and not isinstance(count, bool) else 0
+
+
+def loop_guards(facts, session):
+    """Loop-guard tags L1/L2 (DD-9a). Tags only in Slice 1: they never reach hard_rules or decide."""
+    try:
+        facts = facts if isinstance(facts, dict) else {}
+        session = session if isinstance(session, dict) else {}
+        count = _count_since_human(facts, session)
+        tags = []
+        git = facts.get("git") if isinstance(facts.get("git"), dict) else {}
+        work = facts.get("workflow") if isinstance(facts.get("workflow"), dict) else {}
+        recorded = count > 0 or bool(session.get("relay_pending"))
+        unchanged = (git.get("head") == session.get("last_head")
+                     and work.get("phase_cursor") == session.get("last_cursor"))
+        if facts.get("stop_hook_active") and recorded and unchanged:
+            tags.append("L1_no_progress")
+        limit = (facts.get("settings") or DEFAULTS).get("maxAutoContinuesPerSession", 5)
+        if count >= limit:
+            tags.append("L2_budget")
+        return tags
+    except Exception:  # noqa: BLE001 - tags are advisory in Slice 1: fail open to no tags
+        return []
+
+
+def session_update(state, verdict, head, cursor, tail_sha, relayed, now, last_human_ts=None, notified=False):
+    """New session record after a stop (DD-13). Pure: the input record is never mutated."""
+    old = state if isinstance(state, dict) else {}
+    count = old.get("would_continue_since_human")
+    count = count if isinstance(count, int) and not isinstance(count, bool) else 0
+    if last_human_ts != old.get("last_human_ts"):
+        count = 0
+    if verdict == "would_continue":
+        count += 1
+    sent = bool(relayed or notified)
+    return {
+        "would_continue_since_human": count,
+        "last_human_ts": last_human_ts,
+        "last_head": head,
+        "last_cursor": cursor,
+        "last_notified_tail_sha": tail_sha if sent else old.get("last_notified_tail_sha"),
+        "relay_pending": bool(relayed),
+        "updated_at": now,
+    }
+
+
+# --- shadow row (DD-14) ------------------------------------------------------------------------------
+ROW_KEYS = (
+    "schema", "row_kind", "ts", "session_id", "transcript_path", "mode", "mode_tag", "stop_hook_active",
+    "permission_mode", "wf", "binding_reason", "phase_cursor", "cursor_case", "cursor_resolution", "rule_hits",
+    "loop_guards", "commit_blockers", "jev_text_source", "last_human_ts", "heuristic_kind", "heuristic_verdict",
+    "jev_status", "jev_kind", "jev_kind_conf", "jev_needs_human", "jev_latency_ms", "jev_usage", "verdict",
+    "verdict_source", "act_eligible", "would_action", "notify", "notify_status", "turn_seconds",
+    "turn_seconds_lower_bound", "message_chars", "tail_sha", "hook_ms", "settings_tags")
+_ROW_LIST_KEYS = ("rule_hits", "loop_guards", "commit_blockers", "settings_tags")
+ROW_VALUE_MAX_CHARS = 200
+_ROW_MAX_ITEMS = 40
+
+
+def _row_clean(value, depth=0):
+    """Bound a row value: long strings are cut, containers are shallow and capped (never raw text)."""
+    if isinstance(value, str):
+        return value[:ROW_VALUE_MAX_CHARS]
+    if isinstance(value, (list, tuple)) and depth < 2:
+        return [_row_clean(v, depth + 1) for v in list(value)[:_ROW_MAX_ITEMS]]
+    if isinstance(value, dict) and depth < 2:
+        return {str(k)[:40]: _row_clean(v, depth + 1) for k, v in list(value.items())[:_ROW_MAX_ITEMS]}
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return None
+
+
+def build_row(**fields):
+    """A shadow row with exactly ROW_KEYS. Unknown keys (e.g. message text) are dropped, values bounded."""
+    row = dict.fromkeys(ROW_KEYS)
+    row.update({"schema": 1, "row_kind": "stop", "act_eligible": False, "would_action": "none"})
+    row.update({key: [] for key in _ROW_LIST_KEYS})
+    for key in ROW_KEYS:
+        if key in fields:
+            row[key] = _row_clean(fields[key])
+    return row

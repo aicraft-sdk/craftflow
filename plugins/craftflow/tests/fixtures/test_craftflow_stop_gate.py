@@ -569,6 +569,288 @@ def test_commit_blockers_table():
 
 
 # ---------------------------------------------------------------------------
+# Task 3.1: heuristic taxonomy and verdict combiner
+# ---------------------------------------------------------------------------
+
+HEURISTIC_TABLE = (
+    ("phase_done_awaiting_continue", (
+        "Phase 2 is done and all checks pass. Shall I continue with Phase 3?",
+        "Ready for the next phase?",
+        "Parser is finished and tests are green. Want me to proceed to Phase 2?",
+        "Continue to Phase 3?")),
+    ("awaiting_commit", (
+        "Should I commit these changes?",
+        "Everything is staged. Want me to commit?",
+        "Ready to commit the formatter work?")),
+    ("awaiting_push_or_pr", (
+        "Want me to push and open the PR?",
+        "Shall I merge the branch?",
+        "Should I publish this release?")),
+    ("asking_decision", (
+        "Should I use option A or option B?",
+        "Which approach do you prefer?",
+        "Do you want the parser strict or lenient?\nA) strict\nB) lenient")),
+    ("blocked_by_error", (
+        "Tests fail with ImportError: no module named foo.",
+        "The build failed and I cannot proceed without the missing credentials.",
+        "I am blocked: the migration errors out on step 3.")),
+    ("work_complete", (
+        "All done. Summary: the formatter now handles tabs.",
+        "All phases are complete. Summary of changes below.",
+        "The work is complete.")),
+)
+
+
+def test_heuristic_kind_table():
+    for kind, phrases in HEURISTIC_TABLE:
+        assert len(phrases) >= 3, kind
+        for text in phrases:
+            got, signals = core.heuristic_kind(text)
+            assert got == kind, (kind, text, got)
+            assert isinstance(signals, list) and signals, (text, signals)
+    # only the last 600 chars count
+    long_text = "Should I commit these changes?" + (" filler" * 200) + "\nNothing else to say."
+    assert core.heuristic_kind(long_text)[0] == "other"
+    assert core.heuristic_kind("x" * 1000 + " Ready for the next phase?")[0] == "phase_done_awaiting_continue"
+    # CHOICE_RE / OUTWARD_RE take precedence over a continue phrasing
+    assert core.heuristic_kind("Phase 1 done. Continue, or push first?")[0] == "awaiting_push_or_pr"
+    assert core.heuristic_kind("Phase 1 done. Which approach do you want for Phase 2, shall I continue?")[0] \
+        == "asking_decision"
+
+
+def test_heuristic_other_on_empty():
+    for text in ("", "   ", None, 7, "Thanks."):
+        assert core.heuristic_kind(text) == ("other", []), text
+    assert set(core.STOP_KINDS) == {k for k, _ in HEURISTIC_TABLE} | {"other"}
+
+
+def decide_inputs(**kw):
+    args = {"rule_hits": [], "commit_blockers": [], "heuristic": "phase_done_awaiting_continue",
+            "jev": None, "settings": core.parse_settings(None, None)[0]}
+    args.update(kw)
+    return args
+
+
+def run_decide(**kw):
+    a = decide_inputs(**kw)
+    return core.decide(a["rule_hits"], a["commit_blockers"], a["heuristic"], a["jev"], a["settings"])
+
+
+def jev_ok(kind="phase_done_awaiting_continue", conf=0.95, needs=0.05):
+    return {"status": "ok", "kind": kind, "kind_conf": conf, "needs_human": needs}
+
+
+def test_decide_rules_dominate_any_classifier():
+    import random
+    rnd = random.Random(55)
+    codes = ["H%02d_x" % i for i in range(16)]
+    statuses = ("ok", "timeout", "http_error", "failed", "malformed", "not_consented", "inactive")
+    for _ in range(2000):
+        hits = rnd.sample(codes, rnd.randint(1, 5))
+        jev = None if rnd.random() < 0.3 else {
+            "status": rnd.choice(statuses), "kind": rnd.choice(core.STOP_KINDS),
+            "kind_conf": rnd.random(), "needs_human": rnd.random()}
+        blockers = rnd.sample(["C1_no_dirty_paths", "C2_empty_plan_file_union"], rnd.randint(0, 2))
+        got = run_decide(rule_hits=hits, commit_blockers=blockers, heuristic=rnd.choice(core.STOP_KINDS), jev=jev)
+        assert got["verdict"] == "needs_human" and got["verdict_source"] == "hard_rule", (hits, jev, got)
+        assert got["act_eligible"] is False and got["would_action"] == "none", got
+        assert got["reasons"] == hits, got
+
+
+def test_decide_commit_requires_no_commit_blockers():
+    commit = run_decide(heuristic="awaiting_commit", commit_blockers=[])
+    assert (commit["verdict"], commit["would_action"], commit["verdict_source"]) == (
+        "would_commit", "commit", "heuristic"), commit
+    blocked = run_decide(heuristic="awaiting_commit", commit_blockers=["C1_no_dirty_paths"])
+    assert blocked["verdict"] == "needs_human" and blocked["would_action"] == "none", blocked
+    cont = run_decide(heuristic="phase_done_awaiting_continue", commit_blockers=["C1_no_dirty_paths"])
+    assert cont["verdict"] == "would_continue" and cont["would_action"] == "continue", cont
+    jev_commit = run_decide(jev=jev_ok("awaiting_commit"), commit_blockers=[])
+    assert (jev_commit["verdict"], jev_commit["verdict_source"]) == ("would_commit", "jev"), jev_commit
+    jev_blocked = run_decide(jev=jev_ok("awaiting_commit"), commit_blockers=["C3_dirty_outside_plan"])
+    assert jev_blocked["verdict"] == "needs_human", jev_blocked
+    verdicts = set()
+    for kind in core.STOP_KINDS:
+        for blockers in ([], ["C1_no_dirty_paths"]):
+            verdicts.add(run_decide(heuristic=kind, commit_blockers=blockers)["verdict"])
+            verdicts.add(run_decide(jev=jev_ok(kind), commit_blockers=blockers)["verdict"])
+    assert verdicts <= {"needs_human", "would_continue", "would_commit"} and "done" not in verdicts, verdicts
+
+
+def test_decide_jev_thresholds_boundaries():
+    at = run_decide(jev=jev_ok(conf=0.90, needs=0.20), heuristic="asking_decision")
+    assert (at["verdict"], at["verdict_source"], at["act_eligible"]) == ("would_continue", "jev", True), at
+    for conf, needs in ((0.8999, 0.05), (0.95, 0.2001)):
+        got = run_decide(jev=jev_ok(conf=conf, needs=needs), heuristic="phase_done_awaiting_continue")
+        assert got["verdict"] == "needs_human" and got["verdict_source"] == "jev", (conf, needs, got)
+        assert got["act_eligible"] is False, got
+    other = run_decide(jev=jev_ok("asking_decision"), heuristic="phase_done_awaiting_continue")
+    assert other["verdict"] == "needs_human" and other["verdict_source"] == "jev", other
+    custom = core.parse_settings(None, {"jevKindThreshold": 0.7, "jevNeedsHumanMax": 0.4}, "passwd")[0]
+    got = run_decide(jev=jev_ok(conf=0.7, needs=0.4), settings=custom)
+    assert got["verdict"] == "would_continue", got
+
+
+def test_decide_jev_missing_uses_heuristic_not_act_eligible():
+    for jev in (None, {"status": "timeout"}, {"status": "http_error"}, {"status": "malformed"},
+                {"status": "inactive"}, {"status": "not_consented"}):
+        got = run_decide(jev=jev, heuristic="phase_done_awaiting_continue")
+        assert got["verdict"] == "would_continue" and got["verdict_source"] == "heuristic", (jev, got)
+        assert got["act_eligible"] is False and got["would_action"] == "continue", got
+    none = run_decide(heuristic="work_complete")
+    assert none["verdict"] == "needs_human" and none["act_eligible"] is False, none
+    assert set(none) >= {"verdict", "verdict_source", "act_eligible", "would_action", "reasons"}, none
+
+
+# ---------------------------------------------------------------------------
+# Task 3.3: notify text, relay, loop guards, session math, shadow row
+# ---------------------------------------------------------------------------
+
+def test_notify_text_allowlist_and_shape():
+    import random
+    text = core.notify_text("needs_human", "wf-approved-plan-12345678", "P3", ["H03_pending_gate", "H05_x"])
+    assert text == "Craftflow: needs you - 12345678 P3 (H03_pending_gate)", text
+    assert core.notify_text("needs_human", None, None, []) == "Craftflow: needs you"
+    assert "%s" in core.PUSH_RELAY_TEMPLATE and core.PUSH_RELAY_TEMPLATE.count("%") == 1
+    assert (core.PUSH_RELAY_TEMPLATE % text).count(text) == 1
+    rnd = random.Random(7)
+    hostile = ["\n", "'", '"', "</x>", "\r\n", "é中", "$(rm -rf /)", "%s", "EVIL\n"]
+    for _ in range(300):
+        junk = "".join(rnd.choice(hostile) for _ in range(rnd.randint(1, 30)))
+        big = junk * rnd.choice((1, 400))
+        wf_id = rnd.choice(["wf-" + big, big, "wf-ok-" + big[:12] + "abcdefgh"])
+        out = core.notify_text("needs_human", wf_id, rnd.choice([big, "P1" + big, "P" + junk]),
+                               [rnd.choice([big, "H01_" + big, "H01_no_bound_workflow"])])
+        assert out.isascii() and "\n" not in out and "\r" not in out and len(out) <= 180, repr(out)
+        assert out.startswith("Craftflow: "), out
+        for bad in ("EVIL", "</x>", "'", '"', "$(", "%"):
+            assert bad not in out, (bad, out)
+    ten_kb = core.notify_text("needs_human", "wf-" + "a" * 10000, "P" + "9" * 10000, ["H01_" + "x" * 10000])
+    assert len(ten_kb) <= 180 and ten_kb == "Craftflow: needs you", ten_kb
+
+
+def relay_args(**kw):
+    args = {"settings": {"notify": "push"}, "verdict": "needs_human", "stop_hook_active": False,
+            "session_state": {}, "tail_sha": "t1"}
+    args.update(kw)
+    return args
+
+
+def test_relay_decision_never_when_stop_hook_active():
+    assert core.relay_decision(**relay_args()) is True
+    for notify in ("off", "desktop", "push"):
+        for verdict in ("needs_human", "would_continue", "would_commit", None):
+            for pending in (False, True):
+                for sha in ("t1", "t2", None):
+                    got = core.relay_decision(
+                        {"notify": notify}, verdict, True, {"relay_pending": pending}, sha)
+                    assert got is False, (notify, verdict, pending, sha)
+    assert core.relay_decision(**relay_args(settings={"notify": "desktop"})) is False
+    assert core.relay_decision(**relay_args(settings={"notify": "off"})) is False
+    assert core.relay_decision(**relay_args(verdict="would_continue")) is False
+    assert core.relay_decision(**relay_args(session_state={"relay_pending": True})) is False
+    assert core.relay_decision(**relay_args(session_state=None)) is True
+
+
+def test_relay_decision_once_per_tail_sha():
+    state = core.session_update({}, "needs_human", "h", "P1", "t1", True, 10.0)
+    assert state["relay_pending"] is True and state["last_notified_tail_sha"] == "t1", state
+    done = dict(state, relay_pending=False)  # the follow-up stop cleared the pending flag
+    assert core.relay_decision(**relay_args(session_state=done, tail_sha="t1")) is False
+    assert core.relay_decision(**relay_args(session_state=done, tail_sha="t2")) is True
+    assert core.relay_decision(**relay_args(session_state=state, tail_sha="t2")) is False  # relay pending
+
+
+def loop_facts(head="h1", cursor="P2", active=True, human="A"):
+    git = {"ok": True, "in_progress_op": None, "unmerged": False, "dirty_paths": [], "head": head}
+    return dict(facts_for({"phase_cursor": cursor}, stop_hook_active=active, git=git), last_human_ts=human)
+
+
+def test_loop_guards_and_session_update():
+    state = {}
+    for n in range(1, 6):
+        state = core.session_update(state, "would_continue", "h1", "P2", "t%d" % n, False, 100.0 + n,
+                                    last_human_ts="A")
+        assert state["would_continue_since_human"] == n, state
+    before = dict(state)
+    assert core.session_update(state, "needs_human", "h1", "P2", "t", False, 1.0,
+                               last_human_ts="A")["would_continue_since_human"] == 5
+    assert state == before  # session_update never mutates its input
+    reset = core.session_update(state, "needs_human", "h1", "P2", "t", False, 1.0, last_human_ts="B")
+    assert reset["would_continue_since_human"] == 0 and reset["last_human_ts"] == "B", reset
+    again = core.session_update(state, "would_continue", "h1", "P2", "t", False, 1.0, last_human_ts="B")
+    assert again["would_continue_since_human"] == 1, again
+    assert (reset["last_head"], reset["last_cursor"], reset["updated_at"]) == ("h1", "P2", 1.0), reset
+    # L2: a tag at count 5 (== maxAutoContinuesPerSession), never at 4, never a hard rule, no verdict effect
+    facts = loop_facts(active=False)
+    assert "L2_budget" in core.loop_guards(facts, state)
+    four = dict(state, would_continue_since_human=4)
+    assert core.loop_guards(facts, four) == []
+    assert core.loop_guards(loop_facts(active=False, human="C"), state) == []  # a new human turn resets
+    assert not any(code.startswith("L") for code in core.hard_rules(facts))
+    base = run_decide(heuristic="phase_done_awaiting_continue")
+    assert base["verdict"] == "would_continue" and "L2_budget" not in base["reasons"], base
+    # L1: needs stop_hook_active, a recorded continue or pending relay, and unchanged HEAD and cursor
+    recorded = {"would_continue_since_human": 1, "last_human_ts": "A", "last_head": "h1", "last_cursor": "P2"}
+    assert core.loop_guards(loop_facts(), recorded) == ["L1_no_progress"]
+    assert core.loop_guards(loop_facts(active=False), recorded) == []
+    assert core.loop_guards(loop_facts(head="h2"), recorded) == []
+    assert core.loop_guards(loop_facts(cursor="P1"), recorded) == []
+    pending = {"relay_pending": True, "last_human_ts": "A", "last_head": "h1", "last_cursor": "P2"}
+    assert core.loop_guards(loop_facts(), pending) == ["L1_no_progress"]
+    assert core.loop_guards(loop_facts(), {"last_human_ts": "A", "last_head": "h1", "last_cursor": "P2"}) == []
+    assert core.loop_guards(loop_facts(), {}) == [] and core.loop_guards({}, None) == []
+
+
+EXPECTED_ROW_KEYS = (
+    "schema", "row_kind", "ts", "session_id", "transcript_path", "mode", "mode_tag", "stop_hook_active",
+    "permission_mode", "wf", "binding_reason", "phase_cursor", "cursor_case", "cursor_resolution", "rule_hits",
+    "loop_guards", "commit_blockers", "jev_text_source", "last_human_ts", "heuristic_kind", "heuristic_verdict",
+    "jev_status", "jev_kind", "jev_kind_conf", "jev_needs_human", "jev_latency_ms", "jev_usage", "verdict",
+    "verdict_source", "act_eligible", "would_action", "notify", "notify_status", "turn_seconds",
+    "turn_seconds_lower_bound", "message_chars", "tail_sha", "hook_ms", "settings_tags")
+
+
+def test_build_row_key_set_frozen():
+    assert tuple(core.ROW_KEYS) == EXPECTED_ROW_KEYS, core.ROW_KEYS
+    row = core.build_row()
+    assert tuple(row) == EXPECTED_ROW_KEYS, tuple(row)
+    assert row["schema"] == 1 and row["row_kind"] == "stop", row
+    assert row["rule_hits"] == [] and row["loop_guards"] == [] and row["commit_blockers"] == [], row
+    assert row["act_eligible"] is False and row["would_action"] == "none", row
+    full = core.build_row(row_kind="relay_followup", verdict=None, wf="wf-a", rule_hits=["H01_x"],
+                          jev_usage={"tokens": 3}, unknown_key="dropped")
+    assert tuple(full) == EXPECTED_ROW_KEYS and "unknown_key" not in full, full
+    assert full["row_kind"] == "relay_followup" and full["rule_hits"] == ["H01_x"], full
+    assert full["jev_usage"] == {"tokens": 3}, full
+    json.dumps(full)  # serialisable
+
+
+def test_build_row_never_contains_message_marker():
+    import random
+    rnd = random.Random(99)
+    for i in range(200):
+        marker = "MSGMARK%06d" % rnd.randint(0, 999999)
+        message = "x" * rnd.randint(0, 50) + marker + "y" * rnd.randint(0, 50) + "\nOption A\nOption B"
+        facts = facts_for(message=message)
+        kind, signals = core.heuristic_kind(message)
+        hits = core.hard_rules(facts)
+        verdict = core.decide(hits, core.commit_blockers(facts), kind, None, facts["settings"])
+        row = core.build_row(
+            message=message, last_assistant_message=message, text=message, tail=message,
+            row_kind="stop", rule_hits=hits, commit_blockers=core.commit_blockers(facts),
+            loop_guards=core.loop_guards(facts, {}), heuristic_kind=kind, heuristic_verdict=verdict["verdict"],
+            verdict=verdict["verdict"], verdict_source=verdict["verdict_source"],
+            act_eligible=verdict["act_eligible"], would_action=verdict["would_action"],
+            message_chars=len(message), stop_hook_active=False, mode="audit")
+        blob = json.dumps(row, ensure_ascii=True)
+        assert marker not in blob and "Option A" not in blob, (i, blob)
+        assert row["message_chars"] == len(message), row
+    long_value = core.build_row(wf="wf-" + "z" * 5000, tail_sha="s" * 5000)
+    assert len(long_value["wf"]) <= 200 and len(long_value["tail_sha"]) <= 200, long_value
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
