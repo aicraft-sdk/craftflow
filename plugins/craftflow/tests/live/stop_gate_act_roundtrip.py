@@ -11,7 +11,8 @@ Runs real `claude -p --plugin-dir <plugin> --model haiku` sessions in scratch gi
 Scratch setup (disclosed LIMITATIONs act_requires_consent_file, act_go_from_seeded_events,
 jev_stub_endpoint_test_allowance): a scratch plugin copy whose Stop hook command runs the real hook under a
 wrapper that points the passwd home (consent file AND user layer) at a scratch home, sets HOME to it inside the
-hook process only, and ignores the Jev endpoint override (A09). The arm entry is written by the real arm CLI
+hook process only, and pins the Jev client's passwd home to that scratch home, where a jev-endpoint.json names the
+loopback stub (the endpoint env override no longer exists, so A09 does not fire). The arm entry is written by the real arm CLI
 (`craftflow_stop_gate_arm.arm`) against SEEDED GO events. A loopback stub answers phase_done 0.97 / needs_human
 0.05; the key is fake. The real consent file (passwd home .claude/craftflow/stop-gate.json) is never written
 or parsed: presence and sha256 are recorded before and after (real_consent_unchanged).
@@ -115,7 +116,7 @@ def act_wrapper_command(plugin):
     code = ("import os, sys; sys.path.insert(0, '%s'); import craftflow_stop_gate as g; "
             "import craftflow_stop_gate_core as c; h = os.environ['SG_ACT_HOME']; "
             "g._consent_home = lambda: h; c.passwd_home = lambda: h; os.environ['HOME'] = h; "
-            "g.jev_endpoint_override_set = lambda env: False; raise SystemExit(g.main())"
+            "import craftflow_jev_client as j; j._passwd_home = lambda: h; raise SystemExit(g.main())"
             % (plugin / "scripts"))
     return 'python3 -c "%s"' % code
 
@@ -223,11 +224,19 @@ def arm_project(scr, plugin_dir, home, project, name, budget=None, armed=True):
 
 
 def act_env(home, probe_log, stub_url):
-    return {"SG_ACT_HOME": str(home), "SG_ACT_PROBE_LOG": str(probe_log), "TYPESAFE_API_KEY": "fake-live-proof-key",
-            "CRAFTFLOW_JEV_ENDPOINT": stub_url}
+    return {"SG_ACT_HOME": str(home), "SG_ACT_PROBE_LOG": str(probe_log), "TYPESAFE_API_KEY": "fake-live-proof-key"}
+
+
+def write_jev_endpoint(home, stub_url):
+    """Loopback stub endpoint file in the ISOLATED scratch passwd home (never the real ~/.claude/craftflow)."""
+    path = Path(home) / ".claude" / "craftflow" / "jev-endpoint.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"endpoint": stub_url}), encoding="utf-8")
+    os.chmod(str(path), 0o600)
 
 
 def act_claude(plugin, project, prompt, sid, home, probe_log, stub_url, allowed=None):
+    write_jev_endpoint(home, stub_url)
     env = base.nested_env(project, project / "unused-seam.json", act_env(home, probe_log, stub_url))
     env.pop("CRAFTFLOW_STOP_GATE_USER_CONFIG", None)  # the user layer must be the passwd-home file (A14)
     cmd = ["claude", "-p", "--plugin-dir", str(plugin), "--model", base.MODEL, "--session-id", sid]

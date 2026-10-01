@@ -7,7 +7,8 @@ shadow row, the agent still stops), LV-3 (hard rule wins), LV-4 (a repository-se
 to a loopback Jev stub), LV-5 (push relay through a TEST-ONLY consent override in a scratch plugin copy) and
 LV-6 (stop_hook_active chain probe, recorded not judged).
 
-Safety: Jev is only ever a loopback stub (CRAFTFLOW_JEV_ENDPOINT); the real TypeSafe API is never called. The
+Safety: Jev is only ever a loopback stub (reached via a jev-endpoint.json in an ISOLATED scratch home, injected
+through a scratch-plugin hook wrapper; the env override no longer exists); the real TypeSafe API is never called. The
 real consent file (passwd home .claude/craftflow/stop-gate.json) is never read for content or written: its
 presence and sha256 are recorded before/after and must be equal. LV-5 points the hook's consent lookup at a
 scratch home through a scratch-plugin hook command; the worktree plugin is never modified (config sha256
@@ -338,8 +339,17 @@ def lv4(scr, plugin_dir, user_jev):
     p4 = make_project(scr, "p4")
     sid = str(uuid.uuid4())
     with JevStub(JEV_STUB_SLEEP_S) as stub:
+        # The Jev client no longer honours an endpoint env var: it reads ~/.claude/craftflow/jev-endpoint.json
+        # from the PASSWD home. Isolate that home: the scratch plugin's Stop hook runs the real gate under a
+        # wrapper that points both the consent home and the client's home at a scratch dir holding only the
+        # loopback endpoint file (no consent file -> the gate must not egress). The real home is never written.
+        jev_home = scr / "jev-home"
+        write_json(jev_home / ".claude" / "craftflow" / "jev-endpoint.json", {"endpoint": stub.url})
+        os.chmod(str(jev_home / ".claude" / "craftflow" / "jev-endpoint.json"), 0o600)
+        if patch_stop_gate_command(plugin / "hooks" / "hooks.json", jev_wrapper_command(plugin, jev_home)) != 1:
+            return "FAIL:could_not_patch_scratch_hooks"
         rc, _out, _err = claude(plugin, p4, user_jev, PROMPT, sid, extra_env={
-            "TYPESAFE_API_KEY": "fake-live-proof-key", "CRAFTFLOW_JEV_ENDPOINT": stub.url})
+            "TYPESAFE_API_KEY": "fake-live-proof-key"})
         stop_kind_hits, total = stub.stop_kind_requests, len(stub.requests)
     rows = [r for r in gate_rows(p4) if r.get("session_id") == sid]
     log("lv4: stub total_requests=%d stop_kind_requests=%d" % (total, stop_kind_hits))
@@ -353,6 +363,13 @@ def lv4(scr, plugin_dir, user_jev):
     if not (isinstance(row.get("hook_ms"), int) and row["hook_ms"] < 1000):
         return "FAIL:hook_ms=%r" % row.get("hook_ms")
     return "PASS"
+
+
+def jev_wrapper_command(plugin, home):
+    """Stop-gate hook command (SCRATCH plugin only) pinning the consent home AND the Jev client's passwd home."""
+    return ('python3 -c "import sys; sys.path.insert(0, \'%s\'); import craftflow_stop_gate as g; '
+            'import craftflow_jev_client as j; g._consent_home=lambda: \'%s\'; j._passwd_home=lambda: \'%s\'; '
+            'raise SystemExit(g.main())"' % (plugin / "scripts", home, home))
 
 
 def relay_wrapper_command(plugin, consent_home):

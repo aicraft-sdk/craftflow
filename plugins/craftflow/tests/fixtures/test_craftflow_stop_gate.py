@@ -1275,18 +1275,34 @@ def run_inproc(stub, message=CONTINUE_TEXT, consent=True, key="fake-key", **arti
     home = scratch_dir()
     if consent:
         write_consent(home, {"jevText": True})
+    write_jev_endpoint(home, stub.url)
     plugin = jev_plugin()
     seam = audit_config()
+    import craftflow_jev_client as jev_client
     saved = gate._consent_home
+    saved_jev_home = jev_client._passwd_home
     gate._consent_home = lambda: home
+    jev_client._passwd_home = lambda: home  # the client reads the endpoint file from this scratch home
     started = time.monotonic()
     try:
-        with env_patch(CRAFTFLOW_JEV_ENDPOINT=stub.url, TYPESAFE_API_KEY=key, CLAUDE_PLUGIN_ROOT=str(plugin),
+        with env_patch(TYPESAFE_API_KEY=key, CLAUDE_PLUGIN_ROOT=str(plugin),
                        CLAUDE_PROJECT_DIR=str(root), CRAFTFLOW_STOP_GATE_USER_CONFIG=str(seam)):
             out, row = gate.run(stop_payload(transcript, root, message=message), dict(os.environ))
     finally:
         gate._consent_home = saved
+        jev_client._passwd_home = saved_jev_home
     return out, row, time.monotonic() - started
+
+
+def write_jev_endpoint(home, url):
+    """Write the user-level loopback endpoint file the Jev client reads from the (passwd) home."""
+    folder = os.path.join(home, ".claude", "craftflow")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "jev-endpoint.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump({"endpoint": url}, handle)
+    os.chmod(path, 0o600)
+    return path
 
 
 def test_should_call_jev_truth_table():
@@ -1437,16 +1453,18 @@ def test_hook_jev_not_called_when_rule_hits():
 def test_hook_jev_text_from_seam_or_home_env_never_egresses():
     wrapper_dir = Path(scratch_dir())
 
-    def wrapper(consent_home):
+    def wrapper(consent_home, stub):
+        write_jev_endpoint(consent_home, stub.url)  # loopback stub via the user-level endpoint file
         path = wrapper_dir / ("wrap-%d.py" % len(list(wrapper_dir.iterdir())))
         path.write_text(
             "import sys\nsys.path.insert(0, %r)\nimport craftflow_stop_gate as g\n"
-            "g._consent_home = lambda: %r\nsys.exit(g.main())\n" % (str(SCRIPTS), consent_home), encoding="utf-8")
+            "import craftflow_jev_client as c\n"
+            "g._consent_home = lambda: %r\nc._passwd_home = lambda: %r\n"
+            "sys.exit(g.main())\n" % (str(SCRIPTS), consent_home, consent_home), encoding="utf-8")
         return path
 
     def jev_env(stub, key="fake-key"):
-        return {"CRAFTFLOW_JEV_ENDPOINT": stub.url, "TYPESAFE_API_KEY": key,
-                "CLAUDE_PLUGIN_ROOT": str(jev_plugin())}
+        return {"TYPESAFE_API_KEY": key, "CLAUDE_PLUGIN_ROOT": str(jev_plugin())}
 
     def fresh():
         root = make_project()
@@ -1460,7 +1478,7 @@ def test_hook_jev_text_from_seam_or_home_env_never_egresses():
         seam.write_text(json.dumps({"mode": "audit", "jevText": True}), encoding="utf-8")
         env = jev_env(stub)
         env["CRAFTFLOW_STOP_GATE_USER_CONFIG"] = str(seam)
-        code, _out, err, _ = run_gate(stop_payload(t, root), root, env, script=wrapper(scratch_dir()))
+        code, _out, err, _ = run_gate(stop_payload(t, root), root, env, script=wrapper(scratch_dir(), stub))
         assert code == 0, err
         row = rows_of(root)[-1]
         assert row["jev_text_source"] == "ignored_seam" and row["jev_status"] == "not_consented", row
@@ -1471,7 +1489,7 @@ def test_hook_jev_text_from_seam_or_home_env_never_egresses():
         write_consent(fake_home, {"mode": "audit", "jevText": True})
         env = jev_env(stub)
         env.update({"HOME": fake_home, "CRAFTFLOW_STOP_GATE_USER_CONFIG": None})
-        code, _out, err, _ = run_gate(stop_payload(t, root), root, env, script=wrapper(scratch_dir()))
+        code, _out, err, _ = run_gate(stop_payload(t, root), root, env, script=wrapper(scratch_dir(), stub))
         assert code == 0, err
         row = rows_of(root)[-1]
         assert row["jev_text_source"] == "ignored_seam" and row["mode"] == "audit", row
@@ -1482,7 +1500,7 @@ def test_hook_jev_text_from_seam_or_home_env_never_egresses():
         write_consent(consent_home, {"jevText": True})
         env = jev_env(stub, key=None)
         env["CRAFTFLOW_STOP_GATE_USER_CONFIG"] = str(audit_config())
-        code, _out, err, _ = run_gate(stop_payload(t, root), root, env, script=wrapper(consent_home))
+        code, _out, err, _ = run_gate(stop_payload(t, root), root, env, script=wrapper(consent_home, stub))
         assert code == 0, err
         row = rows_of(root)[-1]
         assert row["jev_text_source"] == "consent_file" and row["jev_status"] == "inactive", row

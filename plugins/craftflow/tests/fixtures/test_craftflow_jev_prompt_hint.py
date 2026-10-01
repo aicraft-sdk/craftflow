@@ -10,6 +10,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -80,7 +81,24 @@ def fail(name: str, reason: str) -> None:
     print(f"  FAIL: {name}: {reason}")
 
 
-def run_hook(payload: dict, env: dict) -> tuple[int, str, str]:
+_HOME_PATCH_RUNNER = (
+    "import sys, runpy\n"
+    "sys.path.insert(0, sys.argv[1])\n"
+    "import craftflow_jev_client as c\n"
+    "c._passwd_home = lambda: sys.argv[2]\n"
+    "script = sys.argv[1] + '/craftflow_jev_prompt_hint.py'\n"
+    "sys.argv = [script]\n"
+    "runpy.run_path(script, run_name='__main__')\n"
+)
+
+
+def _write_endpoint_file(home: str, url: str) -> None:
+    folder = Path(home) / ".claude" / "craftflow"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "jev-endpoint.json").write_text(json.dumps({"endpoint": url}), encoding="utf-8")
+
+
+def run_hook(payload: dict, env: dict, endpoint_url: "str | None" = None) -> tuple[int, str, str]:
     """Run the real craftflow_jev_prompt_hint.py hook as a subprocess.
 
     Same technique as craftflow_hook_unit_tests.py:57-67's run_hook(), copied
@@ -91,8 +109,25 @@ def run_hook(payload: dict, env: dict) -> tuple[int, str, str]:
     """
     merged_env = {k: v for k, v in os.environ.items() if k != "TYPESAFE_API_KEY"}
     merged_env.update(env)
+    argv = [sys.executable, str(SCRIPTS / "craftflow_jev_prompt_hint.py")]
+    fake_home = None
+    if endpoint_url is not None:
+        # The client resolves the PASSWD home (not $HOME) for the user-level jev-endpoint.json, so a
+        # subprocess cannot be pointed at a scratch home by env alone: run the real hook script via a
+        # runner that patches the client's home lookup to an isolated scratch dir (real home untouched).
+        fake_home = tempfile.mkdtemp(prefix="jev-home-")
+        _write_endpoint_file(fake_home, endpoint_url)
+        argv = [sys.executable, "-c", _HOME_PATCH_RUNNER, str(SCRIPTS), fake_home]
+    try:
+        return _run_hook_argv(argv, payload, merged_env)
+    finally:
+        if fake_home is not None:
+            shutil.rmtree(fake_home, ignore_errors=True)
+
+
+def _run_hook_argv(argv: list, payload: dict, merged_env: dict) -> tuple[int, str, str]:
     result = subprocess.run(
-        [sys.executable, str(SCRIPTS / "craftflow_jev_prompt_hint.py")],
+        argv,
         input=json.dumps(payload),
         capture_output=True,
         text=True,
@@ -153,11 +188,11 @@ def test_enabled_but_no_key_exits_silently_no_network() -> None:
     tmp, project, plugin, env = _setup(enabled=True)
     with tmp:
         env_no_key = dict(env)
-        # DD-14 loopback override: if any code path DID reach the network it would hit a
+        # DD-14 user-level loopback endpoint file (scratch home): if any code path DID reach the network it would hit a
         # refused local port and log jev_call_failed -- the assertion below proves no such
         # line exists, i.e. is_active() correctly short-circuited before any network call.
-        env_no_key["CRAFTFLOW_JEV_ENDPOINT"] = "http://127.0.0.1:9/"
-        code, out, err = run_hook({"hook_event_name": "UserPromptSubmit", "prompt": "fix the bug"}, env_no_key)
+        code, out, err = run_hook({"hook_event_name": "UserPromptSubmit", "prompt": "fix the bug"}, env_no_key,
+                                  endpoint_url="http://127.0.0.1:9/")
         jev_dir = project / ".craftflow/state/jev"
         log_path = project / ".craftflow/state/craftflow-hook-events.log"
         log_ok = (not log_path.exists()) or ("jev_call_failed" not in log_path.read_text())
@@ -798,8 +833,8 @@ def test_subprocess_connection_refused_fails_open() -> None:
     with tmp:
         env2 = dict(env)
         env2["TYPESAFE_API_KEY"] = "sk-sentinel-refused"
-        env2["CRAFTFLOW_JEV_ENDPOINT"] = "http://127.0.0.1:9/"
-        code, out, err = run_hook({"hook_event_name": "UserPromptSubmit", "prompt": "fix the login bug"}, env2)
+        code, out, err = run_hook({"hook_event_name": "UserPromptSubmit", "prompt": "fix the login bug"}, env2,
+                                  endpoint_url="http://127.0.0.1:9/")
         log_path = project / ".craftflow/state/craftflow-hook-events.log"
         log_text = log_path.read_text() if log_path.exists() else ""
         failed_lines = [ln for ln in log_text.splitlines() if "jev_call_failed" in ln]
@@ -831,12 +866,14 @@ def test_eight_malformed_stdin_variants_exit_zero_silently() -> None:
         for variant in variants:
             merged_env = {k: v for k, v in os.environ.items() if k != "TYPESAFE_API_KEY"}
             merged_env.update(env2)
+            scratch_home = tempfile.mkdtemp(prefix="jev-home-")  # isolated passwd-home stand-in (no endpoint file)
             result = subprocess.run(
-                [sys.executable, str(SCRIPTS / "craftflow_jev_prompt_hint.py")],
+                [sys.executable, "-c", _HOME_PATCH_RUNNER, str(SCRIPTS), scratch_home],
                 input=variant,
                 capture_output=True,
                 env=merged_env,
             )
+            shutil.rmtree(scratch_home, ignore_errors=True)
             if result.returncode != 0 or result.stdout.strip() != b"":
                 failures.append((variant, result.returncode, result.stdout, result.stderr))
         if not failures:
@@ -850,7 +887,6 @@ def test_stdout_never_contains_decision_or_blockreason() -> None:
     with tmp:
         env2 = dict(env)
         env2["TYPESAFE_API_KEY"] = "sk-sentinel-stdout-check"
-        env2["CRAFTFLOW_JEV_ENDPOINT"] = "http://127.0.0.1:9/"
         scenarios = [
             {"hook_event_name": "UserPromptSubmit", "prompt": "fix the login bug"},
             {"hook_event_name": "UserPromptSubmit", "prompt": "/craftflow status"},
@@ -859,7 +895,7 @@ def test_stdout_never_contains_decision_or_blockreason() -> None:
         ]
         failures = []
         for payload in scenarios:
-            code, out, err = run_hook(payload, env2)
+            code, out, err = run_hook(payload, env2, endpoint_url="http://127.0.0.1:9/")
             if "decision" in out or "blockReason" in out or code != 0:
                 failures.append((payload, code, out))
         if not failures:
