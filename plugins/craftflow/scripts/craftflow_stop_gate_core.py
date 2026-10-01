@@ -15,6 +15,7 @@ import datetime
 import errno
 import fnmatch
 import json
+import math
 import os
 import re
 import stat
@@ -701,12 +702,15 @@ def _h18(facts, work):
 
 
 def _h16(facts):
-    return "L1_no_progress" in loop_guards(facts, facts.get("session"))
+    session = facts.get("session")
+    return _l1(facts, session if isinstance(session, dict) else {})  # no blanket except: an error becomes a hit
 
 
 def _h17(facts):
     limit = (facts.get("settings") or DEFAULTS).get("maxAutoContinuesPerSession", 5)
-    if type(limit) is not int or limit < 1:
+    if type(limit) is not int:
+        return True  # an unusable budget is a hit, not a pass
+    if limit < 1:
         return False  # max 0 disables ACT through blocker A15, never through this hard rule
     session = facts.get("session") if isinstance(facts.get("session"), dict) else {}
     return _count_since_human(facts, session) >= limit
@@ -984,11 +988,37 @@ def _count_since_human(facts, session):
     return _stored_count(session, "would_continue_since_human", facts.get("last_human_ts"))
 
 
+COUNT_CORRUPT = 10 ** 9  # a present but unusable counter reads as exhausted (fail closed, review F2)
+
+
+def _raw_count(session, key):
+    """0 when absent/None, the value when a real int >= 0, else COUNT_CORRUPT."""
+    count = session.get(key)
+    if count is None:
+        return 0
+    return count if type(count) is int and count >= 0 else COUNT_CORRUPT
+
+
+def _counts_corrupt(session):
+    return any(_raw_count(session, key) == COUNT_CORRUPT
+               for key in ("would_continue_since_human", "acted_since_human"))
+
+
 def _stored_count(session, key, human_ts):
     if human_ts is not None and session.get("last_human_ts") != human_ts:
         return 0
-    count = session.get(key)
-    return count if isinstance(count, int) and not isinstance(count, bool) else 0
+    return _raw_count(session, key)
+
+
+def _l1(facts, session):
+    """True when L1 (no progress) holds. May raise: callers decide how to fail (H16 fails closed)."""
+    count = _count_since_human(facts, session)
+    git = facts.get("git") if isinstance(facts.get("git"), dict) else {}
+    work = facts.get("workflow") if isinstance(facts.get("workflow"), dict) else {}
+    recorded = count > 0 or bool(session.get("relay_pending"))
+    unchanged = (git.get("head") is not None and git.get("head") == session.get("last_head")
+                 and work.get("phase_cursor") == session.get("last_cursor"))  # unknown HEAD is not "no progress"
+    return bool(facts.get("stop_hook_active")) and recorded and unchanged
 
 
 def loop_guards(facts, session):
@@ -998,12 +1028,7 @@ def loop_guards(facts, session):
         session = session if isinstance(session, dict) else {}
         count = _count_since_human(facts, session)
         tags = []
-        git = facts.get("git") if isinstance(facts.get("git"), dict) else {}
-        work = facts.get("workflow") if isinstance(facts.get("workflow"), dict) else {}
-        recorded = count > 0 or bool(session.get("relay_pending"))
-        unchanged = (git.get("head") is not None and git.get("head") == session.get("last_head")
-                     and work.get("phase_cursor") == session.get("last_cursor"))  # unknown HEAD is not "no progress"
-        if facts.get("stop_hook_active") and recorded and unchanged:
+        if _l1(facts, session):
             tags.append("L1_no_progress")
         limit = (facts.get("settings") or DEFAULTS).get("maxAutoContinuesPerSession", 5)
         if count >= limit:
@@ -1013,10 +1038,18 @@ def loop_guards(facts, session):
         return []
 
 
-def acted_count_before(old):
-    """Auto-continues recorded in the stored session record (before any reset)."""
-    count = old.get("acted_since_human")
-    return count if isinstance(count, int) and not isinstance(count, bool) else 0
+def effective_disarmed(old, last_human_ts, negative_reply):
+    """True when the session is disarmed once this stop's human line is counted (DD-10, review F1/F6).
+
+    Any stored ``act_disarmed`` other than absent/None/False disarms. A new non-null human ts with a negative
+    reply disarms when auto-continues were recorded since the previous human turn (a corrupt count counts).
+    """
+    old = old if isinstance(old, dict) else {}
+    flag = old.get("act_disarmed")
+    if flag is not None and flag is not False:
+        return True
+    new_turn = last_human_ts is not None and last_human_ts != old.get("last_human_ts")
+    return bool(new_turn and negative_reply is True and _raw_count(old, "acted_since_human") > 0)
 
 
 def session_update(state, verdict, head, cursor, tail_sha, relayed, now, last_human_ts=None, notified=False,
@@ -1028,10 +1061,9 @@ def session_update(state, verdict, head, cursor, tail_sha, relayed, now, last_hu
     the session when it had acted since the previous human turn.
     """
     old = state if isinstance(state, dict) else {}
-    new_turn = last_human_ts is not None and last_human_ts != old.get("last_human_ts")
     count = _stored_count(old, "would_continue_since_human", last_human_ts)
     acted_count = _stored_count(old, "acted_since_human", last_human_ts)
-    disarmed = old.get("act_disarmed") is True or (new_turn and bool(negative_reply) and acted_count_before(old) > 0)
+    disarmed = effective_disarmed(old, last_human_ts, negative_reply)
     if verdict == "would_continue":
         count += 1
     if acted:
@@ -1075,7 +1107,7 @@ def _is_int(value):
 
 
 def _is_number(value):
-    return type(value) in (int, float) and value == value
+    return type(value) in (int, float) and math.isfinite(value)
 
 
 def iso_epoch(text):
@@ -1113,7 +1145,9 @@ def effective_budget(settings, arm_value):
 
 
 def _arm_malformed(entry):
-    if not isinstance(entry, dict) or entry.get("version") != ARM_ENTRY_VERSION or entry.get("version") is True:
+    if not isinstance(entry, dict) or type(entry.get("version")) is not int or entry["version"] != ARM_ENTRY_VERSION:
+        return True
+    if "workflow" not in entry:
         return True
     armed, expires = iso_epoch(entry.get("armedAt")), iso_epoch(entry.get("expiresAt"))
     if armed is None or expires is None or expires <= armed:
@@ -1141,7 +1175,7 @@ def arm_status(consent_obj, consent_ctime, now, project_root_real, settings, las
         entry, present = _arm_entry(consent_obj)
         if not present:
             return "not_armed"
-        if _arm_malformed(entry):
+        if not _is_number(now) or _arm_malformed(entry):
             return "arm_malformed"
         armed, expires = iso_epoch(entry["armedAt"]), iso_epoch(entry["expiresAt"])
         if armed > now + ARM_FUTURE_SKEW_SECONDS:
@@ -1194,13 +1228,15 @@ def _next_phase_id(facts):
     return nxt["id"] if isinstance(nxt, dict) else None
 
 
-def act_blockers(facts, verdict, arm, arm_budget=None, stop_verify=False, endpoint_override=False,
-                 tags=(), session_write_ok=True):
+def act_blockers(facts, verdict, arm, arm_cap=None, stop_verify=False, endpoint_override=False,
+                 tags=(), session_write_ok=True, negative_reply=False):
     """A01..A15 (DD-7a, review B1/B2): reasons ACT must not fire. Pure, logged every stop; [] means clear.
 
-    ``arm`` is the ``arm_status`` string, ``arm_budget`` the arm entry's own cap, ``tags`` the settings and
-    session tags of this stop, ``session_write_ok`` whether the post-decision session write succeeded.
-    A rule that cannot be evaluated counts as a blocker.
+    ``arm`` is the ``arm_status`` string, ``arm_cap`` the arm entry's own budget, ``tags`` the settings and
+    session tags of this stop (a list or tuple), ``session_write_ok`` whether the post-decision session write
+    succeeded, ``negative_reply`` whether a genuine human line since the stored ts was negative (applied BEFORE
+    deciding, so the stop right after a negative reply cannot act). Flags must be exact booleans, anything
+    else blocks. An unevaluable blocker set returns ``A99_blocker_eval_error``.
     """
     try:
         settings = facts["settings"]
@@ -1209,7 +1245,8 @@ def act_blockers(facts, verdict, arm, arm_budget=None, stop_verify=False, endpoi
         sid, artifact_sid = facts.get("session_id"), facts.get("artifact_session_id")
         has_sid = isinstance(sid, str) and bool(sid)
         completed, upcoming = _boundary_phases(facts)
-        budget = effective_budget(settings, arm_budget)
+        budget = effective_budget(settings, arm_cap)
+        tags_ok = type(tags) in (list, tuple)
         acted = _stored_count(session, "acted_since_human", facts.get("last_human_ts"))
         tail_sha = facts.get("tail_sha")
         source = facts.get("override_source")
@@ -1222,30 +1259,33 @@ def act_blockers(facts, verdict, arm, arm_budget=None, stop_verify=False, endpoi
             ("A05_not_jev_verdict", verdict.get("verdict") != "would_continue"
              or verdict.get("verdict_source") != "jev" or verdict.get("act_eligible") is not True),
             ("A06_human_turn_unknown", facts.get("last_human_ts") is None),
-            ("A07_stop_verify_enabled", bool(stop_verify)),
-            ("A08_disarmed_after_negative", session.get("act_disarmed") is True),
-            ("A09_jev_endpoint_override", bool(endpoint_override)),
+            ("A07_stop_verify_enabled", stop_verify is not False),
+            ("A08_disarmed_after_negative",
+             effective_disarmed(session, facts.get("last_human_ts"), negative_reply)),
+            ("A09_jev_endpoint_override", endpoint_override is not False),
             ("A10_no_session_id", not has_sid),
             ("A11_tail_already_acted", bool(tail_sha) and session.get("last_acted_tail_sha") == tail_sha),
             ("A12_phase_id_unrenderable", act_reason(0, 1, facts.get("wf"), _next_phase_id(facts)) is None),
-            ("A13_session_state_unreliable", "session_state_reset" in (tags or ()) or session_write_ok is not True),
+            ("A13_session_state_unreliable", not tags_ok or "session_state_reset" in tags
+             or session_write_ok is not True or _counts_corrupt(session)),
             ("A14_settings_not_from_user_layer", settings.get("mode") == "on"
              and (source in ("seam", "home") or source not in _SETTING_SOURCES)),
             ("A15_budget_zero", budget < 1 or acted >= budget),
         )
         return [code for code, hit in checks if hit]
     except Exception:  # noqa: BLE001 - fail closed: an unevaluable blocker set blocks ACT
-        return ["A02_not_armed", "A05_not_jev_verdict"]
+        return ["A99_blocker_eval_error"]
 
 
 def act_decision(settings, rule_hits, blockers, verdict):
     """True only for the DD-4 conjunction: mode on, no hard rule, no act blocker, a Jev ``would_continue``.
 
-    Hard rules and blockers are separate inputs; either being non-empty (or unreadable) means no action.
+    ``rule_hits`` and ``blockers`` must be real empty lists: None, "", 0, () or {} are not "empty" (F3).
     """
     try:
         return (isinstance(settings, dict) and settings.get("mode") == "on"
-                and not rule_hits and not blockers and isinstance(verdict, dict)
+                and type(rule_hits) is list and not rule_hits and type(blockers) is list and not blockers
+                and isinstance(verdict, dict)
                 and verdict.get("verdict") == "would_continue" and verdict.get("verdict_source") == "jev"
                 and verdict.get("act_eligible") is True)
     except Exception:  # noqa: BLE001 - fail open to no action

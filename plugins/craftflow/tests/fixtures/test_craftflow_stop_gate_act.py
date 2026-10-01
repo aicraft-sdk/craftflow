@@ -288,7 +288,7 @@ def arm_state(entry=None, ctime=HUMAN_EPOCH - 60, settings=None, human=HUMAN_EPO
 def clean_blockers(**over):
     facts = over.pop("facts", None) or act_facts()
     verdict = over.pop("verdict", None) or core.decide([], [], "other", JEV_YES, facts["settings"])
-    kw = dict(arm="armed", arm_budget=5)
+    kw = dict(arm="armed", arm_cap=5)
     kw.update(over)
     return core.act_blockers(facts, verdict, **kw)
 
@@ -388,9 +388,9 @@ def test_act_blockers_clean_case_and_table():
     blocked("A13_session_state_unreliable", session_write_ok=False)
     blocked("A14_settings_not_from_user_layer", facts=act_facts(override_source="seam"))
     blocked("A14_settings_not_from_user_layer", facts=act_facts(override_source="home"))
-    blocked("A15_budget_zero", arm_budget=0)
+    blocked("A15_budget_zero", arm_cap=0)
     blocked("A15_budget_zero", facts=act_facts(settings=on_settings(maxAutoContinuesPerSession=0)))
-    blocked("A15_budget_zero", arm_budget=None)
+    blocked("A15_budget_zero", arm_cap=None)
 
 
 def test_arm_status_table():
@@ -499,13 +499,13 @@ def test_mode_off_audit_unarmed_never_act_end_to_end_pure():
         settings = core.parse_settings(None, {"mode": mode}, "passwd")[0]
         facts = act_facts(settings=settings)
         verdict = core.decide([], [], "other", JEV_YES, settings)
-        blockers = core.act_blockers(facts, verdict, arm="armed", arm_budget=5)
+        blockers = core.act_blockers(facts, verdict, arm="armed", arm_cap=5)
         assert "A01_mode_not_on" in blockers and core.act_decision(settings, [], blockers, verdict) is False, mode
     verdict = core.decide([], [], "other", JEV_YES, facts_on["settings"])
-    unarmed = core.act_blockers(facts_on, verdict, arm=arm_state(ctime=HUMAN_EPOCH + 5), arm_budget=5)
+    unarmed = core.act_blockers(facts_on, verdict, arm=arm_state(ctime=HUMAN_EPOCH + 5), arm_cap=5)
     assert unarmed == ["A02_not_armed"], unarmed
     assert core.act_decision(facts_on["settings"], [], unarmed, verdict) is False
-    armed = core.act_blockers(facts_on, verdict, arm=arm_state(), arm_budget=5)
+    armed = core.act_blockers(facts_on, verdict, arm=arm_state(), arm_cap=5)
     assert armed == [] and core.act_decision(facts_on["settings"], core.hard_rules(facts_on), armed, verdict) is True
     ruled = act_facts(stop_reason="max_tokens")
     assert core.act_decision(ruled["settings"], core.hard_rules(ruled), armed, verdict) is False  # rules win
@@ -517,10 +517,10 @@ def test_effective_budget_is_min_of_arm_and_settings():
     assert core.effective_budget(on_settings(maxAutoContinuesPerSession=0), 9) == 0
     assert core.effective_budget(on_settings(), None) == 0 and core.effective_budget(on_settings(), True) == 0
     spent = act_facts(session={"acted_since_human": 3, "last_human_ts": HUMAN_TS})
-    assert clean_blockers(facts=spent, arm_budget=3) == ["A15_budget_zero"]
-    assert clean_blockers(facts=spent, arm_budget=4) == []
+    assert clean_blockers(facts=spent, arm_cap=3) == ["A15_budget_zero"]
+    assert clean_blockers(facts=spent, arm_cap=4) == []
     loose = act_facts(session={"acted_since_human": 3, "last_human_ts": "older"})  # new human line resets
-    assert clean_blockers(facts=loose, arm_budget=3) == []
+    assert clean_blockers(facts=loose, arm_cap=3) == []
 
 
 def test_session_update_act_fields_and_disarm():
@@ -556,6 +556,114 @@ def test_row_schema_2_keys():
         True, "armed", "end_turn", 1), full
     assert full["act_blockers"] == ["A02_not_armed"]
     json.dumps(full)
+
+
+# ---------------------------------------------------------------------------
+# P4 hardening (hunter F1-F9, reviewer items)
+# ---------------------------------------------------------------------------
+
+def test_f1_negative_reply_disarms_on_the_very_first_stop():
+    old = {"acted_since_human": 1, "last_human_ts": "older"}
+    facts = act_facts(session=old)
+    assert clean_blockers(facts=facts) == []  # no negative reply: the new human turn just resets
+    got = clean_blockers(facts=facts, negative_reply=True)
+    assert got == ["A08_disarmed_after_negative"], got
+    same_turn = act_facts(session={"acted_since_human": 1, "last_human_ts": HUMAN_TS})
+    assert clean_blockers(facts=same_turn, negative_reply=True) == []  # not a new turn, nothing to disarm
+    idle = act_facts(session={"acted_since_human": 0, "last_human_ts": "older"})
+    assert clean_blockers(facts=idle, negative_reply=True) == []
+    assert core.effective_disarmed(old, HUMAN_TS, True) is True
+    assert core.effective_disarmed(old, HUMAN_TS, False) is False
+    assert core.effective_disarmed(old, None, True) is False
+    assert core.effective_disarmed({"act_disarmed": True}, None, False) is True
+
+
+def test_f2_corrupt_counters_fail_closed():
+    for bad in (-100, 5.0, True, "9", [], {}):
+        for key in ("acted_since_human", "would_continue_since_human"):
+            session = {key: bad, "last_human_ts": HUMAN_TS}
+            facts = act_facts(session=session)
+            hits = core.hard_rules(facts)
+            if key == "would_continue_since_human":
+                assert "H17_continue_budget" in hits, (bad, hits)
+            got = clean_blockers(facts=facts)
+            assert "A13_session_state_unreliable" in got, (bad, key, got)
+            if key == "acted_since_human":
+                assert "A15_budget_zero" in got, (bad, got)
+    assert core.hard_rules(act_facts(session={"would_continue_since_human": None, "last_human_ts": HUMAN_TS})) == []
+    assert clean_blockers(facts=act_facts(session={"acted_since_human": 0, "last_human_ts": HUMAN_TS})) == []
+
+
+def test_f3_act_decision_requires_real_empty_lists():
+    would = core.decide([], [], "other", JEV_YES, on_settings())
+    on = on_settings()
+    assert core.act_decision(on, [], [], would) is True
+    for bad in (None, "", 0, (), {}, False):
+        assert core.act_decision(on, bad, [], would) is False, ("rule_hits", bad)
+        assert core.act_decision(on, [], bad, would) is False, ("blockers", bad)
+
+
+def test_f4_h16_fails_closed_when_loop_guards_would_swallow():
+    session = {"would_continue_since_human": 1, "last_human_ts": HUMAN_TS, "last_head": "0" * 40,
+               "last_cursor": "P2"}
+    facts = act_facts(stop_hook_active=True, session=session, settings=dict(on_settings(),
+                                                                          maxAutoContinuesPerSession="5"))
+    assert "H16_no_progress" in core.hard_rules(facts), core.hard_rules(facts)
+    assert "H17_continue_budget" in core.hard_rules(facts)  # an unusable budget is a hit, not a pass
+
+
+def test_f5_non_finite_and_wrong_types_are_malformed():
+    nan, inf = float("nan"), float("inf")
+    assert arm_state(make_arm(version=1.0)) == "arm_malformed"
+    assert arm_state(make_arm(version=True)) == "arm_malformed"
+    assert arm_state(make_arm(go=dict(make_arm()["go"], jevKindThreshold=nan))) == "thresholds_looser"
+    assert arm_state(make_arm(go=dict(make_arm()["go"], jevNeedsHumanMax=inf))) == "thresholds_looser"
+    assert arm_state(human=nan) == "human_turn_unknown"
+    assert arm_state(human=inf) == "human_turn_unknown"
+    assert arm_state(ctime=nan) == "arm_after_last_human"
+    assert core.arm_status({"actContinue": make_arm()}, HUMAN_EPOCH - 60, nan, PROJECT, on_settings(),
+                           HUMAN_EPOCH, WF) == "arm_malformed"
+
+
+def test_f6_any_non_false_disarm_value_disarms():
+    for value in (True, 1, "yes", "false", 0, [], {}):
+        facts = act_facts(session={"act_disarmed": value, "last_human_ts": HUMAN_TS})
+        assert "A08_disarmed_after_negative" in clean_blockers(facts=facts), value
+        kept = core.session_update({"act_disarmed": value}, "needs_human", "h", "P2", "t", False, 1.0,
+                                   last_human_ts=HUMAN_TS)
+        assert kept["act_disarmed"] is True, value
+    for value in (None, False):
+        facts = act_facts(session={"act_disarmed": value, "last_human_ts": HUMAN_TS})
+        assert clean_blockers(facts=facts) == [], value
+    assert clean_blockers(facts=act_facts(session={"last_human_ts": HUMAN_TS})) == []
+
+
+def test_f9_missing_workflow_key_and_exact_flag_types():
+    entry = make_arm()
+    del entry["workflow"]
+    assert arm_state(entry) == "arm_malformed"
+    for bad in (None, 0, 1, "", "yes", [], 2):
+        assert clean_blockers(stop_verify=bad) == ["A07_stop_verify_enabled"], ("stop_verify", bad)
+        assert clean_blockers(endpoint_override=bad) == ["A09_jev_endpoint_override"], ("endpoint", bad)
+    for bad in (None, "session_state_reset", {"a": 1}, 5):
+        assert clean_blockers(tags=bad) == ["A13_session_state_unreliable"], ("tags", bad)
+    assert clean_blockers(tags=("x",)) == [] and clean_blockers(tags=["x"]) == []
+
+
+def test_blocker_eval_error_has_its_own_code():
+    got = core.act_blockers({"settings": None}, {}, "armed", 5)
+    assert got == ["A99_blocker_eval_error"], got
+    assert core.act_blockers(None, None, "armed", 5) == ["A99_blocker_eval_error"]
+
+
+def test_a14_unknown_sources_and_a03_pinned():
+    for source in (None, "bogus", "", 5):
+        got = clean_blockers(facts=act_facts(override_source=source))
+        assert got == ["A14_settings_not_from_user_layer"], (source, got)
+    got = clean_blockers(facts=act_facts(binding_reason="mention_mtime_agree"))
+    assert got == ["A03_binding_not_exact"], got
+    assert act_facts(binding_reason="mention_mtime_agree")["session_id"] == \
+        act_facts(binding_reason="mention_mtime_agree")["artifact_session_id"]
 
 
 def main():
