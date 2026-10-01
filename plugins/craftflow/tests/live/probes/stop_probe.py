@@ -20,6 +20,7 @@ def main(argv):
     if len(argv) < 2:
         return 0
     path = argv[1]
+    record_only = len(argv) > 2 and argv[2] == "--record"  # LA-8: log extra payload fields, never block
     try:
         payload = json.loads(sys.stdin.read() or "{}")
         if not isinstance(payload, dict) or payload.get("hook_event_name") != "Stop":
@@ -31,9 +32,12 @@ def main(argv):
             seen = 0
         row = {"n": seen + 1, "stop_hook_active": payload.get("stop_hook_active"),
                "has_last_assistant_message": isinstance(payload.get("last_assistant_message"), str)}
+        if record_only:
+            row.update(payload_keys=sorted(payload.keys()), prompt_id=payload.get("prompt_id"),
+                       stop_reason=payload.get("stop_reason"))
         with open(path, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(row) + "\n")
-        if seen < BLOCK_FIRST:
+        if seen < BLOCK_FIRST and not record_only:
             sys.stdout.write(json.dumps({"decision": "block", "reason": REASON}))
     except (OSError, ValueError):
         return 0
