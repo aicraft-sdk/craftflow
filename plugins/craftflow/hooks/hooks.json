@@ -245,7 +245,7 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_stop_gate.py\"",
             "timeout": 5,
-            "statusMessage": "CRAFTFLOW opt-in stop gate (shadow; inert unless stop-gate.json enables it)"
+            "statusMessage": "CRAFTFLOW opt-in stop gate (inert unless stop-gate.json enables it; acts only when armed)"
           }
         ]
       }

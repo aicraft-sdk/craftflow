@@ -361,32 +361,67 @@ the router's Intent Routing table always win over any Jev hint (see `router-prot
 - Phase-boundary `/compact` prompt: after each BUILD phase exit (and at PLAN hand-off) the router runs the check (`skills/craftflow-router/references/context-boundary.md`). A `warn` is informational; a `critical` makes the router persist the workflow artifact and pause so you can run `/compact` and say "continue".
 - Every decision is logged as the `context_nudge` event (see `docs/craftflow-event-contract.md`); per-session state is kept under `.craftflow/state/context-nudge/`.
 
-## Optional: Stop gate (shadow)
+## Optional: Stop gate (shadow, plus armed continue)
 
-`craftflow_stop_gate.py` is an opt-in `Stop` hook that classifies each end-of-turn stop and logs what it *would* do (continue to the next approved phase, local commit, or wait for you). It is **shadow only** (SPEC-0018, ADR-0055): it never makes the agent continue and never commits. It always exits 0 (fail open) and does nothing unless `hook_event_name` is `Stop`.
+`craftflow_stop_gate.py` is an opt-in `Stop` hook that classifies each end-of-turn stop and logs what it *would* do (continue to the next approved phase, local commit, or wait for you). Slice 1 (SPEC-0018, ADR-0055) is shadow only. Slice 2 (SPEC-0019, ADR-0056) adds exactly one action: when mode is `on` AND you have armed it (below), it blocks the stop with a constant reason so the agent continues to the next already-approved phase. It never pushes, opens a PR, merges, commits or picks backlog work. It always exits 0 (fail open: any error means no output) and does nothing unless `hook_event_name` is `Stop`.
 
 Modes (`mode` key, shipped default `off` in `config/stop-gate.json`):
 
-- `off`: reads the two settings files and returns.
-- `audit`: evaluates hard rules H00-H15 and appends one row per stop to `.craftflow/state/stop-gate/events.jsonl`, plus one `plugin_stop_gate` log event. Rows never hold message text.
-- `on`: accepted but downgraded to `audit` in Slice 1 (tag `act_not_available`); nothing acts.
+- `off`: with no user settings file, exits before importing heavy modules and writes nothing.
+- `audit`: evaluates hard rules H00-H19 and appends one row per stop to `.craftflow/state/stop-gate/events.jsonl`, plus one `plugin_stop_gate` log event. Rows never hold message text.
+- `on`: audits exactly like `audit` and acts only when armed (mode tag `act_<arm_status>`, for example `act_not_armed` or `act_armed`). Without a valid arm it never blocks.
 
 Enable durably with `~/.claude/craftflow/stop-gate.json`, e.g. `{"mode": "audit"}`. `CRAFTFLOW_STOP_GATE_USER_CONFIG` points at another file (tests, diagnostics). Invalid or unknown keys are ignored and tagged in the row's `settings_tags`.
 
 | Key | Values | Default | Notes |
 |---|---|---|---|
-| `mode` | `off`, `audit`, `on` | `off` | `on` is downgraded to `audit` |
+| `mode` | `off`, `audit`, `on` | `off` | `on` acts only when armed |
 | `notify` | `off`, `desktop`, `push` | `off` | `push` needs the consent file (below) |
 | `notifyMinTurnSeconds` | 0-86400 | 300 | minimum turn length before a notification |
 | `jevKindThreshold` | 0.5-1.0 | 0.9 | minimum Jev kind confidence |
 | `jevNeedsHumanMax` | 0.0-0.5 | 0.2 | maximum Jev needs-human score |
 | `jevTimeoutSeconds` | 0.5-2.5 | 2.0 | Jev call budget |
 | `tailChars` | 200-4000 | 1500 | tail length used for text rules and Jev |
-| `maxAutoContinuesPerSession` | 0-50 | 5 | loop-guard budget (tag only in Slice 1) |
+| `maxAutoContinuesPerSession` | 0-50 | 5 | continue budget between human lines (H17; ACT uses the smaller of this and the arm value; 0 disables ACT) |
 | `intCursorMeaning` | `finished_count`, `one_based_current` | `finished_count` | plugin file only; ignored in the user file |
 | `jevText` | `true` | absent | consent file only |
 
 **Consent file.** `~/.claude/craftflow/stop-gate.json` read from the passwd home (not `$HOME`, not the env seam), without following symlinks, owned by you and at most 64 KiB, is the only place `jevText: true` and `notify: "push"` are honoured. The same path serves as the user settings file; a seam or `HOME`-redirected copy can set `mode`, `notify: "desktop"` and thresholds (local logging and banners only) but is ignored for `jevText` (tag `jev_text_seam_ignored`) and `push` (tag `notify_push_seam_ignored`, falls back to `desktop`). Accepted risk: an agent with file-write access can edit this file, so treat it as your consent, not a security boundary against the agent.
+
+**Arming continue ACT (SPEC-0019).** `on` never acts by itself. Run the arm CLI in your own terminal:
+
+```bash
+python3 scripts/craftflow_stop_gate_arm.py status                       # read-only; caveat human_turn_unchecked
+python3 scripts/craftflow_stop_gate_arm.py arm --workflow WF [--hours H]  # TTY only; --workflow required; 1-24 h, default 8
+python3 scripts/craftflow_stop_gate_arm.py disarm                       # works without a TTY
+```
+
+- `arm` needs a real TTY, a valid workflow id (`--workflow` is required), runs the report with `--scope jev`, refuses (exit 2) unless the GO criteria are met, and asks you to type the project folder name. The arm is per project (realpath of `CLAUDE_PROJECT_DIR` or the git toplevel) and expires after 1-24 h.
+- The arm is written only into the passwd-home consent file (key `actContinue`, atomic, mode 0600, symlinks refused, other keys preserved). The shipped plugin and tests never write your real consent file; an arm in the env seam or a `HOME`-redirected file is ignored (tag `act_arm_seam_ignored`).
+- GO stamp shape: `go.{at, stats, schemas, scope, jevKindThreshold, jevNeedsHumanMax, met}`. The arm also records `maxAutoContinuesPerSession`; ACT uses `min(arm value, settings value)` and refuses if you later loosen the Jev thresholds.
+- Arm first, THEN send your prompt: the consent file ctime must not be newer than your last genuine human line (`arm_after_last_human`). `status` cannot see the transcript, so it reports the caveat `human_turn_unchecked`.
+- The only autonomous action is continue: the hook prints `{"decision":"block","reason":<template>}` and exits 0. The reason is built in code from this constant and validated ids only (no message, Jev or artifact text ever enters it):
+
+> craftflow stop-gate: auto-continue %d/%d (armed by the user). The approved plan of workflow %s continues with phase %s. Run only phase %s under the craftflow router BUILD rules. Do not push, open a pull request, merge, or start any other work. If this phase needs the user, stop and say why.
+
+- Block output happens only when ALL hold: mode `on`; no hard rule hit; no act blocker; a Jev `would_continue` verdict marked `act_eligible`. The relay (needs a human) and continue (needs `would_continue`) are mutually exclusive. The session record is written before the block is printed and printed only if that write succeeded.
+- A negative human reply after an auto-continue disarms the session (A08); the reply text stays in memory only.
+
+**Hard rules H16-H19** (every mode, after H15): H16 `no_progress`; H17 `continue_budget` (applies only when `maxAutoContinuesPerSession >= 1`); H18 `checkpoint_phase` (the next or just-completed phase has a `checkpoint_type` other than `none`); H19 `stop_reason_not_end_turn` (a string `stop_reason` other than `end_turn`).
+
+**Act blockers A01-A17** (logged on every stop in `act_blockers`, consulted only for ACT): A01 mode not `on`; A02 not armed; A03 binding not exact (`binding_reason == session_match`, artifact `session_id` equals the payload `session_id`, and no newer `session_rebound`); A04 `checkpoint_type` missing; A05 not a Jev verdict; A06 human turn unknown; A07 stop-verify enabled; A08 disarmed after a negative reply; A09 `CRAFTFLOW_JEV_ENDPOINT` set; A10 no session id; A11 tail already acted on; A12 phase or workflow id unrenderable; A13 session record unreliable; A14 settings not from the user layer; A15 budget zero or spent; A16 `stop_reason` not an explicit string (H19 needs an explicit `end_turn`); A17 tail truncated (1 MiB) after an act.
+
+**Limits and accepted residuals (friction, not security).** The TTY check and typed confirmation are friction; an agent shell can bypass a TTY (for example with `script`), `events.jsonl` is repo-writable so seeded rows could fake a GO, and the consent file is agent-writable. Accepted residuals:
+
+- the session record is agent-writable (HIGH-3), so a hostile agent could reset the counter; A13 only catches unreliable records it can see;
+- a human line can be forged in the transcript (HIGH-2); only a future-timestamp cap applies;
+- an artifact `worktree_path` can steer the git facts (MEDIUM-4);
+- residual self-arm at the next human turn (R2/F8): an agent that arms itself before your next prompt is stopped only by the ctime rule, the 24 h maximum and project scoping;
+- negative-reply detection reads a tail window, and a 1 MiB truncated transcript trips the truncation blockers (A17), which fail closed;
+- the push relay is skipped under `stop_hook_active`, so a push user is not notified when an auto-continue chain ends (relay at chain end, A9, is deferred);
+- a repository `.claude/settings.json` env block can set `CRAFTFLOW_JEV_ENDPOINT`; ACT only refuses while it is set (A09), the Jev client fix is out of scope;
+- after `/clear` or in a new session the binding is `no_live_candidate` until the router restamps `session_id`, so ACT waits (safe direction);
+- ACT is inert until shadow data exists: GO cannot be met with zero rows, so `arm` refuses.
 
 **Privacy.** When `jevText` is true and Jev is active, the last up to `tailChars` characters of the assistant's final message, after credential masking, plus the workflow type and whether a next phase exists, are sent to api.typesafe.ai for classification. Nothing is stored locally; decision records hold only labels, scores, lengths and a short hash.
 

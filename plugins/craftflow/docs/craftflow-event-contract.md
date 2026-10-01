@@ -278,15 +278,22 @@ Shape (abridged):
 
 - Emitter: `scripts/craftflow_stop_gate.py` (`main`), after the shadow row is appended to
   `.craftflow/state/stop-gate/events.jsonl`. Never emitted in mode `off`.
-- Trigger: one per `Stop` evaluated in mode `audit` (or `on`, downgraded to `audit`).
+- Trigger: one per `Stop` evaluated in mode `audit` or `on`.
 - Fail-open: the hook always exits 0.
 - No `event` key in the payload.
 - Decision payload: `decision` (`needs_human`, `would_continue`, `would_commit`), `wf` (string or
-  `null`), `mode`, `rule_hits` (list of `H##_...` codes), `row_kind` (`stop`, `relay_followup` or `error`).
+  `null`), `mode`, `rule_hits` (list of `H##_...` codes), `row_kind` (`stop`, `relay_followup` or `error`), `acted`
+  (boolean; true only when the hook printed a continue block, SPEC-0019). Armed-continue details live in the
+  row (`act_blockers`, `arm_status`), not in this event.
 - Config payload (same event name): `config_error` (`corrupt`, `unreadable`, `too_large`,
   `home_unresolved`, `not_object`) and `source: "user"`, when the user settings file is unusable.
 - Related event `plugin_stop_gate_error` (payload `exc`: exception class name only) is logged when a hook
-  failure could not be recorded as an `error` row (hook inert, or the row write itself failed).
+  failure could not be recorded as an `error` row (hook inert, or the row write itself failed), or, with
+  `acted_undelivered: true`, when a continue block was recorded but writing it to stdout failed (the host never
+  saw it).
+- Related workflow event `session_rebound` (written by the router to the workflow `events.jsonl`, not a hook
+  log event; fields `from`, `to` session ids): the router re-stamped the artifact `session_id` on resume. The
+  stop gate treats a rebound newer than the last human line as blocker A03.
 
 ```json
 {"decision": "needs_human", "wf": null, "mode": "audit", "rule_hits": ["H01_no_bound_workflow"], "row_kind": "stop"}
@@ -297,15 +304,17 @@ Shape (abridged):
 One JSON object per line with exactly these keys (`ROW_KEYS` in `scripts/craftflow_stop_gate_core.py`;
 unknown keys are dropped, strings are cut to 200 chars, never message text):
 
-`schema` (1), `row_kind` (`stop`, `relay_followup`, `error`), `ts`, `session_id`, `transcript_path`,
+`schema` (2; the report accepts 1 and 2), `row_kind` (`stop`, `relay_followup`, `error`), `ts`, `session_id`, `transcript_path`,
 `mode`, `mode_tag`, `stop_hook_active`, `permission_mode`, `wf`, `binding_reason`, `phase_cursor`,
 `cursor_case`, `cursor_resolution`, `rule_hits`, `loop_guards`, `commit_blockers`, `jev_text_source`,
 `last_human_ts`, `heuristic_kind`, `heuristic_verdict`, `jev_status`, `jev_kind`, `jev_kind_conf`,
-`jev_needs_human`, `jev_latency_ms`, `jev_usage`, `verdict`, `verdict_source`, `act_eligible`
-(always false in Slice 1), `would_action`, `notify`, `notify_status`, `turn_seconds`,
-`turn_seconds_lower_bound`, `message_chars`, `tail_sha` (short hash), `hook_ms`, `settings_tags`.
+`jev_needs_human`, `jev_latency_ms`, `jev_usage`, `verdict`, `verdict_source`, `act_eligible`, `would_action`, `notify`, `notify_status`, `turn_seconds`,
+`turn_seconds_lower_bound`, `message_chars`, `tail_sha` (short hash), `hook_ms`, `settings_tags`, and the
+schema-2 keys `act_blockers` (A01..A17 codes), `acted` (true only when a continue block was printed),
+`arm_status`, `stop_reason`, `continues_since_human`. `act_eligible` is true only for a clean Jev
+`would_continue` verdict.
 
-List-valued keys: `rule_hits`, `loop_guards`, `commit_blockers`, `settings_tags`. An `error` row carries
+List-valued keys: `rule_hits`, `loop_guards`, `commit_blockers`, `settings_tags`, `act_blockers`. An `error` row carries
 only `ts`, `session_id`, `mode`, `hook_ms` and `settings_tags: ["hook_error:<ExceptionClassName>"]`.
 
 ## Keeping this doc honest
