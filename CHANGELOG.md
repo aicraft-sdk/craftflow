@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.24.0] - 2026-10-01
+
+### Features
+
+- stop-gate continue ACT wiring
+- stop-gate report jev scope and arm CLI
+- stop-gate ACT decision core
+- router stamps session_id into workflow artifacts
+
+### Fixes
+
+- harden stop-gate ACT hook
+- harden stop-gate arm CLI status and writes
+- harden stop-gate ACT core
+- harden session_id stamping and resume rebind
+- stop-gate fast path fails open on unreadable stdin
+
+### Performance
+
+- stop-gate off mode exits before heavy imports
+
+### Documentation
+
+- stop-gate continue ACT docs and disclosures
+
+### Tests
+
+- stop-gate continue ACT live proof
+
 ## [1.23.0] - 2026-10-01
 
 ### Features
