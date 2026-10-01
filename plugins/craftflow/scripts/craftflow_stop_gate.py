@@ -616,7 +616,12 @@ def stop_verify_enabled():
 
 
 def jev_endpoint_override_set(env):
-    """Exact bool for blocker A09: ``CRAFTFLOW_JEV_ENDPOINT`` is set (non-empty) in the hook environment."""
+    """Exact bool for blocker A09: ``CRAFTFLOW_JEV_ENDPOINT`` is set (non-empty) in the hook environment.
+
+    The Jev client no longer reads this variable (DD-14), so it cannot redirect
+    the classifier. A09 is kept as a belt-and-braces refusal (defence in depth):
+    ACT still declines while the variable is present.
+    """
     return bool(env.get("CRAFTFLOW_JEV_ENDPOINT"))
 
 

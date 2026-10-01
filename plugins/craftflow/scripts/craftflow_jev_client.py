@@ -22,9 +22,14 @@ Design constraints (see docs/plans/2026-09-19-plan-optional-jev-typesafe-routi-p
   `~/.claude/craftflow/jev-endpoint.json` (`{"endpoint": "<url>"}`), located
   via the passwd-database home (never `$HOME`), read only on the network
   path (after a cache miss), and honored solely when its host is loopback
-  (127.0.0.1, localhost, ::1). A non-loopback value is ignored and logged as
-  `endpoint_override_ignored`; a missing/unreadable/malformed file yields
-  `ENDPOINT` (fail open).
+  (127.0.0.1, localhost, ::1). The file must be a regular file (no FIFO,
+  no symlink) of at most 4096 bytes. The URL must be http or https with a
+  loopback host. Redirects are never followed, so a loopback listener cannot
+  bounce the bearer key elsewhere. A non-loopback or invalid value is
+  ignored and logged as `endpoint_override_ignored`; an unreadable file is
+  logged as `endpoint_file_unreadable`; an unresolved passwd home is logged
+  as `endpoint_home_unresolved`. In every such case the client uses
+  `ENDPOINT` (fail open). The file is a test seam, not for production use.
 """
 from __future__ import annotations
 
