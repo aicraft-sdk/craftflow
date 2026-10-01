@@ -19,6 +19,7 @@ import re
 import stat
 import subprocess
 import sys
+import threading
 import time
 
 import craftflow_context_nudge_compact as cc
@@ -309,10 +310,91 @@ def _git_root(wf_facts, payload, root):
     return str(root)
 
 
-def _jev_status(settings, rule_hits):
+def _jev_active(env, session_id, root):
+    """(active, cfg): the OR-gate of craftflow_jev_prompt_hint.session_is_active, re-implemented locally."""
+    import craftflow_jev_config as jcfg
+    import craftflow_jev_session_cache as jcache
+    cfg, _decisions = jcfg.load_config(plugin_config_dir() / "jev.json")
+    if jcfg.is_active(cfg, env):
+        return True, cfg
+    if jcfg.consent_status(cfg) != "granted" or not jcfg.api_key(env) or not session_id:
+        return False, cfg
+    cached = jcache.read_session_status(state_root(root), session_id)
+    return bool(cached and cached.get("active") is True), cfg
+
+
+def _jev_failure_status(reason):
+    """jev_status for a call that returned None: timeout | http_error | failed."""
+    if reason.get("status") is not None:
+        return "http_error"
+    return "timeout" if reason.get("error") in ("timeout", "TimeoutError") else "failed"
+
+
+def _call_jev(state, cfg, key, settings, remaining):
+    """(answers|None, status, latency_ms, usage): the client call in a daemon thread under a hard wall-clock join."""
+    import craftflow_jev_client as client
+    left = remaining()
+    budget = min(2.5, left - 1.0)
+    box, reason = {}, {}
+
+    def worker():
+        try:
+            box["result"] = client.call(
+                state, core.jev_questions(), api_key=key, model=cfg["model"],
+                timeout=min(settings["jevTimeoutSeconds"], budget), cache_dir=None,
+                total_budget_seconds=budget, failure_reason_out=reason)
+        except Exception:  # noqa: BLE001 - the client never raises; this keeps the thread silent regardless
+            box["result"] = None
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    thread.join(timeout=budget)
+    if thread.is_alive():
+        return None, "timeout", None, None  # abandoned: daemon threads do not block interpreter exit
+    result = box.get("result")
+    if not isinstance(result, dict):
+        return None, _jev_failure_status(reason), None, None
+    return result.get("answers"), "ok", result.get("latency_ms"), result.get("usage")
+
+
+def jev_layer(settings, rule_hits, env, session_id, root, message, wf_facts, has_next, remaining):
+    """(jev_dict|None, fields): optional Jev text classification (DD-11). Fails open to (None, status only)."""
+    fields = {"jev_status": "not_needed", "jev_kind": None, "jev_kind_conf": None, "jev_needs_human": None,
+              "jev_latency_ms": None, "jev_usage": None}
     if rule_hits:
-        return "not_needed"
-    return "not_consented" if not settings.get("jevText") else "inactive"
+        return None, fields
+    if not settings.get("jevText"):
+        fields["jev_status"] = "not_consented"
+        return None, fields
+    try:
+        active, cfg = _jev_active(env, session_id, root)
+        if not active:
+            fields["jev_status"] = "inactive"
+            return None, fields
+        if not core.should_call_jev(True, True, rule_hits, remaining()):
+            fields["jev_status"] = "skipped_deadline"
+            return None, fields
+        import craftflow_jev_config as jcfg
+        key = jcfg.api_key(env)
+        tail, truncated = core.jev_tail(message, settings["tailChars"], key)
+        if tail is None:
+            fields["jev_status"] = "message_too_large" if len(message) > core.JEV_RAW_CAP else "failed"
+            return None, fields
+        state = core.jev_state(tail, truncated, wf_facts["workflow_type"] if wf_facts else "", has_next)
+        answers, status, latency, usage = _call_jev(state, cfg, key, settings, remaining)
+        fields["jev_status"], fields["jev_latency_ms"], fields["jev_usage"] = status, latency, usage
+        if status != "ok":
+            return None, fields
+        gated = core.gate_jev_answers(answers)
+        if gated is None:
+            fields["jev_status"] = "malformed"
+            return None, fields
+        fields.update(jev_kind=gated["kind"], jev_kind_conf=gated["kind_conf"],
+                      jev_needs_human=gated["needs_human"])
+        return gated, fields
+    except Exception:  # noqa: BLE001 - fail open: a Jev problem never changes the hook's outcome
+        fields.update(jev_status="failed", jev_kind=None, jev_kind_conf=None, jev_needs_human=None)
+        return None, fields
 
 
 def run(payload, env, t0=None):
@@ -357,8 +439,11 @@ def run(payload, env, t0=None):
     blockers = core.commit_blockers(facts)
     guards = core.loop_guards(facts, session)
     kind, _signals = core.heuristic_kind(message)
-    verdict = core.decide(rule_hits, blockers, kind, None, settings)
+    heuristic_verdict = core.decide(rule_hits, blockers, kind, None, settings)
     nxt = core.next_phase(facts) if wf_facts is not None else None
+    jev, jev_fields = jev_layer(settings, rule_hits, env, session_id, root, message, wf_facts,
+                                bool(nxt and nxt["phase"] is not None), remaining)
+    verdict = core.decide(rule_hits, blockers, kind, jev, settings) if jev else heuristic_verdict
     cursor = wf_facts["phase_cursor"] if wf_facts is not None else None
     tail_sha = (hashlib.sha256(message[-settings["tailChars"]:].encode("utf-8", "replace")).hexdigest()[:16]
                 if message.strip() else None)
@@ -374,7 +459,7 @@ def run(payload, env, t0=None):
         cursor_case=nxt["case"] if nxt else None, cursor_resolution=nxt["resolution"] if nxt else None,
         rule_hits=rule_hits, loop_guards=guards, commit_blockers=blockers,
         jev_text_source=settings.get("jev_text_source"), last_human_ts=scan["last_human_ts"],
-        heuristic_kind=kind, heuristic_verdict=verdict["verdict"], jev_status=_jev_status(settings, rule_hits),
+        heuristic_kind=kind, heuristic_verdict=heuristic_verdict["verdict"], **jev_fields,
         verdict=verdict["verdict"], verdict_source=verdict["verdict_source"],
         act_eligible=verdict["act_eligible"], would_action=verdict["would_action"],
         notify=settings["notify"], turn_seconds=turn_seconds, turn_seconds_lower_bound=lower_bound,

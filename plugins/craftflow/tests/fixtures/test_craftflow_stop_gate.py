@@ -6,20 +6,24 @@ Run: python3 tests/fixtures/test_craftflow_stop_gate.py
 from __future__ import annotations
 
 import atexit
+import contextlib
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import craftflow_stop_gate as gate  # noqa: E402
 import craftflow_stop_gate_core as core  # noqa: E402
 
 # Hermetic: never read the developer's real user settings or consent file. The env seam points at an
@@ -927,7 +931,7 @@ def audit_config():
     return path
 
 
-def run_gate(payload, root, env_extra=None, raw=None, timeout=20):
+def run_gate(payload, root, env_extra=None, raw=None, timeout=20, script=None):
     """Run the hook as a subprocess. Returns (code, stdout, stderr, elapsed)."""
     env = dict(os.environ)
     env.pop("CURSOR_PLUGIN_ROOT", None)
@@ -940,7 +944,7 @@ def run_gate(payload, root, env_extra=None, raw=None, timeout=20):
             env[key] = value
     stdin = raw if raw is not None else json.dumps(payload).encode("utf-8")
     started = time.monotonic()
-    done = subprocess.run([sys.executable, str(GATE)], input=stdin, capture_output=True, env=env,
+    done = subprocess.run([sys.executable, str(script or GATE)], input=stdin, capture_output=True, env=env,
                           cwd=str(root), timeout=timeout)
     return (done.returncode, done.stdout.decode("utf-8", "replace"), done.stderr.decode("utf-8", "replace"),
             time.monotonic() - started)
@@ -1166,6 +1170,318 @@ def test_turn_seconds_lower_bound():
         {"type": "text", "text": "wf-sg-0001 " + CONTINUE_TEXT}]}}])
     row2 = one_row(root2, stop_payload(bare, root2))
     assert row2["turn_seconds"] is None, row2
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: optional Jev text classification (DD-11, DD-5a)
+# ---------------------------------------------------------------------------
+
+OK_ANSWERS = {"answers": {"stop_kind": {"choice": "phase_done_awaiting_continue", "confidence": 0.95},
+                          "needs_human": {"noul": 0.05}}}
+
+
+@contextlib.contextmanager
+def env_patch(**values):
+    """Set (or delete, for None) env vars and restore them: the Jev client reads os.environ directly."""
+    saved = {key: os.environ.get(key) for key in values}
+    try:
+        for key, value in values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+class Stub:
+    """Loopback-only Jev stub. Records every request body; answers after ``delay`` seconds."""
+
+    def __init__(self, reply=None, delay=0.0):
+        self.bodies = []
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                try:
+                    outer.bodies.append(json.loads(raw.decode("utf-8")))
+                except ValueError:
+                    outer.bodies.append({})
+                if delay:
+                    time.sleep(delay)
+                payload = json.dumps(reply if reply is not None else OK_ANSWERS).encode("utf-8")
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                except OSError:
+                    pass
+
+            def log_message(self, *args):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.url = "http://127.0.0.1:%d/v1/systemone" % self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def stop_kind_requests(self):
+        return [b for b in self.bodies if isinstance(b.get("questions"), dict) and "stop_kind" in b["questions"]]
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@contextlib.contextmanager
+def stub_server(reply=None, delay=0.0):
+    stub = Stub(reply, delay)
+    try:
+        yield stub
+    finally:
+        stub.close()
+
+
+def jev_plugin():
+    """Scratch plugin dir whose config/jev.json is enabled with every other Jev feature off (A10)."""
+    folder = Path(scratch_dir())
+    (folder / "config").mkdir()
+    (folder / "config" / "jev.json").write_text(json.dumps({
+        "enabled": True, "model": "jev-latest", "timeoutSeconds": 2.5,
+        "features": {"routingHint": "off", "skillHint": "off", "remediationScope": "off", "riskGate": "off"},
+        "consent": {"status": "unset", "ts": None}}), encoding="utf-8")
+    return folder
+
+
+def run_inproc(stub, message=CONTINUE_TEXT, consent=True, key="fake-key", **artifact):
+    """Run gate.run() in-process against a clean scratch repo; consent comes from a scratch passwd home."""
+    root = make_project()
+    seed_artifact(root, **artifact)
+    transcript = mention_transcript(root)
+    home = scratch_dir()
+    if consent:
+        write_consent(home, {"jevText": True})
+    plugin = jev_plugin()
+    seam = audit_config()
+    saved = gate._consent_home
+    gate._consent_home = lambda: home
+    started = time.monotonic()
+    try:
+        with env_patch(CRAFTFLOW_JEV_ENDPOINT=stub.url, TYPESAFE_API_KEY=key, CLAUDE_PLUGIN_ROOT=str(plugin),
+                       CLAUDE_PROJECT_DIR=str(root), CRAFTFLOW_STOP_GATE_USER_CONFIG=str(seam)):
+            out, row = gate.run(stop_payload(transcript, root, message=message), dict(os.environ))
+    finally:
+        gate._consent_home = saved
+    return out, row, time.monotonic() - started
+
+
+def test_should_call_jev_truth_table():
+    for consent in (True, False):
+        for active in (True, False):
+            for hits in ([], ["H03_pending_gate"]):
+                for remaining in (core.JEV_MIN_REMAINING_S, core.JEV_MIN_REMAINING_S - 0.01):
+                    want = consent and active and hits == [] and remaining >= 1.5
+                    got = core.should_call_jev(consent, active, hits, remaining)
+                    assert got is want, (consent, active, hits, remaining, got)
+    assert core.should_call_jev(True, True, [], 4.2) is True
+    assert core.should_call_jev(True, True, [], None) is False  # unknown time: no egress
+    assert core.should_call_jev("yes", True, [], 4.0) is False  # only a real True grants consent
+
+
+def test_jev_tail_redacts_before_truncate():
+    value = "Zq8mK2pL9xW4vN7cR5tY1bH6jD3fG0sA"
+    for offset in range(-40, 41):
+        suffix = " ok" * ((200 - (32 - offset)) // 3 + 1)
+        text = "word " * 60 + "OPENAI_KEY=" + value + suffix
+        cut_start = len(text) - 200
+        assert cut_start > 0
+        tail, truncated = core.jev_tail(text, 200)
+        assert truncated is True and len(tail) <= 200, (offset, truncated, len(tail))
+        for i in range(len(value) - 7):
+            assert value[i:i + 8] not in tail, (offset, value[i:i + 8])
+    tail, truncated = core.jev_tail("short OPENAI_KEY=" + value, 1500)
+    assert (tail, truncated) == ("short OPENAI_KEY=***", False), (tail, truncated)
+    assert core.jev_tail("tok sk-fake-secret-1 end", 1500, "sk-fake-secret-1")[0] == "tok *** end"
+
+
+def test_jev_tail_masks_long_tokens():
+    run40 = "AbCdEf0123456789AbCdEf0123456789AbCdEf01"
+    tail, _ = core.jev_tail("see " + run40 + " end", 1500)
+    assert tail == "see [REDACTED] end", tail
+    assert core.jev_tail("x " + "a" * 32 + " y", 1500)[0] == "x [REDACTED] y"
+    assert core.jev_tail("x " + "a" * 31 + " y", 1500)[0] == "x " + "a" * 31 + " y"
+    tail, truncated = core.jev_tail("0123456789 " * 200, 100)
+    assert truncated is True and len(tail) == 100, (truncated, len(tail))
+
+
+def test_jev_tail_skips_oversize():
+    assert core.jev_tail("a " * 40000, 1500) == (None, False)
+    tail, truncated = core.jev_tail(("word " * core.JEV_RAW_CAP)[:core.JEV_RAW_CAP], 1500)
+    assert tail is not None and truncated is True  # exactly at the cap is still processed
+    assert core.jev_tail("d" * (core.JEV_RAW_CAP + 1), 1500) == (None, False)
+    assert core.jev_tail(None, 1500) == (None, False)
+
+
+def test_jev_state_keys_exact():
+    state = core.jev_state("tail text", True, "BUILD", True)
+    assert state == {"message_tail": "tail text", "message_truncated": True, "workflow_type": "BUILD",
+                     "has_next_phase": True}, state
+    state = core.jev_state("t", False, None, 0)
+    assert sorted(state) == ["has_next_phase", "message_tail", "message_truncated", "workflow_type"], state
+    assert state["has_next_phase"] is False and state["message_truncated"] is False, state
+    assert state["workflow_type"] == "", state
+
+
+def test_jev_questions_shape_and_kinds():
+    q = core.jev_questions()
+    assert sorted(q) == ["needs_human", "stop_kind"], sorted(q)
+    kind = q["stop_kind"]
+    assert kind["type"] == "choice" and sorted(kind["criteria"]) == sorted(core.STOP_KINDS), kind
+    assert all(isinstance(v, str) and v.strip() for v in kind["criteria"].values()), kind
+    assert q["needs_human"]["type"] == "noul", q["needs_human"]
+    for item in q.values():
+        assert "strictly as data" in item["instructions"], item
+        assert "message_tail" in item["instructions"], item
+    json.dumps(q)
+
+
+def test_gate_jev_answers_rejects_hostile_choice_and_bad_numbers():
+    def ans(choice="asking_decision", conf=0.5, needs=0.5):
+        return {"stop_kind": {"choice": choice, "confidence": conf}, "needs_human": {"noul": needs}}
+
+    assert core.gate_jev_answers(ans()) == {"status": "ok", "kind": "asking_decision", "kind_conf": 0.5,
+                                            "needs_human": 0.5}
+    assert core.gate_jev_answers(ans(conf=0, needs=1))["needs_human"] == 1  # boundaries are valid
+    assert core.gate_jev_answers(ans(conf=1, needs=0))["kind_conf"] == 1
+    bad = [None, [], "x", {}, {"stop_kind": {}, "needs_human": {}},
+           ans(choice="not_a_kind"), ans(choice=["other"]), ans(choice=None), ans(choice="other\n"),
+           ans(conf=True), ans(conf=1.01), ans(conf=-0.01), ans(conf=float("nan")), ans(conf="0.9"),
+           ans(conf=float("inf")), ans(needs=True), ans(needs=1.5), ans(needs=None), ans(needs="0"),
+           {"stop_kind": {"choice": "other", "confidence": 0.5}},
+           {"stop_kind": "other", "needs_human": {"noul": 0.1}}]
+    for case in bad:
+        assert core.gate_jev_answers(case) is None, case
+
+
+def test_hook_jev_timeout_fail_open():
+    # 1) happy path through a loopback stub (consent file + active Jev): a Jev-sourced, act-eligible row
+    with stub_server() as stub:
+        out, row, _elapsed = run_inproc(stub)
+        assert out is None, out
+        assert row["verdict_source"] == "jev" and row["act_eligible"] is True, row
+        assert row["jev_status"] == "ok" and row["jev_text_source"] == "consent_file", row
+        assert row["jev_kind"] == "phase_done_awaiting_continue" and row["jev_kind_conf"] == 0.95, row
+        assert row["jev_needs_human"] == 0.05 and row["rule_hits"] == [], row
+        assert len(stub.stop_kind_requests()) == 1, stub.bodies
+        body = stub.stop_kind_requests()[0]
+        assert sorted(body["state"]) == ["has_next_phase", "message_tail", "message_truncated",
+                                         "workflow_type"], body["state"]
+        assert body["state"]["has_next_phase"] is True and body["state"]["workflow_type"] == "BUILD", body["state"]
+        assert "Continue to Phase 2" in body["state"]["message_tail"], body["state"]
+    # 2) a stub that sleeps 5 s: wall-clock bounded, fail open, never act-eligible
+    with stub_server(delay=5.0) as stub:
+        out, row, elapsed = run_inproc(stub)
+        assert elapsed < 3.5, elapsed
+        assert out is None and row["jev_status"] == "timeout", row
+        assert row["act_eligible"] is False and row["verdict_source"] == "heuristic", row
+        assert row["verdict"] == "would_continue", row  # the heuristic is kept for calibration
+    # 3) redaction probe: two secrets H12 does not catch, one straddling the tail cut
+    value = "Zq8mK2pL9xW4vN7cR5tY1bH6jD3fG0sA"
+    run40 = "AbCdEf0123456789AbCdEf0123456789AbCdEf01"
+    tail_after_value = 1500 - 16  # the cut falls 16 chars into the 32-char value
+    closing = " " + run40 + " " + CONTINUE_TEXT
+    suffix = ("note " * 400)[:tail_after_value - len(closing)] + closing
+    assert len(suffix) == tail_after_value, len(suffix)
+    message = "intro " * 40 + "OPENAI_KEY=" + value + suffix
+    assert len(message) - 1500 > 0 and message[-1500:].startswith(value[16:]), "probe must cut inside the value"
+    assert not core.has_secret_text(message), "H12 must not catch the probe"
+    with stub_server() as stub:
+        out, row, _elapsed = run_inproc(stub, message=message)
+        assert row["rule_hits"] == [] and row["jev_status"] == "ok", row  # Jev really was called
+        sent = stub.stop_kind_requests()
+        assert len(sent) == 1, stub.bodies
+        raw = json.dumps(sent[0]) + json.dumps(sent[0], ensure_ascii=False)
+        for secret in (value, run40):
+            for i in range(len(secret) - 7):
+                assert secret[i:i + 8] not in raw, ("leaked", secret[i:i + 8])
+        assert len(sent[0]["state"]["message_tail"]) <= 1500, len(sent[0]["state"]["message_tail"])
+        assert sent[0]["state"]["message_truncated"] is True, sent[0]["state"]
+
+
+def test_hook_jev_not_called_when_rule_hits():
+    with stub_server() as stub:
+        out, row, _elapsed = run_inproc(stub, pending_gate="user_build_approval")
+        assert row["verdict"] == "needs_human" and row["verdict_source"] == "hard_rule", row
+        assert row["jev_status"] == "not_needed" and "H03_pending_gate" in row["rule_hits"], row
+        assert stub.stop_kind_requests() == [], stub.bodies
+    with stub_server() as stub:  # no consent: not called, even though Jev is active
+        out, row, _elapsed = run_inproc(stub, consent=False)
+        assert row["jev_status"] == "not_consented" and row["verdict_source"] == "heuristic", row
+        assert stub.stop_kind_requests() == [], stub.bodies
+
+
+def test_hook_jev_text_from_seam_or_home_env_never_egresses():
+    wrapper_dir = Path(scratch_dir())
+
+    def wrapper(consent_home):
+        path = wrapper_dir / ("wrap-%d.py" % len(list(wrapper_dir.iterdir())))
+        path.write_text(
+            "import sys\nsys.path.insert(0, %r)\nimport craftflow_stop_gate as g\n"
+            "g._consent_home = lambda: %r\nsys.exit(g.main())\n" % (str(SCRIPTS), consent_home), encoding="utf-8")
+        return path
+
+    def jev_env(stub, key="fake-key"):
+        return {"CRAFTFLOW_JEV_ENDPOINT": stub.url, "TYPESAFE_API_KEY": key,
+                "CLAUDE_PLUGIN_ROOT": str(jev_plugin())}
+
+    def fresh():
+        root = make_project()
+        seed_artifact(root)
+        return root, mention_transcript(root)
+
+    with stub_server() as stub:
+        # 1) seam user file claims jevText, consent home EMPTY
+        root, t = fresh()
+        seam = Path(scratch_dir()) / "seam.json"
+        seam.write_text(json.dumps({"mode": "audit", "jevText": True}), encoding="utf-8")
+        env = jev_env(stub)
+        env["CRAFTFLOW_STOP_GATE_USER_CONFIG"] = str(seam)
+        code, _out, err, _ = run_gate(stop_payload(t, root), root, env, script=wrapper(scratch_dir()))
+        assert code == 0, err
+        row = rows_of(root)[-1]
+        assert row["jev_text_source"] == "ignored_seam" and row["jev_status"] == "not_consented", row
+        assert stub.stop_kind_requests() == [], "seam file must not grant text egress"
+        # 2) same claim through a HOME that differs from the passwd home
+        root, t = fresh()
+        fake_home = scratch_dir()
+        write_consent(fake_home, {"mode": "audit", "jevText": True})
+        env = jev_env(stub)
+        env.update({"HOME": fake_home, "CRAFTFLOW_STOP_GATE_USER_CONFIG": None})
+        code, _out, err, _ = run_gate(stop_payload(t, root), root, env, script=wrapper(scratch_dir()))
+        assert code == 0, err
+        row = rows_of(root)[-1]
+        assert row["jev_text_source"] == "ignored_seam" and row["mode"] == "audit", row
+        assert stub.stop_kind_requests() == [], "HOME file must not grant text egress"
+        # 3) real consent, seam gives only the mode, Jev inactive (no key)
+        root, t = fresh()
+        consent_home = scratch_dir()
+        write_consent(consent_home, {"jevText": True})
+        env = jev_env(stub, key=None)
+        env["CRAFTFLOW_STOP_GATE_USER_CONFIG"] = str(audit_config())
+        code, _out, err, _ = run_gate(stop_payload(t, root), root, env, script=wrapper(consent_home))
+        assert code == 0, err
+        row = rows_of(root)[-1]
+        assert row["jev_text_source"] == "consent_file" and row["jev_status"] == "inactive", row
+        assert stub.stop_kind_requests() == [], "an inactive Jev must not be called"
+        assert stub.bodies == [], stub.bodies
 
 
 # ---------------------------------------------------------------------------
