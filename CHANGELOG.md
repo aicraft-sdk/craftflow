@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.23.0] - 2026-10-01
+
+### Features
+
+- stop-gate calibration report and offline replay
+- stop-gate desktop notification and consent-gated push relay
+- stop-gate optional Jev text classification (separate consent, fail-open)
+- stop-gate hook in shadow mode (off by default)
+- stop-gate taxonomy heuristic, verdict combiner, notify/relay/session math
+- stop-gate pure core: settings, artifact facts, hard rules
+
+### Fixes
+
+- stop-gate review remediation (error rows, report join, relay cap, git fail-closed)
+
+### Documentation
+
+- stop-gate shadow mode docs and event contract
+
+### Tests
+
+- live proof and timing for stop-gate shadow mode
+
 ## [1.22.0] - 2026-09-30
 
 ### Features
