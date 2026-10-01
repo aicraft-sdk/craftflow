@@ -98,10 +98,12 @@ def test_parse_settings_defaults_off():
     assert tags == [], tags
 
 
-def test_parse_settings_on_downgraded_to_audit_with_tag():
+def test_parse_settings_on_is_kept():
+    # Slice 2 (SPEC-0019): the stale Slice-1 requirement "on is downgraded to audit" is replaced; `on` is kept
+    # and only an arm in the passwd-home consent file lets the shell act (act_arm_seam_ignored covers the seam).
     settings, tags = core.parse_settings({"mode": "off"}, {"mode": "on"}, "passwd")
-    assert settings["mode"] == "audit", settings
-    assert tags == ["act_not_available"], tags
+    assert settings["mode"] == "on", settings
+    assert tags == [], tags
     settings, tags = core.parse_settings({"mode": "audit"}, None)
     assert settings["mode"] == "audit" and tags == [], (settings, tags)
 
@@ -796,6 +798,7 @@ def test_loop_guards_and_session_update():
     assert core.loop_guards(facts, four) == []
     assert core.loop_guards(loop_facts(active=False, human="C"), state) == []  # a new human turn resets
     assert not any(code.startswith("L") for code in core.hard_rules(facts))
+    assert "H17_continue_budget" in core.hard_rules(dict(facts, session=state))  # SPEC-0019: L2 is promoted to H17
     base = run_decide(heuristic="phase_done_awaiting_continue")
     assert base["verdict"] == "would_continue" and "L2_budget" not in base["reasons"], base
     # L1: needs stop_hook_active, a recorded continue or pending relay, and unchanged HEAD and cursor
@@ -816,14 +819,15 @@ EXPECTED_ROW_KEYS = (
     "loop_guards", "commit_blockers", "jev_text_source", "last_human_ts", "heuristic_kind", "heuristic_verdict",
     "jev_status", "jev_kind", "jev_kind_conf", "jev_needs_human", "jev_latency_ms", "jev_usage", "verdict",
     "verdict_source", "act_eligible", "would_action", "notify", "notify_status", "turn_seconds",
-    "turn_seconds_lower_bound", "message_chars", "tail_sha", "hook_ms", "settings_tags")
+    "turn_seconds_lower_bound", "message_chars", "tail_sha", "hook_ms", "settings_tags",
+    "act_blockers", "acted", "arm_status", "stop_reason", "continues_since_human")
 
 
 def test_build_row_key_set_frozen():
     assert tuple(core.ROW_KEYS) == EXPECTED_ROW_KEYS, core.ROW_KEYS
     row = core.build_row()
     assert tuple(row) == EXPECTED_ROW_KEYS, tuple(row)
-    assert row["schema"] == 1 and row["row_kind"] == "stop", row
+    assert row["schema"] == 2 and row["row_kind"] == "stop", row
     assert row["rule_hits"] == [] and row["loop_guards"] == [] and row["commit_blockers"] == [], row
     assert row["act_eligible"] is False and row["would_action"] == "none", row
     full = core.build_row(row_kind="relay_followup", verdict=None, wf="wf-a", rule_hits=["H01_x"],
@@ -2226,7 +2230,10 @@ def test_r11_report_reads_tail_when_capped():
 
 def test_r12_all_scripts_free_of_legacy_literal():
     needle = ".claude" + "/craftflow"
-    for name in ("craftflow_stop_gate.py", "craftflow_stop_gate_core.py", "craftflow_stop_gate_report.py"):
+    names = ["craftflow_stop_gate.py", "craftflow_stop_gate_core.py", "craftflow_stop_gate_report.py"]
+    if (SCRIPTS / "craftflow_stop_gate_arm.py").exists():  # the arm CLI lands in P5; covered from then on
+        names.append("craftflow_stop_gate_arm.py")
+    for name in names:
         assert needle not in (SCRIPTS / name).read_text(encoding="utf-8"), name
 
 

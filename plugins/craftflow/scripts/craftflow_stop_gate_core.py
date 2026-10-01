@@ -11,6 +11,7 @@ free text is only matched locally against ``OUTWARD_RE``.
 """
 from __future__ import annotations
 
+import datetime
 import errno
 import fnmatch
 import json
@@ -70,8 +71,8 @@ def _valid(key, value):
 def _layer(settings, obj, tags, plugin):
     """Overlay the valid keys of ``obj`` onto ``settings``; invalid/unknown keys leave a tag."""
     for key, value in obj.items():
-        if key == "jevText":
-            continue  # consent-file only (DD-5a), decided in parse_settings
+        if key in ("jevText", "actContinue"):
+            continue  # consent-file only (DD-5a / DD-8), decided in parse_settings / arm_status
         if key not in _SPECS:
             tags.append("unknown_key:" + str(key)[:40])
         elif key in _PLUGIN_ONLY_KEYS and not plugin:
@@ -122,9 +123,9 @@ def parse_settings(plugin_obj, user_obj, user_source="absent", consent_obj=None)
             _layer(settings, plugin_obj, tags, True)
         if isinstance(user_obj, dict):
             _layer(settings, user_obj, tags, False)
-        if settings["mode"] == "on":
-            settings["mode"] = "audit"
-            tags.append("act_not_available")
+        if (isinstance(user_obj, dict) and "actContinue" in user_obj
+                and user_source in ("seam", "home")):
+            tags.append("act_arm_seam_ignored")  # an arm is only ever read from the passwd-home consent file
         consent_push = isinstance(consent_obj, dict) and consent_obj.get("notify") == "push"
         if settings["notify"] == "push" and not consent_push:
             settings["notify"] = "desktop"
@@ -232,37 +233,45 @@ def _consent_dirs_ok(home):
     return True, None
 
 
-def read_consent_file(home):
-    """(obj, tag): read the consent file below ``home`` without following symlinks (DD-5a).
+def read_consent_file_ex(home):
+    """(obj, tag, ctime): read the consent file below ``home`` without following symlinks (DD-5a).
 
-    ``(None, None)`` means absent (not a violation); a tag names why the file was refused. Never raises.
+    ``(None, None, None)`` means absent (not a violation); a tag names why the file was refused. ``ctime`` is
+    the inode change time (``utime`` cannot backdate it); it feeds the arm ctime rule. Never raises.
     """
     try:
         if not (isinstance(home, str) and os.path.isabs(home)):
-            return None, None
+            return None, None, None
         ok, tag = _consent_dirs_ok(home)
         if not ok:
-            return None, tag
+            return None, tag, None
         path = os.path.join(home, *USER_OVERRIDE_SEGMENTS)
         try:
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except FileNotFoundError:
-            return None, None
+            return None, None, None
         except OSError as exc:
-            return None, ("consent_file_symlink" if exc.errno == errno.ELOOP else "consent_file_unreadable")
+            return None, ("consent_file_symlink" if exc.errno == errno.ELOOP else "consent_file_unreadable"), None
         with os.fdopen(fd, "rb") as handle:
             st = os.fstat(handle.fileno())
             ok, tag = consent_stat_ok(st.st_mode, st.st_uid, st.st_size, os.getuid())
             if not ok:
-                return None, tag
+                return None, tag, None
             raw = handle.read(USER_OVERRIDE_MAX_BYTES + 1)
         try:
             obj = json.loads(raw.decode("utf-8-sig"))
         except ValueError:
-            return None, "consent_file_corrupt"
-        return (obj, None) if isinstance(obj, dict) else (None, "consent_file_corrupt")
+            return None, "consent_file_corrupt", None
+        if not isinstance(obj, dict):
+            return None, "consent_file_corrupt", None
+        return obj, None, float(st.st_ctime)
     except Exception:  # noqa: BLE001 - fail open: no consent
-        return None, "consent_file_unreadable"
+        return None, "consent_file_unreadable", None
+
+
+def read_consent_file(home):
+    """(obj, tag): ``read_consent_file_ex`` without the ctime. ``(None, None)`` means absent. Never raises."""
+    return read_consent_file_ex(home)[:2]
 
 
 # --- artifact facts (DD-7 / DD-7a / DD-8) ------------------------------------------------------------
@@ -322,11 +331,18 @@ def _phase_files(entry):
     return []
 
 
+def _checkpoint_type(value):
+    """Lower-cased checkpoint type, or None when missing / not a non-empty string (missing is blocker A04)."""
+    text = value.strip().lower() if isinstance(value, str) else ""
+    return text or None
+
+
 def _normalize_one(entry, pid):
     if isinstance(entry, str):
-        return {"id": pid, "title": "", "objective": "", "checks": [], "files": []}
+        return {"id": pid, "title": "", "objective": "", "checks": [], "files": [], "checkpoint_type": None}
     return {"id": pid, "title": _str(entry.get("title")), "objective": _str(entry.get("objective")),
-            "checks": _str_list(entry.get("checks")), "files": _phase_files(entry)}
+            "checks": _str_list(entry.get("checks")), "files": _phase_files(entry),
+            "checkpoint_type": _checkpoint_type(entry.get("checkpoint_type"))}
 
 
 def _normalize_phases(raw):
@@ -345,7 +361,7 @@ def _normalize_phases(raw):
 
 
 def normalize_phases(raw):
-    """Normalised phases: [{id, title, objective, checks, files}] (DD-7a). Never raises."""
+    """Normalised phases: [{id, title, objective, checks, files, checkpoint_type}] (DD-7a). Never raises."""
     try:
         return _normalize_phases(raw)[0]
     except Exception:  # noqa: BLE001 - totality
@@ -615,6 +631,7 @@ def base_facts(**kw):
         "binding_reason": "single_candidate",
         "permission_mode": "default",
         "stop_hook_active": False,
+        "stop_reason": None,
         "git": {"ok": True, "in_progress_op": None, "unmerged": False, "dirty_paths": [], "head": "0" * 40},
         "session": {"would_continue_since_human": 0, "last_human_ts": None, "relay_pending": False},
         "settings": parse_settings(None, None)[0],
@@ -661,6 +678,45 @@ def _h12(facts):
     return has_secret_text(_msg(facts)) or any(secret_path_hit(p) for p in paths)
 
 
+def _boundary_phases(facts):
+    """(completed, upcoming): the phases a continue would cross (H18 / A04): the next-phase candidates and the
+    just-completed phase(s) at the cursor. Never raises."""
+    work = _work(facts)
+    if work is None:
+        return [], []
+    upcoming = list(next_phase(facts)["candidates"])
+    idx = resolve_cursor(work["phase_cursor"], work["phases"], facts["settings"]["intCursorMeaning"])[0]
+    completed = []
+    for pos in ((idx, idx - 1) if idx is not None else ()):
+        if 0 <= pos < len(work["phases"]):
+            phase = work["phases"][pos]
+            if phase_state(work["phase_status"], phase["id"]) == "DONE" and phase not in upcoming:
+                completed.append(phase)
+    return completed, upcoming
+
+
+def _h18(facts, work):
+    completed, upcoming = _boundary_phases(facts)
+    return any(p["checkpoint_type"] not in (None, "none") for p in completed + upcoming)
+
+
+def _h16(facts):
+    return "L1_no_progress" in loop_guards(facts, facts.get("session"))
+
+
+def _h17(facts):
+    limit = (facts.get("settings") or DEFAULTS).get("maxAutoContinuesPerSession", 5)
+    if type(limit) is not int or limit < 1:
+        return False  # max 0 disables ACT through blocker A15, never through this hard rule
+    session = facts.get("session") if isinstance(facts.get("session"), dict) else {}
+    return _count_since_human(facts, session) >= limit
+
+
+def _h19(facts):
+    reason = facts.get("stop_reason")
+    return isinstance(reason, str) and reason != "end_turn"
+
+
 def _wf_rule(test):
     """Wrap a workflow rule: no workflow data means the rule cannot fire (H01 already covers it)."""
     def rule(facts):
@@ -688,11 +744,15 @@ _RULES = (
     ("H13_permission_mode_plan", lambda f: f.get("permission_mode") == "plan"),
     ("H14_question_needs_choice", lambda f: has_choice(_tail(f))),
     ("H15_outward_request", lambda f: outward_question(_tail(f))),
+    ("H16_no_progress", _h16),
+    ("H17_continue_budget", _h17),
+    ("H18_checkpoint_phase", _wf_rule(_h18)),
+    ("H19_stop_reason_not_end_turn", _h19),
 )
 
 
 def hard_rules(facts):
-    """All hard-rule hits, in H00..H15 order (DD-9). Pure; commit blockers are NOT consulted.
+    """All hard-rule hits, in H00..H19 order (DD-9, DD-6). Pure; commit blockers are NOT consulted.
 
     A rule that cannot be evaluated (internal error) counts as a hit: fail closed.
     """
@@ -917,15 +977,22 @@ def relay_decision(settings, verdict, stop_hook_active, session_state, tail_sha,
 
 # --- loop guards and session state (DD-9a, DD-13) ----------------------------------------------------
 def _count_since_human(facts, session):
-    """would_continue_since_human, counted as 0 when a new genuine human turn was seen (DD-13)."""
-    if session.get("last_human_ts") != facts.get("last_human_ts"):
+    """would_continue_since_human, counted as 0 when a NEW genuine human turn was seen (DD-13, DD-7).
+
+    A null human ts (transcript unreadable) is not a new turn: the stored count stands.
+    """
+    return _stored_count(session, "would_continue_since_human", facts.get("last_human_ts"))
+
+
+def _stored_count(session, key, human_ts):
+    if human_ts is not None and session.get("last_human_ts") != human_ts:
         return 0
-    count = session.get("would_continue_since_human")
+    count = session.get(key)
     return count if isinstance(count, int) and not isinstance(count, bool) else 0
 
 
 def loop_guards(facts, session):
-    """Loop-guard tags L1/L2 (DD-9a). Tags only in Slice 1: they never reach hard_rules or decide."""
+    """Loop-guard tags L1/L2 (DD-9a). Still logged every stop; H16/H17 promote them to hard rules (DD-6)."""
     try:
         facts = facts if isinstance(facts, dict) else {}
         session = session if isinstance(session, dict) else {}
@@ -946,19 +1013,36 @@ def loop_guards(facts, session):
         return []
 
 
-def session_update(state, verdict, head, cursor, tail_sha, relayed, now, last_human_ts=None, notified=False):
-    """New session record after a stop (DD-13). Pure: the input record is never mutated."""
+def acted_count_before(old):
+    """Auto-continues recorded in the stored session record (before any reset)."""
+    count = old.get("acted_since_human")
+    return count if isinstance(count, int) and not isinstance(count, bool) else 0
+
+
+def session_update(state, verdict, head, cursor, tail_sha, relayed, now, last_human_ts=None, notified=False,
+                   acted=False, negative_reply=False):
+    """New session record after a stop (DD-13, DD-7, DD-10). Pure: the input record is never mutated.
+
+    The counters reset only on a NEW non-null human ts; a null ts keeps the stored ts and counts.
+    ``acted`` records an auto-continue; ``negative_reply`` (a negative human line since the stored ts) disarms
+    the session when it had acted since the previous human turn.
+    """
     old = state if isinstance(state, dict) else {}
-    count = old.get("would_continue_since_human")
-    count = count if isinstance(count, int) and not isinstance(count, bool) else 0
-    if last_human_ts != old.get("last_human_ts"):
-        count = 0
+    new_turn = last_human_ts is not None and last_human_ts != old.get("last_human_ts")
+    count = _stored_count(old, "would_continue_since_human", last_human_ts)
+    acted_count = _stored_count(old, "acted_since_human", last_human_ts)
+    disarmed = old.get("act_disarmed") is True or (new_turn and bool(negative_reply) and acted_count_before(old) > 0)
     if verdict == "would_continue":
         count += 1
+    if acted:
+        acted_count += 1
     sent = bool(relayed or notified)
     record = {
         "would_continue_since_human": count,
-        "last_human_ts": last_human_ts,
+        "acted_since_human": acted_count,
+        "act_disarmed": disarmed,
+        "last_acted_tail_sha": tail_sha if acted else old.get("last_acted_tail_sha"),
+        "last_human_ts": last_human_ts if last_human_ts is not None else old.get("last_human_ts"),
         "last_head": head,
         "last_cursor": cursor,
         "last_notified_tail_sha": tail_sha if sent else old.get("last_notified_tail_sha"),
@@ -972,6 +1056,202 @@ def session_update(state, verdict, head, cursor, tail_sha, relayed, now, last_hu
     return record
 
 
+# --- continue-ACT: arm status, blockers, reason, decision (SPEC-0019 / ADR-0056, DD-4..DD-8) ---------
+ACT_CONTINUE_TEMPLATE = (
+    "craftflow stop-gate: auto-continue %d/%d (armed by the user). "
+    "The approved plan of workflow %s continues with phase %s. "
+    "Run only phase %s under the craftflow router BUILD rules. "
+    "Do not push, open a pull request, merge, or start any other work. "
+    "If this phase needs the user, stop and say why.")
+ARM_MAX_SECONDS = 24 * 3600
+ARM_FUTURE_SKEW_SECONDS = 60
+ARM_ENTRY_VERSION = 1
+GO_SCOPE = "jev"
+ARM_BUDGET_MAX = 50
+
+
+def _is_int(value):
+    return type(value) is int
+
+
+def _is_number(value):
+    return type(value) in (int, float) and value == value
+
+
+def iso_epoch(text):
+    """Epoch seconds of an ISO-8601 timestamp with a zone (``Z`` or an offset), else None. Never raises."""
+    try:
+        if not isinstance(text, str) or not text.isascii():
+            return None
+        stamp = datetime.datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            return None
+        return stamp.timestamp()
+    except Exception:  # noqa: BLE001 - totality
+        return None
+
+
+def _arm_entry(consent_obj):
+    if isinstance(consent_obj, dict) and "actContinue" in consent_obj:
+        return consent_obj["actContinue"], True
+    return None, False
+
+
+def arm_budget(consent_obj):
+    """The arm entry's ``maxAutoContinuesPerSession`` (0..50), else None (an arm lacking it is refused)."""
+    entry, present = _arm_entry(consent_obj)
+    value = entry.get("maxAutoContinuesPerSession") if present and isinstance(entry, dict) else None
+    return value if _is_int(value) and 0 <= value <= ARM_BUDGET_MAX else None
+
+
+def effective_budget(settings, arm_value):
+    """min(arm budget, settings budget); 0 when either is unusable (B2: a seam cannot widen the arm)."""
+    cap = settings.get("maxAutoContinuesPerSession") if isinstance(settings, dict) else None
+    if not (_is_int(cap) and _is_int(arm_value)):
+        return 0
+    return max(0, min(cap, arm_value))
+
+
+def _arm_malformed(entry):
+    if not isinstance(entry, dict) or entry.get("version") != ARM_ENTRY_VERSION or entry.get("version") is True:
+        return True
+    armed, expires = iso_epoch(entry.get("armedAt")), iso_epoch(entry.get("expiresAt"))
+    if armed is None or expires is None or expires <= armed:
+        return True
+    root, workflow = entry.get("projectRoot"), entry.get("workflow")
+    if not (isinstance(root, str) and root) or not (workflow is None or isinstance(workflow, str)):
+        return True
+    return arm_budget({"actContinue": entry}) is None
+
+
+def _thresholds_looser(go, settings):
+    kind, needs = go.get("jevKindThreshold"), go.get("jevNeedsHumanMax")
+    if not (_is_number(kind) and _is_number(needs)):
+        return True
+    return settings["jevKindThreshold"] < kind or settings["jevNeedsHumanMax"] > needs
+
+
+def arm_status(consent_obj, consent_ctime, now, project_root_real, settings, last_human_epoch, wf):
+    """``armed`` or the first failing status (DD-8). Pure: the arm is read ONLY from ``consent_obj``.
+
+    ``consent_ctime`` is the consent file's inode change time; an arm written after the last genuine human
+    line (``ctime > last_human_epoch``) is refused, so an agent that edits the file mid-turn cannot use it.
+    """
+    try:
+        entry, present = _arm_entry(consent_obj)
+        if not present:
+            return "not_armed"
+        if _arm_malformed(entry):
+            return "arm_malformed"
+        armed, expires = iso_epoch(entry["armedAt"]), iso_epoch(entry["expiresAt"])
+        if armed > now + ARM_FUTURE_SKEW_SECONDS:
+            return "arm_future"
+        if expires - armed > ARM_MAX_SECONDS:
+            return "arm_too_long"
+        if now > expires:
+            return "arm_expired"
+        if entry["projectRoot"] != project_root_real:
+            return "arm_other_project"
+        if entry["workflow"] is not None and entry["workflow"] != wf:
+            return "arm_other_workflow"
+        go = entry.get("go")
+        if not isinstance(go, dict):
+            return "go_missing"
+        if go.get("met") is not True:
+            return "go_not_met"
+        if go.get("scope") != GO_SCOPE:
+            return "go_scope_mismatch"
+        if _thresholds_looser(go, settings):
+            return "thresholds_looser"
+        if not _is_number(last_human_epoch):
+            return "human_turn_unknown"
+        if not _is_number(consent_ctime) or consent_ctime > last_human_epoch:
+            return "arm_after_last_human"
+        return "armed"
+    except Exception:  # noqa: BLE001 - fail closed: anything odd is not armed
+        return "arm_malformed"
+
+
+def act_reason(count, budget, wf, phase):
+    """The constant continue reason, or None when any field is unrenderable (blocker A12). Never raises.
+
+    Only an int count/budget and a regex-validated workflow id and phase id can enter the text: no message,
+    Jev or artifact free text.
+    """
+    try:
+        if not (_is_int(count) and _is_int(budget)):
+            return None
+        wf_id, phase_id = _allowed(wf, cc.WF_ID_RE), _allowed(phase, cc._PHASE_RE)
+        if not (wf_id and phase_id):
+            return None
+        return ACT_CONTINUE_TEMPLATE % (count, budget, wf_id, phase_id, phase_id)
+    except Exception:  # noqa: BLE001 - totality
+        return None
+
+
+def _next_phase_id(facts):
+    nxt = next_phase(facts)["phase"]
+    return nxt["id"] if isinstance(nxt, dict) else None
+
+
+def act_blockers(facts, verdict, arm, arm_budget=None, stop_verify=False, endpoint_override=False,
+                 tags=(), session_write_ok=True):
+    """A01..A15 (DD-7a, review B1/B2): reasons ACT must not fire. Pure, logged every stop; [] means clear.
+
+    ``arm`` is the ``arm_status`` string, ``arm_budget`` the arm entry's own cap, ``tags`` the settings and
+    session tags of this stop, ``session_write_ok`` whether the post-decision session write succeeded.
+    A rule that cannot be evaluated counts as a blocker.
+    """
+    try:
+        settings = facts["settings"]
+        session = facts.get("session") if isinstance(facts.get("session"), dict) else {}
+        verdict = verdict if isinstance(verdict, dict) else {}
+        sid, artifact_sid = facts.get("session_id"), facts.get("artifact_session_id")
+        has_sid = isinstance(sid, str) and bool(sid)
+        completed, upcoming = _boundary_phases(facts)
+        budget = effective_budget(settings, arm_budget)
+        acted = _stored_count(session, "acted_since_human", facts.get("last_human_ts"))
+        tail_sha = facts.get("tail_sha")
+        source = facts.get("override_source")
+        checks = (
+            ("A01_mode_not_on", settings.get("mode") != "on"),
+            ("A02_not_armed", arm != "armed"),
+            ("A03_binding_not_exact", facts.get("binding_reason") != "session_match"
+             or (has_sid and artifact_sid != sid)),
+            ("A04_checkpoint_type_missing", any(p["checkpoint_type"] is None for p in completed + upcoming)),
+            ("A05_not_jev_verdict", verdict.get("verdict") != "would_continue"
+             or verdict.get("verdict_source") != "jev" or verdict.get("act_eligible") is not True),
+            ("A06_human_turn_unknown", facts.get("last_human_ts") is None),
+            ("A07_stop_verify_enabled", bool(stop_verify)),
+            ("A08_disarmed_after_negative", session.get("act_disarmed") is True),
+            ("A09_jev_endpoint_override", bool(endpoint_override)),
+            ("A10_no_session_id", not has_sid),
+            ("A11_tail_already_acted", bool(tail_sha) and session.get("last_acted_tail_sha") == tail_sha),
+            ("A12_phase_id_unrenderable", act_reason(0, 1, facts.get("wf"), _next_phase_id(facts)) is None),
+            ("A13_session_state_unreliable", "session_state_reset" in (tags or ()) or session_write_ok is not True),
+            ("A14_settings_not_from_user_layer", settings.get("mode") == "on"
+             and (source in ("seam", "home") or source not in _SETTING_SOURCES)),
+            ("A15_budget_zero", budget < 1 or acted >= budget),
+        )
+        return [code for code, hit in checks if hit]
+    except Exception:  # noqa: BLE001 - fail closed: an unevaluable blocker set blocks ACT
+        return ["A02_not_armed", "A05_not_jev_verdict"]
+
+
+def act_decision(settings, rule_hits, blockers, verdict):
+    """True only for the DD-4 conjunction: mode on, no hard rule, no act blocker, a Jev ``would_continue``.
+
+    Hard rules and blockers are separate inputs; either being non-empty (or unreadable) means no action.
+    """
+    try:
+        return (isinstance(settings, dict) and settings.get("mode") == "on"
+                and not rule_hits and not blockers and isinstance(verdict, dict)
+                and verdict.get("verdict") == "would_continue" and verdict.get("verdict_source") == "jev"
+                and verdict.get("act_eligible") is True)
+    except Exception:  # noqa: BLE001 - fail open to no action
+        return False
+
+
 # --- shadow row (DD-14) ------------------------------------------------------------------------------
 ROW_KEYS = (
     "schema", "row_kind", "ts", "session_id", "transcript_path", "mode", "mode_tag", "stop_hook_active",
@@ -979,8 +1259,10 @@ ROW_KEYS = (
     "loop_guards", "commit_blockers", "jev_text_source", "last_human_ts", "heuristic_kind", "heuristic_verdict",
     "jev_status", "jev_kind", "jev_kind_conf", "jev_needs_human", "jev_latency_ms", "jev_usage", "verdict",
     "verdict_source", "act_eligible", "would_action", "notify", "notify_status", "turn_seconds",
-    "turn_seconds_lower_bound", "message_chars", "tail_sha", "hook_ms", "settings_tags")
-_ROW_LIST_KEYS = ("rule_hits", "loop_guards", "commit_blockers", "settings_tags")
+    "turn_seconds_lower_bound", "message_chars", "tail_sha", "hook_ms", "settings_tags",
+    "act_blockers", "acted", "arm_status", "stop_reason", "continues_since_human")  # schema 2 (DD-11)
+ROW_SCHEMA = 2
+_ROW_LIST_KEYS = ("rule_hits", "loop_guards", "commit_blockers", "settings_tags", "act_blockers")
 ROW_VALUE_MAX_CHARS = 200
 _ROW_MAX_ITEMS = 40
 
@@ -1001,7 +1283,8 @@ def _row_clean(value, depth=0):
 def build_row(**fields):
     """A shadow row with exactly ROW_KEYS. Unknown keys (e.g. message text) are dropped, values bounded."""
     row = dict.fromkeys(ROW_KEYS)
-    row.update({"schema": 1, "row_kind": "stop", "act_eligible": False, "would_action": "none"})
+    row.update({"schema": ROW_SCHEMA, "row_kind": "stop", "act_eligible": False, "would_action": "none",
+                "acted": False})
     row.update({key: [] for key in _ROW_LIST_KEYS})
     for key in ROW_KEYS:
         if key in fields:
