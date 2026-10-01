@@ -15,10 +15,16 @@ Design constraints (see docs/plans/2026-09-19-plan-optional-jev-typesafe-routi-p
   A retry happens only on `HTTPError` with a status in `RETRY_STATUSES`
   (429/529) -- never on `socket.timeout`/`URLError` -- and only when at
   least 1.0s of budget remains after a 0.3s backoff sleep.
-- DD-14 No endpoint override in production: `ENDPOINT` is a constant. The
-  `CRAFTFLOW_JEV_ENDPOINT` env override exists for tests only and is
-  honored solely when its host is loopback (127.0.0.1, localhost, ::1).
-  Any other value is ignored and logged as `endpoint_override_ignored`.
+- DD-14 No env/repo-controlled endpoint: `ENDPOINT` is the default. The
+  `CRAFTFLOW_JEV_ENDPOINT` env var is NOT consulted (a repo
+  `.claude/settings.json` env block could otherwise redirect the bearer key
+  to a local listener). The only override is the user-level file
+  `~/.claude/craftflow/jev-endpoint.json` (`{"endpoint": "<url>"}`), located
+  via the passwd-database home (never `$HOME`), read only on the network
+  path (after a cache miss), and honored solely when its host is loopback
+  (127.0.0.1, localhost, ::1). A non-loopback value is ignored and logged as
+  `endpoint_override_ignored`; a missing/unreadable/malformed file yields
+  `ENDPOINT` (fail open).
 """
 from __future__ import annotations
 
@@ -42,9 +48,39 @@ _MIN_REMAINING_AFTER_BACKOFF_SECONDS = 1.0
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 
-def _resolve_endpoint(env: Dict[str, str], log) -> str:
-    """Return ENDPOINT unless a loopback-only test override is present (DD-14)."""
-    override = env.get("CRAFTFLOW_JEV_ENDPOINT")
+def _passwd_home() -> Optional[str]:
+    """Home from the passwd database; ignores $HOME. None when unavailable."""
+    try:
+        import pwd  # lazy: POSIX only
+
+        return pwd.getpwuid(os.getuid()).pw_dir
+    except Exception:  # fail open: unresolved home
+        return None
+
+
+def _default_endpoint_path() -> Optional[Path]:
+    home = _passwd_home()
+    if not home:
+        return None
+    return Path(home) / ".claude" / "craftflow" / "jev-endpoint.json"
+
+
+def _read_endpoint_file(path: Optional[Path]) -> Optional[str]:
+    """Return the `endpoint` string from the user file, or None on any problem."""
+    if path is None:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:  # missing/unreadable/malformed -> fail open
+        return None
+    value = data.get("endpoint") if isinstance(data, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
+def _resolve_endpoint(log, config_path: Optional[Path] = None) -> str:
+    """Return ENDPOINT unless the user-level file names a loopback URL (DD-14)."""
+    override = _read_endpoint_file(config_path if config_path is not None else _default_endpoint_path())
     if not override:
         return ENDPOINT
     try:
@@ -115,6 +151,7 @@ def call(
     log=log_event,
     total_budget_seconds: float = TOTAL_BUDGET_SECONDS,
     failure_reason_out: Optional[Dict[str, Any]] = None,
+    endpoint_config_path: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
     """Call the Jev endpoint and return {"answers","usage","model","latency_ms","cache_hit"} or None.
 
@@ -156,7 +193,7 @@ def call(
                     "cache_hit": True,
                 }
 
-        endpoint = _resolve_endpoint(os.environ, log)
+        endpoint = _resolve_endpoint(log, endpoint_config_path)
         req = _build_request(endpoint, state, questions, model, api_key)
 
         start = time.monotonic()

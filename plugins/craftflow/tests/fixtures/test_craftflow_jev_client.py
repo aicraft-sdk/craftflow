@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import socket
 import sys
 import tempfile
@@ -565,50 +566,116 @@ def test_429_retry_then_incomplete_read_logs_status_none() -> None:
         fail("429-retry-then-incomplete-read-status-none", f"result={result!r} calls={calls!r} logged={logged!r}")
 
 
-def test_endpoint_override_honored_only_for_loopback() -> None:
+def _call_capturing_url(env=None, config_path=None, home_env=None):
+    """Run call() against a fake urlopen; return (url, logged decisions)."""
     captured: dict = {}
+    logged: list = []
 
     def fake_urlopen(req, timeout=None):
         captured["full_url"] = req.full_url
-        body = json.dumps({"answers": {}, "usage": {}, "model": "jev-1.12"}).encode()
-        return fake_response(200, body)
+        return fake_response(200, json.dumps({"answers": {}, "usage": {}, "model": "jev-1.12"}).encode())
 
-    with mock.patch.dict("os.environ", {"CRAFTFLOW_JEV_ENDPOINT": "http://127.0.0.1:9/"}, clear=False), mock.patch(
+    patched_env = dict(env or {})
+    if home_env is not None:
+        patched_env["HOME"] = home_env
+    kwargs = {} if config_path is None else {"endpoint_config_path": config_path}
+    with mock.patch.dict("os.environ", patched_env, clear=False), mock.patch(
         "craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen
     ):
-        call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None)
-    loopback_url = captured.get("full_url", "")
+        call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None,
+             log=lambda n, p: logged.append(p.get("decision")), **kwargs)
+    return captured.get("full_url", ""), logged
 
-    logged: list = []
 
-    def fake_log(name, payload):
-        logged.append((name, payload))
+def _write_endpoint_file(tmp: str, content: str) -> str:
+    path = os.path.join(tmp, "jev-endpoint.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    return path
 
-    captured2: dict = {}
 
-    def fake_urlopen2(req, timeout=None):
-        captured2["full_url"] = req.full_url
-        body = json.dumps({"answers": {}, "usage": {}, "model": "jev-1.12"}).encode()
-        return fake_response(200, body)
-
-    with mock.patch.dict("os.environ", {"CRAFTFLOW_JEV_ENDPOINT": "https://evil.example/"}, clear=False), mock.patch(
-        "craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen2
-    ):
-        call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log)
-    evil_url = captured2.get("full_url", "")
-
-    decisions = [p.get("decision") for _n, p in logged]
-    if (
-        loopback_url.startswith("http://127.0.0.1:9/")
-        and evil_url == ENDPOINT
-        and "endpoint_override_ignored" in decisions
-    ):
-        ok("endpoint override honored only for loopback (DD-14)")
+def test_env_endpoint_override_is_ignored() -> None:
+    url, _ = _call_capturing_url(env={"CRAFTFLOW_JEV_ENDPOINT": "http://127.0.0.1:9/"})
+    if url == ENDPOINT:
+        ok("env CRAFTFLOW_JEV_ENDPOINT (loopback) is ignored")
     else:
-        fail(
-            "endpoint-override-loopback-only",
-            f"loopback_url={loopback_url!r} evil_url={evil_url!r} decisions={decisions!r}",
-        )
+        fail("env-override-ignored", f"url={url!r}")
+
+
+def test_endpoint_file_loopback_honored() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_endpoint_file(tmp, json.dumps({"endpoint": "http://127.0.0.1:9/v1"}))
+        url, _ = _call_capturing_url(config_path=path)
+    if url == "http://127.0.0.1:9/v1":
+        ok("endpoint file with loopback URL is honored")
+    else:
+        fail("endpoint-file-loopback", f"url={url!r}")
+
+
+def test_endpoint_file_non_loopback_ignored_and_logged() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_endpoint_file(tmp, json.dumps({"endpoint": "https://evil.example/"}))
+        url, decisions = _call_capturing_url(config_path=path)
+    if url == ENDPOINT and "endpoint_override_ignored" in decisions:
+        ok("endpoint file with non-loopback URL ignored and logged")
+    else:
+        fail("endpoint-file-non-loopback", f"url={url!r} decisions={decisions!r}")
+
+
+def test_endpoint_file_malformed_or_missing_falls_back() -> None:
+    bad = ["not json", "[]", json.dumps({"endpoint": 5}), json.dumps({}), ""]
+    results = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for content in bad:
+            results.append(_call_capturing_url(config_path=_write_endpoint_file(tmp, content))[0])
+        results.append(_call_capturing_url(config_path=os.path.join(tmp, "absent.json"))[0])
+        results.append(_call_capturing_url(config_path=tmp)[0])  # directory: unreadable
+    if all(u == ENDPOINT for u in results):
+        ok("malformed/missing/unreadable endpoint file falls back to ENDPOINT")
+    else:
+        fail("endpoint-file-malformed", f"urls={results!r}")
+
+
+def test_home_env_is_not_used_for_endpoint_file() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        d = os.path.join(tmp, ".claude", "craftflow")
+        os.makedirs(d)
+        _write_endpoint_file(d, json.dumps({"endpoint": "http://127.0.0.1:9/hijack"}))
+        with mock.patch("craftflow_jev_client._passwd_home", return_value=os.path.join(tmp, "nohome")):
+            url, _ = _call_capturing_url(home_env=tmp)
+    if url == ENDPOINT:
+        ok("$HOME env is not used to locate the endpoint file (passwd home is)")
+    else:
+        fail("home-env-not-used", f"url={url!r}")
+
+
+def test_default_endpoint_path_derives_from_passwd_home() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        d = os.path.join(tmp, ".claude", "craftflow")
+        os.makedirs(d)
+        _write_endpoint_file(d, json.dumps({"endpoint": "http://localhost:9/p"}))
+        with mock.patch("craftflow_jev_client._passwd_home", return_value=tmp):
+            url, _ = _call_capturing_url()
+    if url == "http://localhost:9/p":
+        ok("default endpoint file path derives from passwd home")
+    else:
+        fail("default-path-passwd-home", f"url={url!r}")
+
+
+def test_endpoint_file_not_read_on_cache_hit() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        cache = Path(tmp) / "cache"
+        cache.mkdir()
+        with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=lambda r, timeout=None: fake_response(
+            200, json.dumps({"answers": {"a": 1}, "usage": {}, "model": "jev-1.12"}).encode()
+        )):
+            call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=cache)
+        with mock.patch("craftflow_jev_client._read_endpoint_file", side_effect=AssertionError("read")) as rd:
+            r = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=cache)
+    if r is not None and r["cache_hit"] is True and rd.call_count == 0:
+        ok("endpoint file is not read on a cache hit")
+    else:
+        fail("endpoint-file-cache-hit", f"r={r!r} calls={rd.call_count}")
 
 
 def test_non_json_serializable_state_returns_none() -> None:
@@ -922,7 +989,13 @@ def main() -> int:
     test_memory_error_during_response_read_returns_none()
     test_recursion_error_from_hostile_json_returns_none()
     test_429_retry_then_incomplete_read_logs_status_none()
-    test_endpoint_override_honored_only_for_loopback()
+    test_env_endpoint_override_is_ignored()
+    test_endpoint_file_loopback_honored()
+    test_endpoint_file_non_loopback_ignored_and_logged()
+    test_endpoint_file_malformed_or_missing_falls_back()
+    test_home_env_is_not_used_for_endpoint_file()
+    test_default_endpoint_path_derives_from_passwd_home()
+    test_endpoint_file_not_read_on_cache_hit()
     test_non_json_serializable_state_returns_none()
     test_non_numeric_timeout_returns_none()
     test_time_monotonic_failure_returns_none()
