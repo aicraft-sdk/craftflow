@@ -363,7 +363,7 @@ the router's Intent Routing table always win over any Jev hint (see `router-prot
 
 ## Optional: Stop gate (shadow, plus armed continue)
 
-`craftflow_stop_gate.py` is an opt-in `Stop` hook that classifies each end-of-turn stop and logs what it *would* do (continue to the next approved phase, local commit, or wait for you). Slice 1 (SPEC-0018, ADR-0055) is shadow only. Slice 2 (SPEC-0019, ADR-0056) adds exactly one action: when mode is `on` AND you have armed it (below), it blocks the stop with a constant reason so the agent continues to the next already-approved phase. It never pushes, opens a PR, merges, commits or picks backlog work. It always exits 0 (fail open: any error means no output) and does nothing unless `hook_event_name` is `Stop`.
+`craftflow_stop_gate.py` is an opt-in `Stop` hook that classifies each end-of-turn stop and logs what it *would* do (continue to the next approved phase, local commit, or wait for you). Slice 1 (SPEC-0018, ADR-0055) is shadow only. Slice 2 (SPEC-0020, ADR-0057) adds exactly one action: when mode is `on` AND you have armed it (below), it blocks the stop with a constant reason so the agent continues to the next already-approved phase. It never pushes, opens a PR, merges, commits or picks backlog work. It always exits 0 (fail open: any error means no output) and does nothing unless `hook_event_name` is `Stop`.
 
 Modes (`mode` key, shipped default `off` in `config/stop-gate.json`):
 
@@ -388,7 +388,7 @@ Enable durably with `~/.claude/craftflow/stop-gate.json`, e.g. `{"mode": "audit"
 
 **Consent file.** `~/.claude/craftflow/stop-gate.json` read from the passwd home (not `$HOME`, not the env seam), without following symlinks, owned by you and at most 64 KiB, is the only place `jevText: true` and `notify: "push"` are honoured. The same path serves as the user settings file; a seam or `HOME`-redirected copy can set `mode`, `notify: "desktop"` and thresholds (local logging and banners only) but is ignored for `jevText` (tag `jev_text_seam_ignored`) and `push` (tag `notify_push_seam_ignored`, falls back to `desktop`). Accepted risk: an agent with file-write access can edit this file, so treat it as your consent, not a security boundary against the agent.
 
-**Arming continue ACT (SPEC-0019).** `on` never acts by itself. Run the arm CLI in your own terminal:
+**Arming continue ACT (SPEC-0020).** `on` never acts by itself. Run the arm CLI in your own terminal:
 
 ```bash
 python3 scripts/craftflow_stop_gate_arm.py status                       # read-only; caveat human_turn_unchecked

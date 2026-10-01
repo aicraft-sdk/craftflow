@@ -11,9 +11,11 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest.mock as mock
 from pathlib import Path
@@ -85,7 +87,8 @@ _HOME_PATCH_RUNNER = (
     "import sys, runpy\n"
     "sys.path.insert(0, sys.argv[1])\n"
     "import craftflow_jev_client as c\n"
-    "c._passwd_home = lambda: sys.argv[2]\n"
+    "scratch = sys.argv[2]\n"
+    "c._passwd_home = lambda: scratch\n"
     "script = sys.argv[1] + '/craftflow_jev_prompt_hint.py'\n"
     "sys.argv = [script]\n"
     "runpy.run_path(script, run_name='__main__')\n"
@@ -833,17 +836,41 @@ def test_subprocess_connection_refused_fails_open() -> None:
     with tmp:
         env2 = dict(env)
         env2["TYPESAFE_API_KEY"] = "sk-sentinel-refused"
-        code, out, err = run_hook({"hook_event_name": "UserPromptSubmit", "prompt": "fix the login bug"}, env2,
-                                  endpoint_url="http://127.0.0.1:9/")
+        # A loopback listener on an ephemeral port that accepts then drops the connection: the
+        # accept count proves the host/port from the endpoint file was the one actually dialed.
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(4)
+        listener.settimeout(10)
+        accepted: list = []
+
+        def _accept_and_drop() -> None:
+            try:
+                while True:
+                    conn, _addr = listener.accept()
+                    accepted.append(1)
+                    conn.close()
+            except OSError:
+                return
+
+        thread = threading.Thread(target=_accept_and_drop, daemon=True)
+        thread.start()
+        try:
+            port = listener.getsockname()[1]
+            code, out, err = run_hook({"hook_event_name": "UserPromptSubmit", "prompt": "fix the login bug"}, env2,
+                                      endpoint_url=f"http://127.0.0.1:{port}/")
+        finally:
+            listener.close()
+            thread.join(timeout=5)
         log_path = project / ".craftflow/state/craftflow-hook-events.log"
         log_text = log_path.read_text() if log_path.exists() else ""
         failed_lines = [ln for ln in log_text.splitlines() if "jev_call_failed" in ln]
-        if (code, out) == (0, "") and len(failed_lines) == 1 and "sk-sentinel-refused" not in log_text:
-            ok("subprocess connection-refused endpoint fails open (exit 0, one jev_call_failed line, no key leak)")
+        if (code, out) == (0, "") and len(failed_lines) == 1 and accepted and "sk-sentinel-refused" not in log_text:
+            ok("subprocess dropped-connection endpoint-file listener fails open (exit 0, listener dialed, one jev_call_failed line, no key leak)")
         else:
             fail(
                 "subprocess-connection-refused",
-                f"code={code} out={out!r} err={err!r} failed_lines={failed_lines!r}",
+                f"code={code} out={out!r} err={err!r} failed_lines={failed_lines!r} accepted={len(accepted)}",
             )
 
 

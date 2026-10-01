@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Class-A live proof driver for the stop-gate continue ACT (SPEC-0019 / ADR-0056), scenarios LA-1..LA-8.
+"""Class-A live proof driver for the stop-gate continue ACT (SPEC-0020 / ADR-0057), scenarios LA-1..LA-8.
 
 Runs real `claude -p --plugin-dir <plugin> --model haiku` sessions in scratch git projects:
   LA-1 shipped plugin (mode off) is inert         LA-2 helper `--session-id` equals the `--session-id` uuid
@@ -9,7 +9,7 @@ Runs real `claude -p --plugin-dir <plugin> --model haiku` sessions in scratch gi
   LA-8 RECORDED: stop_reason values and whether prompt_id stays stable across a chain
 
 Scratch setup (disclosed LIMITATIONs act_requires_consent_file, act_go_from_seeded_events,
-jev_stub_endpoint_test_allowance): a scratch plugin copy whose Stop hook command runs the real hook under a
+jev_stub_via_scratch_home): a scratch plugin copy whose Stop hook command runs the real hook under a
 wrapper that points the passwd home (consent file AND user layer) at a scratch home, sets HOME to it inside the
 hook process only, and pins the Jev client's passwd home to that scratch home, where a jev-endpoint.json names the
 loopback stub (the endpoint env override no longer exists, so A09 does not fire). The arm entry is written by the real arm CLI
@@ -48,7 +48,7 @@ import stop_gate_roundtrip as base  # noqa: E402  (Slice-1 driver: process, fixt
 WF = "wf-live-act-0001"
 HOOK_P90_GATE_MS = 1500
 LA5_ATTEMPTS = 3  # first run + up to 2 retries (R9)
-LIMITATIONS = ["act_requires_consent_file", "act_go_from_seeded_events", "jev_stub_endpoint_test_allowance"]
+LIMITATIONS = ["act_requires_consent_file", "act_go_from_seeded_events", "jev_stub_via_scratch_home"]
 FORBIDDEN_TOOL_WORDS = ("git push", "gh pr", "merge")
 PROMPT_P1 = ("Reply exactly: Phase P1 of craftflow workflow %s is done and checks pass. "
              "Shall I continue to Phase P2?" % WF)

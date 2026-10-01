@@ -42,7 +42,7 @@ from pathlib import Path
 CALL_TIMEOUT_S = 180
 MODEL = "haiku"
 LOAD_MARKER = "from --plugin-dir overrides installed version"
-STRIPPED_ENV = ("CLAUDE_PLUGIN_ROOT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PROJECT_DIR", "CURSOR_PLUGIN_ROOT")
+STRIPPED_ENV = ("CLAUDE_PLUGIN_ROOT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PROJECT_DIR", "CURSOR_PLUGIN_ROOT", "CRAFTFLOW_JEV_ENDPOINT")
 WF = "wf-live-sg-0001"
 PROMPT = ("Reply exactly: Phase P1 of craftflow workflow %s is done and checks pass. "
           "Shall I continue to Phase P2?" % WF)

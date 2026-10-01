@@ -99,7 +99,7 @@ def test_parse_settings_defaults_off():
 
 
 def test_parse_settings_on_is_kept():
-    # Slice 2 (SPEC-0019): the stale Slice-1 requirement "on is downgraded to audit" is replaced; `on` is kept
+    # Slice 2 (SPEC-0020): the stale Slice-1 requirement "on is downgraded to audit" is replaced; `on` is kept
     # and only an arm in the passwd-home consent file lets the shell act (act_arm_seam_ignored covers the seam).
     settings, tags = core.parse_settings({"mode": "off"}, {"mode": "on"}, "passwd")
     assert settings["mode"] == "on", settings
@@ -798,7 +798,7 @@ def test_loop_guards_and_session_update():
     assert core.loop_guards(facts, four) == []
     assert core.loop_guards(loop_facts(active=False, human="C"), state) == []  # a new human turn resets
     assert not any(code.startswith("L") for code in core.hard_rules(facts))
-    assert "H17_continue_budget" in core.hard_rules(dict(facts, session=state))  # SPEC-0019: L2 is promoted to H17
+    assert "H17_continue_budget" in core.hard_rules(dict(facts, session=state))  # SPEC-0020: L2 is promoted to H17
     base = run_decide(heuristic="phase_done_awaiting_continue")
     assert base["verdict"] == "would_continue" and "L2_budget" not in base["reasons"], base
     # L1: needs stop_hook_active, a recorded continue or pending relay, and unchanged HEAD and cursor

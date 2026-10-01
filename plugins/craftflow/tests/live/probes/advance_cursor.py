@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Throwaway progress probe for LA-5 (SPEC-0019 / ADR-0056). Never part of hooks.json.
+"""Throwaway progress probe for LA-5 (SPEC-0020 / ADR-0057). Never part of hooks.json.
 
 Usage: advance_cursor.py <project-dir>
 

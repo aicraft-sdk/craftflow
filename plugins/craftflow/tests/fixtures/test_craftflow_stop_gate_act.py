@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the stop gate ACT slice (SPEC-0019 / ADR-0056): off fast path (P2) and later phases.
+"""Tests for the stop gate ACT slice (SPEC-0020 / ADR-0057): off fast path (P2) and later phases.
 
 Run: python3 tests/fixtures/test_craftflow_stop_gate_act.py
 """

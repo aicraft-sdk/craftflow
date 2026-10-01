@@ -283,7 +283,7 @@ Shape (abridged):
 - No `event` key in the payload.
 - Decision payload: `decision` (`needs_human`, `would_continue`, `would_commit`), `wf` (string or
   `null`), `mode`, `rule_hits` (list of `H##_...` codes), `row_kind` (`stop`, `relay_followup` or `error`), `acted`
-  (boolean; true only when the hook printed a continue block, SPEC-0019). Armed-continue details live in the
+  (boolean; true only when the hook printed a continue block, SPEC-0020). Armed-continue details live in the
   row (`act_blockers`, `arm_status`), not in this event.
 - Config payload (same event name): `config_error` (`corrupt`, `unreadable`, `too_large`,
   `home_unresolved`, `not_object`) and `source: "user"`, when the user settings file is unusable.

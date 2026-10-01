@@ -601,7 +601,7 @@ def relay_followup_row(settings, tags, payload, session_id, transcript_path, t0)
         hook_ms=int((time.monotonic() - t0) * 1000), settings_tags=tags)
 
 
-# --- ACT facts (SPEC-0019 / ADR-0056) ----------------------------------------------------------------
+# --- ACT facts (SPEC-0020 / ADR-0057) ----------------------------------------------------------------
 def stop_verify_enabled():
     """Exact bool for blocker A07: True when ``config/stop-verify.json`` exists and is enabled or unreadable
     (an unusable file fails closed)."""
