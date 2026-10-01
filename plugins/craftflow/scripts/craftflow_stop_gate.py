@@ -12,21 +12,73 @@ Privacy: rows carry no message text and no artifact free text (``build_row`` dro
 """
 from __future__ import annotations
 
-import calendar
-import hashlib
 import json
 import os
-import re
-import shutil
-import stat
-import subprocess
 import sys
-import threading
-import time
 
-import craftflow_context_nudge_compact as cc
-import craftflow_stop_gate_core as core
-from craftflow_hooklib import load_input, log_event, now_iso, plugin_config_dir, project_dir, state_root
+_USER_OVERRIDE_ENV = "CRAFTFLOW_STOP_GATE_USER_CONFIG"  # mirrors core.USER_OVERRIDE_ENV (fast path only)
+_USER_OVERRIDE_SEGMENTS = (".claude", "craftflow", "stop-gate.json")  # mirrors core.USER_OVERRIDE_SEGMENTS
+
+
+def _parse_stdin(raw):
+    """Payload dict from raw stdin bytes, mirroring ``craftflow_hooklib.load_input`` (any failure -> {})."""
+    try:
+        text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+        if not text.strip():
+            return {}
+        parsed = json.loads(text)
+    except (ValueError, AttributeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _fast_inert(raw, env):
+    """True only when the full path is provably a no-op: not a Stop event, the Cursor guard, or plugin mode
+    ``off`` with no user-level file (even a dangling symlink counts as present). Imports nothing heavy, writes
+    nothing. Any error means not inert, so the full path decides."""
+    try:
+        payload = _parse_stdin(raw)
+        if payload.get("hook_event_name") != "Stop" or env.get("CURSOR_PLUGIN_ROOT"):
+            return True
+        root = env.get("CLAUDE_PLUGIN_ROOT")
+        if not root:
+            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "config", "stop-gate.json"), "rb") as handle:
+            plugin_obj = json.loads(handle.read().decode("utf-8-sig"))
+        if not isinstance(plugin_obj, dict) or plugin_obj.get("mode") != "off":
+            return False
+        forced = env.get(_USER_OVERRIDE_ENV)
+        if isinstance(forced, str) and forced.strip():
+            user_path = os.path.expanduser(forced)
+        else:
+            home = env.get("HOME")
+            if not isinstance(home, str) or not os.path.isabs(home):
+                return False  # passwd lookup needs the full path
+            user_path = os.path.join(home, *_USER_OVERRIDE_SEGMENTS)
+        return not os.path.lexists(user_path)
+    except Exception:  # noqa: BLE001 - any doubt falls through to the full path
+        return False
+
+
+if __name__ == "__main__":
+    _RAW_STDIN = sys.stdin.buffer.read()
+    if _fast_inert(_RAW_STDIN, os.environ):
+        sys.exit(0)
+else:
+    _RAW_STDIN = None
+
+import calendar  # noqa: E402 - heavy imports stay below the off-mode fast exit
+import hashlib  # noqa: E402
+import re  # noqa: E402
+import shutil  # noqa: E402
+import stat  # noqa: E402
+import subprocess  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+
+import craftflow_context_nudge_compact as cc  # noqa: E402
+import craftflow_stop_gate_core as core  # noqa: E402
+from craftflow_hooklib import load_input, log_event, now_iso, plugin_config_dir, project_dir, state_root  # noqa: E402
 
 DEADLINE_S = 4.2
 GIT_CALL_TIMEOUT_S = 0.8
@@ -611,12 +663,13 @@ def record_failure(exc, ctx, t0):
         pass
 
 
-def main():
-    """Always returns 0 (fail open). The row is appended BEFORE any relay block is printed."""
+def main(raw=None):
+    """Always returns 0 (fail open). The row is appended BEFORE any relay block is printed. ``raw`` is the
+    stdin bytes already read by the fast-path guard (None: read stdin via ``load_input``)."""
     t0 = time.monotonic()
     ctx = {}
     try:
-        out, row = run(load_input(), os.environ, t0, ctx)
+        out, row = run(load_input() if raw is None else _parse_stdin(raw), os.environ, t0, ctx)
         if row is not None:
             append_row(row)
             log_event("plugin_stop_gate", {"decision": row["verdict"], "wf": row["wf"], "mode": row["mode"],
@@ -630,4 +683,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(_RAW_STDIN))
