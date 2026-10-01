@@ -361,6 +361,52 @@ the router's Intent Routing table always win over any Jev hint (see `router-prot
 - Phase-boundary `/compact` prompt: after each BUILD phase exit (and at PLAN hand-off) the router runs the check (`skills/craftflow-router/references/context-boundary.md`). A `warn` is informational; a `critical` makes the router persist the workflow artifact and pause so you can run `/compact` and say "continue".
 - Every decision is logged as the `context_nudge` event (see `docs/craftflow-event-contract.md`); per-session state is kept under `.craftflow/state/context-nudge/`.
 
+## Optional: Stop gate (shadow)
+
+`craftflow_stop_gate.py` is an opt-in `Stop` hook that classifies each end-of-turn stop and logs what it *would* do (continue to the next approved phase, local commit, or wait for you). It is **shadow only** (SPEC-0018, ADR-0055): it never makes the agent continue and never commits. It always exits 0 (fail open) and does nothing unless `hook_event_name` is `Stop`.
+
+Modes (`mode` key, shipped default `off` in `config/stop-gate.json`):
+
+- `off`: reads the two settings files and returns.
+- `audit`: evaluates hard rules H00-H15 and appends one row per stop to `.craftflow/state/stop-gate/events.jsonl`, plus one `plugin_stop_gate` log event. Rows never hold message text.
+- `on`: accepted but downgraded to `audit` in Slice 1 (tag `act_not_available`); nothing acts.
+
+Enable durably with `~/.claude/craftflow/stop-gate.json`, e.g. `{"mode": "audit"}`. `CRAFTFLOW_STOP_GATE_USER_CONFIG` points at another file (tests, diagnostics). Invalid or unknown keys are ignored and tagged in the row's `settings_tags`.
+
+| Key | Values | Default | Notes |
+|---|---|---|---|
+| `mode` | `off`, `audit`, `on` | `off` | `on` is downgraded to `audit` |
+| `notify` | `off`, `desktop`, `push` | `off` | `push` needs the consent file (below) |
+| `notifyMinTurnSeconds` | 0-86400 | 300 | minimum turn length before a notification |
+| `jevKindThreshold` | 0.5-1.0 | 0.9 | minimum Jev kind confidence |
+| `jevNeedsHumanMax` | 0.0-0.5 | 0.2 | maximum Jev needs-human score |
+| `jevTimeoutSeconds` | 0.5-2.5 | 2.0 | Jev call budget |
+| `tailChars` | 200-4000 | 1500 | tail length used for text rules and Jev |
+| `maxAutoContinuesPerSession` | 0-50 | 5 | loop-guard budget (tag only in Slice 1) |
+| `intCursorMeaning` | `finished_count`, `one_based_current` | `finished_count` | plugin file only; ignored in the user file |
+| `jevText` | `true` | absent | consent file only |
+
+**Consent file.** `~/.claude/craftflow/stop-gate.json` read from the passwd home (not `$HOME`, not the env seam), without following symlinks, owned by you and at most 64 KiB, is the only place `jevText: true` and `notify: "push"` are honoured. The same path serves as the user settings file; a seam or `HOME`-redirected copy can set `mode`, `notify: "desktop"` and thresholds (local logging and banners only) but is ignored for `jevText` (tag `jev_text_seam_ignored`) and `push` (tag `notify_push_seam_ignored`, falls back to `desktop`). Accepted risk: an agent with file-write access can edit this file, so treat it as your consent, not a security boundary against the agent.
+
+**Privacy.** When `jevText` is true and Jev is active, the last up to `tailChars` characters of the assistant's final message, after credential masking, plus the workflow type and whether a next phase exists, are sent to api.typesafe.ai for classification. Nothing is stored locally; decision records hold only labels, scores, lengths and a short hash.
+
+**Push notifications.** `notify: "push"` takes effect only when the user-layer setting says `"push"` AND the consent file also sets `notify: "push"` (stricter than a single layer). The relay costs one extra short model turn (a `decision: block` asking for one `PushNotification` call). It fires at most once per tail sha, at most once per genuine human turn, never when `stop_hook_active` is true, and is refused without a `session_id`. `desktop` uses local `osascript`/`notify-send` and costs no model turn. Notification text is built from allowlisted fields only.
+
+**Error rows.** If the hook fails while active it appends a row with `row_kind: "error"` and `settings_tags: ["hook_error:<ExceptionClassName>"]` (class name only, never the message). If that cannot be written, a `plugin_stop_gate_error` log event is emitted instead.
+
+**Report CLI.** Labels each row by your next genuine reply in the same transcript and prints one JSON object (verdict counts, rule hits, Jev and heuristic precision/coverage, threshold sweep, latency, summed Jev usage, `go_criteria`):
+
+```bash
+python3 scripts/craftflow_stop_gate_report.py [--events FILE] [--transcripts-root DIR]
+python3 scripts/craftflow_stop_gate_report.py --replay --transcripts-root DIR   # counts only, offline
+```
+
+It is read-only and never prints message text. ACT stays **NO-GO** until the RD-3 go criteria all hold: at least 50 labeled `would_continue` rows, at least 5 sessions, precision >= 0.95, zero negated replies, Jev failure rate <= 5%, hook p90 <= 1500 ms, `label_coverage` >= 0.8 (labeled rows over all rows) and `jev_calls_min` >= 20 Jev calls.
+
+**Tests.** `python3 tests/fixtures/test_craftflow_stop_gate.py` includes load-sensitive timing tests (hook latency budgets); run them on a quiet host and re-run before treating a timing failure as a regression.
+
+---
+
 ## Architecture graph
 
 `docs/generated/architecture.md` is a generated (not hand-maintained) view of
