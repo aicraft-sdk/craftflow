@@ -1229,8 +1229,8 @@ def _next_phase_id(facts):
 
 
 def act_blockers(facts, verdict, arm, arm_cap=None, stop_verify=False, endpoint_override=False,
-                 tags=(), session_write_ok=True, negative_reply=False):
-    """A01..A15 (DD-7a, review B1/B2): reasons ACT must not fire. Pure, logged every stop; [] means clear.
+                 tags=(), session_write_ok=True, negative_reply=False, tail_truncated=False):
+    """A01..A17 (DD-7a, review B1/B2): reasons ACT must not fire. Pure, logged every stop; [] means clear.
 
     ``arm`` is the ``arm_status`` string, ``arm_cap`` the arm entry's own budget, ``tags`` the settings and
     session tags of this stop (a list or tuple), ``session_write_ok`` whether the post-decision session write
@@ -1271,6 +1271,9 @@ def act_blockers(facts, verdict, arm, arm_cap=None, stop_verify=False, endpoint_
             ("A14_settings_not_from_user_layer", settings.get("mode") == "on"
              and (source in ("seam", "home") or source not in _SETTING_SOURCES)),
             ("A15_budget_zero", budget < 1 or acted >= budget),
+            ("A16_stop_reason_unknown", not isinstance(facts.get("stop_reason"), str)),
+            ("A17_tail_truncated_after_act",
+             tail_truncated is not False and _raw_count(session, "acted_since_human") > 0),
         )
         return [code for code, hit in checks if hit]
     except Exception:  # noqa: BLE001 - fail closed: an unevaluable blocker set blocks ACT

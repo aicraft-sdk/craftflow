@@ -267,7 +267,7 @@ def act_facts(payload=None, **over):
     work = core.workflow_facts(payload or phase_payload(), lambda p: True)
     facts = core.base_facts(workflow=work, binding_reason="session_match", settings=on_settings())
     facts.update(session_id="sid-00000001", artifact_session_id="sid-00000001", wf=WF, tail_sha="aa11",
-                 override_source="passwd", last_human_ts=HUMAN_TS)
+                 override_source="passwd", last_human_ts=HUMAN_TS, stop_reason="end_turn")
     facts.update(over)
     return facts
 
@@ -961,6 +961,7 @@ def test_arm_cli_bad_arguments_print_one_json_error_and_exit_2():
 # ---------------------------------------------------------------------------
 
 ACT_SID = "sid-00000001"
+HUMAN_OFF = 60  # seconds after base; slack so a loaded host cannot push the consent ctime past it
 ACT_TEXT = "Phase P1 is done and verified. Ready for the next phase."
 ACT_DRIVER = """
 import os, sys
@@ -970,10 +971,18 @@ import craftflow_stop_gate_core as core
 home = os.environ["SGA_HOME"]
 gate._consent_home = lambda: home
 core.passwd_home = lambda: home
-answer = {"status": "ok", "kind": "phase_done_awaiting_continue", "kind_conf": 0.97, "needs_human": 0.05}
+kind = os.environ.get("SGA_KIND", "phase_done_awaiting_continue")
+answer = {"status": "ok", "kind": kind, "kind_conf": 0.97, "needs_human": 0.05}
 fields = {"jev_status": "ok", "jev_kind": answer["kind"], "jev_kind_conf": 0.97, "jev_needs_human": 0.05,
           "jev_latency_ms": 1, "jev_usage": None}
 gate.jev_layer = lambda *a, **k: (answer, fields)
+if os.environ.get("SGA_RACE"):
+    orig_write = gate.write_session
+    def racy(root, sid, record):
+        done = orig_write(root, sid, record)
+        orig_write(root, sid, dict(record, acted_since_human=record["acted_since_human"] + 7, updated_at=0))
+        return done
+    gate.write_session = racy
 if os.environ.get("SGA_RAISE"):
     def boom(*a, **k):
         raise RuntimeError("boom")
@@ -994,7 +1003,9 @@ def act_git_project():
 
 
 def act_line(kind, ts, content, **extra):
-    row = {"type": kind, "timestamp": iso(ts), "message": {"role": kind, "content": content}}
+    row = {"type": kind, "message": {"role": kind, "content": content}}
+    if ts is not None:
+        row["timestamp"] = iso(ts)
     row["message"].update(extra)
     return row
 
@@ -1002,7 +1013,7 @@ def act_line(kind, ts, content, **extra):
 def act_run(mode="on", base=None, arm="ok", arm_over=None, artifact_sid=ACT_SID, extra_lines=(), session=None,
             stop_reason="end_turn", plugin=None, env_extra=None, events=None, phase_ids=("P1", "P2"),
             cursor="P2", consent_late=False, seam_arm=False, hook_active=False, raw_session=None,
-            sessions_mode=None, raise_in_act=False):
+            sessions_mode=None, raise_in_act=False, consent_extra=None, kind=None, pad_bytes=0, events_pad=0, race=False):
     """Run the hook once as a subprocess against a fully armed scratch setup. Returns a namespace."""
     base = time.time() if base is None else base
     root = act_git_project()
@@ -1010,7 +1021,7 @@ def act_run(mode="on", base=None, arm="ok", arm_over=None, artifact_sid=ACT_SID,
     entry = make_arm(armedAt=iso(base - 3600), expiresAt=iso(base + 7 * 3600),
                      projectRoot=os.path.realpath(str(root)))
     entry.update(arm_over or {})
-    consent = {"mode": mode}
+    consent = dict({"mode": mode}, **(consent_extra or {}))
     if arm == "ok":
         consent["actContinue"] = entry
     folder = Path(home) / ".claude" / "craftflow"
@@ -1038,17 +1049,22 @@ def act_run(mode="on", base=None, arm="ok", arm_over=None, artifact_sid=ACT_SID,
     wfdir.mkdir(parents=True)
     (wfdir / (WF + ".json")).write_text(json.dumps(artifact), encoding="utf-8")
     if events is not None:
-        (wfdir / (WF + ".events.jsonl")).write_text("".join(json.dumps(e) + "\n" for e in events),
+        pad = [{"ts": iso(base - 100), "wf": WF, "event": "note", "x": "y" * 1000}] * (events_pad // 1000)
+        (wfdir / (WF + ".events.jsonl")).write_text("".join(json.dumps(e) + "\n" for e in pad + list(events)),
                                                     encoding="utf-8")
-    human_ts = iso(base + 10)
-    lines = [act_line("user", base + 10, "start " + WF),
-             act_line("assistant", base + 12, [{"type": "text", "text": ACT_TEXT}], stop_reason=stop_reason)]
+    human_ts = iso(base + HUMAN_OFF)
+    lines = [act_line("assistant", base + 1, [{"type": "text", "text": "x" * pad_bytes}])] if pad_bytes else []
+    lines += [act_line("user", base + HUMAN_OFF, "start " + WF),
+              act_line("assistant", base + HUMAN_OFF + 2, [{"type": "text", "text": ACT_TEXT}],
+                       stop_reason=stop_reason)]
     lines += list(extra_lines)
     transcript = Path(scratch_dir()) / "t.jsonl"
     transcript.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
     if consent_late:
         write_consent_file()
     spath = gate.session_path(root, ACT_SID)
+    head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    session = {k: (head if v == "@HEAD" else v) for k, v in session.items()} if session is not None else None
     if session is not None or raw_session is not None:
         spath.parent.mkdir(parents=True)
         spath.write_text(raw_session if raw_session is not None else
@@ -1064,6 +1080,10 @@ def act_run(mode="on", base=None, arm="ok", arm_over=None, artifact_sid=ACT_SID,
         env["CRAFTFLOW_STOP_GATE_USER_CONFIG"] = str(seam_path)
     if raise_in_act:
         env["SGA_RAISE"] = "1"
+    if race:
+        env["SGA_RACE"] = "1"
+    if kind:
+        env["SGA_KIND"] = kind
     env.update(env_extra or {})
     payload = {"hook_event_name": "Stop", "session_id": ACT_SID, "transcript_path": str(transcript),
                "cwd": str(root), "permission_mode": "default", "stop_hook_active": hook_active,
@@ -1164,7 +1184,7 @@ def test_p6_seam_only_arm_prints_nothing():
 
 
 def test_p6_arm_written_after_the_last_human_line_prints_nothing():
-    act_quiet(act_run(consent_late=True, base=time.time() - 60), "A02", "arm_after_last_human")
+    act_quiet(act_run(consent_late=True, base=time.time() - 120), "A02", "arm_after_last_human")
 
 
 def test_p6_session_write_failure_means_no_block_b1():
@@ -1184,16 +1204,16 @@ def test_p6_corrupt_session_file_means_no_block_b1():
 def test_p6_negative_reply_right_before_the_stop_disarms_and_does_not_act():
     base = time.time()
     run = act_run(base=base, session={"acted_since_human": 1},
-                  extra_lines=[act_line("user", base + 14, "no, stop that")])
+                  extra_lines=[act_line("user", base + HUMAN_OFF + 4, "no, stop that")])
     row = act_quiet(run, "A08")
     assert run.session["act_disarmed"] is True, run.session
-    assert row["last_human_ts"] == iso(base + 14), row["last_human_ts"]
+    assert row["last_human_ts"] == iso(base + HUMAN_OFF + 4), row["last_human_ts"]
 
 
 def test_p6_interrupt_then_new_prompt_also_disarms():
     base = time.time()
-    extra = [act_line("user", base + 14, "[Request interrupted by user]"),
-             act_line("user", base + 16, "ok carry on please")]
+    extra = [act_line("user", base + HUMAN_OFF + 4, "[Request interrupted by user]"),
+             act_line("user", base + HUMAN_OFF + 6, "ok carry on please")]
     act_quiet(act_run(base=base, session={"acted_since_human": 1}, extra_lines=extra), "A08")
 
 
@@ -1203,7 +1223,7 @@ def test_p6_stale_artifact_session_id_means_no_block():
 
 def test_p6_session_rebound_newer_than_the_last_human_line_means_no_block():
     base = time.time()
-    events = [{"ts": iso(base + 11), "wf": WF, "event": "session_rebound", "from": None, "to": ACT_SID}]
+    events = [{"ts": iso(base + HUMAN_OFF + 1), "wf": WF, "event": "session_rebound", "from": None, "to": ACT_SID}]
     act_quiet(act_run(base=base, events=events), "A03")
     old = [{"ts": iso(base - 5), "wf": WF, "event": "session_rebound", "from": None, "to": ACT_SID}]
     assert act_run(base=base, events=old).out.startswith('{"decision": "block"')
@@ -1236,6 +1256,147 @@ def test_p6_jev_endpoint_override_means_no_block():
 def test_p6_exception_in_the_act_step_is_silent_and_exits_zero():
     run = act_run(raise_in_act=True)
     assert run.code == 0 and run.out == "", (run.code, run.out, run.err)
+
+
+# --- P6 remediation: negative-reply detection, ts guards, A16/A17, race, relay exclusivity ------------
+
+def _negative_run(text, content=None):
+    base = time.time()
+    line = act_line("user", base + HUMAN_OFF + 4, content if content is not None else text)
+    return base, act_run(base=base, session={"acted_since_human": 1}, extra_lines=[line])
+
+
+def test_p6r_curly_apostrophe_dont_is_negative():
+    _base, run = _negative_run("don’t do that")
+    act_quiet(run, "A08")
+
+
+def test_p6r_lexicon_nope_not_yet_never_mind_hold_on_undo():
+    for text in ("nope", "Not yet", "never mind", "ok, hold on a sec", "please undo that", "revert it"):
+        act_quiet(_negative_run(text)[1], "A08")
+
+
+def test_p6r_negative_word_anywhere_in_the_first_80_chars():
+    act_quiet(_negative_run("hmm, I think we should wait before going on")[1], "A08")
+    far = _negative_run("carry on with the next phase and keep the tests green. " * 3 + "nope")[1]
+    assert far.out.startswith('{"decision"'), far.out  # beyond 80 chars: not a negative reply
+
+
+def test_p6r_ide_prefixed_content_list_is_a_human_line_and_negative():
+    blocks = [{"type": "text", "text": "<ide_selection>The user selected x</ide_selection>"},
+              {"type": "text", "text": "no, stop"}]
+    base, run = _negative_run("", content=blocks)
+    row = act_quiet(run, "A08")
+    assert row["last_human_ts"] == iso(base + HUMAN_OFF + 4), row["last_human_ts"]
+
+
+def test_p6r_human_text_filters():
+    mk = lambda c, **kw: dict({"type": "user", "message": {"content": c}}, **kw)  # noqa: E731
+    assert gate._human_text(mk([{"type": "tool_result", "content": "x"}])) is None
+    assert gate._human_text(mk([{"type": "text", "text": "<system-reminder>x</system-reminder>"}])) is None
+    assert gate._human_text(mk("craftflow stop-gate: auto-continue 1/5 (armed by the user).")) is None
+    assert gate._human_text(mk("no, craftflow stop-gate: is wrong")) == "no, craftflow stop-gate: is wrong"
+    assert gate._human_text(mk([{"type": "image"}, {"type": "text", "text": "go"}])) == "go"
+
+
+def test_p6r_human_line_without_timestamp_is_unknown_and_blocks():
+    base = time.time()
+    run = act_run(base=base, session={"acted_since_human": 1},
+                  extra_lines=[act_line("user", None, "carry on")])
+    row = act_quiet(run, "A06")
+    assert row["last_human_ts"] is None, row["last_human_ts"]
+    scan = gate.scan_transcript(json.dumps(act_line("user", None, "stop")).encode())
+    assert scan["human_lines"] == [(float("inf"), "stop")] and gate.negative_since(scan, iso(base))
+
+
+def test_p6r_future_human_timestamp_is_unknown():
+    base = time.time() + 400
+    run = act_run(base=base, arm_over={"armedAt": iso(time.time() - 60)})
+    act_quiet(run, "A06")
+
+
+def test_p6r_a16_stop_reason_unknown_blocks_and_is_pure_in_core():
+    act_quiet(act_run(stop_reason=None), "A16")
+    assert "A16_stop_reason_unknown" in clean_blockers(facts=act_facts(stop_reason=None))
+    assert "A16_stop_reason_unknown" in clean_blockers(facts=act_facts(stop_reason=7))
+    assert clean_blockers() == []
+
+
+def test_p6r_truncated_transcript_tail_after_an_act_fails_closed():
+    big = 1_200_000
+    held = act_run(session={"acted_since_human": 1}, pad_bytes=big)
+    act_quiet(held, "A17")
+    fresh = act_run(pad_bytes=big)
+    assert fresh.out.startswith('{"decision"'), (fresh.out, fresh.rows[0]["act_blockers"])
+    scan = gate.scan_transcript(b"")
+    assert scan["tail_truncated"] is False
+
+
+def test_p6r_truncated_events_tail_after_an_act_fails_closed():
+    base = time.time()
+    run = act_run(base=base, session={"acted_since_human": 1}, events=[], events_pad=1_200_000)
+    act_quiet(run, "A03")
+
+
+def test_p6r_concurrent_session_writer_means_no_block_m2():
+    run = act_run(race=True)
+    row = act_quiet(run, "A13")
+    assert run.session["acted_since_human"] == 8, run.session
+
+
+def test_p6r_broken_stdout_logs_a_compensating_event_and_exits_zero():
+    row = core.build_row(row_kind="stop", mode="on", verdict="would_continue", acted=True)
+    seen = []
+    saved = (gate.run, gate.append_row, gate.log_event, sys.stdout)
+
+    class Broken:
+        def write(self, _text):
+            raise BrokenPipeError()
+
+        def flush(self):
+            pass
+
+    gate.run = lambda *a, **k: ({"decision": "block", "reason": "r"}, row)
+    gate.append_row = lambda r: seen.append(("row", r["acted"]))
+    gate.log_event = lambda name, data: seen.append((name, data))
+    sys.stdout = Broken()
+    try:
+        code = gate.main(b"{}")
+    finally:
+        gate.run, gate.append_row, gate.log_event, sys.stdout = saved
+    assert code == 0, code
+    assert seen[0] == ("row", True) and seen[-1][0] == "plugin_stop_gate_error", seen
+    assert seen[-1][1].get("acted_undelivered") is True, seen
+
+
+def test_p6r_read_tail_caps_the_bytes_it_returns():
+    path = Path(scratch_dir()) / "big.bin"
+    path.write_bytes((b"y" * 99 + b"\n") * 20000)
+    data, truncated = gate.read_tail_ex(str(path))
+    assert truncated is True and len(data) <= gate.TAIL_BYTES, (truncated, len(data))
+
+
+def test_p6r_push_relay_on_needs_human_does_not_act():
+    run = act_run(kind="asking_decision", base=time.time() - 3600,
+                  consent_extra={"notify": "push", "notifyMinTurnSeconds": 0})
+    row = run.rows[0]
+    assert run.code == 0 and json.loads(run.out)["decision"] == "block", run.out
+    assert json.loads(run.out)["reason"].startswith("craftflow stop-gate: the user asked"), run.out
+    assert (row["acted"], row["verdict"], row["notify_status"]) == (False, "needs_human", "relay"), row
+
+
+def test_p6r_needs_human_with_an_armed_setup_never_acts():
+    run = act_run(kind="asking_decision")
+    act_quiet(run, "A05")
+    assert run.rows[0]["verdict"] == "needs_human"
+
+
+def test_p6r_no_progress_chain_h16_blocks():
+    run = act_run(hook_active=True, session={"acted_since_human": 1, "would_continue_since_human": 1,
+                                             "last_head": "@HEAD", "last_cursor": "P2"})
+    assert run.code == 0 and run.out == "", (run.out, run.err)
+    assert "H16_no_progress" in run.rows[0]["rule_hits"], run.rows[0]["rule_hits"]
+    assert run.rows[0]["acted"] is False
 
 
 def main():

@@ -80,6 +80,7 @@ import stat  # noqa: E402
 import subprocess  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
+import unicodedata  # noqa: E402
 
 import craftflow_context_nudge_compact as cc  # noqa: E402
 import craftflow_stop_gate_core as core  # noqa: E402
@@ -94,6 +95,7 @@ NOTIFY_TIMEOUT_S = 1.0
 NOTIFY_RESERVE_S = 0.2
 TAIL_BYTES = 1048576
 HUMAN_TEXT_CAP = 300
+HUMAN_FUTURE_SKEW_S = 120.0
 STATUS_DIRTY_CAP = 500
 _UNMERGED_CODES = frozenset(("DD", "AU", "UD", "UA", "DU", "AA", "UU"))
 _TS_RE = re.compile(
@@ -125,28 +127,36 @@ def parse_ts(value):
 
 def read_tail(path):
     """Last TAIL_BYTES of a REGULAR transcript file as bytes; b'' for anything else (FIFO, missing, ...)."""
+    return read_tail_ex(path)[0]
+
+
+def read_tail_ex(path):
+    """(bytes, truncated): like ``read_tail``; ``truncated`` is True when the file starts before the tail.
+
+    Never returns more than TAIL_BYTES, even when the file grows while it is read."""
     if not isinstance(path, str) or not path:
-        return b""
+        return b"", False
     fd = -1
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
-            return b""
+            return b"", False
         start = max(0, info.st_size - TAIL_BYTES)
         os.lseek(fd, start, os.SEEK_SET)
-        chunks = []
-        while True:
-            chunk = os.read(fd, 65536)
+        chunks, total = [], 0
+        while total < TAIL_BYTES:
+            chunk = os.read(fd, min(65536, TAIL_BYTES - total))
             if not chunk:
                 break
             chunks.append(chunk)
+            total += len(chunk)
         data = b"".join(chunks)
         if start > 0:
             data = data.split(b"\n", 1)[1] if b"\n" in data else b""  # drop the cut first line
-        return data
+        return data, start > 0
     except OSError:
-        return b""
+        return b"", False
     finally:
         if fd >= 0:
             try:
@@ -175,28 +185,31 @@ def _records(data):
 
 
 def _human_text(rec):
-    """The text of a genuine human line (DD-21: not a tool result, meta, summary, command or our own relay),
-    else None."""
+    """The text of a genuine human line (DD-21), else None.
+
+    Leading ``<...>`` IDE/system text blocks and non-text blocks (images) are skipped, not fatal; a message
+    holding a ``tool_result`` block, or no human text at all, is not a human line. Text that BEGINS with our
+    own relay/continue template is not human (a human quoting it mid-sentence still is)."""
     if rec.get("type") != "user" or rec.get("isMeta") or rec.get("isCompactSummary") or "toolUseResult" in rec:
         return None
     message = rec.get("message")
     content = message.get("content") if isinstance(message, dict) else None
     if isinstance(content, str):
-        text = content
+        parts = [content]
     elif isinstance(content, list):
         parts = []
         for block in content:
-            if not isinstance(block, dict) or block.get("type") not in ("text", "image"):
+            if not isinstance(block, dict) or block.get("type") == "tool_result":
                 return None
             if block.get("type") == "text" and isinstance(block.get("text"), str):
                 parts.append(block["text"])
-        text = "\n".join(parts)
     else:
         return None
+    text = "\n".join(t for t in parts if not t.lstrip().startswith("<"))
     stripped = text.strip()
-    if stripped.startswith("<") or stripped.startswith("Stop hook feedback"):
+    if not stripped or stripped.startswith("Stop hook feedback") or stripped.startswith("craftflow stop-gate:"):
         return None
-    return None if "craftflow stop-gate:" in text else text
+    return text
 
 
 def is_genuine_human(rec):
@@ -215,22 +228,23 @@ def _assistant_text(rec):
     return ""
 
 
-def scan_transcript(data):
+def scan_transcript(data, truncated=False):
     """{last_human_ts, last_human_epoch, oldest_epoch, assistant_text, stop_reason, human_lines} from the tail.
 
     ``human_lines`` holds (epoch, text[:HUMAN_TEXT_CAP]) of every genuine human line (memory only, for the
     negative-reply check); ``stop_reason`` is the last assistant record's ``message.stop_reason`` string."""
     out = {"last_human_ts": None, "last_human_epoch": None, "oldest_epoch": None, "assistant_text": "",
-           "stop_reason": None, "human_lines": []}
+           "stop_reason": None, "human_lines": [], "tail_truncated": truncated is True}
     for rec in _records(data):
         stamp = rec.get("timestamp")
         epoch = parse_ts(stamp)
         if epoch is not None and (out["oldest_epoch"] is None or epoch < out["oldest_epoch"]):
             out["oldest_epoch"] = epoch
         human = _human_text(rec)
-        if human is not None and epoch is not None:
-            out["last_human_ts"], out["last_human_epoch"] = stamp, epoch
-            out["human_lines"].append((epoch, human[:HUMAN_TEXT_CAP]))
+        if human is not None:
+            # a human line with no usable timestamp makes the human turn unknown (fails toward disarming)
+            out["last_human_ts"], out["last_human_epoch"] = (stamp, epoch) if epoch is not None else (None, None)
+            out["human_lines"].append((epoch if epoch is not None else float("inf"), human[:HUMAN_TEXT_CAP]))
         elif rec.get("type") == "assistant":
             text = _assistant_text(rec)
             if text.strip():
@@ -245,8 +259,18 @@ def negative_since(scan, stored_ts):
     """True when ANY genuine human line after the stored human ts is a negative reply (DD-10, A7). An
     unparseable or absent stored ts counts every line in the tail (fails toward disarming)."""
     after = parse_ts(stored_ts)
-    return any(core.label_reply(text) == "negative" for epoch, text in scan["human_lines"]
-               if after is None or epoch > after)
+    return any(is_negative_text(text) for epoch, text in scan["human_lines"] if after is None or epoch > after)
+
+
+_NEGATIVE_RE = re.compile(
+    r"\b(?:no|nope|not yet|never ?mind|undo|revert|hold on|hold|wait|stop|don'?t|do not|request interrupted)\b")
+NEGATIVE_WINDOW = 80
+
+
+def is_negative_text(text):
+    """A negative reply: NFKC-folded, curly apostrophes folded, a lexicon word in the first 80 chars."""
+    folded = unicodedata.normalize("NFKC", text).replace("’", "'").replace("‘", "'").lower()
+    return core.label_reply(folded) == "negative" or bool(_NEGATIVE_RE.search(folded[:NEGATIVE_WINDOW]))
 
 
 def turn_timing(scan, now):
@@ -596,7 +620,7 @@ def jev_endpoint_override_set(env):
     return bool(env.get("CRAFTFLOW_JEV_ENDPOINT"))
 
 
-def rebound_after(root, wf, human_epoch):
+def rebound_after(root, wf, human_epoch, acted_before=False):
     """True when the bound workflow has a ``session_rebound`` event newer than the last human line (A03 input).
     No events file means no rebound. An unreadable file, or an unknown human time, fails closed (True)."""
     if not wf:
@@ -604,9 +628,9 @@ def rebound_after(root, wf, human_epoch):
     path = os.path.join(str(root), ".craftflow", "state", "workflows", wf + ".events.jsonl")
     if not is_regular_file(path):
         return os.path.lexists(path)  # absent: no rebound; present but not a regular file: fail closed
-    data = read_tail(path)
-    if human_epoch is None:
-        return True
+    data, truncated = read_tail_ex(path)
+    if human_epoch is None or (truncated and acted_before):
+        return True  # a cut-off events tail cannot prove there was no rebound: fail closed after an act
     for rec in _records(data):
         if rec.get("event") == "session_rebound":
             epoch = parse_ts(rec.get("ts"))
@@ -650,7 +674,10 @@ def run(payload, env, t0=None, ctx=None):
             write_session(root, session_id, dict(session, relay_pending=False, updated_at=now))
             return None, relay_followup_row(settings, tags, payload, session_id, transcript_path, t0)
         session = dict(session, relay_pending=False)  # stale flag from an ended relay or a user interruption
-    scan = scan_transcript(read_tail(transcript_path))
+    scan = scan_transcript(*read_tail_ex(transcript_path))
+    if scan["last_human_epoch"] is not None and scan["last_human_epoch"] > now + HUMAN_FUTURE_SKEW_S:
+        scan.update(last_human_ts=None, last_human_epoch=None)  # a far-future human stamp is unknown (A06)
+    acted_before = core._raw_count(session, "acted_since_human") > 0
     turn_seconds, lower_bound = turn_timing(scan, now)
     given = payload.get("last_assistant_message")
     message = given if isinstance(given, str) and given.strip() else scan["assistant_text"]
@@ -666,7 +693,7 @@ def run(payload, env, t0=None, ctx=None):
     given_reason = payload.get("stop_reason")
     stop_reason = given_reason if isinstance(given_reason, str) else scan["stop_reason"]  # real value, no default
     artifact_sid = wf_payload.get("session_id") if wf_payload is not None else None
-    if not isinstance(artifact_sid, str) or rebound_after(root, wf, scan["last_human_epoch"]):
+    if not isinstance(artifact_sid, str) or rebound_after(root, wf, scan["last_human_epoch"], acted_before):
         artifact_sid = None  # a re-stamp newer than the last human line voids the exact-session binding (A03)
     tail_sha = (hashlib.sha256(message[-settings["tailChars"]:].encode("utf-8", "replace")).hexdigest()[:16]
                 if message.strip() else None)
@@ -698,7 +725,8 @@ def run(payload, env, t0=None, ctx=None):
     arm = core.arm_status(consent_obj, consent.get("ctime"), now, os.path.realpath(str(root)), settings,
                           scan["last_human_epoch"], wf)
     act_flags = dict(arm_cap=core.arm_budget(consent_obj), stop_verify=stop_verify_enabled(),
-                     endpoint_override=jev_endpoint_override_set(env), tags=tags, negative_reply=negative)
+                     endpoint_override=jev_endpoint_override_set(env), tags=tags, negative_reply=negative,
+                     tail_truncated=scan["tail_truncated"])
     act_block = core.act_blockers(facts, verdict, arm, **act_flags)
     acted_reason, acted = None, False
     new_session = core.session_update(
@@ -714,6 +742,11 @@ def run(payload, env, t0=None, ctx=None):
         if acted_reason is not None:
             new_session = act_session
     wrote = write_session(root, session_id, new_session)
+    if wrote and acted_reason is not None:
+        # M-2: print only if the record on disk is still exactly ours (a concurrent writer means no block)
+        stored, stored_tag = read_session(root, session_id)
+        wrote = (stored_tag is None and stored.get("acted_since_human") == new_session["acted_since_human"]
+                 and stored.get("updated_at") == new_session["updated_at"])
     if acted_reason is not None and wrote:
         acted = True
     elif acted_reason is not None:
@@ -784,8 +817,12 @@ def main(raw=None):
                                            "rule_hits": row["rule_hits"], "row_kind": row["row_kind"],
                                            "acted": row["acted"]})
         if out is not None:
-            sys.stdout.write(json.dumps(out, ensure_ascii=True))
-            sys.stdout.flush()
+            try:
+                sys.stdout.write(json.dumps(out, ensure_ascii=True))
+                sys.stdout.flush()
+            except (OSError, ValueError) as exc:  # BrokenPipeError is an OSError: the block never reached the host
+                if row is not None and row.get("acted") is True:
+                    log_event("plugin_stop_gate_error", {"exc": type(exc).__name__, "acted_undelivered": True})
     except Exception as exc:  # noqa: BLE001 - fail-open contract: the Stop proceeds exactly as today
         record_failure(exc, ctx, t0)
     return 0
