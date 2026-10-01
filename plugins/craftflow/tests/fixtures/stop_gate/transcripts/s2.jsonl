@@ -1,0 +1,5 @@
+{"type": "user", "timestamp": "2026-10-01T10:00:00Z", "message": {"role": "user", "content": "fix the bug"}}
+{"type": "assistant", "timestamp": "2026-10-01T10:05:00Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Fixed. Do you want me to commit this?"}]}}
+{"type": "user", "timestamp": "2026-10-01T10:05:30Z", "message": {"role": "user", "content": "Yes."}}
+{"type": "assistant", "timestamp": "2026-10-01T10:08:00Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Committed. Should I use option A or option B for the follow-up?"}]}}
+{"type": "user", "timestamp": "2026-10-01T10:09:00Z", "message": {"role": "user", "content": "use option B"}}

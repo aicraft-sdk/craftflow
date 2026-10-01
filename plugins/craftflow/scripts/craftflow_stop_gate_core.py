@@ -997,3 +997,77 @@ def build_row(**fields):
         if key in fields:
             row[key] = _row_clean(fields[key])
     return row
+
+
+# --- calibration: reply labels, threshold sweep, RD-3 go criteria (DD-21, RD-3) ---------------------------
+RUBBER_STAMP_RE = re.compile(
+    r"^\s*(continue|go|go on|go ahead|yes|y|ok|okay|proceed|next|do it|commit|sure|yep|continue please|"
+    r"carry on|keep going)[.! ]*$", re.IGNORECASE)
+NEGATION_RE = re.compile(r"^\s*(?:no|stop|wait|don'?t|hold)\b", re.IGNORECASE)
+SWEEP_KIND_THRESHOLDS = tuple(round(0.70 + 0.01 * i, 2) for i in range(30))
+SWEEP_NEEDS_MAXES = tuple(round(0.05 * i, 2) for i in range(1, 11))
+_WOULD_CONTINUE_KIND = "phase_done_awaiting_continue"
+RD3 = {"would_continue_labeled": 50, "sessions": 5, "precision": 0.95, "negatives": 0,
+       "jev_failure_rate": 0.05, "hook_p90_ms": 1500}
+_RD3_AT_LEAST = ("would_continue_labeled", "sessions", "precision")
+_LABELED = frozenset(("rubber_stamp", "negative", "human_input"))
+
+
+def label_reply(text):
+    """Label the user's next reply: rubber_stamp | negative | human_input | unlabeled (no reply)."""
+    if not isinstance(text, str) or not text.strip():
+        return "unlabeled"
+    if RUBBER_STAMP_RE.match(text):
+        return "rubber_stamp"
+    if NEGATION_RE.match(text):
+        return "negative"
+    return "human_input"
+
+
+def _cell(selected, total_labeled):
+    n = len(selected)
+    stamped = sum(1 for r in selected if r.get("label") == "rubber_stamp")
+    return {"n": n, "rubber_stamp": stamped,
+            "precision": round(stamped / n, 4) if n else None,
+            "coverage": round(n / total_labeled, 4) if total_labeled else None}
+
+
+def _num(value):
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def sweep(rows, kind_thresholds=None, needs_maxes=None):
+    """Precision/coverage of would_continue per Jev threshold cell and for the heuristic (labeled, un-vetoed rows)."""
+    labeled = [r for r in rows if isinstance(r, dict) and r.get("label") in _LABELED and not r.get("rule_hits")]
+    kinds = SWEEP_KIND_THRESHOLDS if kind_thresholds is None else kind_thresholds
+    needs = SWEEP_NEEDS_MAXES if needs_maxes is None else needs_maxes
+    jev_rows = [r for r in labeled if r.get("jev_status") == "ok" and r.get("jev_kind") == _WOULD_CONTINUE_KIND
+                and _num(r.get("jev_kind_conf")) is not None and _num(r.get("jev_needs_human")) is not None]
+    cells = []
+    for threshold in kinds:
+        for needs_max in needs:
+            picked = [r for r in jev_rows if r["jev_kind_conf"] >= threshold and r["jev_needs_human"] <= needs_max]
+            cell = {"kind_threshold": threshold, "needs_human_max": needs_max}
+            cell.update(_cell(picked, len(labeled)))
+            cells.append(cell)
+    heuristic = _cell([r for r in labeled if r.get("heuristic_verdict") == "would_continue"], len(labeled))
+    return {"jev": cells, "heuristic": heuristic}
+
+
+def go_criteria(stats):
+    """RD-3 evaluation. ACT stays NO-GO unless every criterion holds; an absent Jev failure rate (None) is vacuous."""
+    stats = stats if isinstance(stats, dict) else {}
+    criteria = {}
+    for key, required in RD3.items():
+        value = stats.get(key)
+        number = _num(value)
+        if number is None:
+            met = key == "jev_failure_rate" and key in stats and value is None
+        elif key in _RD3_AT_LEAST:
+            met = number >= required
+        else:
+            met = number <= required
+        criteria[key] = {"value": value, "required": required, "met": met}
+    all_met = all(c["met"] for c in criteria.values())
+    return {"met": all_met, "criteria": criteria,
+            "act": "RD-3 met: Slice 2 may be planned" if all_met else "NO-GO"}

@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""Stop-gate calibration report and offline replay (SPEC-0018 / ADR-0055, RD-3). Read-only, fail soft.
+
+  craftflow_stop_gate_report.py [--events FILE] [--transcripts-root DIR]
+      Labels each shadow row by the user's next genuine reply in the same transcript, then prints ONE JSON
+      object: rows, labeled, by_verdict, rule_hits, jev, heuristic, sweep, latency_ms, usage_total,
+      go_criteria. ACT stays NO-GO unless the RD-3 criteria are met.
+  craftflow_stop_gate_report.py --replay --transcripts-root DIR
+      Offline replay over transcripts only: prints counts, never any message text.
+
+The events file is only ever read. Message text is read to compute labels and is never printed.
+Python 3.9 stdlib only.
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import math
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import craftflow_stop_gate as gate  # noqa: E402
+import craftflow_stop_gate_core as core  # noqa: E402
+
+MAX_EVENTS_BYTES = 64 * 1024 * 1024
+MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024
+STATE_SEGMENTS = (".craftflow", "state", "stop-gate", "events.jsonl")
+NO_JEV_CALL = frozenset(("not_needed", "not_consented", "inactive", None))
+VERDICTS = ("would_continue", "would_commit", "needs_human")
+
+
+def iter_records(data):
+    """Parsed JSON object per line of transcript/events bytes; malformed lines are skipped."""
+    return gate._records(data)
+
+
+def read_bytes(path, cap):
+    """Bytes of a REGULAR file (at most ``cap``), else b''. Never raises."""
+    if not gate.is_regular_file(path):
+        return b""
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(cap)
+    except OSError:
+        return b""
+
+
+def human_text(rec):
+    """Text of a genuine human line, else None."""
+    if not gate.is_genuine_human(rec):
+        return None
+    content = rec["message"]["content"]
+    if isinstance(content, str):
+        return content
+    return "\n".join(b["text"] for b in content if b.get("type") == "text" and isinstance(b.get("text"), str))
+
+
+def join_next_user_reply(records, after_ts):
+    """Text of the first genuine human line strictly after ``after_ts`` (ISO string), else None."""
+    after = gate.parse_ts(after_ts)
+    if after is None:
+        return None
+    for rec in records:
+        epoch = gate.parse_ts(rec.get("timestamp"))
+        if epoch is None or epoch <= after:
+            continue
+        text = human_text(rec)
+        if text is not None:
+            return text
+    return None
+
+
+def metric_rows(rows):
+    """Rows that count toward metrics: dict rows of row_kind stop (relay follow-ups and errors are excluded)."""
+    return [r for r in rows if isinstance(r, dict) and r.get("row_kind") == "stop"]
+
+
+def load_events(path):
+    return [r for r in iter_records(read_bytes(path, MAX_EVENTS_BYTES))]
+
+
+def _find_transcript(row, root):
+    names = []
+    tpath, sid = row.get("transcript_path"), row.get("session_id")
+    if isinstance(tpath, str) and tpath:
+        names.append(os.path.basename(tpath))
+    if isinstance(sid, str) and sid:
+        names.append(sid + ".jsonl")
+    candidates = [os.path.join(root, n) for n in names] if root else []
+    if not root and isinstance(tpath, str) and tpath:
+        candidates.append(tpath)
+    for candidate in candidates:
+        if gate.is_regular_file(candidate):
+            return candidate
+    return None
+
+
+def label_rows(rows, root):
+    """Copies of the rows with a ``label`` from the user's next reply; unlabeled when it cannot be joined."""
+    cache = {}
+    out = []
+    for row in rows:
+        labeled = dict(row)
+        labeled["label"] = "unlabeled"
+        path = _find_transcript(row, root)
+        if path is not None:
+            if path not in cache:
+                cache[path] = list(iter_records(read_bytes(path, MAX_TRANSCRIPT_BYTES)))
+            labeled["label"] = core.label_reply(join_next_user_reply(cache[path], row.get("ts")))
+        out.append(labeled)
+    return out
+
+
+def _percentile(values, pct):
+    numbers = sorted(v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool))
+    if not numbers:
+        return None
+    return numbers[max(0, min(len(numbers) - 1, int(math.ceil(pct / 100.0 * len(numbers))) - 1))]
+
+
+def _latency(values):
+    numbers = [v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    return {"n": len(numbers), "p50": _percentile(numbers, 50), "p90": _percentile(numbers, 90),
+            "max": max(numbers) if numbers else None}
+
+
+def _count(values):
+    counts = {}
+    for value in values:
+        counts[str(value)] = counts.get(str(value), 0) + 1
+    return counts
+
+
+def _usage_total(rows):
+    total = {}
+    for row in rows:
+        usage = row.get("jev_usage")
+        if isinstance(usage, dict):
+            for key, value in usage.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    total[key] = total.get(key, 0) + value
+    return total
+
+
+def _jev_summary(rows):
+    calls = [r for r in rows if r.get("jev_status") not in NO_JEV_CALL]
+    failures = [r for r in calls if r.get("jev_status") != "ok"]
+    return {"calls": len(calls), "failures": len(failures),
+            "failure_rate": round(len(failures) / len(calls), 4) if calls else None,
+            "status_counts": _count(r.get("jev_status") for r in rows)}
+
+
+def build_report(rows, root):
+    stops = label_rows(metric_rows(rows), root)
+    labeled = [r for r in stops if r["label"] != "unlabeled"]
+    wc = [r for r in labeled if r.get("verdict") == "would_continue"]
+    stamped = sum(1 for r in wc if r["label"] == "rubber_stamp")
+    jev = _jev_summary(stops)
+    hook_latency = _latency(r.get("hook_ms") for r in stops)
+    stats = {
+        "would_continue_labeled": len(wc),
+        "sessions": len({r.get("session_id") for r in wc if r.get("session_id")}),
+        "precision": round(stamped / len(wc), 4) if wc else None,
+        "negatives": sum(1 for r in wc if r["label"] == "negative"),
+        "jev_failure_rate": jev["failure_rate"],
+        "hook_p90_ms": hook_latency["p90"],
+    }
+    swept = core.sweep(stops)
+    return {
+        "rows": len(stops),
+        "labeled": len(labeled),
+        "by_verdict": _count(r.get("verdict") for r in stops),
+        "rule_hits": _count(code for r in stops for code in (r.get("rule_hits") or [])),
+        "jev": jev,
+        "heuristic": dict(swept["heuristic"], label_counts=_count(r["label"] for r in stops)),
+        "sweep": swept["jev"],
+        "latency_ms": {"hook": hook_latency, "jev": _latency(r.get("jev_latency_ms") for r in stops)},
+        "usage_total": _usage_total(stops),
+        "go_criteria": dict(core.go_criteria(stats), stats=stats),
+    }
+
+
+def replay(root):
+    """Counts over every user turn that follows assistant text in the transcripts. Never returns text."""
+    out = {"turns": 0, "rubber_stamp": 0, "question_end": 0, "question_end_rubber_stamp": 0,
+           "heuristic_confusion": {v: {"rubber_stamp": 0, "other": 0} for v in VERDICTS}}
+    paths = sorted(glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True)) if root else []
+    for path in paths:
+        last = None
+        for rec in iter_records(read_bytes(path, MAX_TRANSCRIPT_BYTES)):
+            if rec.get("type") == "assistant":
+                text = gate._assistant_text(rec)
+                if text.strip():
+                    last = text
+                continue
+            reply = human_text(rec)
+            if reply is None or last is None:
+                continue
+            stamp = core.label_reply(reply) == "rubber_stamp"
+            kind, _signals = core.heuristic_kind(last)
+            verdict = core._verdict_for(kind, [])
+            out["turns"] += 1
+            out["rubber_stamp"] += stamp
+            if last.rstrip().endswith("?"):
+                out["question_end"] += 1
+                out["question_end_rubber_stamp"] += stamp
+            out["heuristic_confusion"][verdict]["rubber_stamp" if stamp else "other"] += 1
+            last = None
+    return out
+
+
+def default_events_path():
+    base = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    return os.path.join(base, *STATE_SEGMENTS)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Stop-gate calibration report (read-only).")
+    parser.add_argument("--events", default=None)
+    parser.add_argument("--transcripts-root", default=None)
+    parser.add_argument("--replay", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        if args.replay:
+            result = replay(args.transcripts_root)
+        else:
+            result = build_report(load_events(args.events or default_events_path()), args.transcripts_root)
+    except Exception as exc:  # noqa: BLE001 - fail soft: report the error class only, never content
+        result = {"error": type(exc).__name__}
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1746,6 +1746,150 @@ def test_notify_desktop_under_deadline_fake_osascript():
 
 
 # ---------------------------------------------------------------------------
+# P7: calibration report and offline replay
+# ---------------------------------------------------------------------------
+import craftflow_stop_gate_report as report  # noqa: E402
+
+REPORT_SCRIPT = SCRIPTS / "craftflow_stop_gate_report.py"
+SAMPLE_DIR = PLUGIN_ROOT / "tests" / "fixtures" / "stop_gate"
+
+
+def test_label_reply_table():
+    for text in ("continue", "Yes.", "go ahead", "commit"):
+        assert core.label_reply(text) == "rubber_stamp", text
+    assert core.label_reply("no, wait") == "negative"
+    assert core.label_reply("use option B") == "human_input"
+    assert core.label_reply("") == "unlabeled"
+    assert core.label_reply(None) == "unlabeled"
+
+
+def _tline(kind, ts, content, **extra):
+    rec = {"type": kind, "timestamp": ts, "message": {"role": kind, "content": content}}
+    rec.update(extra)
+    return json.dumps(rec)
+
+
+def test_join_next_user_reply_after_ts():
+    lines = [
+        _tline("user", "2026-10-01T10:00:00Z", "before the stop"),
+        _tline("assistant", "2026-10-01T10:01:00Z", [{"type": "text", "text": "done. continue?"}]),
+        _tline("user", "2026-10-01T10:01:05Z", [{"type": "tool_result", "content": "x"}]),
+        _tline("user", "2026-10-01T10:01:06Z", "meta line", isMeta=True),
+        _tline("user", "2026-10-01T10:01:07Z", "Stop hook feedback: something"),
+        _tline("user", "2026-10-01T10:01:08Z", "craftflow stop-gate: the user asked to be notified"),
+        _tline("user", "2026-10-01T10:02:00Z", "go ahead"),
+        _tline("user", "2026-10-01T10:03:00Z", "later message"),
+    ]
+    records = list(report.iter_records("\n".join(lines).encode("utf-8")))
+    assert report.join_next_user_reply(records, "2026-10-01T10:01:30Z") == "go ahead"
+    assert report.join_next_user_reply(records, "2026-10-01T10:01:00Z") == "go ahead"
+    assert report.join_next_user_reply(records, "2026-10-01T10:03:30Z") is None
+    assert report.join_next_user_reply(records, "not-a-timestamp") is None
+    rows = [
+        {"row_kind": "stop", "verdict": "would_continue"},
+        {"row_kind": "relay_followup", "verdict": None},
+        {"row_kind": "error", "verdict": None},
+        "garbage",
+    ]
+    assert report.metric_rows(rows) == [rows[0]]
+
+
+def test_sweep_precision_math():
+    def row(label, conf, needs=0.1, hits=()):
+        return {"label": label, "jev_status": "ok", "jev_kind": "phase_done_awaiting_continue",
+                "jev_kind_conf": conf, "jev_needs_human": needs, "heuristic_verdict": "would_continue",
+                "rule_hits": list(hits)}
+    rows = [row("rubber_stamp", 0.95), row("rubber_stamp", 0.95), row("rubber_stamp", 0.95),
+            row("negative", 0.95), row("rubber_stamp", 0.75), row("rubber_stamp", 0.99, hits=["H03_pending_gate"]),
+            row("unlabeled", 0.99)]
+    out = core.sweep(rows, kind_thresholds=[0.7, 0.9], needs_maxes=[0.05, 0.2])
+    cells = {(c["kind_threshold"], c["needs_human_max"]): c for c in out["jev"]}
+    assert len(cells) == 4
+    assert cells[(0.9, 0.2)] == {"kind_threshold": 0.9, "needs_human_max": 0.2, "n": 4, "rubber_stamp": 3,
+                                 "precision": 0.75, "coverage": 0.8}
+    assert cells[(0.7, 0.2)]["n"] == 5 and cells[(0.7, 0.2)]["precision"] == 0.8
+    assert cells[(0.7, 0.05)]["n"] == 0 and cells[(0.7, 0.05)]["precision"] is None
+    assert out["heuristic"]["n"] == 5 and out["heuristic"]["rubber_stamp"] == 4
+    assert out["heuristic"]["precision"] == 0.8
+    default = core.sweep([])
+    assert len(default["jev"]) == 30 * 10
+
+
+def test_go_criteria_rd3():
+    good = {"would_continue_labeled": 50, "sessions": 5, "precision": 0.95, "negatives": 0,
+            "jev_failure_rate": 0.05, "hook_p90_ms": 1500}
+    verdict = core.go_criteria(good)
+    assert verdict["met"] is True and verdict["act"] == "RD-3 met: Slice 2 may be planned"
+    for key, bad in (("would_continue_labeled", 49), ("sessions", 4), ("precision", 0.94), ("negatives", 1),
+                     ("jev_failure_rate", 0.06), ("hook_p90_ms", 1501)):
+        worse = core.go_criteria(dict(good, **{key: bad}))
+        assert worse["met"] is False, key
+        assert worse["criteria"][key]["met"] is False, key
+        assert worse["act"] == "NO-GO", key
+    empty = core.go_criteria({})
+    assert empty["met"] is False and empty["act"] == "NO-GO"
+    assert core.go_criteria(dict(good, jev_failure_rate=None))["met"] is True
+
+
+def _run_report(args, cwd=None):
+    return subprocess.run([sys.executable, str(REPORT_SCRIPT)] + args, capture_output=True, text=True,
+                          timeout=30, cwd=cwd or str(PLUGIN_ROOT))
+
+
+def test_report_cli_sample():
+    proc = _run_report(["--events", "tests/fixtures/stop_gate/events-sample.jsonl",
+                        "--transcripts-root", "tests/fixtures/stop_gate/transcripts"])
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+    for key in ("rows", "labeled", "by_verdict", "rule_hits", "jev", "heuristic", "sweep", "latency_ms",
+                "usage_total", "go_criteria"):
+        assert key in out, key
+    assert out["go_criteria"]["met"] is False and out["go_criteria"]["act"] == "NO-GO"
+    assert out["rows"] > 0 and out["labeled"] > 0
+    assert out["by_verdict"].get("would_continue", 0) >= 1
+    assert "relay_followup" not in json.dumps(out["by_verdict"])
+    assert out["rows"] == sum(out["by_verdict"].values())
+
+
+def test_replay_never_prints_text():
+    scr = scratch_dir()
+    marker = "ZZPLANTEDMARKERZZ"
+    lines = [
+        _tline("user", "2026-10-01T10:00:00Z", "start"),
+        _tline("assistant", "2026-10-01T10:01:00Z", [{"type": "text", "text": marker + " shall we continue?"}]),
+        _tline("user", "2026-10-01T10:02:00Z", "continue"),
+        _tline("assistant", "2026-10-01T10:03:00Z", [{"type": "text", "text": marker + " all done."}]),
+        _tline("user", "2026-10-01T10:04:00Z", marker + " different request"),
+    ]
+    Path(scr, "s1.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    proc = _run_report(["--replay", "--transcripts-root", scr])
+    assert proc.returncode == 0, proc.stderr
+    assert marker not in proc.stdout and marker not in proc.stderr
+    out = json.loads(proc.stdout)
+    assert out["turns"] == 2 and out["rubber_stamp"] == 1
+    assert out["question_end"] == 1 and out["question_end_rubber_stamp"] == 1
+    assert out["heuristic_confusion"]["would_continue"] == {"rubber_stamp": 1, "other": 0}
+    assert out["heuristic_confusion"]["needs_human"] == {"rubber_stamp": 0, "other": 1}
+
+
+def test_report_handles_missing_transcripts():
+    scr = scratch_dir()
+    events = Path(scr, "events.jsonl")
+    row = core.build_row(row_kind="stop", ts="2026-10-01T10:01:00Z", session_id="nope",
+                         transcript_path="/nonexistent/x.jsonl", verdict="would_continue",
+                         verdict_source="heuristic", heuristic_verdict="would_continue", rule_hits=[])
+    events.write_text(json.dumps(row) + "\nnot json\n", encoding="utf-8")
+    proc = _run_report(["--events", str(events), "--transcripts-root", os.path.join(scr, "absent")])
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+    assert out["rows"] == 1 and out["labeled"] == 0
+    assert out["go_criteria"]["met"] is False
+    missing = _run_report(["--events", os.path.join(scr, "no-such.jsonl")])
+    assert missing.returncode == 0
+    assert json.loads(missing.stdout)["rows"] == 0
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 

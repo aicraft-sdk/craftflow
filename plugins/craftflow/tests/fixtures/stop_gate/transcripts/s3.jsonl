@@ -1,0 +1,5 @@
+{"type": "user", "timestamp": "2026-10-01T11:00:00Z", "message": {"role": "user", "content": "add docs"}}
+{"type": "assistant", "timestamp": "2026-10-01T11:04:00Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Docs added. Phase P1 complete. Continue to the next phase?"}]}}
+{"type": "user", "timestamp": "2026-10-01T11:04:20Z", "message": {"role": "user", "content": "Stop hook feedback: ignored"}}
+{"type": "user", "timestamp": "2026-10-01T11:04:30Z", "message": {"role": "user", "content": "craftflow stop-gate: relay line ignored"}}
+{"type": "user", "timestamp": "2026-10-01T11:05:00Z", "message": {"role": "user", "content": "go ahead"}}
