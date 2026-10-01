@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import time
 import urllib.error
 import urllib.parse
@@ -46,6 +47,7 @@ RETRY_STATUSES = (429, 529)
 _RETRY_BACKOFF_SECONDS = 0.3
 _MIN_REMAINING_AFTER_BACKOFF_SECONDS = 1.0
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+_MAX_ENDPOINT_FILE_BYTES = 4096
 
 
 def _passwd_home() -> Optional[str]:
@@ -65,32 +67,125 @@ def _default_endpoint_path() -> Optional[Path]:
     return Path(home) / ".claude" / "craftflow" / "jev-endpoint.json"
 
 
-def _read_endpoint_file(path: Optional[Path]) -> Optional[str]:
-    """Return the `endpoint` string from the user file, or None on any problem."""
+class _UnreadableEndpointFile(Exception):
+    """Internal: carries a non-sensitive reason token (never file contents)."""
+
+
+def _log_safely(log, decision: str, error: Optional[str] = None) -> None:
+    payload: Dict[str, Any] = {"event": "jev_call", "decision": decision}
+    if error is not None:
+        payload["error"] = error
+    try:
+        log("plugin_jev_client", payload)
+    except Exception:
+        pass  # a hostile log callable must never break endpoint resolution
+
+
+def _read_endpoint_file(path: Optional[Path], log=None) -> Optional[str]:
+    """Return the `endpoint` string from the user file, or None on any problem.
+
+    A missing file is silent. Any other problem (non-regular file, oversized,
+    unreadable, malformed, wrong shape) logs exactly one
+    `endpoint_file_unreadable` event carrying only an exception type name or
+    reason token -- never the path contents or value.
+    """
     if path is None:
         return None
     try:
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-    except Exception:  # missing/unreadable/malformed -> fail open
-        return None
-    value = data.get("endpoint") if isinstance(data, dict) else None
-    return value if isinstance(value, str) and value else None
+        try:
+            st = os.stat(path)
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISREG(st.st_mode):
+            raise _UnreadableEndpointFile("not_regular_file")
+        # O_NONBLOCK: never block on a FIFO swapped in after the stat;
+        # O_NOFOLLOW: refuse a symlink swapped in after the stat.
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise _UnreadableEndpointFile("not_regular_file")
+            raw = b""
+            while len(raw) <= _MAX_ENDPOINT_FILE_BYTES:
+                chunk = os.read(fd, _MAX_ENDPOINT_FILE_BYTES + 1 - len(raw))
+                if not chunk:
+                    break
+                raw += chunk
+        finally:
+            os.close(fd)
+        if len(raw) > _MAX_ENDPOINT_FILE_BYTES:
+            raise _UnreadableEndpointFile("too_large")
+        data = json.loads(raw.decode("utf-8"))
+        if not isinstance(data, dict):
+            raise _UnreadableEndpointFile("not_object")
+        value = data.get("endpoint")
+        if not isinstance(value, str) or not value:
+            raise _UnreadableEndpointFile("endpoint_not_string")
+        return value
+    except _UnreadableEndpointFile as exc:
+        reason = str(exc)
+    except Exception as exc:  # unreadable/malformed -> fail open, token only
+        reason = type(exc).__name__
+    if log is not None:
+        _log_safely(log, "endpoint_file_unreadable", reason)
+    return None
+
+
+def _is_safe_loopback_url(url: str) -> bool:
+    """True only for an unambiguous http(s) loopback URL (DD-14).
+
+    urlsplit and urllib.request.Request must agree on the host, and anything
+    parser-differential bait (userinfo, backslash, whitespace, control chars)
+    is rejected outright.
+    """
+    try:
+        if any(ch == "\\" or ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in url):
+            return False
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme not in ("http", "https"):
+            return False
+        if "@" in parts.netloc or parts.username is not None or parts.password is not None:
+            return False
+        hostname = parts.hostname
+        if hostname not in _LOOPBACK_HOSTS:
+            return False
+        req_host = urllib.request.Request(url).host
+        if req_host.startswith("["):
+            req_host = req_host[1:].split("]", 1)[0]
+        else:
+            req_host = req_host.rsplit(":", 1)[0] if ":" in req_host else req_host
+        return req_host.lower() == hostname
+    except Exception:
+        return False
 
 
 def _resolve_endpoint(log, config_path: Optional[Path] = None) -> str:
     """Return ENDPOINT unless the user-level file names a loopback URL (DD-14)."""
-    override = _read_endpoint_file(config_path if config_path is not None else _default_endpoint_path())
+    path = config_path if config_path is not None else _default_endpoint_path()
+    if path is None:
+        _log_safely(log, "endpoint_home_unresolved")
+        return ENDPOINT
+    override = _read_endpoint_file(path, log)
     if not override:
         return ENDPOINT
-    try:
-        hostname = urllib.parse.urlsplit(override).hostname
-    except Exception:
-        hostname = None
-    if hostname in _LOOPBACK_HOSTS:
+    if _is_safe_loopback_url(override):
         return override
-    log("plugin_jev_client", {"event": "jev_call", "decision": "endpoint_override_ignored"})
+    _log_safely(log, "endpoint_override_ignored")
     return ENDPOINT
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Fail any 3xx so the bearer key can never be forwarded to a redirect target."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirectHandler)
+
+
+def _urlopen(req, timeout=None):
+    return _OPENER.open(req, timeout=timeout)
 
 
 def _cache_key(state: Any, questions: Any, model: str) -> str:
@@ -201,7 +296,7 @@ def call(
             try:
                 remaining = total_budget_seconds - (time.monotonic() - start)
                 attempt_timeout = min(timeout, remaining)
-                with urllib.request.urlopen(req, timeout=attempt_timeout) as resp:
+                with _urlopen(req, timeout=attempt_timeout) as resp:
                     body = resp.read()
                 data = json.loads(body)
                 if not isinstance(data, dict) or "answers" not in data:

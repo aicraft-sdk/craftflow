@@ -3,17 +3,21 @@
 
 Run: python3 tests/fixtures/test_craftflow_jev_client.py
 
-All network I/O is mocked via mock.patch("craftflow_jev_client.urllib.request.urlopen").
+All network I/O is mocked via mock.patch("craftflow_jev_client._urlopen").
 The client must never touch the real network in these tests.
 """
 from __future__ import annotations
 
+import contextlib
 import http.client
+import http.server
 import json
 import os
+import signal
 import socket
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 from pathlib import Path
@@ -107,7 +111,7 @@ def test_success_returns_answers_and_usage_and_sends_bearer_header() -> None:
         body = json.dumps({"answers": {"workflow": "BUILD"}, "usage": {"tokens": 10}, "model": "jev-1.12"}).encode()
         return fake_response(200, body)
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
         result = call(
             {"prompt": "hi"},
             {"workflow": {"criteria": {}}},
@@ -144,7 +148,7 @@ def test_401_returns_none_without_retry_and_logs_status_only() -> None:
     def fake_log(name, payload):
         logged.append((name, payload))
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
         result = call(
             {}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log
         )
@@ -173,7 +177,7 @@ def test_429_then_success_retries_once_with_backoff() -> None:
         body = json.dumps({"answers": {"a": 1}, "usage": {}, "model": "jev-1.12"}).encode()
         return fake_response(200, body)
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen), mock.patch(
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen), mock.patch(
         "craftflow_jev_client.time.sleep", side_effect=lambda s: slept.append(s)
     ):
         result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None)
@@ -194,7 +198,7 @@ def test_529_retries_but_500_does_not() -> None:
         body = json.dumps({"answers": {}, "usage": {}, "model": "jev-1.12"}).encode()
         return fake_response(200, body)
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen_529), mock.patch(
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen_529), mock.patch(
         "craftflow_jev_client.time.sleep", return_value=None
     ):
         result_529 = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None)
@@ -205,7 +209,7 @@ def test_529_retries_but_500_does_not() -> None:
         calls_500.append(timeout)
         raise _http_error(500, "Server Error")
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen_500):
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen_500):
         result_500 = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None)
 
     if result_529 is not None and len(calls_529) == 2 and result_500 is None and len(calls_500) == 1:
@@ -226,7 +230,7 @@ def test_retry_skipped_when_budget_below_one_second() -> None:
         clock.advance(3.2)
         raise _http_error(429, "Too Many Requests")
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen), mock.patch(
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen), mock.patch(
         "craftflow_jev_client.time.monotonic", side_effect=clock.monotonic
     ):
         result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None)
@@ -254,7 +258,7 @@ def test_second_attempt_timeout_never_exceeds_remaining_budget() -> None:
     def fake_sleep(seconds):
         clock.advance(seconds)
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen), mock.patch(
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen), mock.patch(
         "craftflow_jev_client.time.monotonic", side_effect=clock.monotonic
     ), mock.patch("craftflow_jev_client.time.sleep", side_effect=fake_sleep):
         result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None)
@@ -282,7 +286,7 @@ def test_socket_timeout_is_not_retried() -> None:
     def fake_log(name, payload):
         logged.append((name, payload))
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
         result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log)
 
     if (
@@ -310,7 +314,7 @@ def test_timeout_seconds_4_leaves_no_retry_budget() -> None:
     def fake_log(name, payload):
         logged.append((name, payload))
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen), mock.patch(
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen), mock.patch(
         "craftflow_jev_client.time.monotonic", side_effect=clock.monotonic
     ):
         result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=4.0, cache_dir=None, log=fake_log)
@@ -330,14 +334,14 @@ def test_malformed_json_and_missing_answers_return_none() -> None:
     def fake_urlopen_malformed(req, timeout=None):
         return fake_response(200, b"not-json{")
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen_malformed):
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen_malformed):
         result_malformed = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None)
 
     def fake_urlopen_missing(req, timeout=None):
         body = json.dumps({"usage": {}, "model": "jev-1.12"}).encode()
         return fake_response(200, body)
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen_missing):
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen_missing):
         result_missing = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None)
 
     if result_malformed is None and result_missing is None:
@@ -356,7 +360,7 @@ def test_cache_hit_skips_network_and_marks_cache_hit() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         cache_dir = Path(tmp)
-        with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+        with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
             result1 = call(
                 {"prompt": "same"}, {"workflow": {}}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=cache_dir
             )
@@ -384,7 +388,7 @@ def test_cache_entry_never_contains_state_or_key() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         cache_dir = Path(tmp)
-        with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+        with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
             call(
                 {"prompt": "secret-state-value"},
                 {"workflow": {}},
@@ -414,7 +418,7 @@ def test_key_never_appears_in_exception_or_log_payloads() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         cache_dir = Path(tmp)
-        with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+        with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
             result = call(
                 {}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=cache_dir, log=fake_log
             )
@@ -442,7 +446,7 @@ def test_incomplete_read_during_response_body_returns_none() -> None:
     def fake_urlopen(req, timeout=None):
         return _FakeResponseReadRaises(http.client.IncompleteRead(b"", 10))
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
         result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log)
 
     payload_dump = json.dumps(logged, default=str)
@@ -467,7 +471,7 @@ def test_connection_reset_during_response_body_returns_none() -> None:
     def fake_urlopen(req, timeout=None):
         return _FakeResponseReadRaises(ConnectionResetError("connection reset"))
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
         result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log)
 
     payload_dump = json.dumps(logged, default=str)
@@ -492,7 +496,7 @@ def test_memory_error_during_response_read_returns_none() -> None:
     def fake_urlopen(req, timeout=None):
         return _FakeResponseReadRaises(MemoryError())
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
         result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log)
 
     payload_dump = json.dumps(logged, default=str)
@@ -519,7 +523,7 @@ def test_recursion_error_from_hostile_json_returns_none() -> None:
     def fake_urlopen(req, timeout=None):
         return fake_response(200, hostile_body)
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
         result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log)
 
     if (
@@ -549,7 +553,7 @@ def test_429_retry_then_incomplete_read_logs_status_none() -> None:
     def fake_log(name, payload):
         logged.append((name, payload))
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen), mock.patch(
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen), mock.patch(
         "craftflow_jev_client.time.sleep", return_value=None
     ):
         result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log)
@@ -566,25 +570,34 @@ def test_429_retry_then_incomplete_read_logs_status_none() -> None:
         fail("429-retry-then-incomplete-read-status-none", f"result={result!r} calls={calls!r} logged={logged!r}")
 
 
-def _call_capturing_url(env=None, config_path=None, home_env=None):
-    """Run call() against a fake urlopen; return (url, logged decisions)."""
+def _call_capturing_url(env=None, config_path=None, home_env=None, passwd_home=None, with_logs=False):
+    """Run call() against a fake urlopen; return (url, logged decisions[, full payloads])."""
     captured: dict = {}
     logged: list = []
+    payloads: list = []
 
     def fake_urlopen(req, timeout=None):
         captured["full_url"] = req.full_url
         return fake_response(200, json.dumps({"answers": {}, "usage": {}, "model": "jev-1.12"}).encode())
 
+    def fake_log(name, payload):
+        logged.append(payload.get("decision"))
+        payloads.append(payload)
+
     patched_env = dict(env or {})
     if home_env is not None:
         patched_env["HOME"] = home_env
     kwargs = {} if config_path is None else {"endpoint_config_path": config_path}
-    with mock.patch.dict("os.environ", patched_env, clear=False), mock.patch(
-        "craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen
-    ):
-        call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None,
-             log=lambda n, p: logged.append(p.get("decision")), **kwargs)
-    return captured.get("full_url", ""), logged
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.dict("os.environ", patched_env, clear=False))
+        stack.enter_context(mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen))
+        if passwd_home is not None:
+            stack.enter_context(mock.patch("craftflow_jev_client._passwd_home", return_value=passwd_home))
+        call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log, **kwargs)
+    url = captured.get("full_url", "")
+    if with_logs:
+        return url, logged, payloads
+    return url, logged
 
 
 def _write_endpoint_file(tmp: str, content: str) -> str:
@@ -666,7 +679,7 @@ def test_endpoint_file_not_read_on_cache_hit() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         cache = Path(tmp) / "cache"
         cache.mkdir()
-        with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=lambda r, timeout=None: fake_response(
+        with mock.patch("craftflow_jev_client._urlopen", side_effect=lambda r, timeout=None: fake_response(
             200, json.dumps({"answers": {"a": 1}, "usage": {}, "model": "jev-1.12"}).encode()
         )):
             call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=cache)
@@ -676,6 +689,179 @@ def test_endpoint_file_not_read_on_cache_hit() -> None:
         ok("endpoint file is not read on a cache hit")
     else:
         fail("endpoint-file-cache-hit", f"r={r!r} calls={rd.call_count}")
+
+
+def test_fifo_endpoint_file_does_not_hang_and_falls_back() -> None:
+    def on_alarm(signum, frame):
+        raise TimeoutError("endpoint file read hung on FIFO")
+
+    old = signal.signal(signal.SIGALRM, on_alarm)
+    url, payloads = None, []
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            fifo = os.path.join(tmp, "jev-endpoint.json")
+            os.mkfifo(fifo)
+            signal.alarm(5)
+            try:
+                url, _, payloads = _call_capturing_url(config_path=fifo, with_logs=True)
+            finally:
+                signal.alarm(0)
+    except TimeoutError as exc:
+        fail("fifo-no-hang", str(exc))
+        return
+    finally:
+        signal.signal(signal.SIGALRM, old)
+    events = [p for p in payloads if p.get("decision") == "endpoint_file_unreadable"]
+    if url == ENDPOINT and len(events) == 1 and events[0].get("error") == "not_regular_file":
+        ok("FIFO endpoint file does not hang; falls back and logs endpoint_file_unreadable")
+    else:
+        fail("fifo-no-hang", f"url={url!r} payloads={payloads!r}")
+
+
+def test_oversized_endpoint_file_rejected_and_small_honored() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        big = json.dumps({"endpoint": "http://127.0.0.1:9/v1", "pad": "x" * 5000})
+        url_big, _, payloads = _call_capturing_url(config_path=_write_endpoint_file(tmp, big), with_logs=True)
+        small = json.dumps({"endpoint": "http://127.0.0.1:9/v1"})
+        url_small, _ = _call_capturing_url(config_path=_write_endpoint_file(tmp, small))
+    events = [p for p in payloads if p.get("decision") == "endpoint_file_unreadable"]
+    if (
+        url_big == ENDPOINT
+        and len(events) == 1
+        and events[0].get("error") == "too_large"
+        and url_small == "http://127.0.0.1:9/v1"
+    ):
+        ok("oversized (>4096) endpoint file rejected; small file honored")
+    else:
+        fail("endpoint-file-size-cap", f"big={url_big!r} small={url_small!r} payloads={payloads!r}")
+
+
+def test_unreadable_endpoint_file_logs_exactly_one_event_without_contents() -> None:
+    secret = "SUPERSECRETVALUE"
+    cases = {
+        "malformed": ("{" + secret, "JSONDecodeError"),
+        "non_dict": (json.dumps([secret]), "not_object"),
+        "non_string": (json.dumps({"endpoint": 5, "k": secret}), "endpoint_not_string"),
+    }
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for label, (content, expected_token) in cases.items():
+            path = _write_endpoint_file(tmp, content)
+            url, _, payloads = _call_capturing_url(config_path=path, with_logs=True)
+            events = [p for p in payloads if p.get("decision") == "endpoint_file_unreadable"]
+            dump = json.dumps(payloads, default=str)
+            if not (
+                url == ENDPOINT
+                and len(events) == 1
+                and events[0].get("error") == expected_token
+                and events[0].get("event") == "jev_call"
+                and secret not in dump
+            ):
+                problems.append((label, url, payloads))
+        directory = _call_capturing_url(config_path=tmp, with_logs=True)
+        dir_events = [p for p in directory[2] if p.get("decision") == "endpoint_file_unreadable"]
+        if len(dir_events) != 1:
+            problems.append(("directory", directory))
+        missing = _call_capturing_url(config_path=os.path.join(tmp, "absent.json"), with_logs=True)
+        if missing[2]:
+            problems.append(("missing-logs-nothing", missing))
+    if not problems:
+        ok("unreadable endpoint file logs exactly one event, no contents; missing file logs nothing")
+    else:
+        fail("endpoint-file-unreadable-logging", f"problems={problems!r}")
+
+
+def test_unresolved_passwd_home_logs_endpoint_home_unresolved() -> None:
+    with mock.patch("craftflow_jev_client._passwd_home", return_value=None):
+        url, _, payloads = _call_capturing_url(with_logs=True)
+    events = [p for p in payloads if p.get("decision") == "endpoint_home_unresolved"]
+    if url == ENDPOINT and len(events) == 1 and events[0].get("event") == "jev_call":
+        ok("unresolved passwd home logs endpoint_home_unresolved and uses ENDPOINT")
+    else:
+        fail("home-unresolved-logged", f"url={url!r} payloads={payloads!r}")
+
+
+def test_invalid_override_urls_rejected() -> None:
+    bad = [
+        "file://localhost/x",
+        "http://user:pw@127.0.0.1/",
+        "http://evil.com\\@127.0.0.1/",
+        "http://127.0.0.1@evil.com",
+        "http://127.0.0.1/ x",
+        "http://127.0.0.1/\tx",
+        "http://127.0.0.1/\x01x",
+        "ftp://127.0.0.1/",
+    ]
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for u in bad:
+            path = _write_endpoint_file(tmp, json.dumps({"endpoint": u}))
+            url, decisions = _call_capturing_url(config_path=path)
+            if url != ENDPOINT or "endpoint_override_ignored" not in decisions:
+                problems.append((u, url, decisions))
+        for good in ("http://127.0.0.1:9/v1", "https://localhost:9/v1", "http://[::1]:9/v1"):
+            path = _write_endpoint_file(tmp, json.dumps({"endpoint": good}))
+            url, _ = _call_capturing_url(config_path=path)
+            if url != good:
+                problems.append(("good", good, url))
+    if not problems:
+        ok("invalid override URLs rejected (scheme/userinfo/backslash/whitespace/control); valid loopback honored")
+    else:
+        fail("override-url-validation", f"problems={problems!r}")
+
+
+class _Recorder(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):  # silence
+        pass
+
+    def do_POST(self):
+        self.server.seen.append(dict(self.headers))
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
+        location = getattr(self.server, "redirect_to", None)
+        if location:
+            self.send_response(307)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        else:
+            body = b'{"answers": {"x": 1}}'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+
+def _start_server(redirect_to=None):
+    srv = http.server.HTTPServer(("127.0.0.1", 0), _Recorder)
+    srv.seen = []
+    srv.redirect_to = redirect_to
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def test_redirects_are_not_followed_and_key_not_forwarded() -> None:
+    second = _start_server()
+    first = _start_server(redirect_to=f"http://127.0.0.1:{second.server_address[1]}/stolen")
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_endpoint_file(
+                tmp, json.dumps({"endpoint": f"http://127.0.0.1:{first.server_address[1]}/v1"})
+            )
+            with mock.patch.dict("os.environ", {"no_proxy": "127.0.0.1", "NO_PROXY": "127.0.0.1"}):
+                result = call(
+                    {}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None,
+                    log=lambda n, p: None, endpoint_config_path=path,
+                )
+    finally:
+        first.shutdown()
+        second.shutdown()
+    leaked = [h for h in second.seen if "Authorization" in h]
+    if result is None and len(first.seen) == 1 and second.seen == [] and not leaked:
+        ok("3xx redirect fails the call; second loopback listener never sees Authorization")
+    else:
+        fail("redirect-not-followed", f"result={result!r} first={len(first.seen)} second={second.seen!r}")
 
 
 def test_non_json_serializable_state_returns_none() -> None:
@@ -739,7 +925,7 @@ def test_non_numeric_timeout_returns_none() -> None:
     def fake_urlopen(req, timeout=None):
         raise AssertionError("network should not be reached when timeout is invalid")
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
         result = call(
             {}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=None, cache_dir=None, log=fake_log
         )
@@ -771,7 +957,7 @@ def test_time_monotonic_failure_returns_none() -> None:
 
     try:
         with mock.patch("craftflow_jev_client.time.monotonic", side_effect=fake_monotonic), mock.patch(
-            "craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen
+            "craftflow_jev_client._urlopen", side_effect=fake_urlopen
         ):
             result = call(
                 {}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log
@@ -794,7 +980,7 @@ def test_hostile_log_callable_never_prevents_none_return() -> None:
         raise _http_error(401, "Unauthorized")
 
     try:
-        with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+        with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
             result = call(
                 {}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=hostile_log
             )
@@ -824,7 +1010,7 @@ def test_default_total_budget_matches_existing_4s_constant_baseline() -> None:
         body = json.dumps({"answers": {}, "usage": {}, "model": "jev-1.12"}).encode()
         return fake_response(200, body)
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen), mock.patch(
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen), mock.patch(
         "craftflow_jev_client.time.monotonic", side_effect=clock.monotonic
     ), mock.patch("craftflow_jev_client.time.sleep", return_value=None):
         result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None)
@@ -850,7 +1036,7 @@ def test_total_budget_seconds_override_suppresses_retry_that_default_would_allow
         body = json.dumps({"answers": {}, "usage": {}, "model": "jev-1.12"}).encode()
         return fake_response(200, body)
 
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen), mock.patch(
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen), mock.patch(
         "craftflow_jev_client.time.monotonic", side_effect=clock.monotonic
     ), mock.patch("craftflow_jev_client.time.sleep", return_value=None):
         result = call(
@@ -874,7 +1060,7 @@ def test_failure_reason_out_populated_on_http_error() -> None:
         raise _http_error(401, "Unauthorized")
 
     reason: dict = {}
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
         result = call(
             {},
             {},
@@ -896,7 +1082,7 @@ def test_failure_reason_out_populated_on_non_http_error() -> None:
         raise urllib.error.URLError("boom")
 
     reason: dict = {}
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
         result = call(
             {},
             {},
@@ -919,7 +1105,7 @@ def test_failure_reason_out_untouched_on_success() -> None:
         return fake_response(200, body)
 
     reason: dict = {}
-    with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+    with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
         result = call(
             {},
             {},
@@ -946,7 +1132,7 @@ def test_hostile_failure_reason_out_never_prevents_none_return() -> None:
         raise _http_error(401, "Unauthorized")
 
     try:
-        with mock.patch("craftflow_jev_client.urllib.request.urlopen", side_effect=fake_urlopen):
+        with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
             result = call(
                 {},
                 {},
@@ -1006,6 +1192,12 @@ def main() -> int:
     test_failure_reason_out_populated_on_non_http_error()
     test_failure_reason_out_untouched_on_success()
     test_hostile_failure_reason_out_never_prevents_none_return()
+    test_fifo_endpoint_file_does_not_hang_and_falls_back()
+    test_oversized_endpoint_file_rejected_and_small_honored()
+    test_unreadable_endpoint_file_logs_exactly_one_event_without_contents()
+    test_unresolved_passwd_home_logs_endpoint_home_unresolved()
+    test_invalid_override_urls_rejected()
+    test_redirects_are_not_followed_and_key_not_forwarded()
 
     print()
     print("=" * 40)
@@ -1020,5 +1212,14 @@ def main() -> int:
     return 0
 
 
+def _hermetic_main() -> int:
+    """Run main() with the passwd home pointed at a nonexistent dir so no test
+    can read the developer's real ~/.claude/craftflow/jev-endpoint.json."""
+    with tempfile.TemporaryDirectory() as tmp:
+        nonexistent_home = os.path.join(tmp, "no-such-home")
+        with mock.patch("craftflow_jev_client._passwd_home", return_value=nonexistent_home):
+            return main()
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_hermetic_main())
