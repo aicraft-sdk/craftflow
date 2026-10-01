@@ -1485,6 +1485,267 @@ def test_hook_jev_text_from_seam_or_home_env_never_egresses():
 
 
 # ---------------------------------------------------------------------------
+# Phase 6: notifications (desktop sender, consent-gated push relay) (DD-12, DD-5a, A8, A9)
+# ---------------------------------------------------------------------------
+
+NOTIFIER = "osascript" if sys.platform == "darwin" else "notify-send"
+RELAY_PREFIX = "craftflow stop-gate: the user asked to be notified"
+
+
+def fake_notifier(sleep_git=False):
+    """(bin_dir, record_path): a fake notifier that records argv (one arg per line, then ---CALL), plus an
+    optional slow fake git. Putting bin_dir first on PATH means a real desktop notification can never fire."""
+    folder = Path(scratch_dir())
+    record = folder / "calls.txt"
+    script = folder / NOTIFIER
+    script.write_text("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> " + str(record)
+                      + "; done\nprintf '%s\\n' ---CALL >> " + str(record) + "\n", encoding="utf-8")
+    script.chmod(0o755)
+    if sleep_git:
+        slow = folder / "git"
+        slow.write_text("#!/bin/sh\nexec sleep 0.9\n", encoding="utf-8")
+        slow.chmod(0o755)
+    return str(folder), record
+
+
+def recorded_calls(record):
+    """Argv lists the fake notifier saw."""
+    if not Path(record).exists():
+        return []
+    calls, current = [], []
+    for line in Path(record).read_text(encoding="utf-8").splitlines():
+        if line == "---CALL":
+            calls.append(current)
+            current = []
+        else:
+            current.append(line)
+    return calls
+
+
+def notify_wrapper(consent_home):
+    """Test-only entry point: the real hook main() with the consent lookup pointed at a scratch home."""
+    path = Path(scratch_dir()) / "wrap.py"
+    path.write_text("import sys\nsys.path.insert(0, %r)\nimport craftflow_stop_gate as g\n"
+                    "g._consent_home = lambda: %r\nsys.exit(g.main())\n" % (str(SCRIPTS), consent_home),
+                    encoding="utf-8")
+    return path
+
+
+def notify_run(root, transcript, seam, consent=None, bin_dir=None, timeout=20, **payload):
+    """One subprocess run through the wrapper. The real consent file is never read."""
+    seam_path = Path(scratch_dir()) / "seam.json"
+    seam_path.write_text(json.dumps(seam), encoding="utf-8")
+    home = scratch_dir()
+    if consent is not None:
+        write_consent(home, consent)
+    env = {"CRAFTFLOW_STOP_GATE_USER_CONFIG": str(seam_path)}
+    if bin_dir:
+        env["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+    code, out, err, elapsed = run_gate(stop_payload(transcript, root, **payload), root, env,
+                                       script=notify_wrapper(home), timeout=timeout)
+    assert code == 0, (code, err)
+    return out, err, elapsed
+
+
+PENDING = {"pending_gate": "user_build_approval"}
+NOTIFY_SEAM = {"mode": "audit", "notifyMinTurnSeconds": 0}
+# The core only lets the consent file AUTHORISE a requested push (it never switches push on alone), so a push
+# run needs the user layer (here the seam, in production the same stop-gate.json) to ask for it too.
+PUSH_SEAM = dict(NOTIFY_SEAM, notify="push")
+
+
+def test_notify_push_relay_block_once():
+    root = make_project()
+    seed_artifact(root, **PENDING)
+    t = mention_transcript(root)
+    bin_dir, record = fake_notifier()
+    seam = PUSH_SEAM
+    out, err, _ = notify_run(root, t, seam, consent={"notify": "push"}, bin_dir=bin_dir)
+    obj = json.loads(out)
+    assert out.strip().count("\n") == 0 and obj["decision"] == "block", out
+    assert obj["reason"].startswith(RELAY_PREFIX), obj["reason"]
+    assert obj["reason"] == core.PUSH_RELAY_TEMPLATE % core.notify_text(
+        "needs_human", WF_ID, "P2", ["H03_pending_gate"]), obj["reason"]
+    row = rows_of(root)[-1]
+    assert row["notify"] == "push" and row["notify_status"] == "relay" and row["row_kind"] == "stop", row
+    assert recorded_calls(record) == [], "push must not also fire a desktop notification"
+    # follow-up stop inside the relay turn: silent, followup row
+    out, _, _ = notify_run(root, t, seam, consent={"notify": "push"}, bin_dir=bin_dir, stop_hook_active=True)
+    assert out == "", out
+    follow = rows_of(root)[-1]
+    assert follow["row_kind"] == "relay_followup" and set(follow) == set(core.ROW_KEYS), follow
+    assert follow["verdict"] is None and follow["would_action"] == "none", follow
+    assert follow["notify_status"] == "relay_followup", follow
+    for key in ("rule_hits", "loop_guards", "commit_blockers"):
+        assert follow[key] == [], (key, follow)
+    # same tail again: deduped, no second relay
+    out, _, _ = notify_run(root, t, seam, consent={"notify": "push"}, bin_dir=bin_dir)
+    assert out == "", out
+    # control: push in the seam file is ignored -> desktop, no block
+    root2 = make_project()
+    seed_artifact(root2, **PENDING)
+    t2 = mention_transcript(root2)
+    bin2, record2 = fake_notifier()
+    out, _, _ = notify_run(root2, t2, dict(NOTIFY_SEAM, notify="push"), consent=None, bin_dir=bin2)
+    assert out == "", out
+    row2 = rows_of(root2)[-1]
+    assert row2["notify"] == "desktop" and "notify_push_seam_ignored" in row2["settings_tags"], row2
+    sent_calls = recorded_calls(record2)  # under heavy host load the sender may time out: then it is recorded
+    assert row2["notify_status"] in ("sent", "timeout", "skipped_deadline"), row2
+    if row2["notify_status"] == "sent":
+        assert len(sent_calls) == 1, sent_calls
+
+
+def test_notify_push_never_on_stop_hook_active():
+    root = make_project()
+    seed_artifact(root, **PENDING)
+    t = mention_transcript(root)
+    bin_dir, record = fake_notifier()
+    out, _, _ = notify_run(root, t, PUSH_SEAM, consent={"notify": "push"}, bin_dir=bin_dir,
+                           stop_hook_active=True)
+    assert out == "", out
+    row = rows_of(root)[-1]
+    assert row["row_kind"] == "stop" and row["notify_status"] == "skipped_hook_active", row
+    assert recorded_calls(record) == [], "a refused relay must not fall back to a desktop banner"
+
+
+def test_notify_skipped_below_min_turn_seconds():
+    root = make_project()
+    seed_artifact(root, **PENDING)
+    t = mention_transcript(root)  # the human line is ~600 s old
+    bin_dir, record = fake_notifier()
+    out, _, _ = notify_run(root, t, dict(NOTIFY_SEAM, notify="desktop", notifyMinTurnSeconds=3600),
+                           bin_dir=bin_dir)
+    assert out == "" and rows_of(root)[-1]["notify_status"] == "skipped_min_turn", rows_of(root)[-1]
+    assert recorded_calls(record) == [], recorded_calls(record)
+    out, _, _ = notify_run(root, t, dict(PUSH_SEAM, notifyMinTurnSeconds=3600),
+                           consent={"notify": "push"}, bin_dir=bin_dir)
+    assert out == "" and rows_of(root)[-1]["notify_status"] == "skipped_min_turn", rows_of(root)[-1]
+    # near miss: a threshold under the turn length sends
+    out, _, _ = notify_run(root, t, dict(NOTIFY_SEAM, notify="desktop", notifyMinTurnSeconds=300),
+                           bin_dir=bin_dir, message="Ready for review?")
+    assert rows_of(root)[-1]["notify_status"] == "sent", rows_of(root)[-1]
+    # a non-needs_human verdict never notifies
+    root2 = make_project()
+    seed_artifact(root2)
+    t2 = mention_transcript(root2)
+    bin2, record2 = fake_notifier()
+    notify_run(root2, t2, dict(NOTIFY_SEAM, notify="desktop"), bin_dir=bin2)
+    row = rows_of(root2)[-1]
+    assert row["verdict"] == "would_continue" and row["notify_status"] == "not_needed", row
+    assert recorded_calls(record2) == [], recorded_calls(record2)
+
+
+def test_notify_desktop_fake_osascript_argv():
+    root = make_project()
+    seed_artifact(root, **PENDING)
+    t = mention_transcript(root)
+    bin_dir, record = fake_notifier()
+    out, _, _ = notify_run(root, t, dict(NOTIFY_SEAM, notify="desktop"), bin_dir=bin_dir)
+    assert out == "", out
+    row = rows_of(root)[-1]
+    want = core.notify_text("needs_human", row["wf"], row["phase_cursor"], row["rule_hits"])
+    calls = recorded_calls(record)
+    assert row["notify_status"] == "sent" and len(calls) == 1, (row, calls)
+    assert calls[0][-1] == want and want.startswith("Craftflow: needs you - "), (calls, want)
+    if NOTIFIER == "osascript":
+        assert calls[0][:3] == ["-e", "on run argv", "-e"], calls[0]
+    # the same stop is not announced twice
+    notify_run(root, t, dict(NOTIFY_SEAM, notify="desktop"), bin_dir=bin_dir)
+    assert len(recorded_calls(record)) == 1, recorded_calls(record)
+    assert rows_of(root)[-1]["notify_status"] == "skipped_duplicate", rows_of(root)[-1]
+
+
+def test_notify_unsupported_platform_status():
+    root = make_project()
+    seed_artifact(root, **PENDING)
+    t = mention_transcript(root)
+    seam = Path(scratch_dir()) / "seam.json"
+    seam.write_text(json.dumps(dict(NOTIFY_SEAM, notify="desktop")), encoding="utf-8")
+    saved = sys.platform
+    try:
+        sys.platform = "plan9"
+        with env_patch(CLAUDE_PROJECT_DIR=str(root), CRAFTFLOW_STOP_GATE_USER_CONFIG=str(seam)):
+            out, row = gate.run(stop_payload(t, root), dict(os.environ))
+    finally:
+        sys.platform = saved
+    assert out is None and row["notify_status"] == "unsupported_platform", row
+
+
+def test_hook_source_has_no_shell_true():
+    import re
+    source = (SCRIPTS / "craftflow_stop_gate.py").read_text(encoding="utf-8")
+    assert not re.search(r"shell\s*=\s*True", source), "shell=True is forbidden"
+    assert "os.system" not in source and "os.popen" not in source, "no shell helpers"
+    assert re.search(r"shutil\.which", source) and "sys.platform" in source, "sender must use which + platform"
+
+
+def test_relay_followup_row_shape():
+    root = make_project()
+    seed_artifact(root, **PENDING)
+    t = mention_transcript(root)
+    bin_dir, _record = fake_notifier()
+    consent = {"notify": "push"}
+    notify_run(root, t, PUSH_SEAM, consent=consent, bin_dir=bin_dir)
+    assert gate.read_session(root, "s1")[0]["relay_pending"] is True
+    out, _, _ = notify_run(root, t, PUSH_SEAM, consent=consent, bin_dir=bin_dir, stop_hook_active=True)
+    assert out == "", out
+    row = rows_of(root)[-1]
+    assert row["row_kind"] == "relay_followup" and list(row) == list(core.ROW_KEYS), row
+    for key in ("heuristic_kind", "heuristic_verdict", "jev_status", "jev_kind", "jev_kind_conf",
+                "jev_needs_human", "jev_latency_ms", "jev_usage", "jev_text_source", "verdict",
+                "verdict_source", "cursor_case", "cursor_resolution"):
+        assert row[key] is None, (key, row[key])
+    assert row["act_eligible"] is False and row["stop_hook_active"] is True, row
+    assert row["session_id"] == "s1" and row["mode"] == "audit", row
+    assert gate.read_session(root, "s1")[0]["relay_pending"] is False, "followup clears relay_pending"
+    assert [r["row_kind"] for r in rows_of(root)] == ["stop", "relay_followup"], rows_of(root)
+
+
+def test_relay_refused_while_pending_and_cleared_on_fresh_stop():
+    root = make_project()
+    seed_artifact(root, **PENDING)
+    t = mention_transcript(root)
+    bin_dir, _record = fake_notifier()
+    consent = {"notify": "push"}
+    stale = {"would_continue_since_human": 0, "last_human_ts": None, "last_head": None, "last_cursor": None,
+             "last_notified_tail_sha": None, "relay_pending": True, "updated_at": 0}
+    assert gate.write_session(root, "s1", stale)
+    # a needs-human stop inside the relay turn: refused (and recorded as the followup)
+    out, _, _ = notify_run(root, t, PUSH_SEAM, consent=consent, bin_dir=bin_dir, stop_hook_active=True,
+                           message="Should I use A or B?")
+    assert out == "" and rows_of(root)[-1]["row_kind"] == "relay_followup", (out, rows_of(root)[-1])
+    # a fresh stop (hook not active) with a stale pending flag clears it first, then may relay
+    assert gate.write_session(root, "s1", stale)
+    out, _, _ = notify_run(root, t, PUSH_SEAM, consent=consent, bin_dir=bin_dir, message="Which option?")
+    assert json.loads(out)["decision"] == "block", out
+    assert rows_of(root)[-1]["row_kind"] == "stop" and rows_of(root)[-1]["notify_status"] == "relay"
+
+
+def test_notify_desktop_under_deadline_fake_osascript():
+    root = make_project()
+    seed_artifact(root)
+    t = mention_transcript(root)
+    bin_dir, record = fake_notifier(sleep_git=True)  # every git call burns 0.8 s, H11 makes it needs_human
+    out, _, elapsed = notify_run(root, t, dict(NOTIFY_SEAM, notify="desktop"), bin_dir=bin_dir)
+    assert out == "" and elapsed < 4.6, (out, elapsed)
+    row = rows_of(root)[-1]
+    assert "H11_git_unsafe" in row["rule_hits"] and row["verdict"] == "needs_human", row
+    calls = recorded_calls(record)
+    assert row["notify_status"] in ("sent", "skipped_deadline", "timeout"), row  # timeout: host overload only
+    if row["notify_status"] == "sent":
+        assert len(calls) == 1 and calls[0][-1].startswith("Craftflow: needs you"), calls
+    elif row["notify_status"] == "skipped_deadline":
+        assert calls == [], calls
+    # deterministic bound: with 1.19 s left the sender refuses, with plenty left it sends
+    bin2, record2 = fake_notifier()
+    assert gate.send_desktop("Craftflow: needs you", lambda: 1.19, bin2) == "skipped_deadline"
+    assert recorded_calls(record2) == []
+    assert gate.send_desktop("Craftflow: needs you", lambda: 3.0, bin2) == "sent"
+    assert recorded_calls(record2)[0][-1] == "Craftflow: needs you"
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 

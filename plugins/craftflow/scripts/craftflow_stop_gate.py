@@ -4,7 +4,8 @@
 Opt-in Claude Code ``Stop`` hook. With ``mode: off`` (the shipped default) it reads two settings files and
 returns: no transcript read, no git call, no row, no output. With ``mode: audit`` it gathers facts (bound
 workflow artifact, git state, transcript tail), runs the pure core (hard rules, heuristic, verdict) and
-appends ONE shadow row. It never continues or commits, and never prints anything in this slice.
+appends ONE shadow row. It never continues or commits. The only thing it can print is the opt-in
+``notify: "push"`` relay block (consent-file only), which asks the model for one PushNotification call.
 
 Fail open: every branch is inside ``try/except`` and ``main()`` always returns 0.
 Privacy: rows carry no message text and no artifact free text (``build_row`` drops unknown keys).
@@ -16,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -30,6 +32,9 @@ DEADLINE_S = 4.2
 GIT_CALL_TIMEOUT_S = 0.8
 GIT_MIN_REMAINING_S = 1.0
 GIT_RESERVE_S = 0.5
+NOTIFY_MIN_REMAINING_S = 1.2
+NOTIFY_TIMEOUT_S = 1.0
+NOTIFY_RESERVE_S = 0.2
 TAIL_BYTES = 1048576
 STATUS_DIRTY_CAP = 500
 _UNMERGED_CODES = frozenset(("DD", "AU", "UD", "UA", "DU", "AA", "UU"))
@@ -397,8 +402,73 @@ def jev_layer(settings, rule_hits, env, session_id, root, message, wf_facts, has
         return None, fields
 
 
+# --- notification sender (DD-12) ---------------------------------------------------------------------
+def send_desktop(text, remaining, path=None):
+    """Fire one local desktop notification (argv only, no shell). Returns the notify_status string."""
+    left = remaining()
+    if left < NOTIFY_MIN_REMAINING_S:
+        return "skipped_deadline"
+    if sys.platform == "darwin":
+        exe, tail = "osascript", ["-e", "on run argv", "-e",
+                                  'display notification (item 1 of argv) with title "Craftflow"',
+                                  "-e", "end run", text]
+    elif sys.platform.startswith("linux"):
+        exe, tail = "notify-send", ["Craftflow", text]
+    else:
+        return "unsupported_platform"
+    found = shutil.which(exe, path=path)
+    if not found:
+        return "unavailable"
+    try:
+        done = subprocess.run([found] + tail, capture_output=True,
+                              timeout=min(NOTIFY_TIMEOUT_S, left - NOTIFY_RESERVE_S))
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    except (OSError, ValueError):
+        return "failed"
+    return "sent" if done.returncode == 0 else "failed"
+
+
+def notify_step(settings, verdict, wf, cursor, session, tail_sha, hook_active, turn_seconds, session_id,
+                remaining):
+    """(notify_status, relay_reason|None, sent). Eligibility per DD-12; never raises."""
+    mode = settings["notify"]
+    if mode == "off":
+        return None, None, False
+    try:
+        if verdict["verdict"] != "needs_human":
+            return "not_needed", None, False
+        if turn_seconds is None or turn_seconds < settings["notifyMinTurnSeconds"]:
+            return "skipped_min_turn", None, False
+        text = core.notify_text(verdict["verdict"], wf, cursor, verdict.get("reasons"))
+        if mode == "push":
+            if hook_active:
+                return "skipped_hook_active", None, False
+            if not core.relay_decision(settings, verdict["verdict"], hook_active, session, tail_sha):
+                return "skipped_duplicate", None, False
+            return "relay", core.PUSH_RELAY_TEMPLATE % text, False
+        if session_id and tail_sha and session.get("last_notified_tail_sha") == tail_sha:
+            return "skipped_duplicate", None, False
+        status = send_desktop(text, remaining)
+        return status, None, status == "sent"
+    except Exception:  # noqa: BLE001 - a notification problem never changes the hook's outcome
+        return "failed", None, False
+
+
+def relay_followup_row(settings, tags, payload, session_id, transcript_path, t0):
+    """The row for the stop that ends a push-relay turn: no classification, every ROW_KEYS key present."""
+    perm = payload.get("permission_mode")
+    return core.build_row(
+        row_kind="relay_followup", ts=now_iso(), session_id=session_id or None,
+        transcript_path=transcript_path or None, mode=settings["mode"], stop_hook_active=True,
+        permission_mode=perm if isinstance(perm, str) else None,
+        notify=settings["notify"], notify_status="relay_followup",
+        hook_ms=int((time.monotonic() - t0) * 1000), settings_tags=tags)
+
+
 def run(payload, env, t0=None):
-    """(stdout_obj|None, row|None). ``row`` is None whenever the hook is inert. Slice 1 never prints."""
+    """(stdout_obj|None, row|None). ``row`` is None whenever the hook is inert. Only the consent-file push
+    relay ever returns a stdout object."""
     t0 = time.monotonic() if t0 is None else t0
 
     def remaining():
@@ -417,6 +487,15 @@ def run(payload, env, t0=None):
     session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else ""
     transcript_path = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else ""
     now = time.time()
+    hook_active = payload.get("stop_hook_active") is True
+    session, session_tag = read_session(root, session_id)
+    if session_tag:
+        tags.append(session_tag)
+    if session.get("relay_pending"):
+        if hook_active:  # the stop that ends a relay turn: no classification, clear the flag (DD-12, A8)
+            write_session(root, session_id, dict(session, relay_pending=False, updated_at=now))
+            return None, relay_followup_row(settings, tags, payload, session_id, transcript_path, t0)
+        session = dict(session, relay_pending=False)  # stale flag from an ended relay or a user interruption
     scan = scan_transcript(read_tail(transcript_path))
     turn_seconds, lower_bound = turn_timing(scan, now)
     given = payload.get("last_assistant_message")
@@ -425,12 +504,9 @@ def run(payload, env, t0=None):
     wf, reason, wf_payload = _bind(root, transcript_path, session_id)
     wf_facts = core.workflow_facts(wf_payload, os.path.isdir) if wf_payload is not None else None
     git = git_facts(_git_root(wf_facts, payload, root), remaining)
-    session, session_tag = read_session(root, session_id)
-    if session_tag:
-        tags.append(session_tag)
 
     facts = {
-        "message": message, "binding_reason": reason, "stop_hook_active": payload.get("stop_hook_active") is True,
+        "message": message, "binding_reason": reason, "stop_hook_active": hook_active,
         "permission_mode": payload.get("permission_mode") if isinstance(payload.get("permission_mode"), str) else "",
         "git": git, "session": session, "settings": settings, "workflow": wf_facts,
         "last_human_ts": scan["last_human_ts"],
@@ -448,9 +524,12 @@ def run(payload, env, t0=None):
     tail_sha = (hashlib.sha256(message[-settings["tailChars"]:].encode("utf-8", "replace")).hexdigest()[:16]
                 if message.strip() else None)
 
+    notify_status, relay_reason, sent = notify_step(
+        settings, verdict, wf, cursor if isinstance(cursor, str) else "", session, tail_sha, hook_active,
+        turn_seconds, session_id, remaining)
     write_session(root, session_id, core.session_update(
-        session, verdict["verdict"], git.get("head"), cursor, tail_sha, False, now,
-        last_human_ts=scan["last_human_ts"], notified=False))
+        session, verdict["verdict"], git.get("head"), cursor, tail_sha, relay_reason is not None, now,
+        last_human_ts=scan["last_human_ts"], notified=sent))
     row = core.build_row(
         row_kind="stop", ts=now_iso(), session_id=session_id or None, transcript_path=transcript_path or None,
         mode=settings["mode"], mode_tag="act_not_available" if "act_not_available" in tags else None,
@@ -462,10 +541,10 @@ def run(payload, env, t0=None):
         heuristic_kind=kind, heuristic_verdict=heuristic_verdict["verdict"], **jev_fields,
         verdict=verdict["verdict"], verdict_source=verdict["verdict_source"],
         act_eligible=verdict["act_eligible"], would_action=verdict["would_action"],
-        notify=settings["notify"], turn_seconds=turn_seconds, turn_seconds_lower_bound=lower_bound,
+        notify=settings["notify"], notify_status=notify_status, turn_seconds=turn_seconds, turn_seconds_lower_bound=lower_bound,
         message_chars=len(message), tail_sha=tail_sha, hook_ms=int((time.monotonic() - t0) * 1000),
         settings_tags=tags)
-    return None, row
+    return ({"decision": "block", "reason": relay_reason} if relay_reason else None), row
 
 
 def append_row(row):
@@ -480,7 +559,10 @@ def main():
     """Always returns 0 (fail open)."""
     t0 = time.monotonic()
     try:
-        _out, row = run(load_input(), os.environ, t0)
+        out, row = run(load_input(), os.environ, t0)
+        if out is not None:
+            sys.stdout.write(json.dumps(out, ensure_ascii=True))
+            sys.stdout.flush()
         if row is not None:
             append_row(row)
             log_event("plugin_stop_gate", {"decision": row["verdict"], "wf": row["wf"], "mode": row["mode"],
