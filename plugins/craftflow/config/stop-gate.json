@@ -1,0 +1,11 @@
+{
+  "mode": "off",
+  "notify": "off",
+  "notifyMinTurnSeconds": 300,
+  "jevKindThreshold": 0.9,
+  "jevNeedsHumanMax": 0.2,
+  "jevTimeoutSeconds": 2.0,
+  "tailChars": 1500,
+  "maxAutoContinuesPerSession": 5,
+  "intCursorMeaning": "finished_count"
+}
