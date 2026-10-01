@@ -93,6 +93,7 @@ NOTIFY_MIN_REMAINING_S = 1.2
 NOTIFY_TIMEOUT_S = 1.0
 NOTIFY_RESERVE_S = 0.2
 TAIL_BYTES = 1048576
+HUMAN_TEXT_CAP = 300
 STATUS_DIRTY_CAP = 500
 _UNMERGED_CODES = frozenset(("DD", "AU", "UD", "UA", "DU", "AA", "UU"))
 _TS_RE = re.compile(
@@ -173,10 +174,11 @@ def _records(data):
             yield rec
 
 
-def is_genuine_human(rec):
-    """DD-21: a user line typed by the human (not a tool result, meta, summary, command or our own relay)."""
+def _human_text(rec):
+    """The text of a genuine human line (DD-21: not a tool result, meta, summary, command or our own relay),
+    else None."""
     if rec.get("type") != "user" or rec.get("isMeta") or rec.get("isCompactSummary") or "toolUseResult" in rec:
-        return False
+        return None
     message = rec.get("message")
     content = message.get("content") if isinstance(message, dict) else None
     if isinstance(content, str):
@@ -185,16 +187,21 @@ def is_genuine_human(rec):
         parts = []
         for block in content:
             if not isinstance(block, dict) or block.get("type") not in ("text", "image"):
-                return False
+                return None
             if block.get("type") == "text" and isinstance(block.get("text"), str):
                 parts.append(block["text"])
         text = "\n".join(parts)
     else:
-        return False
+        return None
     stripped = text.strip()
     if stripped.startswith("<") or stripped.startswith("Stop hook feedback"):
-        return False
-    return "craftflow stop-gate:" not in text
+        return None
+    return None if "craftflow stop-gate:" in text else text
+
+
+def is_genuine_human(rec):
+    """DD-21: a user line typed by the human."""
+    return _human_text(rec) is not None
 
 
 def _assistant_text(rec):
@@ -209,20 +216,37 @@ def _assistant_text(rec):
 
 
 def scan_transcript(data):
-    """{last_human_ts, last_human_epoch, oldest_epoch, assistant_text} from the transcript tail bytes."""
-    out = {"last_human_ts": None, "last_human_epoch": None, "oldest_epoch": None, "assistant_text": ""}
+    """{last_human_ts, last_human_epoch, oldest_epoch, assistant_text, stop_reason, human_lines} from the tail.
+
+    ``human_lines`` holds (epoch, text[:HUMAN_TEXT_CAP]) of every genuine human line (memory only, for the
+    negative-reply check); ``stop_reason`` is the last assistant record's ``message.stop_reason`` string."""
+    out = {"last_human_ts": None, "last_human_epoch": None, "oldest_epoch": None, "assistant_text": "",
+           "stop_reason": None, "human_lines": []}
     for rec in _records(data):
         stamp = rec.get("timestamp")
         epoch = parse_ts(stamp)
         if epoch is not None and (out["oldest_epoch"] is None or epoch < out["oldest_epoch"]):
             out["oldest_epoch"] = epoch
-        if is_genuine_human(rec) and epoch is not None:
+        human = _human_text(rec)
+        if human is not None and epoch is not None:
             out["last_human_ts"], out["last_human_epoch"] = stamp, epoch
+            out["human_lines"].append((epoch, human[:HUMAN_TEXT_CAP]))
         elif rec.get("type") == "assistant":
             text = _assistant_text(rec)
             if text.strip():
                 out["assistant_text"] = text
+            message = rec.get("message")
+            reason = message.get("stop_reason") if isinstance(message, dict) else None
+            out["stop_reason"] = reason if isinstance(reason, str) else None
     return out
+
+
+def negative_since(scan, stored_ts):
+    """True when ANY genuine human line after the stored human ts is a negative reply (DD-10, A7). An
+    unparseable or absent stored ts counts every line in the tail (fails toward disarming)."""
+    after = parse_ts(stored_ts)
+    return any(core.label_reply(text) == "negative" for epoch, text in scan["human_lines"]
+               if after is None or epoch > after)
 
 
 def turn_timing(scan, now):
@@ -355,8 +379,10 @@ def _consent_home():
     return core.passwd_home()
 
 
-def load_settings(env, with_consent, report_errors=False):
+def load_settings(env, with_consent, report_errors=False, consent_out=None):
     """(settings, tags): plugin file + user file (+ consent file when asked). Never raises.
+
+    ``consent_out`` (a dict, optional) receives ``obj`` and ``ctime`` of the consent file for the arm check.
 
     A user file that exists but cannot be used (corrupt, oversized, ...) still fails open to the defaults, but
     is surfaced: a ``user_config_error:<why>`` tag and, with ``report_errors``, one ``config_error`` log event.
@@ -364,7 +390,10 @@ def load_settings(env, with_consent, report_errors=False):
     plugin_obj = core.load_json_file(os.path.join(str(plugin_config_dir()), "stop-gate.json"))[0]
     user_obj, user_status, user_error = core.load_json_file(core.user_override_path(env))
     source = core.override_source(env, core.passwd_home())
-    consent_obj, consent_tag = (core.read_consent_file(_consent_home()) if with_consent else (None, None))
+    consent_obj, consent_tag, consent_ctime = (
+        core.read_consent_file_ex(_consent_home()) if with_consent else (None, None, None))
+    if consent_out is not None:
+        consent_out.update(obj=consent_obj, ctime=consent_ctime)
     settings, tags = core.parse_settings(plugin_obj, user_obj, source, consent_obj)
     if consent_tag:
         tags.append(consent_tag)
@@ -548,6 +577,44 @@ def relay_followup_row(settings, tags, payload, session_id, transcript_path, t0)
         hook_ms=int((time.monotonic() - t0) * 1000), settings_tags=tags)
 
 
+# --- ACT facts (SPEC-0019 / ADR-0056) ----------------------------------------------------------------
+def stop_verify_enabled():
+    """Exact bool for blocker A07: True when ``config/stop-verify.json`` exists and is enabled or unreadable
+    (an unusable file fails closed)."""
+    path = plugin_config_dir() / "stop-verify.json"
+    try:
+        if not path.exists():
+            return False
+        obj = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+    return bool(isinstance(obj, dict) and obj.get("enabled")) or not isinstance(obj, dict)
+
+
+def jev_endpoint_override_set(env):
+    """Exact bool for blocker A09: ``CRAFTFLOW_JEV_ENDPOINT`` is set (non-empty) in the hook environment."""
+    return bool(env.get("CRAFTFLOW_JEV_ENDPOINT"))
+
+
+def rebound_after(root, wf, human_epoch):
+    """True when the bound workflow has a ``session_rebound`` event newer than the last human line (A03 input).
+    No events file means no rebound. An unreadable file, or an unknown human time, fails closed (True)."""
+    if not wf:
+        return False
+    path = os.path.join(str(root), ".craftflow", "state", "workflows", wf + ".events.jsonl")
+    if not is_regular_file(path):
+        return os.path.lexists(path)  # absent: no rebound; present but not a regular file: fail closed
+    data = read_tail(path)
+    if human_epoch is None:
+        return True
+    for rec in _records(data):
+        if rec.get("event") == "session_rebound":
+            epoch = parse_ts(rec.get("ts"))
+            if epoch is None or epoch > human_epoch:
+                return True
+    return False
+
+
 def run(payload, env, t0=None, ctx=None):
     """(stdout_obj|None, row|None). ``row`` is None whenever the hook is inert. Only the consent-file push
     relay ever returns a stdout object. ``ctx`` (optional) receives ``mode``/``session_id`` once the hook is
@@ -566,7 +633,8 @@ def run(payload, env, t0=None, ctx=None):
     if settings["mode"] == "off":
         return None, None
     ctx["mode"] = settings["mode"]
-    settings, tags = load_settings(env, with_consent=True)
+    consent = {}
+    settings, tags = load_settings(env, with_consent=True, consent_out=consent)
 
     root = project_dir()
     session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else ""
@@ -595,11 +663,20 @@ def run(payload, env, t0=None, ctx=None):
     elif git.get("skip") == "truncated":
         tags.append("git_dirty_truncated")
 
+    given_reason = payload.get("stop_reason")
+    stop_reason = given_reason if isinstance(given_reason, str) else scan["stop_reason"]  # real value, no default
+    artifact_sid = wf_payload.get("session_id") if wf_payload is not None else None
+    if not isinstance(artifact_sid, str) or rebound_after(root, wf, scan["last_human_epoch"]):
+        artifact_sid = None  # a re-stamp newer than the last human line voids the exact-session binding (A03)
+    tail_sha = (hashlib.sha256(message[-settings["tailChars"]:].encode("utf-8", "replace")).hexdigest()[:16]
+                if message.strip() else None)
+    override_source = core.override_source(env, core.passwd_home())
     facts = {
         "message": message, "binding_reason": reason, "stop_hook_active": hook_active,
         "permission_mode": payload.get("permission_mode") if isinstance(payload.get("permission_mode"), str) else "",
         "git": git, "session": session, "settings": settings, "workflow": wf_facts,
-        "last_human_ts": scan["last_human_ts"],
+        "last_human_ts": scan["last_human_ts"], "stop_reason": stop_reason, "session_id": session_id,
+        "artifact_session_id": artifact_sid, "wf": wf, "tail_sha": tail_sha, "override_source": override_source,
     }
     rule_hits = core.hard_rules(facts)
     blockers = core.commit_blockers(facts)
@@ -611,21 +688,45 @@ def run(payload, env, t0=None, ctx=None):
                                 bool(nxt and nxt["phase"] is not None), remaining)
     verdict = core.decide(rule_hits, blockers, kind, jev, settings) if jev else heuristic_verdict
     cursor = wf_facts["phase_cursor"] if wf_facts is not None else None
-    tail_sha = (hashlib.sha256(message[-settings["tailChars"]:].encode("utf-8", "replace")).hexdigest()[:16]
-                if message.strip() else None)
 
     notify_status, relay_reason, sent = notify_step(
         settings, verdict, wf, cursor if isinstance(cursor, str) else "", session, tail_sha, hook_active,
         turn_seconds, session_id, remaining, scan["last_human_ts"])
-    write_session(root, session_id, core.session_update(
+
+    # ACT (DD-4): the session record is written FIRST; the block is printed only if that write succeeded (B1).
+    consent_obj, negative = consent.get("obj"), negative_since(scan, session.get("last_human_ts"))
+    arm = core.arm_status(consent_obj, consent.get("ctime"), now, os.path.realpath(str(root)), settings,
+                          scan["last_human_epoch"], wf)
+    act_flags = dict(arm_cap=core.arm_budget(consent_obj), stop_verify=stop_verify_enabled(),
+                     endpoint_override=jev_endpoint_override_set(env), tags=tags, negative_reply=negative)
+    act_block = core.act_blockers(facts, verdict, arm, **act_flags)
+    acted_reason, acted = None, False
+    new_session = core.session_update(
         session, verdict["verdict"], git.get("head"), cursor, tail_sha, relay_reason is not None, now,
-        last_human_ts=scan["last_human_ts"], notified=sent))
+        last_human_ts=scan["last_human_ts"], notified=sent, negative_reply=negative)
+    if core.act_decision(settings, rule_hits, act_block, verdict):
+        act_session = core.session_update(
+            session, verdict["verdict"], git.get("head"), cursor, tail_sha, False, now,
+            last_human_ts=scan["last_human_ts"], notified=sent, acted=True, negative_reply=negative)
+        acted_reason = core.act_reason(act_session["acted_since_human"],
+                                       core.effective_budget(settings, act_flags["arm_cap"]), wf,
+                                       nxt["phase"]["id"] if nxt and isinstance(nxt["phase"], dict) else None)
+        if acted_reason is not None:
+            new_session = act_session
+    wrote = write_session(root, session_id, new_session)
+    if acted_reason is not None and wrote:
+        acted = True
+    elif acted_reason is not None:
+        acted_reason = None
+        act_block = core.act_blockers(facts, verdict, arm, session_write_ok=False, **act_flags)
     row = core.build_row(
         row_kind="stop", ts=now_iso(), session_id=session_id or None, transcript_path=transcript_path or None,
-        mode=settings["mode"], mode_tag="act_not_available" if "act_not_available" in tags else None,
+        mode=settings["mode"], mode_tag=("act_" + arm) if settings["mode"] == "on" else None,
         stop_hook_active=facts["stop_hook_active"], permission_mode=facts["permission_mode"] or None,
         wf=wf, binding_reason=reason, phase_cursor=cursor,
         cursor_case=nxt["case"] if nxt else None, cursor_resolution=nxt["resolution"] if nxt else None,
+        act_blockers=act_block, acted=acted, arm_status=arm, stop_reason=stop_reason,
+        continues_since_human=new_session.get("acted_since_human"),
         rule_hits=rule_hits, loop_guards=guards, commit_blockers=blockers,
         jev_text_source=settings.get("jev_text_source"), last_human_ts=scan["last_human_ts"],
         heuristic_kind=kind, heuristic_verdict=heuristic_verdict["verdict"], **jev_fields,
@@ -634,6 +735,8 @@ def run(payload, env, t0=None, ctx=None):
         notify=settings["notify"], notify_status=notify_status, turn_seconds=turn_seconds, turn_seconds_lower_bound=lower_bound,
         message_chars=len(message), tail_sha=tail_sha, hook_ms=int((time.monotonic() - t0) * 1000),
         settings_tags=tags)
+    if acted:
+        return {"decision": "block", "reason": acted_reason}, row
     return ({"decision": "block", "reason": relay_reason} if relay_reason else None), row
 
 
@@ -678,7 +781,8 @@ def main(raw=None):
         if row is not None:
             append_row(row)
             log_event("plugin_stop_gate", {"decision": row["verdict"], "wf": row["wf"], "mode": row["mode"],
-                                           "rule_hits": row["rule_hits"], "row_kind": row["row_kind"]})
+                                           "rule_hits": row["rule_hits"], "row_kind": row["row_kind"],
+                                           "acted": row["acted"]})
         if out is not None:
             sys.stdout.write(json.dumps(out, ensure_ascii=True))
             sys.stdout.flush()

@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -953,6 +954,288 @@ def test_arm_cli_bad_arguments_print_one_json_error_and_exit_2():
     rows = [core.build_row(row_kind="stop", ts="2026-10-01T08:00:00Z", session_id="s")]
     assert report.build_report([dict(rows[0], schema=2.0), dict(rows[0], schema=True)], None, scope="jev")["rows"] == 0
     assert report.build_report([dict(rows[0], schema=2)], None, scope="jev")["rows"] == 1
+
+
+# ---------------------------------------------------------------------------
+# P6: hook ACT wiring (subprocess, scratch passwd-home, patched Jev layer)
+# ---------------------------------------------------------------------------
+
+ACT_SID = "sid-00000001"
+ACT_TEXT = "Phase P1 is done and verified. Ready for the next phase."
+ACT_DRIVER = """
+import os, sys
+sys.path.insert(0, os.environ["SGA_SCRIPTS"])
+import craftflow_stop_gate as gate
+import craftflow_stop_gate_core as core
+home = os.environ["SGA_HOME"]
+gate._consent_home = lambda: home
+core.passwd_home = lambda: home
+answer = {"status": "ok", "kind": "phase_done_awaiting_continue", "kind_conf": 0.97, "needs_human": 0.05}
+fields = {"jev_status": "ok", "jev_kind": answer["kind"], "jev_kind_conf": 0.97, "jev_needs_human": 0.05,
+          "jev_latency_ms": 1, "jev_usage": None}
+gate.jev_layer = lambda *a, **k: (answer, fields)
+if os.environ.get("SGA_RAISE"):
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+    core.act_decision = boom
+sys.exit(gate.main(sys.stdin.buffer.read()))
+"""
+
+
+def act_git_project():
+    root = Path(scratch_dir())
+    for args in (["init", "-q"], ["add", ".gitignore"], ["commit", "-q", "-m", "init"]):
+        if args[0] == "add":
+            (root / ".gitignore").write_text(".craftflow/\n", encoding="utf-8")
+        done = subprocess.run(["git", "-C", str(root), "-c", "user.email=t@example.com", "-c", "user.name=t",
+                               "-c", "commit.gpgsign=false"] + args, capture_output=True, timeout=30)
+        assert done.returncode == 0, done.stderr
+    return root
+
+
+def act_line(kind, ts, content, **extra):
+    row = {"type": kind, "timestamp": iso(ts), "message": {"role": kind, "content": content}}
+    row["message"].update(extra)
+    return row
+
+
+def act_run(mode="on", base=None, arm="ok", arm_over=None, artifact_sid=ACT_SID, extra_lines=(), session=None,
+            stop_reason="end_turn", plugin=None, env_extra=None, events=None, phase_ids=("P1", "P2"),
+            cursor="P2", consent_late=False, seam_arm=False, hook_active=False, raw_session=None,
+            sessions_mode=None, raise_in_act=False):
+    """Run the hook once as a subprocess against a fully armed scratch setup. Returns a namespace."""
+    base = time.time() if base is None else base
+    root = act_git_project()
+    home = scratch_dir()
+    entry = make_arm(armedAt=iso(base - 3600), expiresAt=iso(base + 7 * 3600),
+                     projectRoot=os.path.realpath(str(root)))
+    entry.update(arm_over or {})
+    consent = {"mode": mode}
+    if arm == "ok":
+        consent["actContinue"] = entry
+    folder = Path(home) / ".claude" / "craftflow"
+    folder.mkdir(parents=True)
+    path = folder / "stop-gate.json"
+    seam_path = None
+    if seam_arm:
+        seam_path = Path(scratch_dir()) / "seam.json"
+        seam_path.write_text(json.dumps({"mode": mode, "actContinue": entry}), encoding="utf-8")
+        consent = {}
+
+    def write_consent_file():
+        path.write_text(json.dumps(consent), encoding="utf-8")
+        os.chmod(str(path), 0o600)
+
+    if not consent_late:
+        write_consent_file()
+    status = {phase_ids[0]: "completed"}
+    status.update({pid: "pending" for pid in phase_ids[1:]})
+    artifact = {"workflow_type": "BUILD", "plan_file": "docs/plans/x.md", "phase_cursor": cursor,
+                "phase_status": status, "session_id": artifact_sid, "pending_gate": None,
+                "normalized_phases": [{"phase_id": pid, "title": "t-" + pid, "files": ["f.py"],
+                                       "checkpoint_type": "none"} for pid in phase_ids]}
+    wfdir = root / ".craftflow" / "state" / "workflows"
+    wfdir.mkdir(parents=True)
+    (wfdir / (WF + ".json")).write_text(json.dumps(artifact), encoding="utf-8")
+    if events is not None:
+        (wfdir / (WF + ".events.jsonl")).write_text("".join(json.dumps(e) + "\n" for e in events),
+                                                    encoding="utf-8")
+    human_ts = iso(base + 10)
+    lines = [act_line("user", base + 10, "start " + WF),
+             act_line("assistant", base + 12, [{"type": "text", "text": ACT_TEXT}], stop_reason=stop_reason)]
+    lines += list(extra_lines)
+    transcript = Path(scratch_dir()) / "t.jsonl"
+    transcript.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    if consent_late:
+        write_consent_file()
+    spath = gate.session_path(root, ACT_SID)
+    if session is not None or raw_session is not None:
+        spath.parent.mkdir(parents=True)
+        spath.write_text(raw_session if raw_session is not None else
+                         json.dumps(dict({"last_human_ts": human_ts}, **session)), encoding="utf-8")
+    if sessions_mode is not None:
+        spath.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(str(spath.parent), sessions_mode)
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("CURSOR_PLUGIN_ROOT", "CRAFTFLOW_JEV_ENDPOINT", "CRAFTFLOW_STOP_GATE_USER_CONFIG")}
+    env.update({"CLAUDE_PLUGIN_ROOT": plugin or str(PLUGIN_ROOT), "CLAUDE_PROJECT_DIR": str(root),
+                "HOME": home, "SGA_HOME": home, "SGA_SCRIPTS": str(SCRIPTS)})
+    if seam_path:
+        env["CRAFTFLOW_STOP_GATE_USER_CONFIG"] = str(seam_path)
+    if raise_in_act:
+        env["SGA_RAISE"] = "1"
+    env.update(env_extra or {})
+    payload = {"hook_event_name": "Stop", "session_id": ACT_SID, "transcript_path": str(transcript),
+               "cwd": str(root), "permission_mode": "default", "stop_hook_active": hook_active,
+               "last_assistant_message": ACT_TEXT}
+    done = subprocess.run([sys.executable, "-c", ACT_DRIVER], input=json.dumps(payload).encode(),
+                          capture_output=True, env=env, cwd=str(root), timeout=60)
+    rows_path = root / ".craftflow" / "state" / "stop-gate" / "events.jsonl"
+    rows = ([json.loads(x) for x in rows_path.read_text(encoding="utf-8").splitlines() if x.strip()]
+            if rows_path.exists() else [])
+    stored = None
+    if spath.exists():
+        try:
+            stored = json.loads(spath.read_text(encoding="utf-8"))
+        except ValueError:
+            stored = "corrupt"
+    for target in (spath.parent,):
+        if target.exists():
+            os.chmod(str(target), 0o755)
+    return type("Run", (), {"code": done.returncode, "out": done.stdout.decode("utf-8"),
+                            "err": done.stderr.decode("utf-8"), "rows": rows, "root": root, "session": stored,
+                            "human_ts": human_ts})()
+
+
+def act_quiet(run, blocker=None, arm_state_=None):
+    """Assertions shared by every 'no block' case: exit 0, empty stdout, one row, optionally the reason."""
+    assert run.code == 0 and run.out == "", (run.code, run.out, run.err)
+    assert len(run.rows) == 1, run.rows
+    row = run.rows[0]
+    assert row["acted"] is False, row
+    if blocker:
+        assert any(code.startswith(blocker) for code in row["act_blockers"]), row["act_blockers"]
+    if arm_state_:
+        assert row["arm_status"] == arm_state_, row["arm_status"]
+    return row
+
+
+def test_p6_armed_clean_stop_prints_exactly_the_block_json_and_logs_acted():
+    run = act_run()
+    want = {"decision": "block", "reason": core.act_reason(1, 5, WF, "P2")}
+    assert run.code == 0 and run.err == "", (run.code, run.err)
+    assert run.out == json.dumps(want, ensure_ascii=True), run.out
+    row = run.rows[0]
+    assert (row["schema"], row["acted"], row["binding_reason"], row["continues_since_human"],
+            row["arm_status"], row["act_blockers"], row["verdict"], row["stop_reason"]) == (
+        2, True, "session_match", 1, "armed", [], "would_continue", "end_turn"), row
+    assert run.session["acted_since_human"] == 1 and run.session["last_acted_tail_sha"] == row["tail_sha"]
+
+
+def test_p6_chain_counts_up_and_stops_at_the_budget():
+    base = time.time()
+    chain = act_run(base=base, hook_active=True, session={"acted_since_human": 4, "would_continue_since_human": 4,
+                                                          "last_head": "x"})
+    assert json.loads(chain.out)["reason"] == core.act_reason(5, 5, WF, "P2"), chain.out
+    spent = act_run(base=base, session={"acted_since_human": 5})
+    act_quiet(spent, "A15", "armed")
+
+
+def test_p6_same_tail_already_acted_does_not_act_twice():
+    first = act_run()
+    sha = first.rows[0]["tail_sha"]
+    again = act_run(session={"acted_since_human": 1, "last_acted_tail_sha": sha})
+    act_quiet(again, "A11")
+
+
+def test_p6_unarmed_on_prints_nothing_and_behaves_like_audit():
+    run = act_run(arm="none")
+    row = act_quiet(run, "A02", "not_armed")
+    assert row["mode"] == "on" and row["verdict"] == "would_continue", row
+    assert run.session["acted_since_human"] == 0, run.session
+
+
+def test_p6_expired_arm_prints_nothing():
+    base = time.time()
+    run = act_run(base=base, arm_over={"armedAt": iso(base - 10 * 3600), "expiresAt": iso(base - 3600)})
+    act_quiet(run, "A02", "arm_expired")
+
+
+def test_p6_other_project_arm_prints_nothing():
+    act_quiet(act_run(arm_over={"projectRoot": "/somewhere/else"}), "A02", "arm_other_project")
+
+
+def test_p6_disarmed_session_prints_nothing():
+    act_quiet(act_run(session={"act_disarmed": True, "acted_since_human": 1}), "A08")
+
+
+def test_p6_off_and_audit_modes_print_nothing():
+    off = act_run(mode="off")
+    assert (off.code, off.out, off.rows) == (0, "", []), (off.code, off.out, off.rows)
+    audit = act_run(mode="audit")
+    row = act_quiet(audit, "A01")
+    assert row["mode"] == "audit", row
+
+
+def test_p6_seam_only_arm_prints_nothing():
+    run = act_run(seam_arm=True)
+    act_quiet(run, "A02", "not_armed")
+    assert "A14_settings_not_from_user_layer" in run.rows[0]["act_blockers"], run.rows[0]["act_blockers"]
+
+
+def test_p6_arm_written_after_the_last_human_line_prints_nothing():
+    act_quiet(act_run(consent_late=True, base=time.time() - 60), "A02", "arm_after_last_human")
+
+
+def test_p6_session_write_failure_means_no_block_b1():
+    run = act_run(sessions_mode=0o555)
+    assert run.code == 0 and run.out == "", (run.out, run.err)
+    row = run.rows[0]
+    assert row["acted"] is False and "A13_session_state_unreliable" in row["act_blockers"], row
+    assert run.session is None, run.session
+
+
+def test_p6_corrupt_session_file_means_no_block_b1():
+    run = act_run(raw_session="{not json")
+    row = act_quiet(run, "A13")
+    assert "session_state_reset" in row["settings_tags"], row["settings_tags"]
+
+
+def test_p6_negative_reply_right_before_the_stop_disarms_and_does_not_act():
+    base = time.time()
+    run = act_run(base=base, session={"acted_since_human": 1},
+                  extra_lines=[act_line("user", base + 14, "no, stop that")])
+    row = act_quiet(run, "A08")
+    assert run.session["act_disarmed"] is True, run.session
+    assert row["last_human_ts"] == iso(base + 14), row["last_human_ts"]
+
+
+def test_p6_interrupt_then_new_prompt_also_disarms():
+    base = time.time()
+    extra = [act_line("user", base + 14, "[Request interrupted by user]"),
+             act_line("user", base + 16, "ok carry on please")]
+    act_quiet(act_run(base=base, session={"acted_since_human": 1}, extra_lines=extra), "A08")
+
+
+def test_p6_stale_artifact_session_id_means_no_block():
+    act_quiet(act_run(artifact_sid="sid-other-0001"), "A03")
+
+
+def test_p6_session_rebound_newer_than_the_last_human_line_means_no_block():
+    base = time.time()
+    events = [{"ts": iso(base + 11), "wf": WF, "event": "session_rebound", "from": None, "to": ACT_SID}]
+    act_quiet(act_run(base=base, events=events), "A03")
+    old = [{"ts": iso(base - 5), "wf": WF, "event": "session_rebound", "from": None, "to": ACT_SID}]
+    assert act_run(base=base, events=old).out.startswith('{"decision": "block"')
+
+
+def test_p6_hostile_phase_id_means_no_block():
+    run = act_run(phase_ids=("P1", "P2 && git push"), cursor="P2 && git push")
+    assert run.code == 0 and run.out == "", (run.out, run.err)
+    assert any(c.startswith("A12") for c in run.rows[0]["act_blockers"]), run.rows[0]["act_blockers"]
+
+
+def test_p6_real_stop_reason_from_the_transcript_feeds_h19():
+    run = act_run(stop_reason="max_tokens")
+    assert run.out == "" and run.rows[0]["stop_reason"] == "max_tokens", run.rows[0]
+    assert "H19_stop_reason_not_end_turn" in run.rows[0]["rule_hits"], run.rows[0]["rule_hits"]
+
+
+def test_p6_stop_verify_enabled_means_no_block():
+    plugin = scratch_dir()
+    shutil.copytree(str(PLUGIN_ROOT / "config"), os.path.join(plugin, "config"))
+    Path(plugin, "config", "stop-verify.json").write_text(
+        json.dumps({"enabled": True, "command": "true"}), encoding="utf-8")
+    act_quiet(act_run(plugin=plugin), "A07")
+
+
+def test_p6_jev_endpoint_override_means_no_block():
+    act_quiet(act_run(env_extra={"CRAFTFLOW_JEV_ENDPOINT": "http://127.0.0.1:9/x"}), "A09")
+
+
+def test_p6_exception_in_the_act_step_is_silent_and_exits_zero():
+    run = act_run(raise_in_act=True)
+    assert run.code == 0 and run.out == "", (run.code, run.out, run.err)
 
 
 def main():
