@@ -42,7 +42,7 @@ def _fast_inert(raw, env):
             return True
         root = env.get("CLAUDE_PLUGIN_ROOT")
         if not root:
-            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
         with open(os.path.join(root, "config", "stop-gate.json"), "rb") as handle:
             plugin_obj = json.loads(handle.read().decode("utf-8-sig"))
         if not isinstance(plugin_obj, dict) or plugin_obj.get("mode") != "off":
@@ -55,14 +55,19 @@ def _fast_inert(raw, env):
             if not isinstance(home, str) or not os.path.isabs(home):
                 return False  # passwd lookup needs the full path
             user_path = os.path.join(home, *_USER_OVERRIDE_SEGMENTS)
+        # lexists returns False on OSError; the full path's os.stat(...) FileNotFoundError/OSError handling in
+        # core.load_json_file treats those the same way, so this is equivalent (intentional, do not tighten).
         return not os.path.lexists(user_path)
     except Exception:  # noqa: BLE001 - any doubt falls through to the full path
         return False
 
 
 if __name__ == "__main__":
-    _RAW_STDIN = sys.stdin.buffer.read()
-    if _fast_inert(_RAW_STDIN, os.environ):
+    try:
+        _RAW_STDIN = sys.stdin.buffer.read()
+    except Exception:  # noqa: BLE001 - closed/absent stdin: fall through, load_input handles it (fail open)
+        _RAW_STDIN = None
+    if _RAW_STDIN is not None and _fast_inert(_RAW_STDIN, os.environ):
         sys.exit(0)
 else:
     _RAW_STDIN = None

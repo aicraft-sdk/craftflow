@@ -21,6 +21,7 @@ GATE = SCRIPTS / "craftflow_stop_gate.py"
 sys.path.insert(0, str(SCRIPTS))
 
 import craftflow_stop_gate as gate  # noqa: E402
+import craftflow_stop_gate_core as core  # noqa: E402
 
 _passes = 0
 _errors = []
@@ -149,6 +150,83 @@ def test_off_mode_imports_nothing_heavy():
     assert "json" in imported, sorted(imported)[:20]  # the probe actually saw imports
     leaked = [name for name in HEAVY if name in imported]
     assert not leaked, "off mode imported " + ", ".join(leaked)
+
+
+def test_fast_path_constants_match_core():
+    assert gate._USER_OVERRIDE_ENV == core.USER_OVERRIDE_ENV
+    assert gate._USER_OVERRIDE_SEGMENTS == core.USER_OVERRIDE_SEGMENTS
+
+
+def test_fast_path_user_path_matches_core():
+    off = plugin_with_mode("off")
+    home = scratch_dir()
+    seam = os.path.join(scratch_dir(), "seam.json")
+    matrix = [
+        {"CRAFTFLOW_STOP_GATE_USER_CONFIG": seam},
+        {"CRAFTFLOW_STOP_GATE_USER_CONFIG": "   ", "HOME": home},
+        {"CRAFTFLOW_STOP_GATE_USER_CONFIG": "rel/seam.json"},
+        {"HOME": home},
+        {"HOME": "relative/home"},
+        {},
+    ]
+    for extra in matrix:
+        env = dict(extra, CLAUDE_PLUGIN_ROOT=off)
+        want = core.user_override_path(env)
+        if "HOME" not in env and not env.get("CRAFTFLOW_STOP_GATE_USER_CONFIG"):
+            # core would resolve the real passwd home here: never write there, only check the fall-through
+            assert gate._fast_inert(STOP, env) is False, extra
+            continue
+        # Make the user file present at the path core resolves; the fast path must then fall through.
+        if want is not None and os.path.isabs(want):
+            os.makedirs(os.path.dirname(want), exist_ok=True)
+            with open(want, "w", encoding="utf-8") as handle:
+                handle.write("{}")
+            assert gate._fast_inert(STOP, env) is False, extra
+            os.remove(want)
+            assert gate._fast_inert(STOP, env) is True, extra
+        elif want is not None:  # relative seam: resolves against cwd, absent here
+            assert gate._fast_inert(STOP, env) is (not os.path.lexists(want)), extra
+        else:  # core cannot resolve a path: the fast path must not claim inert
+            assert gate._fast_inert(STOP, env) is False, extra
+
+
+def test_fast_path_not_inert_where_full_path_acts():
+    absent = absent_user_path()
+    for label, root in (("on", plugin_with_mode("on")), ("audit", plugin_with_mode("audit")),
+                        ("invalid", plugin_with_mode("bogus")), ("upper", plugin_with_mode("OFF"))):
+        assert gate._fast_inert(STOP, env_for(root, absent)) is False, label
+    off = plugin_with_mode("off")
+    assert gate._fast_inert(STOP, {"CLAUDE_PLUGIN_ROOT": off, "CRAFTFLOW_STOP_GATE_USER_CONFIG": "  "}) is False
+    assert gate._fast_inert(STOP, {"CLAUDE_PLUGIN_ROOT": off, "HOME": "relative/home"}) is False
+
+
+def test_fast_path_unreadable_stdin_fails_open():
+    env = dict(os.environ, CRAFTFLOW_STOP_GATE_USER_CONFIG=absent_user_path())
+    env.pop("CURSOR_PLUGIN_ROOT", None)
+    closed = subprocess.run(["sh", "-c", 'exec "$1" "$2" <&-', "sh", sys.executable, str(GATE)],
+                            capture_output=True, env=env, timeout=30)
+    assert (closed.returncode, closed.stdout) == (0, b""), (closed.returncode, closed.stdout, closed.stderr)
+    devnull = subprocess.run([sys.executable, str(GATE)], stdin=subprocess.DEVNULL, capture_output=True,
+                             env=env, timeout=30)
+    assert (devnull.returncode, devnull.stdout) == (0, b""), (devnull.returncode, devnull.stderr)
+
+
+def test_audit_mode_through_guard_writes_exactly_one_row():
+    plugin = plugin_with_mode("audit")
+    project = scratch_dir()
+    home = scratch_dir()
+    env = {k: v for k, v in os.environ.items() if k != "CURSOR_PLUGIN_ROOT"}
+    env.update({"CLAUDE_PLUGIN_ROOT": plugin, "CLAUDE_PROJECT_DIR": project, "HOME": home,
+                "CRAFTFLOW_STOP_GATE_USER_CONFIG": absent_user_path()})
+    payload = json.dumps({"hook_event_name": "Stop", "session_id": "s-1", "transcript_path": "",
+                          "stop_hook_active": False, "last_assistant_message": "All done."}).encode()
+    proc = subprocess.run([sys.executable, str(GATE)], input=payload, capture_output=True, env=env,
+                          cwd=project, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+    path = Path(project) / ".craftflow" / "state" / "stop-gate" / "events.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(rows) == 1, rows
+    assert rows[0]["mode"] == "audit", rows[0]
 
 
 def main():
