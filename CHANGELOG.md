@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.24.1] - 2026-10-01
+
+### Fixes
+
+- renumber stop-gate spec/ADR to 0020/0057 and tighten jev seam tests
+- harden jev endpoint file read, redirects and URL validation
+- remove CRAFTFLOW_JEV_ENDPOINT env override; use user-level loopback-only endpoint file
+
+### Documentation
+
+- document jev endpoint file seam and close env override residual
+
+### Tests
+
+- migrate jev tests and live harnesses off CRAFTFLOW_JEV_ENDPOINT to isolated-home endpoint file
+
 ## [1.24.0] - 2026-10-01
 
 ### Features
