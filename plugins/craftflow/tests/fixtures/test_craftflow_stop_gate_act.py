@@ -666,6 +666,193 @@ def test_a14_unknown_sources_and_a03_pinned():
         act_facts(binding_reason="mention_mtime_agree")["artifact_session_id"]
 
 
+# ---------------------------------------------------------------------------
+# P5: report --scope jev and the arm CLI (DD-15: scratch homes only, never the real consent file)
+# ---------------------------------------------------------------------------
+
+def _tline(kind, ts, content):
+    return json.dumps({"type": kind, "timestamp": ts, "message": {"role": kind, "content": content}})
+
+
+def go_fixture(sessions=5, per=10, negative_in_first=False, schema=2):
+    """(project root, events path, transcripts root) holding sessions*per labelled would_continue Jev rows."""
+    root = os.path.realpath(scratch_dir())
+    troot = os.path.join(root, "transcripts")
+    os.makedirs(troot)
+    rows = []
+    for s in range(sessions):
+        sid = "sess-%d" % s
+        lines = [_tline("user", "2026-10-01T07:00:00Z", "start")]
+        for m in range(per):
+            row_ts = "2026-10-01T08:%02d:00Z" % (m * 2)
+            reply_ts = "2026-10-01T08:%02d:30Z" % (m * 2)
+            reply = "no, stop" if (negative_in_first and s == 0 and m == 0) else "yes"
+            lines.append(_tline("assistant", row_ts, [{"type": "text", "text": "phase done. continue?"}]))
+            lines.append(_tline("user", reply_ts, reply))
+            rows.append(core.build_row(row_kind="stop", ts=row_ts, session_id=sid, schema=schema,
+                                       transcript_path="/gone/" + sid + ".jsonl", verdict="would_continue",
+                                       jev_status="ok", hook_ms=100))
+        Path(troot, sid + ".jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    events = os.path.join(root, ".craftflow", "state", "stop-gate", "events.jsonl")
+    os.makedirs(os.path.dirname(events))
+    Path(events).write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    return root, events, troot
+
+
+def arm_mod():
+    import craftflow_stop_gate_arm as arm
+    return arm
+
+
+def run_arm(argv, root, home, troot=None, events=None, tty=True, confirm=None, now=None, cwd=None, env_extra=None):
+    """(exit code, parsed stdout JSON) of arm.main in-process with a scratch home."""
+    import io
+    from contextlib import redirect_stdout
+    arm = arm_mod()
+    env = {"CLAUDE_PROJECT_DIR": root} if root else {}
+    env.update(env_extra or {})
+    extra = (["--transcripts-root", troot] if troot else []) + (["--events", events] if events else [])
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        code = arm.main(argv + extra, env=env, home=home, tty=tty,
+                        confirm=confirm or (lambda _prompt: os.path.basename(root)), now=now, cwd=cwd)
+    text = buf.getvalue().strip()
+    return code, (json.loads(text) if text else None)
+
+
+NOW = 1790000000.0  # fixed clock for the arm tests
+
+
+def test_report_scope_jev_counts_schema2_rows_only():
+    root, events, troot = go_fixture(sessions=2, per=3)
+    mixed = [json.loads(line) for line in Path(events).read_text(encoding="utf-8").splitlines()]
+    legacy = [dict(r, schema=1, session_id="old") for r in mixed[:2]]
+    import craftflow_stop_gate_report as report
+    allrep = report.build_report(mixed + legacy, troot, scope="all")
+    jevrep = report.build_report(mixed + legacy, troot, scope="jev")
+    assert allrep["rows"] == 8 and allrep["scope"] == "all", allrep["rows"]
+    assert jevrep["rows"] == 6 and jevrep["scope"] == "jev", jevrep["rows"]
+    assert jevrep["go_criteria"]["criteria"]["would_continue_labeled"]["value"] == 6
+    assert jevrep["act"] == {"acted": 0, "chains": 0, "chain_negatives": 0}, jevrep["act"]
+    # acted rows join the reply without the next-row bound
+    acted = [core.build_row(row_kind="stop", ts="2026-10-01T08:00:00Z", session_id="sess-0", acted=True,
+                            transcript_path="/gone/sess-0.jsonl", verdict="would_continue", jev_status="ok"),
+             core.build_row(row_kind="stop", ts="2026-10-01T08:00:10Z", session_id="sess-0", acted=True,
+                            stop_hook_active=True, transcript_path="/gone/sess-0.jsonl",
+                            verdict="would_continue", jev_status="ok")]
+    out = report.build_report(acted, troot, scope="jev")
+    assert out["labeled"] == 2 and out["act"]["acted"] == 2 and out["act"]["chains"] == 1, out["act"]
+
+
+def test_report_go_passes_with_enough_good_rows_and_fails_on_a_negative():
+    import craftflow_stop_gate_report as report
+    root, events, troot = go_fixture()
+    rows, _cut = report.load_events_ex(events)
+    good = report.build_report(rows, troot, scope="jev")
+    assert good["go_criteria"]["met"] is True, good["go_criteria"]
+    root2, events2, troot2 = go_fixture(negative_in_first=True)
+    bad = report.build_report(report.load_events_ex(events2)[0], troot2, scope="jev")
+    assert bad["go_criteria"]["met"] is False and bad["go_criteria"]["stats"]["negatives"] == 1, bad["go_criteria"]
+    root3, events3, troot3 = go_fixture(schema=1)  # schema 1 rows never count toward the jev scope
+    none = report.build_report(report.load_events_ex(events3)[0], troot3, scope="jev")
+    assert none["rows"] == 0 and none["go_criteria"]["met"] is False, none["rows"]
+
+
+def test_arm_cli_without_a_tty_exits_2_no_tty():
+    scratch = scratch_dir()
+    proc = subprocess.run([sys.executable, str(SCRIPTS / "craftflow_stop_gate_arm.py"), "arm"],
+                          stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
+                          env=dict(os.environ, CLAUDE_PROJECT_DIR=scratch))
+    assert proc.returncode == 2 and json.loads(proc.stdout) == {"error": "no_tty"}, (proc.returncode, proc.stdout)
+
+
+def test_arm_cli_arm_refuses_without_go_then_writes_entry_in_scratch_home():
+    root, events, troot = go_fixture()
+    home = os.path.realpath(scratch_dir())
+    bad_root, bad_events, bad_troot = go_fixture(negative_in_first=True)
+    code, out = run_arm(["arm", "--workflow", "wf-a-1"], bad_root, home, bad_troot, bad_events, now=NOW)
+    assert code == 2 and out["error"] == "go_not_met", (code, out)
+    assert not os.path.lexists(os.path.join(home, ".claude", "craftflow", "stop-gate.json"))
+    code, out = run_arm(["arm", "--workflow", "wf-a-1", "--hours", "3"], root, home, troot, events, now=NOW,
+                        confirm=lambda _prompt: "wrong-name")
+    assert code == 2 and out["error"] == "not_confirmed", (code, out)
+    code, out = run_arm(["arm", "--workflow", "wf-a-1", "--hours", "3"], root, home, troot, events, now=NOW)
+    assert code == 0 and out["armed"] is True, (code, out)
+    path = os.path.join(home, ".claude", "craftflow", "stop-gate.json")
+    assert (os.stat(path).st_mode & 0o777) == 0o600 and (os.stat(os.path.dirname(path)).st_mode & 0o777) == 0o700
+    obj, tag, ctime = core.read_consent_file_ex(home)
+    entry = obj["actContinue"]
+    assert tag is None and entry["projectRoot"] == root and entry["workflow"] == "wf-a-1", entry
+    assert entry["go"]["met"] is True and entry["go"]["scope"] == "jev" and entry["go"]["schemas"] == [2]
+    assert entry["maxAutoContinuesPerSession"] == 5 and entry["version"] == 1
+    assert core.iso_epoch(entry["expiresAt"]) - core.iso_epoch(entry["armedAt"]) == 3 * 3600
+    settings, _tags = core.parse_settings({}, obj, "passwd", obj)
+    assert core.arm_status(obj, ctime, NOW + 5, root, settings, ctime + 10, "wf-a-1") == "armed"
+    # arming from a subdirectory of a git checkout resolves the same project root
+    repo = os.path.realpath(scratch_dir())
+    subprocess.run(["git", "init", "-q", repo], check=True, timeout=30)
+    os.makedirs(os.path.join(repo, "sub"))
+    arm = arm_mod()
+    assert arm.project_root({}, os.path.join(repo, "sub")) == repo
+    assert arm.project_root({"CLAUDE_PROJECT_DIR": os.path.join(repo, "sub")}, "/") == os.path.join(repo, "sub")
+
+
+def test_arm_cli_disarm_removes_only_the_entry():
+    root, events, troot = go_fixture()
+    home = os.path.realpath(scratch_dir())
+    cdir = os.path.join(home, ".claude", "craftflow")
+    os.makedirs(cdir, mode=0o700)
+    path = os.path.join(cdir, "stop-gate.json")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        json.dump({"notify": "push"}, handle)
+    assert run_arm(["arm", "--workflow", "wf-a-1"], root, home, troot, events, now=NOW)[0] == 0
+    code, out = run_arm(["disarm"], root, home, tty=False)
+    assert code == 0 and out == {"armed": False, "removed": True}, (code, out)
+    obj, tag, _ctime = core.read_consent_file_ex(home)
+    assert obj == {"notify": "push"} and tag is None, obj
+    assert run_arm(["disarm"], root, home, tty=False)[1] == {"armed": False, "removed": False}
+
+
+def test_arm_cli_status_reports_arm_status():
+    root, events, troot = go_fixture()
+    home = os.path.realpath(scratch_dir())
+    code, out = run_arm(["status", "--workflow", "wf-a-1"], root, home, tty=False, now=NOW)
+    assert code == 0 and out["status"] == "not_armed", (code, out)
+    assert run_arm(["arm", "--workflow", "wf-a-1"], root, home, troot, events, now=NOW)[0] == 0
+    code, out = run_arm(["status", "--workflow", "wf-a-1"], root, home, tty=False, now=NOW + 60)
+    assert code == 0 and out["status"] == "armed" and out["projectRoot"] == root, out
+    assert run_arm(["status", "--workflow", "wf-other"], root, home, tty=False, now=NOW + 60)[1]["status"] \
+        == "arm_other_workflow"
+    assert run_arm(["status", "--workflow", "wf-a-1"], root, home, tty=False, now=NOW + 9 * 3600)[1]["status"] \
+        == "arm_expired"
+
+
+def test_arm_cli_duration_bounds_one_to_twenty_four_hours_default_eight():
+    arm = arm_mod()
+    settings = dict(core.DEFAULTS)
+    go = {"met": True}
+    for bad in (0, 25, -1, True, 1.5, "8"):
+        try:
+            arm.build_arm_entry(NOW, bad, "/p", "wf-a-1", settings, go)
+        except ValueError:
+            continue
+        raise AssertionError("hours accepted: " + repr(bad))
+    for hours in (1, 24):
+        entry = arm.build_arm_entry(NOW, hours, "/p", "wf-a-1", settings, go)
+        assert core.iso_epoch(entry["expiresAt"]) - core.iso_epoch(entry["armedAt"]) == hours * 3600
+    root, events, troot = go_fixture()
+    home = os.path.realpath(scratch_dir())
+    for hours in ("0", "25"):
+        code, out = run_arm(["arm", "--workflow", "wf-a-1", "--hours", hours], root, home, troot, events, now=NOW)
+        assert code == 2 and out["error"] == "bad_hours", (code, out)
+    code, _out = run_arm(["arm", "--workflow", "wf-a-1"], root, home, troot, events, now=NOW)
+    obj = core.read_consent_file(home)[0]
+    assert code == 0 and core.iso_epoch(obj["actContinue"]["expiresAt"]) - NOW == 8 * 3600
+    code, out = run_arm(["arm", "--workflow", "bad id; rm"], root, home, troot, events, now=NOW)
+    assert code == 2 and out["error"] == "bad_workflow", (code, out)
+
+
 def main():
     print("test_craftflow_stop_gate_act: running")
     names = [n for n in list(globals()) if n.startswith("test_")]

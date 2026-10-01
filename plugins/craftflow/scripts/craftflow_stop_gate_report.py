@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Stop-gate calibration report and offline replay (SPEC-0018 / ADR-0055, RD-3). Read-only, fail soft.
 
-  craftflow_stop_gate_report.py [--events FILE] [--transcripts-root DIR]
-      Labels each shadow row by the user's next genuine reply in the same transcript, then prints ONE JSON
+  craftflow_stop_gate_report.py [--events FILE] [--transcripts-root DIR] [--scope {all,jev}]
+      --scope jev counts schema-2 rows only (the GO basis for arming) and adds the ``act`` section. Labels each shadow row by the user's next genuine reply in the same transcript, then prints ONE JSON
       object: rows, labeled, by_verdict, rule_hits, jev, heuristic, sweep, latency_ms, usage_total,
       go_criteria. ACT stays NO-GO unless the RD-3 criteria are met.
   craftflow_stop_gate_report.py --replay --transcripts-root DIR
@@ -165,8 +165,11 @@ def label_rows(rows, root, flags=None):
                 cache[path] = list(iter_records(data))
                 if cut and flags is not None:
                     flags.add("transcript")
+            # an auto-continued (acted) or follow-up stop is answered by the human line after the whole chain,
+            # so its reply is not bounded by the next row of the session
+            chained = row.get("acted") is True or row.get("stop_hook_active") is True
             labeled["label"] = core.label_reply(
-                join_next_user_reply(cache[path], row.get("ts"), bounds.get(index)))
+                join_next_user_reply(cache[path], row.get("ts"), None if chained else bounds.get(index)))
         out.append(labeled)
     return out
 
@@ -210,9 +213,29 @@ def _jev_summary(rows):
             "status_counts": _count(r.get("jev_status") for r in rows)}
 
 
-def build_report(rows, root, events_truncated=False):
+SCOPES = ("all", "jev")
+GO_ROW_SCHEMA = 2
+
+
+def _act_summary(stops):
+    """{acted, chains, chain_negatives}: auto-continued rows, chain starts, and acted rows the user answered
+    negatively."""
+    acted = [r for r in stops if r.get("acted") is True]
+    return {"acted": len(acted),
+            "chains": sum(1 for r in acted if not r.get("stop_hook_active")),
+            "chain_negatives": sum(1 for r in acted if r["label"] == "negative")}
+
+
+def build_report(rows, root, events_truncated=False, scope="all"):
+    """Calibration report. ``scope`` ``jev`` counts schema-2 rows only (A11): older rows predate the act
+    fields and the Jev-gated verdict, so they cannot back a GO."""
+    if scope not in SCOPES:
+        raise ValueError("scope")
     flags = set()
-    stops = label_rows(metric_rows(rows), root, flags)
+    selected = metric_rows(rows)
+    if scope == "jev":
+        selected = [r for r in selected if r.get("schema") == GO_ROW_SCHEMA]
+    stops = label_rows(selected, root, flags)
     labeled = [r for r in stops if r["label"] != "unlabeled"]
     # a follow-up stop (stop_hook_active) is a consequence of an earlier stop, not an independent verdict
     wc = [r for r in labeled if r.get("verdict") == "would_continue" and not r.get("stop_hook_active")]
@@ -231,6 +254,8 @@ def build_report(rows, root, events_truncated=False):
     }
     swept = core.sweep(stops)
     return {
+        "scope": scope,
+        "act": _act_summary(stops),
         "rows": len(stops),
         "labeled": len(labeled),
         "unlabeled": len(stops) - len(labeled),
@@ -288,13 +313,14 @@ def main(argv=None):
     parser.add_argument("--events", default=None)
     parser.add_argument("--transcripts-root", default=None)
     parser.add_argument("--replay", action="store_true")
+    parser.add_argument("--scope", choices=SCOPES, default="all")
     args = parser.parse_args(argv)
     try:
         if args.replay:
             result = replay(args.transcripts_root)
         else:
             rows, cut = load_events_ex(args.events or default_events_path())
-            result = build_report(rows, args.transcripts_root, cut)
+            result = build_report(rows, args.transcripts_root, cut, args.scope)
     except Exception as exc:  # noqa: BLE001 - fail soft: report the error class only, never content
         result = {"error": type(exc).__name__}
     print(json.dumps(result, sort_keys=True))

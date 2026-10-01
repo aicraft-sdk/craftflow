@@ -2230,9 +2230,8 @@ def test_r11_report_reads_tail_when_capped():
 
 def test_r12_all_scripts_free_of_legacy_literal():
     needle = ".claude" + "/craftflow"
-    names = ["craftflow_stop_gate.py", "craftflow_stop_gate_core.py", "craftflow_stop_gate_report.py"]
-    if (SCRIPTS / "craftflow_stop_gate_arm.py").exists():  # the arm CLI lands in P5; covered from then on
-        names.append("craftflow_stop_gate_arm.py")
+    names = ["craftflow_stop_gate.py", "craftflow_stop_gate_core.py", "craftflow_stop_gate_report.py",
+             "craftflow_stop_gate_arm.py"]
     for name in names:
         assert needle not in (SCRIPTS / name).read_text(encoding="utf-8"), name
 
