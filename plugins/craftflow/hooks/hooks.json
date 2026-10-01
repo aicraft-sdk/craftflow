@@ -240,6 +240,12 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_stop_verify.py\"",
             "timeout": 125,
             "statusMessage": "CRAFTFLOW opt-in stop-verify gate (inert unless config/stop-verify.json enables it)"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_stop_gate.py\"",
+            "timeout": 5,
+            "statusMessage": "CRAFTFLOW opt-in stop gate (shadow; inert unless stop-gate.json enables it)"
           }
         ]
       }

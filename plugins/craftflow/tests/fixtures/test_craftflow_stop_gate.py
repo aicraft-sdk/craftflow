@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for craftflow_stop_gate_core.py (SPEC-0018 / ADR-0055), pure core.
+"""Tests for craftflow_stop_gate_core.py and the craftflow_stop_gate.py hook shell (SPEC-0018 / ADR-0055).
 
 Run: python3 tests/fixtures/test_craftflow_stop_gate.py
 """
@@ -9,8 +9,10 @@ import atexit
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -848,6 +850,322 @@ def test_build_row_never_contains_message_marker():
         assert row["message_chars"] == len(message), row
     long_value = core.build_row(wf="wf-" + "z" * 5000, tail_sha="s" * 5000)
     assert len(long_value["wf"]) <= 200 and len(long_value["tail_sha"]) <= 200, long_value
+
+
+# ---------------------------------------------------------------------------
+# Hook shell (phase 4): subprocess tests through run_gate
+# ---------------------------------------------------------------------------
+
+GATE = SCRIPTS / "craftflow_stop_gate.py"
+WF_ID = "wf-sg-0001"
+CONTINUE_TEXT = "Phase 1 done, checks pass. Continue to Phase 2?"
+ISO = "%Y-%m-%dT%H:%M:%S.000Z"
+
+
+def iso_ago(seconds):
+    return time.strftime(ISO, time.gmtime(time.time() - seconds))
+
+
+def git(root, *args):
+    cmd = ["git", "-C", str(root), "-c", "user.email=t@example.com", "-c", "user.name=t",
+           "-c", "commit.gpgsign=false"] + list(args)
+    done = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    assert done.returncode == 0, (args, done.stderr)
+    return done.stdout
+
+
+def make_project():
+    """A clean scratch git repo whose committed .gitignore hides .craftflow/ (A10)."""
+    root = Path(scratch_dir())
+    git(root, "init", "-q")
+    (root / ".gitignore").write_text(".craftflow/\n", encoding="utf-8")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-q", "-m", "init")
+    return root
+
+
+def seed_artifact(root, wf=WF_ID, **overrides):
+    payload = {
+        "workflow_type": "BUILD", "plan_file": "docs/plans/x.md", "phase_cursor": "P2",
+        "phase_status": {"P1": "completed", "P2": "pending"},
+        "normalized_phases": [{"phase_id": "P1", "title": "Parser"}, {"phase_id": "P2", "title": "Formatter"}],
+        "pending_gate": None,
+    }
+    payload.update(overrides)
+    folder = root / ".craftflow" / "state" / "workflows"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / (wf + ".json")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def user_line(content, ts, **extra):
+    row = {"type": "user", "timestamp": ts, "message": {"role": "user", "content": content}}
+    row.update(extra)
+    return row
+
+
+def assistant_line(text, ts):
+    return {"type": "assistant", "timestamp": ts,
+            "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
+
+
+def write_transcript(root, lines, name="t.jsonl"):
+    path = Path(scratch_dir()) / name
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    return path
+
+
+def mention_transcript(root, wf=WF_ID, extra=()):
+    lines = [user_line("start " + wf, iso_ago(600)), assistant_line(CONTINUE_TEXT, iso_ago(60))]
+    return write_transcript(root, lines + list(extra))
+
+
+def audit_config():
+    path = Path(scratch_dir()) / "user-stop-gate.json"
+    path.write_text(json.dumps({"mode": "audit"}), encoding="utf-8")
+    return path
+
+
+def run_gate(payload, root, env_extra=None, raw=None, timeout=20):
+    """Run the hook as a subprocess. Returns (code, stdout, stderr, elapsed)."""
+    env = dict(os.environ)
+    env.pop("CURSOR_PLUGIN_ROOT", None)
+    env["CLAUDE_PROJECT_DIR"] = str(root)
+    env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
+    for key, value in (env_extra or {}).items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
+    stdin = raw if raw is not None else json.dumps(payload).encode("utf-8")
+    started = time.monotonic()
+    done = subprocess.run([sys.executable, str(GATE)], input=stdin, capture_output=True, env=env,
+                          cwd=str(root), timeout=timeout)
+    return (done.returncode, done.stdout.decode("utf-8", "replace"), done.stderr.decode("utf-8", "replace"),
+            time.monotonic() - started)
+
+
+def stop_payload(transcript, root, message=CONTINUE_TEXT, **extra):
+    payload = {"hook_event_name": "Stop", "session_id": "s1", "transcript_path": str(transcript),
+               "cwd": str(root), "permission_mode": "default", "stop_hook_active": False}
+    if message is not None:
+        payload["last_assistant_message"] = message
+    payload.update(extra)
+    return payload
+
+
+def rows_of(root):
+    path = Path(root) / ".craftflow" / "state" / "stop-gate" / "events.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def audit_env():
+    return {"CRAFTFLOW_STOP_GATE_USER_CONFIG": str(audit_config())}
+
+
+def one_row(root, payload, env_extra=None, **kw):
+    env = audit_env()
+    env.update(env_extra or {})
+    code, out, err, _elapsed = run_gate(payload, root, env, **kw)
+    assert code == 0, (code, err)
+    assert out == "", out
+    rows = rows_of(root)
+    assert len(rows) >= 1, "no row written; stderr=" + err
+    return rows[-1]
+
+
+def test_hook_off_is_inert():
+    root = make_project()
+    seed_artifact(root)
+    t = mention_transcript(root)
+    code, out, err, _ = run_gate(stop_payload(t, root), root)
+    assert (code, out) == (0, ""), (code, out, err)
+    assert not (root / ".craftflow" / "state" / "stop-gate").exists()
+
+
+def test_hook_off_fifo_transcript_does_not_block():
+    root = make_project()
+    fifo = Path(scratch_dir()) / "t.fifo"
+    os.mkfifo(str(fifo))
+    code, out, err, elapsed = run_gate(stop_payload(fifo, root), root, timeout=3)
+    assert (code, out) == (0, ""), (code, out, err)
+    assert elapsed < 3, elapsed
+    assert not (root / ".craftflow" / "state" / "stop-gate").exists()
+
+
+def test_hook_non_stop_event_noop():
+    root = make_project()
+    seed_artifact(root)
+    t = mention_transcript(root)
+    for name in ("SubagentStop", "stop", "", None):
+        payload = stop_payload(t, root)
+        if name is None:
+            payload.pop("hook_event_name")
+        else:
+            payload["hook_event_name"] = name
+        code, out, err, _ = run_gate(payload, root, audit_env())
+        assert (code, out) == (0, ""), (name, code, out, err)
+    assert rows_of(root) == []
+
+
+def test_hook_cursor_env_noop():
+    root = make_project()
+    seed_artifact(root)
+    t = mention_transcript(root)
+    env = audit_env()
+    env["CURSOR_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
+    code, out, err, _ = run_gate(stop_payload(t, root), root, env)
+    assert (code, out) == (0, ""), (code, out, err)
+    assert rows_of(root) == []
+
+
+def test_hook_bad_stdin_exit0():
+    root = make_project()
+    for raw in (b"\xff\xfe not json", b"[1, 2, 3]", b"", b'{"hook_event_name": "Stop"'):
+        code, out, err, _ = run_gate(None, root, audit_env(), raw=raw)
+        assert (code, out) == (0, ""), (raw, code, out, err)
+    assert rows_of(root) == []
+
+
+def test_hook_audit_would_continue_row():
+    root = make_project()
+    seed_artifact(root)
+    t = mention_transcript(root)
+    row = one_row(root, stop_payload(t, root))
+    assert tuple(row) == core.ROW_KEYS or set(row) == set(core.ROW_KEYS), sorted(set(row) ^ set(core.ROW_KEYS))
+    assert row["row_kind"] == "stop" and row["mode"] == "audit", row
+    assert row["verdict"] == "would_continue" and row["verdict_source"] == "heuristic", row
+    assert row["act_eligible"] is False and row["rule_hits"] == [], row
+    assert row["cursor_case"] == "at_next" and row["binding_reason"] == "single_candidate", row
+    assert row["commit_blockers"] == ["C1_no_dirty_paths", "C2_empty_plan_file_union"], row
+    assert row["wf"] == WF_ID and row["session_id"] == "s1", row
+    assert row["message_chars"] == len(CONTINUE_TEXT) and row["hook_ms"] >= 0, row
+    assert "Continue to Phase 2" not in json.dumps(row), "message text leaked into the row"
+    # variant: cursor still on the completed phase
+    root2 = make_project()
+    seed_artifact(root2, phase_cursor="P1")
+    t2 = mention_transcript(root2)
+    row2 = one_row(root2, stop_payload(t2, root2))
+    assert row2["verdict"] == "would_continue" and row2["cursor_case"] == "on_completed", row2
+
+
+def test_hook_audit_pending_gate_row():
+    root = make_project()
+    seed_artifact(root, pending_gate="user_build_approval")
+    t = mention_transcript(root)
+    row = one_row(root, stop_payload(t, root))
+    assert row["verdict"] == "needs_human" and row["verdict_source"] == "hard_rule", row
+    assert "H03_pending_gate" in row["rule_hits"], row
+
+
+def test_hook_ambiguous_binding_needs_human():
+    root = make_project()
+    first = seed_artifact(root, wf="wf-sg-0001")
+    second = seed_artifact(root, wf="wf-sg-0002")
+    now = time.time()
+    os.utime(str(first), (now, now))
+    os.utime(str(second), (now - 120, now - 120))  # most recently mentioned, but not the newest file
+    lines = [user_line("a wf-sg-0001", iso_ago(300)), assistant_line("then wf-sg-0002 " + CONTINUE_TEXT, iso_ago(60))]
+    t = write_transcript(root, lines)
+    row = one_row(root, stop_payload(t, root))
+    assert row["verdict"] == "needs_human" and "H01_no_bound_workflow" in row["rule_hits"], row
+    assert row["binding_reason"] == "ambiguous" and row["wf"] is None, row
+
+
+def test_hook_git_merge_in_progress_h11():
+    root = make_project()
+    seed_artifact(root)
+    head = git(root, "rev-parse", "HEAD").strip()
+    (root / ".git" / "MERGE_HEAD").write_text(head + "\n", encoding="utf-8")
+    t = mention_transcript(root)
+    row = one_row(root, stop_payload(t, root))
+    assert row["verdict"] == "needs_human" and "H11_git_unsafe" in row["rule_hits"], row
+
+
+def test_hook_last_message_missing_uses_transcript_tail():
+    root = make_project()
+    seed_artifact(root)
+    t = mention_transcript(root)
+    row = one_row(root, stop_payload(t, root, message=None))
+    assert "H00_message_missing" not in row["rule_hits"], row
+    assert row["verdict"] == "would_continue" and row["message_chars"] == len(CONTINUE_TEXT), row
+    # no payload message and an empty transcript: H00
+    root2 = make_project()
+    seed_artifact(root2)
+    empty = write_transcript(root2, [user_line("hi wf-sg-0001", iso_ago(30))])
+    row2 = one_row(root2, stop_payload(empty, root2, message=None))
+    assert "H00_message_missing" in row2["rule_hits"] and row2["verdict"] == "needs_human", row2
+
+
+def test_hook_deadline_bounds_git():
+    root = make_project()
+    seed_artifact(root)
+    t = mention_transcript(root)
+    fake = Path(scratch_dir())
+    script = fake / "git"
+    script.write_text("#!/bin/sh\nexec sleep 0.9\n", encoding="utf-8")
+    script.chmod(0o755)
+    env = audit_env()
+    env["PATH"] = str(fake) + os.pathsep + os.environ.get("PATH", "")
+    code, out, err, elapsed = run_gate(stop_payload(t, root), root, env)
+    assert (code, out) == (0, ""), (code, out, err)
+    assert elapsed < 4.6, elapsed
+    row = rows_of(root)[-1]
+    assert "H11_git_unsafe" in row["rule_hits"] and row["verdict"] == "needs_human", row
+    assert isinstance(row["hook_ms"], int) and 0 <= row["hook_ms"] < 4600, row["hook_ms"]
+
+
+def test_genuine_human_line_definition():
+    root = make_project()
+    seed_artifact(root)
+    genuine = iso_ago(500)
+    later = [
+        user_line([{"type": "tool_result", "tool_use_id": "x", "content": "ok"}], iso_ago(400)),
+        user_line("meta text", iso_ago(390), isMeta=True),
+        user_line("compact summary", iso_ago(380), isCompactSummary=True),
+        user_line("<command-name>/clear</command-name>", iso_ago(370)),
+        user_line("Stop hook feedback: keep going", iso_ago(360)),
+        user_line("craftflow stop-gate: please call the tool", iso_ago(350)),
+        user_line("tool output", iso_ago(340), toolUseResult={"stdout": "x"}),
+        user_line([{"type": "text", "text": "mixed"}, {"type": "tool_result", "content": "y"}], iso_ago(330)),
+    ]
+    lines = [user_line("start " + WF_ID, iso_ago(900)), user_line("please go on", genuine),
+             assistant_line(CONTINUE_TEXT, iso_ago(450))] + later
+    t = write_transcript(root, lines)
+    row = one_row(root, stop_payload(t, root))
+    assert row["last_human_ts"] == genuine, row["last_human_ts"]
+    assert row["turn_seconds_lower_bound"] is False, row
+    assert 480 <= row["turn_seconds"] <= 560, row["turn_seconds"]
+    # near-miss positive: a list of text/image blocks IS a genuine human line
+    newest = iso_ago(100)
+    lines.append(user_line([{"type": "text", "text": "ok continue"}, {"type": "image", "source": {}}], newest))
+    t2 = write_transcript(root, lines, name="t2.jsonl")
+    row2 = one_row(root, stop_payload(t2, root))
+    assert row2["last_human_ts"] == newest and 80 <= row2["turn_seconds"] <= 160, row2
+
+
+def test_turn_seconds_lower_bound():
+    root = make_project()
+    seed_artifact(root)
+    oldest = iso_ago(900)
+    lines = [assistant_line("working on " + WF_ID, oldest),
+             user_line([{"type": "tool_result", "tool_use_id": "x", "content": "ok"}], iso_ago(500)),
+             assistant_line(CONTINUE_TEXT, iso_ago(60))]
+    t = write_transcript(root, lines)
+    row = one_row(root, stop_payload(t, root))
+    assert row["last_human_ts"] is None, row
+    assert row["turn_seconds_lower_bound"] is True, row
+    assert 880 <= row["turn_seconds"] <= 960, row["turn_seconds"]
+    # no timestamps at all: unknown
+    root2 = make_project()
+    seed_artifact(root2)
+    bare = write_transcript(root2, [{"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "text", "text": "wf-sg-0001 " + CONTINUE_TEXT}]}}])
+    row2 = one_row(root2, stop_payload(bare, root2))
+    assert row2["turn_seconds"] is None, row2
 
 
 # ---------------------------------------------------------------------------

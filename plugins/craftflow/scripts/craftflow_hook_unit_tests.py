@@ -16858,6 +16858,33 @@ def test_hooks_json_registers_stop_verify() -> None:
     ok(name)
 
 
+def test_stop_gate_registered_under_stop(tmp_dir: Path) -> None:
+    name = "stop-gate/registered-under-stop"
+    path = PLUGIN_ROOT / "hooks" / "hooks.json"
+    hooks = json.loads(path.read_text(encoding="utf-8"))
+    entries = [h for entry in hooks.get("hooks", {}).get("Stop", []) for h in entry.get("hooks", [])]
+    gate = [h for h in entries if h.get("command", "").endswith('craftflow_stop_gate.py"')]
+    if len(gate) != 1:
+        fail(name, f"expected exactly one stop-gate command under Stop; got {len(gate)}")
+        return
+    if gate[0].get("timeout") != 5 or gate[0].get("type") != "command":
+        fail(name, f"stop-gate entry must be a command hook with timeout 5; got {gate[0]!r}")
+        return
+    if not any("craftflow_stop_verify" in h.get("command", "") for h in entries):
+        fail(name, "existing stop-verify registration was removed")
+        return
+    ok(name)
+
+
+def test_stop_gate_committed_config_off(tmp_dir: Path) -> None:
+    name = "stop-gate/committed-config-off"
+    config = json.loads((PLUGIN_ROOT / "config" / "stop-gate.json").read_text(encoding="utf-8"))
+    if config.get("mode") != "off" or config.get("notify") != "off":
+        fail(name, f"shipped stop-gate.json must be off by default; got mode={config.get('mode')!r} notify={config.get('notify')!r}")
+        return
+    ok(name)
+
+
 # ---------------------------------------------------------------------------
 # Hook trust/provenance gate tests (Workstream B — concept-ported from
 # xai-org/grok-build's xai-grok-hooks trust.rs, Apache-2.0)
@@ -26654,6 +26681,8 @@ def main() -> int:
         test_stop_verify_allows_when_command_passes(tmp / "sv2")
         test_stop_verify_blocks_when_command_fails(tmp / "sv3")
         test_stop_verify_never_blocks_on_continuation_stop(tmp / "sv4")
+        test_stop_gate_registered_under_stop(tmp / "sg1")
+        test_stop_gate_committed_config_off(tmp / "sg2")
 
         print()
         print("[ hook-trust ]")

@@ -46,6 +46,7 @@ flowchart LR
   script_craftflow_precompact_state_py(["craftflow_precompact_state.py"])
   script_craftflow_stop_persist_py(["craftflow_stop_persist.py"])
   script_craftflow_stop_verify_py(["craftflow_stop_verify.py"])
+  script_craftflow_stop_gate_py(["craftflow_stop_gate.py"])
   script_craftflow_stop_failure_log_py(["craftflow_stop_failure_log.py"])
   script_craftflow_instructions_loaded_audit_py(["craftflow_instructions_loaded_audit.py"])
   script_craftflow_jev_prompt_hint_py(["craftflow_jev_prompt_hint.py"])
@@ -73,13 +74,14 @@ flowchart LR
   event_Stop --> script_craftflow_stop_persist_py
   event_Stop --> script_craftflow_memory_protect_restore_py
   event_Stop --> script_craftflow_stop_verify_py
+  event_Stop --> script_craftflow_stop_gate_py
   event_StopFailure --> script_craftflow_stop_failure_log_py
   event_InstructionsLoaded --> script_craftflow_instructions_loaded_audit_py
   event_UserPromptSubmit --> script_craftflow_jev_prompt_hint_py
   event_UserPromptSubmit --> script_craftflow_context_nudge_py
 ```
 
-28 hook registrations across 11 event types, 23 distinct scripts.
+29 hook registrations across 11 event types, 24 distinct scripts.
 
 ## Agent -> declared skills
 
@@ -153,4 +155,4 @@ flowchart LR
 
 - 14 agents (`agents/*.md`)
 - 33 skills (`skills/*/SKILL.md`)
-- 23 hook scripts wired in `hooks/hooks.json`
+- 24 hook scripts wired in `hooks/hooks.json`
