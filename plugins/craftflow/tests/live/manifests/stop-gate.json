@@ -1,0 +1,45 @@
+{
+  "name": "stop-gate",
+  "workdir": ".",
+  "required_env": [],
+  "environment": {
+    "CI": "true"
+  },
+  "healthcheck": {
+    "name": "claude CLI present",
+    "command": "claude --version",
+    "expected": "exit 0, claude version printed"
+  },
+  "scenarios": [
+    {
+      "name": "Load probe: --plugin-dir overrides the installed craftflow",
+      "mode": "proof",
+      "given": "an empty scratch project with a .craftflow/state dir, CLAUDE_PLUGIN_ROOT / CLAUDE_CODE_SESSION_ID unset and CLAUDE_PROJECT_DIR pointing at the scratch project",
+      "when": "claude -p --plugin-dir plugins/craftflow --model haiku --debug-file <file> runs a one-word prompt",
+      "then": "the debug log contains 'from --plugin-dir overrides installed version' at least once, proving the worktree plugin (not the installed one) is what the live scenarios exercise",
+      "command": "SCR=$(mktemp -d) && mkdir -p \"$SCR/p1/.craftflow/state\" && PLUGIN=\"$PWD/plugins/craftflow\" && (cd \"$SCR/p1\" && env -u CLAUDE_PLUGIN_ROOT -u CLAUDE_CODE_SESSION_ID CLAUDE_PROJECT_DIR=\"$SCR/p1\" claude -p --plugin-dir \"$PLUGIN\" --model haiku --debug-file \"$SCR/dbg.txt\" \"Reply OK\" >/dev/null 2>&1); N=$(grep -c 'from --plugin-dir overrides installed version' \"$SCR/dbg.txt\"); rm -rf \"$SCR\"; echo \"load_probe_hits=$N\"; test \"$N\" -ge 1",
+      "expected": "exit 0; load_probe_hits >= 1",
+      "timeout_seconds": 240
+    },
+    {
+      "name": "Stop gate LV-1..LV-6",
+      "mode": "proof",
+      "given": "the worktree plugin loaded via --plugin-dir with its shipped stop-gate config UNCHANGED (mode off), scratch git projects with a seeded BUILD workflow artifact (one with a pending gate), scratch user-config files reached through CRAFTFLOW_STOP_GATE_USER_CONFIG, a loopback Jev stub reached through CRAFTFLOW_JEV_ENDPOINT, and scratch plugin copies for the relay (test-only consent override) and the stop_hook_active probe",
+      "when": "stop_gate_roundtrip.py drives real haiku sessions: the shipped plugin is inert (LV-1), audit writes one shadow row and the agent still stops (LV-2), a pending gate forces needs_human via H03 (LV-3), a repository-set jevText never reaches the Jev stub (LV-4), the push relay asks for exactly one PushNotification through a scratch consent home (LV-5), and a probe hook records stop_hook_active across chained continuations (LV-6)",
+      "then": "the driver prints the summary JSON with load_probe PASS, lv1..lv4 PASS, lv5 PASS or LIMITATION:push_tool_unavailable_headless, lv5_limitation push_requires_consent_file, lv6 RECORDED, the observed stop_hook_active_chain value, plugin_config_unchanged true and evidence_class A, leaves the real consent file untouched, and exits 0",
+      "command": "python3 plugins/craftflow/tests/live/stop_gate_roundtrip.py --plugin-dir plugins/craftflow",
+      "expected": "exit 0; {\"load_probe\":\"PASS\",\"lv1\":\"PASS\",\"lv2\":\"PASS\",\"lv3\":\"PASS\",\"lv4\":\"PASS\",\"lv5\":\"PASS\"|\"LIMITATION:push_tool_unavailable_headless\",\"lv5_limitation\":\"push_requires_consent_file\",\"lv6\":\"RECORDED\",\"stop_hook_active_chain\":\"<true|false>\",\"plugin_config_unchanged\":true,\"evidence_class\":\"A\"}",
+      "timeout_seconds": 1800
+    },
+    {
+      "name": "Stop gate timing",
+      "mode": "stress",
+      "given": "a 1 MiB transcript, a 90 KB workflow artifact and a git repo with 200 files in a temp project, with the hook run in mode off and mode audit (no Jev) next to a bare python3 -c pass",
+      "when": "stop_gate_timing.py runs 20 interleaved bare / off / audit subprocess rounds",
+      "then": "off delta median <= 10 ms and audit delta median <= 150 ms over bare python when the 1-minute load is at most the CPU count, otherwise absolute_gate is inconclusive_load (disclosed, never converted to a pass); every run exits 0 with no stdout and audit appends exactly one bound row per run",
+      "command": "python3 plugins/craftflow/tests/live/stop_gate_timing.py --runs 20",
+      "expected": "exit 0; gate_pass true or absolute_gate inconclusive_load",
+      "timeout_seconds": 900
+    }
+  ]
+}
