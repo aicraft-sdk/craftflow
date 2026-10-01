@@ -763,8 +763,10 @@ def test_relay_decision_once_per_tail_sha():
     assert state["relay_pending"] is True and state["last_notified_tail_sha"] == "t1", state
     done = dict(state, relay_pending=False)  # the follow-up stop cleared the pending flag
     assert core.relay_decision(**relay_args(session_state=done, tail_sha="t1")) is False
-    assert core.relay_decision(**relay_args(session_state=done, tail_sha="t2")) is True
-    assert core.relay_decision(**relay_args(session_state=state, tail_sha="t2")) is False  # relay pending
+    # R3 (stale requirement, tightened): a new tail alone no longer re-arms a relay, a new human turn does
+    assert core.relay_decision(**relay_args(session_state=done, tail_sha="t2")) is False
+    assert core.relay_decision(**relay_args(session_state=done, tail_sha="t2", last_human_ts="B")) is True
+    assert core.relay_decision(**relay_args(session_state=state, tail_sha="t2", last_human_ts="B")) is False
 
 
 def loop_facts(head="h1", cursor="P2", active=True, human="A"):
@@ -1674,9 +1676,11 @@ def test_notify_unsupported_platform_status():
 
 def test_hook_source_has_no_shell_true():
     import re
+    for name in ("craftflow_stop_gate.py", "craftflow_stop_gate_core.py", "craftflow_stop_gate_report.py"):
+        text = (SCRIPTS / name).read_text(encoding="utf-8")
+        assert not re.search(r"shell\s*=\s*True", text), name + ": shell=True is forbidden"
+        assert "os.system" not in text and "os.popen" not in text, name + ": no shell helpers"
     source = (SCRIPTS / "craftflow_stop_gate.py").read_text(encoding="utf-8")
-    assert not re.search(r"shell\s*=\s*True", source), "shell=True is forbidden"
-    assert "os.system" not in source and "os.popen" not in source, "no shell helpers"
     assert re.search(r"shutil\.which", source) and "sys.platform" in source, "sender must use which + platform"
 
 
@@ -1817,18 +1821,24 @@ def test_sweep_precision_math():
 
 def test_go_criteria_rd3():
     good = {"would_continue_labeled": 50, "sessions": 5, "precision": 0.95, "negatives": 0,
-            "jev_failure_rate": 0.05, "hook_p90_ms": 1500}
+            "jev_failure_rate": 0.05, "hook_p90_ms": 1500, "label_coverage": 0.8, "jev_calls": 20}
     verdict = core.go_criteria(good)
     assert verdict["met"] is True and verdict["act"] == "RD-3 met: Slice 2 may be planned"
+    assert core.RD3["label_coverage"] == 0.8 and core.RD3["jev_calls_min"] == 20
     for key, bad in (("would_continue_labeled", 49), ("sessions", 4), ("precision", 0.94), ("negatives", 1),
-                     ("jev_failure_rate", 0.06), ("hook_p90_ms", 1501)):
+                     ("jev_failure_rate", 0.06), ("hook_p90_ms", 1501), ("label_coverage", 0.79),
+                     ("jev_calls", 19)):
         worse = core.go_criteria(dict(good, **{key: bad}))
+        crit = "jev_calls_min" if key == "jev_calls" else key
         assert worse["met"] is False, key
-        assert worse["criteria"][key]["met"] is False, key
+        assert worse["criteria"][crit]["met"] is False, key
         assert worse["act"] == "NO-GO", key
     empty = core.go_criteria({})
     assert empty["met"] is False and empty["act"] == "NO-GO"
-    assert core.go_criteria(dict(good, jev_failure_rate=None))["met"] is True
+    # an absent Jev failure rate is NOT vacuously met, even when the call count would otherwise pass
+    none_rate = core.go_criteria(dict(good, jev_failure_rate=None))
+    assert none_rate["met"] is False and none_rate["criteria"]["jev_failure_rate"]["met"] is False, none_rate
+    assert core.go_criteria(dict(good, label_coverage=None))["met"] is False
 
 
 def _run_report(args, cwd=None):
@@ -1887,6 +1897,337 @@ def test_report_handles_missing_transcripts():
     missing = _run_report(["--events", os.path.join(scr, "no-such.jsonl")])
     assert missing.returncode == 0
     assert json.loads(missing.stdout)["rows"] == 0
+
+
+
+# ---------------------------------------------------------------------------
+# Review remediation (R1..R12)
+# ---------------------------------------------------------------------------
+import io  # noqa: E402
+
+
+@contextlib.contextmanager
+def patched(module, **attrs):
+    saved = {key: getattr(module, key) for key in attrs}
+    try:
+        for key, value in attrs.items():
+            setattr(module, key, value)
+        yield
+    finally:
+        for key, value in saved.items():
+            setattr(module, key, value)
+
+
+def _boom(*_args, **_kw):
+    raise RuntimeError("PLANTEDMARKER secret message text")
+
+
+def main_inproc(root, payload, seam=None, env_extra=None, consent=None, **patches):
+    """gate.main() in-process (stdin, log_event and consent home replaced). Returns (code, stdout, logged)."""
+    logged = []
+    home = scratch_dir()
+    if consent is not None:
+        write_consent(home, consent)
+    env = {"CLAUDE_PROJECT_DIR": str(root), "CURSOR_PLUGIN_ROOT": None,
+           "CRAFTFLOW_STOP_GATE_USER_CONFIG": str(seam or audit_config())}
+    env.update(env_extra or {})
+    buf = io.StringIO()
+    with env_patch(**env):
+        with patched(gate, load_input=lambda: payload, log_event=lambda n, p: logged.append((n, p)),
+                     _consent_home=lambda: home, **patches):
+            with contextlib.redirect_stdout(buf):
+                code = gate.main()
+    return code, buf.getvalue(), logged
+
+
+def test_r1_hook_exception_leaves_error_row():
+    root = make_project()
+    seed_artifact(root)
+    t = mention_transcript(root)
+    code, out, _logged = main_inproc(root, stop_payload(t, root), scan_transcript=_boom)
+    assert (code, out) == (0, ""), (code, out)
+    rows = rows_of(root)
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert set(row) == set(core.ROW_KEYS) and row["row_kind"] == "error", row
+    assert "hook_error:RuntimeError" in row["settings_tags"], row
+    assert row["mode"] == "audit" and row["session_id"] == "s1", row
+    assert "PLANTEDMARKER" not in json.dumps(row), "exception message text leaked into the row"
+    assert report.metric_rows(rows) == [], "error rows never count toward metrics"
+
+
+def test_r1_unwritable_events_logs_error_event_exit0():
+    root = make_project()
+    seed_artifact(root)
+    t = mention_transcript(root)
+    (root / ".craftflow" / "state" / "stop-gate" / "events.jsonl").mkdir(parents=True)
+    code, out, logged = main_inproc(root, stop_payload(t, root))
+    assert (code, out) == (0, ""), (code, out)
+    assert ("plugin_stop_gate_error", {"exc": "IsADirectoryError"}) in logged, logged
+    # and the real subprocess still exits 0 without a traceback
+    root2 = make_project()
+    seed_artifact(root2)
+    (root2 / ".craftflow" / "state" / "stop-gate" / "events.jsonl").mkdir(parents=True)
+    code, out, err, _ = run_gate(stop_payload(mention_transcript(root2), root2), root2, audit_env())
+    assert (code, out) == (0, ""), (code, out, err)
+    assert "Traceback" not in err, err
+
+
+def test_r1_row_appended_before_relay_printed():
+    root = make_project()
+    seed_artifact(root, **PENDING)
+    t = mention_transcript(root)
+    seam = Path(scratch_dir()) / "seam.json"
+    seam.write_text(json.dumps(PUSH_SEAM), encoding="utf-8")
+    seen = []
+    real = gate.append_row
+
+    def spy(row):
+        seen.append(sys.stdout.getvalue())
+        real(row)
+
+    code, out, _ = main_inproc(root, stop_payload(t, root), seam=seam, consent={"notify": "push"}, append_row=spy)
+    assert code == 0 and json.loads(out)["decision"] == "block", out
+    assert seen == [""], "the relay block must not be printed before the row is appended: " + repr(seen)
+    # a row that cannot be written suppresses the relay (no side effect without a trace)
+    root2 = make_project()
+    seed_artifact(root2, **PENDING)
+    code, out, _ = main_inproc(root2, stop_payload(mention_transcript(root2), root2), seam=seam,
+                               consent={"notify": "push"}, append_row=_boom)
+    assert (code, out) == (0, ""), (code, out)
+
+
+def test_r2_report_attributes_reply_to_latest_preceding_stop_row():
+    scr = scratch_dir()
+    lines = [_tline("user", "2026-10-01T07:59:00Z", "start"),
+             _tline("assistant", "2026-10-01T08:10:30Z", [{"type": "text", "text": "done. continue?"}]),
+             _tline("user", "2026-10-01T08:11:00Z", "yes")]
+    Path(scr, "s1.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    rows = [core.build_row(row_kind="stop", ts="2026-10-01T08:%02d:00Z" % m, session_id="s1",
+                           transcript_path="/gone/s1.jsonl", verdict="would_continue",
+                           heuristic_verdict="would_continue") for m in (0, 5, 10)]
+    out = report.build_report(rows, scr)
+    assert out["rows"] == 3 and out["labeled"] == 1, out
+    assert out["unlabeled"] == 2 and out["label_coverage"] == round(1 / 3, 4), out
+    # a hook-active (follow-up) stop is excluded from the precision denominator
+    rows2 = [core.build_row(row_kind="stop", ts="2026-10-01T08:00:00Z", session_id="s1",
+                            transcript_path="/gone/s1.jsonl", verdict="would_continue", stop_hook_active=False),
+             core.build_row(row_kind="stop", ts="2026-10-01T08:05:00Z", session_id="s1",
+                            transcript_path="/gone/s1.jsonl", verdict="would_continue", stop_hook_active=True)]
+    out2 = report.build_report(rows2, scr)
+    assert out2["labeled"] == 1, out2
+    assert out2["go_criteria"]["stats"]["would_continue_labeled"] == 0, out2["go_criteria"]["stats"]
+
+
+def test_r3_push_relay_capped_per_human_turn():
+    root = make_project()
+    seed_artifact(root, **PENDING)
+    t = mention_transcript(root)
+    bin_dir, _record = fake_notifier()
+    consent = {"notify": "push"}
+    outs = [notify_run(root, t, PUSH_SEAM, consent=consent, bin_dir=bin_dir, message=m)[0]
+            for m in ("Which option?", "Which one, A or B?", "Should I use X or Y?")]
+    assert len([o for o in outs if o]) == 1, outs
+    assert [r["notify_status"] for r in rows_of(root)] == ["relay", "skipped_duplicate", "skipped_duplicate"]
+    # a new genuine human turn re-arms exactly one relay
+    t2 = mention_transcript(root, extra=[user_line("ok go on", iso_ago(5))])
+    again = notify_run(root, t2, PUSH_SEAM, consent=consent, bin_dir=bin_dir, message="Which approach?")[0]
+    assert json.loads(again)["decision"] == "block", again
+
+
+def test_r3_push_relay_refused_without_session_id():
+    root = make_project()
+    seed_artifact(root, **PENDING)
+    t = mention_transcript(root)
+    bin_dir, _record = fake_notifier()
+    for _ in range(2):
+        out, _, _ = notify_run(root, t, PUSH_SEAM, consent={"notify": "push"}, bin_dir=bin_dir, session_id="")
+        assert out == "", out
+    assert [r["notify_status"] for r in rows_of(root)] == ["skipped_no_session"] * 2, rows_of(root)
+
+
+def _plugin_with_audit():
+    folder = Path(scratch_dir())
+    (folder / "config").mkdir()
+    (folder / "config" / "stop-gate.json").write_text(json.dumps({"mode": "audit"}), encoding="utf-8")
+    return folder
+
+
+def test_r4_corrupt_user_config_surfaced_and_fails_open():
+    root = make_project()
+    seed_artifact(root)
+    t = mention_transcript(root)
+    bad = Path(scratch_dir()) / "u.json"
+    bad.write_text('{"mode":"audit",}', encoding="utf-8")
+    code, out, logged = main_inproc(root, stop_payload(t, root), seam=bad)
+    assert (code, out) == (0, "") and rows_of(root) == [], (code, out)  # mode stays off: fail open
+    errs = [p for n, p in logged if n == "plugin_stop_gate" and "config_error" in p]
+    assert [e["config_error"] for e in errs] == ["corrupt"], logged
+    big = Path(scratch_dir()) / "big.json"
+    big.write_text('{"mode":"audit","pad":"' + "x" * 70000 + '"}', encoding="utf-8")
+    _c, _o, logged = main_inproc(root, stop_payload(t, root), seam=big)
+    assert [p["config_error"] for n, p in logged if n == "plugin_stop_gate" and "config_error" in p] == ["too_large"]
+    # an absent user file is not an error
+    absent = Path(scratch_dir()) / "nope.json"
+    _c, _o, logged = main_inproc(root, stop_payload(t, root), seam=absent)
+    assert not [1 for n, p in logged if "config_error" in p], logged
+    # when the plugin file keeps the hook on, the row carries a settings tag
+    plugin = _plugin_with_audit()
+    code, out, logged = main_inproc(root, stop_payload(t, root), seam=bad,
+                                    env_extra={"CLAUDE_PLUGIN_ROOT": str(plugin)})
+    assert (code, out) == (0, ""), (code, out)
+    assert "user_config_error:corrupt" in rows_of(root)[-1]["settings_tags"], rows_of(root)[-1]
+    assert len([1 for n, p in logged if "config_error" in p]) == 1, logged  # logged once per Stop
+
+
+def test_r4_corrupt_plugin_file_not_surfaced():
+    root = make_project()
+    t = mention_transcript(root)
+    plugin = Path(scratch_dir())
+    (plugin / "config").mkdir()
+    (plugin / "config" / "stop-gate.json").write_text("{not json", encoding="utf-8")
+    absent = Path(scratch_dir()) / "nope.json"
+    _c, _o, logged = main_inproc(root, stop_payload(t, root), seam=absent,
+                                 env_extra={"CLAUDE_PLUGIN_ROOT": str(plugin)})
+    assert not [1 for n, p in logged if "config_error" in p], logged
+
+
+def test_r5_git_status_lists_untracked_files_individually():
+    root = make_project()
+    (root / "newdir").mkdir()
+    (root / "newdir" / "a.txt").write_text("x", encoding="utf-8")
+    facts = gate.git_facts(str(root), lambda: 4.0)
+    assert facts["ok"] is True and facts["dirty_paths"] == ["newdir/a.txt"], facts
+    # so a secret-looking file inside a new directory is seen by H12
+    (root / "newdir" / ".env").write_text("K=1", encoding="utf-8")
+    paths = gate.git_facts(str(root), lambda: 4.0)["dirty_paths"]
+    assert "newdir/.env" in paths and any(core.secret_path_hit(p) for p in paths), paths
+
+
+def test_r6_dirty_path_cap_fails_closed():
+    root = make_project()
+    folder = root / "many"
+    folder.mkdir()
+    for n in range(gate.STATUS_DIRTY_CAP):
+        (folder / ("f%03d.txt" % n)).write_text("x", encoding="utf-8")
+    exact = gate.git_facts(str(root), lambda: 4.0)
+    assert exact["ok"] is True and len(exact["dirty_paths"]) == gate.STATUS_DIRTY_CAP, len(exact["dirty_paths"])
+    (folder / "extra.txt").write_text("x", encoding="utf-8")
+    over = gate.git_facts(str(root), lambda: 4.0)
+    assert over["ok"] is False and over.get("skip") == "truncated", over
+    assert len(over["dirty_paths"]) <= gate.STATUS_DIRTY_CAP
+    # hook level (cap lowered for speed): H11 and a tag
+    root2 = make_project()
+    seed_artifact(root2)
+    t = mention_transcript(root2)
+    for n in range(5):
+        (root2 / ("g%d.txt" % n)).write_text("x", encoding="utf-8")
+    main_inproc(root2, stop_payload(t, root2), STATUS_DIRTY_CAP=3)
+    row = rows_of(root2)[-1]
+    assert "H11_git_unsafe" in row["rule_hits"] and row["verdict"] == "needs_human", row
+    assert "git_dirty_truncated" in row["settings_tags"], row
+
+
+def test_r7_deadline_starvation_tagged_distinct_from_unsafe():
+    root = make_project()
+    seed_artifact(root)
+    t = mention_transcript(root)
+    starved = gate.git_facts(str(root), lambda: 0.5)
+    assert starved["ok"] is False and starved.get("skip") == "deadline", starved
+    main_inproc(root, stop_payload(t, root), DEADLINE_S=0.5)
+    row = rows_of(root)[-1]
+    assert "H11_git_unsafe" in row["rule_hits"] and row["verdict"] == "needs_human", row
+    assert "git_skipped_deadline" in row["settings_tags"], row
+    # a healthy run carries neither tag
+    root2 = make_project()
+    seed_artifact(root2)
+    main_inproc(root2, stop_payload(mention_transcript(root2), root2))
+    tags = rows_of(root2)[-1]["settings_tags"]
+    assert "git_skipped_deadline" not in tags and "git_dirty_truncated" not in tags, tags
+
+
+def test_r7_l1_not_fired_when_head_unknown():
+    git = {"ok": False, "in_progress_op": None, "unmerged": False, "dirty_paths": [], "head": None}
+    facts = dict(facts_for({"phase_cursor": "P2"}, stop_hook_active=True, git=git), last_human_ts="A")
+    recorded = {"would_continue_since_human": 1, "last_human_ts": "A", "last_head": None, "last_cursor": "P2"}
+    assert core.loop_guards(facts, recorded) == []
+    assert core.loop_guards(facts, {"relay_pending": True, "last_human_ts": "A", "last_cursor": "P2"}) == []
+
+
+def test_r8_interrupt_reply_labels_negative():
+    for text in ("[Request interrupted by user]", "[Request interrupted by user for tool use]",
+                 "  [Request interrupted by user]  "):
+        assert core.label_reply(text) == "negative", text
+    assert core.label_reply("continue") == "rubber_stamp"
+    # still a genuine human line for the human-turn clock, and joined by the report
+    rec = json.loads(_tline("user", "2026-10-01T10:02:00Z", "[Request interrupted by user]"))
+    assert gate.is_genuine_human(rec) is True
+    recs = [rec]
+    assert core.label_reply(report.join_next_user_reply(recs, "2026-10-01T10:01:00Z")) == "negative"
+
+
+def test_r9_nudge_private_names_contract():
+    import craftflow_context_nudge_compact as cc
+    for name in ("_has_gate", "_PHASE_RE", "_load_artifact", "payload_terminal", "resolve_active_workflow",
+                 "WF_ID_RE"):
+        assert hasattr(cc, name), "nudge module dropped " + name + " (stop-gate depends on it)"
+    assert cc._has_gate({"kind": "user_build_approval"}) is True and cc._has_gate("user_build_approval") is True
+    assert cc._has_gate({"kind": "none"}) is False and cc._has_gate("") is False and cc._has_gate(None) is False
+    assert cc._PHASE_RE.fullmatch("P2") and cc._PHASE_RE.fullmatch("phase-2.1")
+    assert cc._PHASE_RE.fullmatch("two words") is None and cc._PHASE_RE.fullmatch("") is None
+    assert cc.WF_ID_RE.fullmatch("wf-abc-123") and cc.WF_ID_RE.fullmatch("abc") is None
+    assert cc.WF_ID_RE.fullmatch("wf-x\n") is None
+    assert cc.payload_terminal({"worktree_mode": "merged"}) is True
+    assert cc.payload_terminal("not a dict") is True
+    assert cc.payload_terminal({"phase_cursor": "P2", "workflow_type": "BUILD"}, isdir=lambda p: True) is False
+    root = make_project()
+    path = seed_artifact(root)
+    mtime, size, payload = cc._load_artifact(str(path))
+    assert isinstance(mtime, float) and size > 0 and payload["phase_cursor"] == "P2", (mtime, size, payload)
+    assert cc._load_artifact(str(root / "missing.json")) is None
+    t = mention_transcript(root)
+    snapshot, reason, bound = cc.resolve_active_workflow(
+        str(root / ".craftflow" / "state" / "workflows"), str(t), "s1", str(root), time.time())
+    assert bound == WF_ID and reason in core.BOUND_REASONS, (snapshot, reason, bound)
+
+
+def test_r10_label_coverage_and_jev_volume_in_report():
+    out = report.build_report([], None)
+    stats = out["go_criteria"]["stats"]
+    assert out["unlabeled"] == 0 and "label_coverage" in stats and "jev_calls" in stats, out
+    assert out["go_criteria"]["criteria"]["jev_failure_rate"]["met"] is False
+    assert out["go_criteria"]["criteria"]["jev_calls_min"]["met"] is False
+    sample = _run_report(["--events", "tests/fixtures/stop_gate/events-sample.jsonl",
+                          "--transcripts-root", "tests/fixtures/stop_gate/transcripts"])
+    got = json.loads(sample.stdout)
+    assert got["unlabeled"] == got["rows"] - got["labeled"], got
+    assert got["go_criteria"]["act"] == "NO-GO"
+
+
+def test_r11_report_reads_tail_when_capped():
+    scr = scratch_dir()
+    rows = [core.build_row(row_kind="stop", ts="2026-10-01T08:0%d:00Z" % n, session_id="s%d" % n,
+                           verdict=("would_continue" if n < 3 else "needs_human")) for n in range(6)]
+    events = Path(scr, "events.jsonl")
+    events.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    line = len(json.dumps(rows[0])) + 1
+    with patched(report, MAX_EVENTS_BYTES=line * 2 + 5):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            assert report.main(["--events", str(events)]) == 0
+    out = json.loads(buf.getvalue())
+    assert out["truncated"] is True, out
+    assert out["by_verdict"] == {"needs_human": 2}, out  # the newest rows survive, not the oldest
+    full = io.StringIO()
+    with contextlib.redirect_stdout(full):
+        report.main(["--events", str(events)])
+    assert json.loads(full.getvalue())["truncated"] is False
+
+
+def test_r12_all_scripts_free_of_legacy_literal():
+    needle = ".claude" + "/craftflow"
+    for name in ("craftflow_stop_gate.py", "craftflow_stop_gate_core.py", "craftflow_stop_gate_report.py"):
+        assert needle not in (SCRIPTS / name).read_text(encoding="utf-8"), name
 
 
 # ---------------------------------------------------------------------------

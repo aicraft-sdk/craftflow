@@ -178,10 +178,14 @@ def turn_timing(scan, now):
 
 
 # --- git facts (DD-20) -------------------------------------------------------------------------------
-def _git(root, args, remaining):
-    """CompletedProcess for one git call, or None when skipped for lack of time, timed out or not runnable."""
+def _git(root, args, remaining, facts=None):
+    """CompletedProcess for one git call, or None when skipped for lack of time, timed out or not runnable.
+
+    A call skipped for lack of time marks ``facts["skip"] = "deadline"`` (starvation, not git unsafety)."""
     left = remaining()
     if left < GIT_MIN_REMAINING_S:
+        if facts is not None:
+            facts["skip"] = "deadline"
         return None
     env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
     try:
@@ -192,8 +196,10 @@ def _git(root, args, remaining):
 
 
 def parse_status(text):
-    """(dirty_paths, unmerged) from ``git status --porcelain=v1 -z`` output."""
-    paths, unmerged = [], False
+    """(dirty_paths, unmerged, truncated) from ``git status --porcelain=v1 -z`` output.
+
+    ``dirty_paths`` holds at most STATUS_DIRTY_CAP paths; ``truncated`` says there were more."""
+    paths, unmerged, total = [], False, 0
     entries = text.split("\0")
     i = 0
     while i < len(entries):
@@ -206,23 +212,31 @@ def parse_status(text):
             unmerged = True
         if "R" in code or "C" in code:
             i += 1  # the rename/copy source follows as its own NUL entry
+        total += 1
         if len(paths) < STATUS_DIRTY_CAP:
             paths.append(path)
-    return paths, unmerged
+    return paths, unmerged, total > STATUS_DIRTY_CAP
 
 
 def git_facts(root, remaining):
-    """Facts of the worktree at ``root`` with at most three git calls. Any failure => ok False (H11)."""
-    facts = {"ok": False, "in_progress_op": None, "unmerged": False, "dirty_paths": [], "head": None}
-    status = _git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"], remaining)
+    """Facts of the worktree at ``root`` with at most three git calls. Any failure => ok False (H11).
+
+    ``skip`` says why a fail-closed result is not real git unsafety: ``deadline`` (starved of time) or
+    ``truncated`` (more than STATUS_DIRTY_CAP dirty paths: the list is incomplete, so H11 fires)."""
+    facts = {"ok": False, "in_progress_op": None, "unmerged": False, "dirty_paths": [], "head": None,
+             "skip": None}
+    status = _git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], remaining, facts)
     if status is None or status.returncode != 0:
         return facts
-    facts["dirty_paths"], facts["unmerged"] = parse_status(status.stdout)
-    head = _git(root, ["rev-parse", "HEAD"], remaining)
+    facts["dirty_paths"], facts["unmerged"], truncated = parse_status(status.stdout)
+    if truncated:
+        facts["skip"] = "truncated"
+        return facts
+    head = _git(root, ["rev-parse", "HEAD"], remaining, facts)
     if head is not None and head.returncode == 0:
         facts["head"] = head.stdout.strip() or None
     ops = _git(root, ["rev-parse", "--git-path", "MERGE_HEAD", "--git-path", "rebase-merge",
-                      "--git-path", "rebase-apply"], remaining)
+                      "--git-path", "rebase-apply"], remaining, facts)
     if ops is None or ops.returncode != 0:
         return facts  # in-progress state unknown: stays unsafe
     lines = ops.stdout.splitlines()
@@ -284,15 +298,23 @@ def _consent_home():
     return core.passwd_home()
 
 
-def load_settings(env, with_consent):
-    """(settings, tags): plugin file + user file (+ consent file when asked). Never raises."""
+def load_settings(env, with_consent, report_errors=False):
+    """(settings, tags): plugin file + user file (+ consent file when asked). Never raises.
+
+    A user file that exists but cannot be used (corrupt, oversized, ...) still fails open to the defaults, but
+    is surfaced: a ``user_config_error:<why>`` tag and, with ``report_errors``, one ``config_error`` log event.
+    The plugin file is ours and is never reported."""
     plugin_obj = core.load_json_file(os.path.join(str(plugin_config_dir()), "stop-gate.json"))[0]
-    user_obj = core.load_json_file(core.user_override_path(env))[0]
+    user_obj, user_status, user_error = core.load_json_file(core.user_override_path(env))
     source = core.override_source(env, core.passwd_home())
     consent_obj, consent_tag = (core.read_consent_file(_consent_home()) if with_consent else (None, None))
     settings, tags = core.parse_settings(plugin_obj, user_obj, source, consent_obj)
     if consent_tag:
         tags.append(consent_tag)
+    if user_status == "error" and user_error:
+        tags.append("user_config_error:" + user_error)
+        if report_errors:
+            log_event("plugin_stop_gate", {"config_error": user_error, "source": "user"})
     return settings, tags
 
 
@@ -430,7 +452,7 @@ def send_desktop(text, remaining, path=None):
 
 
 def notify_step(settings, verdict, wf, cursor, session, tail_sha, hook_active, turn_seconds, session_id,
-                remaining):
+                remaining, last_human_ts=None):
     """(notify_status, relay_reason|None, sent). Eligibility per DD-12; never raises."""
     mode = settings["notify"]
     if mode == "off":
@@ -444,7 +466,10 @@ def notify_step(settings, verdict, wf, cursor, session, tail_sha, hook_active, t
         if mode == "push":
             if hook_active:
                 return "skipped_hook_active", None, False
-            if not core.relay_decision(settings, verdict["verdict"], hook_active, session, tail_sha):
+            if not session_id:  # no session record, so no host-independent cap: never relay
+                return "skipped_no_session", None, False
+            if not core.relay_decision(settings, verdict["verdict"], hook_active, session, tail_sha,
+                                       last_human_ts):
                 return "skipped_duplicate", None, False
             return "relay", core.PUSH_RELAY_TEMPLATE % text, False
         if session_id and tail_sha and session.get("last_notified_tail_sha") == tail_sha:
@@ -466,10 +491,12 @@ def relay_followup_row(settings, tags, payload, session_id, transcript_path, t0)
         hook_ms=int((time.monotonic() - t0) * 1000), settings_tags=tags)
 
 
-def run(payload, env, t0=None):
+def run(payload, env, t0=None, ctx=None):
     """(stdout_obj|None, row|None). ``row`` is None whenever the hook is inert. Only the consent-file push
-    relay ever returns a stdout object."""
+    relay ever returns a stdout object. ``ctx`` (optional) receives ``mode``/``session_id`` once the hook is
+    active, so a failure can still leave an error row."""
     t0 = time.monotonic() if t0 is None else t0
+    ctx = {} if ctx is None else ctx
 
     def remaining():
         return DEADLINE_S - (time.monotonic() - t0)
@@ -478,13 +505,15 @@ def run(payload, env, t0=None):
         return None, None
     if env.get("CURSOR_PLUGIN_ROOT"):  # inferred, unproven extra guard (DD-15)
         return None, None
-    settings, tags = load_settings(env, with_consent=False)
+    settings, tags = load_settings(env, with_consent=False, report_errors=True)
     if settings["mode"] == "off":
         return None, None
+    ctx["mode"] = settings["mode"]
     settings, tags = load_settings(env, with_consent=True)
 
     root = project_dir()
     session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else ""
+    ctx["session_id"] = session_id
     transcript_path = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else ""
     now = time.time()
     hook_active = payload.get("stop_hook_active") is True
@@ -504,6 +533,10 @@ def run(payload, env, t0=None):
     wf, reason, wf_payload = _bind(root, transcript_path, session_id)
     wf_facts = core.workflow_facts(wf_payload, os.path.isdir) if wf_payload is not None else None
     git = git_facts(_git_root(wf_facts, payload, root), remaining)
+    if git.get("skip") == "deadline":
+        tags.append("git_skipped_deadline")
+    elif git.get("skip") == "truncated":
+        tags.append("git_dirty_truncated")
 
     facts = {
         "message": message, "binding_reason": reason, "stop_hook_active": hook_active,
@@ -526,7 +559,7 @@ def run(payload, env, t0=None):
 
     notify_status, relay_reason, sent = notify_step(
         settings, verdict, wf, cursor if isinstance(cursor, str) else "", session, tail_sha, hook_active,
-        turn_seconds, session_id, remaining)
+        turn_seconds, session_id, remaining, scan["last_human_ts"])
     write_session(root, session_id, core.session_update(
         session, verdict["verdict"], git.get("head"), cursor, tail_sha, relay_reason is not None, now,
         last_human_ts=scan["last_human_ts"], notified=sent))
@@ -555,20 +588,44 @@ def append_row(row):
         handle.write(json.dumps(row, ensure_ascii=True) + "\n")
 
 
-def main():
-    """Always returns 0 (fail open)."""
-    t0 = time.monotonic()
+def error_row(exc, ctx, t0):
+    """Minimal row_kind "error" row: the exception CLASS name only, never its message."""
+    return core.build_row(
+        row_kind="error", ts=now_iso(), session_id=ctx.get("session_id") or None, mode=ctx.get("mode"),
+        hook_ms=int((time.monotonic() - t0) * 1000), settings_tags=["hook_error:" + type(exc).__name__])
+
+
+def record_failure(exc, ctx, t0):
+    """Leave a trace of a hook failure: an error row when the hook was active, else (or when that write also
+    fails) a ``plugin_stop_gate_error`` log event. Never raises."""
     try:
-        out, row = run(load_input(), os.environ, t0)
-        if out is not None:
-            sys.stdout.write(json.dumps(out, ensure_ascii=True))
-            sys.stdout.flush()
+        if ctx.get("mode") is None:
+            raise exc  # inert hook: nothing to put in the events file, fall through to the log event
+        append_row(error_row(exc, ctx, t0))
+        return
+    except Exception:  # noqa: BLE001 - best effort, fall through to the log event
+        pass
+    try:
+        log_event("plugin_stop_gate_error", {"exc": type(exc).__name__})
+    except Exception:  # noqa: BLE001 - nothing more can be done; the Stop proceeds
+        pass
+
+
+def main():
+    """Always returns 0 (fail open). The row is appended BEFORE any relay block is printed."""
+    t0 = time.monotonic()
+    ctx = {}
+    try:
+        out, row = run(load_input(), os.environ, t0, ctx)
         if row is not None:
             append_row(row)
             log_event("plugin_stop_gate", {"decision": row["verdict"], "wf": row["wf"], "mode": row["mode"],
                                            "rule_hits": row["rule_hits"], "row_kind": row["row_kind"]})
-    except Exception:  # noqa: BLE001 - fail-open contract: the Stop proceeds exactly as today
-        return 0
+        if out is not None:
+            sys.stdout.write(json.dumps(out, ensure_ascii=True))
+            sys.stdout.flush()
+    except Exception as exc:  # noqa: BLE001 - fail-open contract: the Stop proceeds exactly as today
+        record_failure(exc, ctx, t0)
     return 0
 
 

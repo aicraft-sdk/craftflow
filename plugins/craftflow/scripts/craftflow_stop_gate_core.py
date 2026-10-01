@@ -900,10 +900,15 @@ def notify_text(verdict, wf, phase, reasons):
     return text[:NOTIFY_MAX_CHARS]
 
 
-def relay_decision(settings, verdict, stop_hook_active, session_state, tail_sha):
-    """True when a push relay block should be printed: once per tail, never inside a relay (DD-12, P5)."""
+def relay_decision(settings, verdict, stop_hook_active, session_state, tail_sha, last_human_ts=None):
+    """True when a push relay block should be printed: once per tail, never inside a relay (DD-12, P5).
+
+    Host-independent cap: at most one relay per genuine human turn (``relayed_for`` marks that turn).
+    """
     state = session_state if isinstance(session_state, dict) else {}
     if stop_hook_active or not tail_sha or state.get("relay_pending"):
+        return False
+    if "relayed_for" in state and state["relayed_for"] == last_human_ts:
         return False
     if not isinstance(settings, dict) or settings.get("notify") != "push" or verdict != "needs_human":
         return False
@@ -929,8 +934,8 @@ def loop_guards(facts, session):
         git = facts.get("git") if isinstance(facts.get("git"), dict) else {}
         work = facts.get("workflow") if isinstance(facts.get("workflow"), dict) else {}
         recorded = count > 0 or bool(session.get("relay_pending"))
-        unchanged = (git.get("head") == session.get("last_head")
-                     and work.get("phase_cursor") == session.get("last_cursor"))
+        unchanged = (git.get("head") is not None and git.get("head") == session.get("last_head")
+                     and work.get("phase_cursor") == session.get("last_cursor"))  # unknown HEAD is not "no progress"
         if facts.get("stop_hook_active") and recorded and unchanged:
             tags.append("L1_no_progress")
         limit = (facts.get("settings") or DEFAULTS).get("maxAutoContinuesPerSession", 5)
@@ -951,7 +956,7 @@ def session_update(state, verdict, head, cursor, tail_sha, relayed, now, last_hu
     if verdict == "would_continue":
         count += 1
     sent = bool(relayed or notified)
-    return {
+    record = {
         "would_continue_since_human": count,
         "last_human_ts": last_human_ts,
         "last_head": head,
@@ -960,6 +965,11 @@ def session_update(state, verdict, head, cursor, tail_sha, relayed, now, last_hu
         "relay_pending": bool(relayed),
         "updated_at": now,
     }
+    if relayed:
+        record["relayed_for"] = last_human_ts  # the human turn this relay was spent on (cap: one per turn)
+    elif "relayed_for" in old:
+        record["relayed_for"] = old["relayed_for"]
+    return record
 
 
 # --- shadow row (DD-14) ------------------------------------------------------------------------------
@@ -1004,12 +1014,14 @@ RUBBER_STAMP_RE = re.compile(
     r"^\s*(continue|go|go on|go ahead|yes|y|ok|okay|proceed|next|do it|commit|sure|yep|continue please|"
     r"carry on|keep going)[.! ]*$", re.IGNORECASE)
 NEGATION_RE = re.compile(r"^\s*(?:no|stop|wait|don'?t|hold)\b", re.IGNORECASE)
+INTERRUPT_RE = re.compile(r"^\s*\[Request interrupted by user", re.IGNORECASE)  # an interrupt is a negative signal
 SWEEP_KIND_THRESHOLDS = tuple(round(0.70 + 0.01 * i, 2) for i in range(30))
 SWEEP_NEEDS_MAXES = tuple(round(0.05 * i, 2) for i in range(1, 11))
 _WOULD_CONTINUE_KIND = "phase_done_awaiting_continue"
 RD3 = {"would_continue_labeled": 50, "sessions": 5, "precision": 0.95, "negatives": 0,
-       "jev_failure_rate": 0.05, "hook_p90_ms": 1500}
-_RD3_AT_LEAST = ("would_continue_labeled", "sessions", "precision")
+       "jev_failure_rate": 0.05, "hook_p90_ms": 1500, "label_coverage": 0.8, "jev_calls_min": 20}
+_RD3_AT_LEAST = ("would_continue_labeled", "sessions", "precision", "label_coverage", "jev_calls_min")
+_RD3_STAT_KEY = {"jev_calls_min": "jev_calls"}  # criterion name -> stats key
 _LABELED = frozenset(("rubber_stamp", "negative", "human_input"))
 
 
@@ -1019,7 +1031,7 @@ def label_reply(text):
         return "unlabeled"
     if RUBBER_STAMP_RE.match(text):
         return "rubber_stamp"
-    if NEGATION_RE.match(text):
+    if NEGATION_RE.match(text) or INTERRUPT_RE.match(text):
         return "negative"
     return "human_input"
 
@@ -1055,14 +1067,19 @@ def sweep(rows, kind_thresholds=None, needs_maxes=None):
 
 
 def go_criteria(stats):
-    """RD-3 evaluation. ACT stays NO-GO unless every criterion holds; an absent Jev failure rate (None) is vacuous."""
+    """RD-3 evaluation. ACT stays NO-GO unless every criterion holds.
+
+    ``label_coverage`` is labeled/rows (a missing replies must not hide behind the labeled subset). An absent
+    Jev failure rate (None, no calls) is NOT met, and ``jev_calls_min`` needs enough Jev calls for the rate
+    to mean anything.
+    """
     stats = stats if isinstance(stats, dict) else {}
     criteria = {}
     for key, required in RD3.items():
-        value = stats.get(key)
+        value = stats.get(_RD3_STAT_KEY.get(key, key))
         number = _num(value)
         if number is None:
-            met = key == "jev_failure_rate" and key in stats and value is None
+            met = False
         elif key in _RD3_AT_LEAST:
             met = number >= required
         else:

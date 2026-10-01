@@ -37,15 +37,30 @@ def iter_records(data):
     return gate._records(data)
 
 
-def read_bytes(path, cap):
-    """Bytes of a REGULAR file (at most ``cap``), else b''. Never raises."""
+def read_capped(path, cap):
+    """(bytes, truncated) of a REGULAR file, else (b'', False). Never raises.
+
+    A file larger than ``cap`` is read from its TAIL (the newest lines), the cut first line is dropped and
+    ``truncated`` is True."""
     if not gate.is_regular_file(path):
-        return b""
+        return b"", False
     try:
         with open(path, "rb") as handle:
-            return handle.read(cap)
+            size = os.fstat(handle.fileno()).st_size
+            if size <= cap:
+                return handle.read(cap), False
+            handle.seek(size - cap - 1)  # one byte earlier: tells whether the cut fell on a line boundary
+            data = handle.read(cap + 1)
     except OSError:
-        return b""
+        return b"", False
+    if data[:1] == b"\n":
+        return data[1:], True
+    return (data.split(b"\n", 1)[1] if b"\n" in data else b""), True
+
+
+def read_bytes(path, cap):
+    """Bytes of a REGULAR file (the tail when larger than ``cap``), else b''. Never raises."""
+    return read_capped(path, cap)[0]
 
 
 def human_text(rec):
@@ -58,8 +73,11 @@ def human_text(rec):
     return "\n".join(b["text"] for b in content if b.get("type") == "text" and isinstance(b.get("text"), str))
 
 
-def join_next_user_reply(records, after_ts):
-    """Text of the first genuine human line strictly after ``after_ts`` (ISO string), else None."""
+def join_next_user_reply(records, after_ts, before_epoch=None):
+    """Text of the first genuine human line strictly after ``after_ts`` (ISO string), else None.
+
+    With ``before_epoch`` (the next stop row of the same session) a reply at or after it belongs to that
+    later stop, so it is not returned here."""
     after = gate.parse_ts(after_ts)
     if after is None:
         return None
@@ -69,7 +87,7 @@ def join_next_user_reply(records, after_ts):
             continue
         text = human_text(rec)
         if text is not None:
-            return text
+            return text if before_epoch is None or epoch < before_epoch else None
     return None
 
 
@@ -78,8 +96,14 @@ def metric_rows(rows):
     return [r for r in rows if isinstance(r, dict) and r.get("row_kind") == "stop"]
 
 
+def load_events_ex(path):
+    """(rows, truncated): the newest MAX_EVENTS_BYTES of the events file."""
+    data, truncated = read_capped(path, MAX_EVENTS_BYTES)
+    return list(iter_records(data)), truncated
+
+
 def load_events(path):
-    return [r for r in iter_records(read_bytes(path, MAX_EVENTS_BYTES))]
+    return load_events_ex(path)[0]
 
 
 def _find_transcript(row, root):
@@ -98,18 +122,51 @@ def _find_transcript(row, root):
     return None
 
 
-def label_rows(rows, root):
-    """Copies of the rows with a ``label`` from the user's next reply; unlabeled when it cannot be joined."""
+def _session_key(row):
+    sid, tpath = row.get("session_id"), row.get("transcript_path")
+    if isinstance(sid, str) and sid:
+        return ("sid", sid)
+    if isinstance(tpath, str) and tpath:
+        return ("tp", tpath)
+    return None
+
+
+def _next_row_epochs(rows):
+    """{row index: epoch of the next stop row of the same session}: a reply belongs to the LATEST stop row
+    that precedes it, so it must come before the next row's timestamp."""
+    groups = {}
+    for index, row in enumerate(rows):
+        key, epoch = _session_key(row), gate.parse_ts(row.get("ts"))
+        if key is not None and epoch is not None:
+            groups.setdefault(key, []).append((epoch, index))
+    bounds = {}
+    for items in groups.values():
+        items.sort()
+        for (_epoch, index), (later, _other) in zip(items, items[1:]):
+            bounds[index] = later
+    return bounds
+
+
+def label_rows(rows, root, flags=None):
+    """Copies of the rows with a ``label`` from the user's next reply; unlabeled when it cannot be joined.
+
+    Each reply labels only the latest preceding stop row of its session. ``flags`` (a set) collects
+    ``"transcript"`` when a transcript was read from its tail because of the size cap."""
     cache = {}
+    bounds = _next_row_epochs(rows)
     out = []
-    for row in rows:
+    for index, row in enumerate(rows):
         labeled = dict(row)
         labeled["label"] = "unlabeled"
         path = _find_transcript(row, root)
         if path is not None:
             if path not in cache:
-                cache[path] = list(iter_records(read_bytes(path, MAX_TRANSCRIPT_BYTES)))
-            labeled["label"] = core.label_reply(join_next_user_reply(cache[path], row.get("ts")))
+                data, cut = read_capped(path, MAX_TRANSCRIPT_BYTES)
+                cache[path] = list(iter_records(data))
+                if cut and flags is not None:
+                    flags.add("transcript")
+            labeled["label"] = core.label_reply(
+                join_next_user_reply(cache[path], row.get("ts"), bounds.get(index)))
         out.append(labeled)
     return out
 
@@ -153,10 +210,12 @@ def _jev_summary(rows):
             "status_counts": _count(r.get("jev_status") for r in rows)}
 
 
-def build_report(rows, root):
-    stops = label_rows(metric_rows(rows), root)
+def build_report(rows, root, events_truncated=False):
+    flags = set()
+    stops = label_rows(metric_rows(rows), root, flags)
     labeled = [r for r in stops if r["label"] != "unlabeled"]
-    wc = [r for r in labeled if r.get("verdict") == "would_continue"]
+    # a follow-up stop (stop_hook_active) is a consequence of an earlier stop, not an independent verdict
+    wc = [r for r in labeled if r.get("verdict") == "would_continue" and not r.get("stop_hook_active")]
     stamped = sum(1 for r in wc if r["label"] == "rubber_stamp")
     jev = _jev_summary(stops)
     hook_latency = _latency(r.get("hook_ms") for r in stops)
@@ -166,12 +225,17 @@ def build_report(rows, root):
         "precision": round(stamped / len(wc), 4) if wc else None,
         "negatives": sum(1 for r in wc if r["label"] == "negative"),
         "jev_failure_rate": jev["failure_rate"],
+        "jev_calls": jev["calls"],
         "hook_p90_ms": hook_latency["p90"],
+        "label_coverage": round(len(labeled) / len(stops), 4) if stops else None,
     }
     swept = core.sweep(stops)
     return {
         "rows": len(stops),
         "labeled": len(labeled),
+        "unlabeled": len(stops) - len(labeled),
+        "label_coverage": stats["label_coverage"],
+        "truncated": bool(events_truncated or flags),
         "by_verdict": _count(r.get("verdict") for r in stops),
         "rule_hits": _count(code for r in stops for code in (r.get("rule_hits") or [])),
         "jev": jev,
@@ -186,11 +250,13 @@ def build_report(rows, root):
 def replay(root):
     """Counts over every user turn that follows assistant text in the transcripts. Never returns text."""
     out = {"turns": 0, "rubber_stamp": 0, "question_end": 0, "question_end_rubber_stamp": 0,
-           "heuristic_confusion": {v: {"rubber_stamp": 0, "other": 0} for v in VERDICTS}}
+           "heuristic_confusion": {v: {"rubber_stamp": 0, "other": 0} for v in VERDICTS}, "truncated": False}
     paths = sorted(glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True)) if root else []
     for path in paths:
         last = None
-        for rec in iter_records(read_bytes(path, MAX_TRANSCRIPT_BYTES)):
+        data, cut = read_capped(path, MAX_TRANSCRIPT_BYTES)
+        out["truncated"] = out["truncated"] or cut
+        for rec in iter_records(data):
             if rec.get("type") == "assistant":
                 text = gate._assistant_text(rec)
                 if text.strip():
@@ -227,7 +293,8 @@ def main(argv=None):
         if args.replay:
             result = replay(args.transcripts_root)
         else:
-            result = build_report(load_events(args.events or default_events_path()), args.transcripts_root)
+            rows, cut = load_events_ex(args.events or default_events_path())
+            result = build_report(rows, args.transcripts_root, cut)
     except Exception as exc:  # noqa: BLE001 - fail soft: report the error class only, never content
         result = {"error": type(exc).__name__}
     print(json.dumps(result, sort_keys=True))
