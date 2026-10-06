@@ -11,7 +11,7 @@ not re-validate that precondition itself.
 Design: docs/plans/2026-07-29-multi-repo-workspace-worktree-design.md (Option A)
 
 Usage:
-  python3 craftflow_resolve_workspace_root.py --cwd DIR --request TEXT
+  python3 craftflow_resolve_workspace_root.py --cwd DIR (--request TEXT | --request-file PATH|-)
 
 Output (JSON to stdout on exit 0 -- including NO_REPO_FOUND, which is a
 normal decision outcome, not a script failure):
@@ -313,8 +313,21 @@ def main() -> int:
         ),
     )
     parser.add_argument("--cwd", required=True, metavar="DIR")
-    parser.add_argument("--request", required=True, metavar="TEXT")
+    parser.add_argument("--request", default=None, metavar="TEXT")
+    parser.add_argument("--request-file", dest="request_file", default=None, metavar="PATH",
+                        help="read the request from PATH ('-' = stdin) instead of --request")
     args = parser.parse_args()
+    if (args.request is None) == (args.request_file is None):
+        parser.error("exactly one of --request / --request-file is required")
+    if args.request_file is not None:
+        try:
+            if args.request_file == "-":
+                args.request = sys.stdin.read()
+            else:
+                args.request = Path(args.request_file).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"craftflow_resolve_workspace_root: cannot read request file: {exc}", file=sys.stderr)
+            return 1
 
     try:
         cwd = Path(args.cwd).resolve()

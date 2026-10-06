@@ -8,6 +8,8 @@ check denies an oversized Read. Never mutates the target file.
 
 Usage:
     python3 craftflow_state_query.py <path> [--mode summary|full] [--tail N] [--event-type NAME]
+    python3 craftflow_state_query.py --mode digest --project-root R [--workspace-root W]
+        [--workflow-uuid U]   # one fixed-size multi-tier memory digest (router ## 2.)
 
 --mode full: byte-identical passthrough of the target file's current content.
 --mode summary (default): shape-aware compaction --
@@ -31,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -177,11 +180,33 @@ def _summarize_generic(content: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="craftflow state-read compaction query")
-    parser.add_argument("path")
-    parser.add_argument("--mode", choices=["summary", "full"], default="summary")
+    parser.add_argument("path", nargs="?", default=None)
+    parser.add_argument("--mode", choices=["summary", "full", "digest"], default="summary")
     parser.add_argument("--tail", type=int, default=DEFAULT_TAIL_LINES)
     parser.add_argument("--event-type", default=None)
+    parser.add_argument("--project-root", default=None, help="digest mode: repo root")
+    parser.add_argument("--workspace-root", default=None, help="digest mode: optional workspace root")
+    parser.add_argument("--workflow-uuid", default=None, help="digest mode: optional workflow id")
     args = parser.parse_args()
+
+    if args.mode == "digest":
+        if not args.project_root:
+            sys.stderr.write("Error: --mode digest requires --project-root\n")
+            return 1
+        from craftflow_state_digest import build_digest
+
+        if args.workflow_uuid is not None and not re.fullmatch(r"wf-[A-Za-z0-9][A-Za-z0-9._-]*", args.workflow_uuid):
+            sys.stderr.write("Error: --workflow-uuid must match ^wf-[A-Za-z0-9][A-Za-z0-9._-]*$\n")
+            return 1
+        project_root = Path(args.project_root).resolve()
+        if not (project_root / ".craftflow").is_dir():
+            sys.stderr.write(f"ERROR: project-root not found (no .craftflow directory): {project_root}\n")
+            return 1
+        workspace = Path(args.workspace_root).resolve() if args.workspace_root else None
+        sys.stdout.write(build_digest(project_root, workspace, args.workflow_uuid))
+        return 0
+    if args.path is None:
+        parser.error("path is required unless --mode digest")
 
     target = Path(args.path).resolve()
     try:

@@ -5,7 +5,6 @@ model: sonnet
 color: green
 tools: Read, Edit, Write, Bash, Grep, Glob, Skill, LSP, WebFetch, TaskUpdate, mcp__ai-craft-registry__registry_search, mcp__ai-craft-registry__registry_get, mcp__ai-craft-registry__registry_list
 skills:
-  - craftflow:session-memory
   - craftflow:test-driven-development
   - craftflow:code-generation
   - craftflow:verification-before-completion

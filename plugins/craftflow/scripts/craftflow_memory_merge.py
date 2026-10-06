@@ -7,6 +7,13 @@ Deterministic, confidence-aware markdown bullet merger.
 Usage (CLI mode):
     python3 craftflow_memory_merge.py < payload.json
 
+Usage (--finalize mode; batch of --apply calls under one self-managed permit):
+    python3 craftflow_memory_merge.py --finalize <batch.json>
+    batch.json = {"project_root": ..., "workflow_uuid": "wf-...",
+                  "applies": [{"target": <memory file>, "payload": {...}}, ...]}
+    Writes the .memory-finalize permit itself, applies every payload, and clears the
+    permit in a finally block (no compound Bash permit-write needed).
+
 Usage (--apply mode; the safe write path for memory files):
     python3 craftflow_memory_merge.py --apply <project>/.craftflow/state/project/patterns.md < payload.json
     The payload is the same JSON as below but WITHOUT "file_text"/"section_text"
@@ -757,7 +764,10 @@ def _reject_json_constant(constant: str):
     raise ValueError(f"invalid numeric literal in JSON: {constant}")
 
 
-_APPLY_USAGE = "Usage: craftflow_memory_merge.py [--apply <memory-file>]  (payload JSON on stdin)\n"
+_APPLY_USAGE = (
+    "Usage: craftflow_memory_merge.py [--apply <memory-file>]  (payload JSON on stdin)\n"
+    "       craftflow_memory_merge.py --finalize <batch.json>\n"
+)
 # Used with fullmatch: `$` would accept a trailing newline and `\d` Unicode digits.
 _SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
 _MONTH_RE = re.compile(r"[0-9]{4}-[0-9]{2}")
@@ -964,6 +974,67 @@ def _apply_to_file(target_arg: str, raw_stdin: str) -> int:
     return 0
 
 
+_FINALIZE_WF_RE = re.compile(r"wf-[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _finalize_batch(batch_arg: str) -> int:
+    """--finalize mode: create the permit, run every --apply payload, clear the permit.
+
+    Batch JSON: {"project_root": "...", "workflow_uuid": "wf-...",
+                 "applies": [{"target": "<memory file>", "payload": {<--apply payload>}}, ...]}
+    One failing item does not stop the rest; exit 1 if any item failed. The permit is
+    cleared in a finally block. Every target still goes through _apply_to_file's own
+    validation (memory-file names/locations only, permit re-checked per item)."""
+    try:
+        batch = json.loads(Path(batch_arg).read_text(encoding="utf-8"), parse_constant=_reject_json_constant)
+    except (OSError, ValueError) as exc:
+        return _apply_error(f"cannot read batch file: {exc}")
+    if not isinstance(batch, dict):
+        return _apply_error("batch must be a JSON object")
+    wf, root_arg, applies = batch.get("workflow_uuid"), batch.get("project_root"), batch.get("applies")
+    if not isinstance(wf, str) or not _FINALIZE_WF_RE.fullmatch(wf):
+        return _apply_error("batch 'workflow_uuid' must match ^wf-[A-Za-z0-9][A-Za-z0-9._-]*$")
+    if not isinstance(applies, list) or not applies or not all(
+        isinstance(a, dict) and isinstance(a.get("target"), str) and isinstance(a.get("payload"), dict)
+        for a in applies
+    ):
+        return _apply_error("batch 'applies' must be a non-empty list of {target, payload} objects")
+    if not isinstance(root_arg, str) or not Path(root_arg).is_dir():
+        return _apply_error("batch 'project_root' must be an existing directory")
+    root = Path(root_arg).resolve()
+    state = root / ".craftflow" / "state"
+    if not state.is_dir():
+        return _apply_error("batch 'project_root' has no .craftflow/state directory")
+    for item in applies:
+        try:
+            Path(item["target"]).resolve().relative_to(state)
+        except ValueError:
+            return _apply_error(f"target outside <project_root>/.craftflow/state: {item['target']}")
+    permit = state / ".memory-finalize"
+    if permit.is_symlink():
+        return _apply_error("refusing a symlinked .memory-finalize permit")
+    if permit.exists() and permit.read_text(encoding="utf-8").strip() != wf:
+        return _apply_error("a memory-finalize permit for a different workflow already exists")
+    failed: list[str] = []
+    created_permit = not permit.exists()  # only remove a permit this call created
+    permit.write_text(wf, encoding="utf-8")
+    try:
+        for item in applies:
+            try:
+                rc = _apply_to_file(item["target"], json.dumps(item["payload"]))
+            except Exception as exc:  # noqa: BLE001 - one bad item must not strand the rest
+                sys.stderr.write(f"Error: {item['target']}: unexpected {type(exc).__name__}: {exc}\n")
+                rc = 1
+            if rc != 0:
+                failed.append(item["target"])
+    finally:
+        if created_permit:
+            permit.unlink(missing_ok=True)
+    print(f"craftflow_memory_merge: applied {len(applies) - len(failed)}/{len(applies)}; "
+          f"failed: {', '.join(failed) if failed else 'none'}")
+    return 1 if failed else 0
+
+
 def main() -> int:
     """
     CLI entry point: read JSON from stdin, write merged output to stdout.
@@ -984,6 +1055,8 @@ def main() -> int:
     if argv:
         if len(argv) == 2 and argv[0] == "--apply":
             return _apply_to_file(argv[1], sys.stdin.read())
+        if len(argv) == 2 and argv[0] == "--finalize":
+            return _finalize_batch(argv[1])
         sys.stderr.write(_APPLY_USAGE)
         return 1
 

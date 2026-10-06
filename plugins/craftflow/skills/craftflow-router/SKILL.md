@@ -17,8 +17,7 @@ description: |
 Mandatory reference read: before routing (## 1.) or dispatching any agent, read
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` once per
 session if not already read. It holds the host-agnostic Intent Routing table and the
-dispatch prompt scaffold, both `Read()` from there rather than inlined below — see backlog
-item 8's hooks-as-bridge redesign. A missing or unreadable shared doc is a hard-stop
+dispatch prompt scaffold, both `Read()` from there rather than inlined below. A missing or unreadable shared doc is a hard-stop
 condition, same as any other required reference read in this file — do not silently
 proceed with routing/dispatch decisions from stale in-context memory of its content.
 
@@ -26,9 +25,7 @@ proceed with routing/dispatch decisions from stale in-context memory of its cont
 
 **Shared with Cursor — canonical text lives in
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
-"Intent Routing" (Phase 3 of the hooks-as-bridge redesign, backlog item 8). `Read()` that
-file now if you have not already this session; it has the full priority/keyword/chain
-table, routing rules, and the announce-line convention.** See `references/fast-path.md`
+"Intent Routing" (full priority/keyword/chain table, routing rules, announce-line convention).** See `references/fast-path.md`
 for the risk-keyword detection table used to choose between BUILD's fast path and full
 chain. An optional Jev hint block (Claude Code only; produced by the opt-in
 `UserPromptSubmit` hook gated by `config/jev.json`, off by default), when present, is
@@ -40,11 +37,9 @@ consulted per the shared doc's hint-precedence rule (ERROR keywords always win).
 
 **Shared with Cursor — canonical text lives in
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
-"Resolve Project Root" (Phase 3b of the hooks-as-bridge redesign, backlog item 8).
-`Read()` that file now if you have not already this session; it has the full
-single-repo/multi-repo resolution algorithm — the `git rev-parse --show-toplevel` check,
-the `1a.` multi-repo branch (its own dedicated resolver script), and the
-`DETERMINISTIC`/`AMBIGUOUS`/`NO_REPO_FOUND` outcome handling.** Runs once per session,
+"Resolve Project Root" (single-repo/multi-repo resolution: the `git rev-parse --show-toplevel`
+check, the `1a.` multi-repo branch with its dedicated resolver script, and the
+`DETERMINISTIC`/`AMBIGUOUS`/`NO_REPO_FOUND` outcome handling).** Runs once per session,
 before `## 1.` routing and before any `.craftflow/state/...` path is touched. `PROJECT_ROOT`
 resolved here is reused verbatim by every later step in this document (memory load,
 workflow-artifact creation, resume, and — for BUILD only — worktree creation) — never
@@ -69,8 +64,8 @@ Detection procedure:
 4. Any ambiguous, partial, or errored probe result -> fail-safe to `task_tools_available = false`.
    Never assume `true` without an unambiguous positive confirmation.
 5. Record the boolean under `capabilities.task_tools_available` in the workflow artifact JSON
-   (see `## 6. Workflow Task Graphs -> Parent workflow creation` for the artifact `Write()`
-   literal this field is added to, and `## 2a. Workflow Artifact And Hook Policy` for the schema
+   (see `## 6. Workflow Task Graphs -> Parent workflow creation` for the `--task-tools-available`
+   flag that stamps this field at artifact creation, and `## 2a. Workflow Artifact And Hook Policy` for the schema
    documentation this field is added to).
 
 This section's content is inherently Claude-only vocabulary (`task_tools_available`,
@@ -87,10 +82,17 @@ Always run this before routing or resuming. Memory is organized in three tiers:
 
 ```text
 1. Bash("mkdir -p \"$PROJECT_ROOT/.craftflow/state/project\"")
-2. Read("$PROJECT_ROOT/.craftflow/state/project/activeContext.md")
-3. Read("$PROJECT_ROOT/.craftflow/state/project/patterns.md")
-4. Read("$PROJECT_ROOT/.craftflow/state/project/progress.md")
-5. Read("$PROJECT_ROOT/.craftflow/state/project/constitution.md") — skip gracefully if absent; when present, MUST constraints are active for this session
+2-5. (default path) ONE Bash call replaces the per-file Reads of project/{activeContext,patterns,progress}.md,
+    project/constitution.md, workspace/*, and workflows/{workflow_uuid}/*, after steps 1, 5a and 6a below
+    have resolved which tiers apply:
+      Bash("python3 {plugin_root}/scripts/craftflow_state_query.py --mode digest --project-root \"$PROJECT_ROOT\" [--workspace-root \"{workspace_root}\"] [--workflow-uuid {workflow_uuid}]")
+    stdout is ONE fixed-size digest (independent of file size, no state-read-compaction deny/retry): per
+    `### {tier}/{file} [OK|EMPTY|MISSING|UNREADABLE]` block, `MISSING_SECTIONS:` lines (drives auto-heal),
+    the constitution's MUST constraints (active for this session when present), a root-flat tier only when
+    project/ is empty (step 7), and ready-made `## Memory Summary` / `## Project Patterns` text for the
+    dispatch scaffold. Read a file in full only when the digest is insufficient, via
+    `craftflow_state_query.py <path> --mode full`, or raw Read for files under the compaction threshold.
+    **Re-read rule:** when the digest shows `(omitted for size` or `(+N more)` for a section the task depends on, or the task depends on prior Decisions/Learnings, re-read that file with `craftflow_state_query.py <path> --mode full` before acting.
 5a. Workspace-tier discovery (capped upward walk, max 3 levels above PROJECT_ROOT, to
     avoid runaway scans): starting at PROJECT_ROOT's parent, check each ancestor for
     EITHER a `.craftflow-workspace.json` file OR a `.craftflow/state/workspace/`
@@ -100,10 +102,8 @@ Always run this before routing or resuming. Memory is organized in three tiers:
     `craftflow_workspace_init.py`'s own refusal list).
     - No marker found: skip silently -- zero behavior change (existing production
       reality for every non-workspace session today).
-    - Marker found at {workspace_root}:
-      Read("{workspace_root}/.craftflow/state/workspace/activeContext.md")
-      Read("{workspace_root}/.craftflow/state/workspace/patterns.md")
-      Read("{workspace_root}/.craftflow/state/workspace/progress.md")
+    - Marker found at {workspace_root}: pass it as `--workspace-root` to the digest call
+      (covers workspace/activeContext.md, patterns.md, progress.md).
       Missing/malformed file: auto-heal via craftflow:session-memory template (same rule
       as project/'s own auto-heal), never a hard stop.
       Unreadable (permission error): skip with a logged note, never a hard stop.
@@ -121,17 +121,19 @@ Always run this before routing or resuming. Memory is organized in three tiers:
     ADR-recorded -- do not "re-sync" the two without reading that ADR first.
 6. If workflow_uuid is known (resume path):
    a. Bash("mkdir -p \"$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}\"")
-   b. Read("$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md")
-   c. Read("$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/patterns.md")
-   d. Read("$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md")
+   b-d. pass `--workflow-uuid {workflow_uuid}` to the digest call (covers workflows/{workflow_uuid}/
+        activeContext.md, patterns.md, progress.md).
    Merge: workflow-scoped values override project-scoped for current-focus
    fields (## Current Focus, ## Next Steps, ## Tasks) only.
-7. Fallback: If project/ files are missing or empty, also read the root-flat
-   files ($PROJECT_ROOT/.craftflow/state/activeContext.md etc.) and merge content into project/
+7. Fallback: If project/ files are missing or empty, the digest also includes the root-flat
+   files ($PROJECT_ROOT/.craftflow/state/activeContext.md etc.); merge content into project/
    before proceeding. Root-flat files are the backward-compat layer.
 ```
 
 Do not parallelize step 1 with reads.
+
+Memory Summary / Project Patterns for the dispatch scaffold: take them from the digest's
+`## Memory Summary` and `## Project Patterns` blocks (do not re-Read the files for this).
 
 State-read compaction self-heal: if any `Read(...)` in this section is denied with a
 `state-read-compaction` reason (the target `.craftflow/state/**` file is oversized), do not
@@ -434,11 +436,7 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
       # great-grandparent directory is always PROJECT_ROOT, in both the single-repo and
       # multi-repo-resolved cases.
       PROJECT_ROOT=$(dirname "$(dirname "$(dirname "{worktree_path}")")")
-      CRAFTFLOW_INSTALL=$(python3 -c "
-      import json, pathlib
-      reg = json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())
-      print(reg['plugins']['craftflow@craftflow'][0]['installPath'])
-      ")
+      CRAFTFLOW_INSTALL=$(python3 -c "import json,pathlib;print(json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())['plugins']['craftflow@craftflow'][0]['installPath'])")
       CRAFTFLOW_INSTALL_EXIT=$?
       LOCK_DIR="$PROJECT_ROOT/.claude/worktrees/.merge.lock"
       ```
@@ -750,46 +748,42 @@ Safety: Worktree creates are idempotent in the event log. If a resume finds `wor
 
 Use this pattern for every new workflow:
 
-1. Generate a stable workflow UUID, worktree names, and `iso_timestamp` before `TaskCreate()` by running the minting helper:
+1. Mint the id, worktree names and `iso_timestamp` AND write the v10 artifact + event log in one helper call, in three sub-steps. Never splice request text into a shell string (quotes, `$(...)` and backticks in it would be executed or corrupt the command); it travels through a per-session file instead.
+
+   a. Resolve the install dir and the session id (no workflow id is needed for this). `CRAFTFLOW_INSTALL` is resolved by this one-line bootstrap, the canonical form that other sections reuse verbatim:
 
 ```bash
-# Locate the helper via the plugin registry
-CRAFTFLOW_INSTALL=$(python3 -c "
-import json, pathlib
-reg = json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())
-print(reg['plugins']['craftflow@craftflow'][0]['installPath'])
-")
-
-# Mint the id — pass the user request; the helper auto-detects the current git branch
-WF_INFO=$(python3 "${CRAFTFLOW_INSTALL}/scripts/craftflow_workflow_id.py" \
-  --request "USER_REQUEST_SHELL_ESCAPED" \
-  --project "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" \
-  --json)
+CRAFTFLOW_INSTALL=$(python3 -c "import json,pathlib;print(json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())['plugins']['craftflow@craftflow'][0]['installPath'])")
+python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_workflow_id.py" --session-id
 ```
 
-Replace `USER_REQUEST_SHELL_ESCAPED` with the actual user request, properly shell-quoted.
-Then parse the JSON to bind: `workflow_uuid` · `iso_timestamp` · `worktree_dir` · `worktree_branch`.
+   b. Write the user request VERBATIM with the `Write` tool to `$PROJECT_ROOT/.craftflow/state/.router-request-{session_id}.txt` (`{session_id}` = the line printed above; use `nosession` when it is empty). The per-session name keeps concurrent sessions apart; the Write guard allows this path (`.craftflow/state/` is inside the project, unlike `/tmp`).
+
+   c. Mint (the helper reads the file, mints, writes the artifact, then deletes the request file; it rejects a request file older than 120 s as a stale leftover, and an empty request):
 
 ```bash
-workflow_uuid=$(printf '%s' "$WF_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['workflow_uuid'])")
-iso_timestamp=$(printf '%s' "$WF_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['iso_timestamp'])")
-worktree_dir=$(printf '%s' "$WF_INFO"  | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['worktree_dir'])")
-worktree_branch=$(printf '%s' "$WF_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['worktree_branch'])")
-session_id_json=$(printf '%s' "$WF_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['session_id_json'])")
+CRAFTFLOW_INSTALL=$(python3 -c "import json,pathlib;print(json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())['plugins']['craftflow@craftflow'][0]['installPath'])")
+python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_workflow_id.py" \
+  --request-file "$PROJECT_ROOT/.craftflow/state/.router-request-{session_id}.txt" --project "$PROJECT_ROOT" \
+  --emit-env --init-artifact \
+  --workflow-type "{WORKFLOW}" --phase "{build|debug|review|plan}" \
+  --task-tools-available "{true|false|unknown}"
 ```
 
-Paste `{session_id_json}` verbatim (it is already quoted, or `null` when the session env var is absent or malformed); never add or strip quotes.
+`{WORKFLOW}` is `BUILD|DEBUG|REVIEW|PLAN` and `--task-tools-available` is the detected `capabilities.task_tools_available` value. The call prints raw `KEY=value` lines (split each on the first `=`; no quoting to undo); read `workflow_uuid` · `iso_timestamp` · `worktree_dir` · `worktree_branch` · `session_id` · `session_id_json` from that output and substitute them into later steps (do not `eval` the output: the safe-shell guard denies it). **Mint-failure stop rule:** if the call exits non-zero, or its output has no `workflow_uuid=` line, STOP — do not call `TaskCreate()`, do not create child tasks, and report the `Error:` line to the user; a failed mint writes nothing (the helper removes any file it created) and is never to be treated as success. The helper writes `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json` (the v10 artifact, schema per `references/workflow-artifact-and-hook-policy.md`, including `circuit_breaker`), `{workflow_uuid}.events.jsonl` (the `workflow_started` line) and creates the `workflows/{workflow_uuid}/` directory; it refuses (non-zero exit, naming the conflicting file) to overwrite an existing artifact or events log. No artifact `Write()` and no separate `mkdir` are needed. Optional flags:
+
+- `--task-id "{parent_task_id}"` is optional and normally omitted: the artifact is written before `TaskCreate()`, so the `workflow_started` event's `task_id` is `null`.
+- **Only if `## 0.` recorded a `project_root_resolution_fallback` reason for this session** (`TOPLEVEL_EXIT != 0` and outcome `NO_REPO_FOUND` or `RESOLVE_SCRIPT_ERROR`): `--fallback-reason "NO_REPO_FOUND"` (or `"RESOLVE_SCRIPT_ERROR"`). This appends the `project_root_resolution_fallback` `status_history` entry and a second events.jsonl line. Skip in the common single-repo case.
+- **Only if `## 0.` step 1a set `WORKSPACE_WRITABLE_PATHS_JSON` to something other than `[]`** (`TOPLEVEL_EXIT != 0` and the variable is set and `!= '[]'`): `--workspace-writable-paths-json "$WORKSPACE_WRITABLE_PATHS_JSON"` (fills `workspace_writable_paths`; default `[]`). Additionally, if `WORKSPACE_WRITABLE_PATHS_DROPPED_JSON` is non-empty, `--writable-paths-dropped-json "$WORKSPACE_WRITABLE_PATHS_DROPPED_JSON"` (appends the `workspace_writable_paths_entries_dropped` entry and events line).
 
 ID format: `wf-{slug}-{YYYYMMDD-HHMMSS}-{8hex}`.
 Slug = slugified git branch name (if a genuine feature branch, i.e. not main/master/develop/dev/trunk or a craftflow-generated `wf-`/`worktree-` branch) — otherwise slugified request text.
-The `iso_timestamp` from the helper is the authoritative creation timestamp — use it for **all** `{iso_timestamp}` placeholders in the artifact Write below (no separate time derivation needed).
+The `iso_timestamp` from the helper is the authoritative creation timestamp — use it for any later `{iso_timestamp}` placeholder. `session_id_json` is a raw JSON fragment (a double-quoted string, or `null` when the session id is absent); paste it as-is where a JSON value is needed, and `session_id` is empty in that case. The project's `.craftflow/` directory must already exist (the `## 2.` memory-load step creates it); otherwise the mint fails with `Error:` and writes nothing.
 
 **Task*-tool fallback:** when `capabilities.task_tools_available == false`, skip step 2
-(`TaskCreate()`) entirely — there is no parent orchestration task to create. Proceed directly to
-step 3 (the artifact `Write()` calls). When `capabilities.task_tools_available == true`, step 2
-runs exactly as documented today — no behavior change on that path.
+(`TaskCreate()`) entirely — there is no parent orchestration task to create; the artifact is already written by step 1.
 
-2. Create the parent workflow task with that UUID from the first write:
+2. Create the parent workflow task with that UUID (after step 1, so the artifact exists first):
 
 ```text
 TaskCreate({
@@ -799,49 +793,7 @@ TaskCreate({
 })
 ```
 
-3. Immediately write the v10 artifact and event log:
-
-```text
-Write(
-  file_path="$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json",
-  content="{\"workflow_uuid\":\"{workflow_uuid}\",\"workflow_id\":\"{workflow_uuid}\",\"workflow_type\":\"{WORKFLOW}\",\"session_id\":{session_id_json},\"state_root\":\".craftflow/state\",\"user_request\":\"{request}\",\"plan_file\":null,\"design_file\":null,\"research_files\":[],\"approved_decisions\":[],\"plan_mode\":null,\"verification_rigor\":\"standard\",\"proof_status\":\"gaps_found\",\"plan_file_stem\":null,\"bakeoff_n\":null,\"bakeoff_n_requested\":null,\"bakeoff_models\":[],\"bakeoff_triggered\":false,\"bakeoff_all_failed\":false,\"bakeoff_candidate_failures\":[],\"traceability\":{\"requirements\":[],\"phases\":[],\"verification\":[],\"remediation\":[]},\"intent\":{\"goal\":null,\"non_goals\":[],\"constraints\":[],\"acceptance_criteria\":[],\"open_decisions\":[]},\"normalized_phases\":[],\"phase_cursor\":null,\"capabilities\":{\"brightdata_available\":\"unknown\",\"octocode_available\":\"unknown\",\"websearch_available\":\"unknown\",\"webfetch_available\":\"unknown\",\"task_tools_available\":\"unknown\"},\"research_rounds\":[],\"research_backend_history\":[],\"research_quality\":{\"web\":\"none\",\"github\":\"none\",\"overall\":\"none\"},\"task_ids\":{\"planner_create\":null,\"planning_review_pass1\":null,\"planner_replan\":null,\"planning_review_pass2\":null,\"memory_finalize\":null,\"plan_bakeoff_candidates\":{},\"plan_bakeoff_judge\":null},\"phase_status\":{},\"results\":{\"builder\":null,\"investigator\":null,\"reviewer\":null,\"hunter\":null,\"verifier\":null,\"planner\":null,\"planning_reviewer\":null,\"research\":{\"web\":null,\"github\":null,\"synthesis\":null},\"bakeoff\":[],\"plan_bakeoff_judge\":null},\"evidence\":{\"builder\":[],\"investigator\":[],\"reviewer\":[],\"hunter\":[],\"verifier\":[],\"planning_reviewer\":[]},\"telemetry\":{\"task_metrics_available\":\"unknown\",\"workflow_wall_clock_seconds\":0,\"agent_wall_clock_seconds\":{\"builder\":0,\"investigator\":0,\"reviewer\":0,\"hunter\":0,\"verifier\":0,\"planner\":0},\"loop_counts\":{\"re_review\":0,\"re_hunt\":0,\"re_verify\":0},\"verifier\":{\"phase_exit_proof_runs\":0,\"extended_audit_runs\":0,\"workload_seconds\":{\"tests\":0,\"build\":0,\"scan\":0,\"reconcile\":0,\"reasoning\":0}}},\"quality\":{\"confidence\":null,\"evidence_complete\":false,\"scenario_coverage\":0,\"research_quality\":\"none\",\"convergence_state\":\"pending\"},\"planning_review_runs\":0,\"planning_review_findings\":[],\"planning_review_status\":\"not_started\",\"build_mode\":null,\"fast_path_risk_signals\":[],\"fast_path_escalated\":false,\"worktree_mode\":null,\"worktree_path\":null,\"worktree_branch\":null,\"workspace_writable_paths\":[],\"memory_notes\":[],\"pending_gate\":null,\"status_history\":[{\"event\":\"workflow_started\",\"ts\":\"{iso_timestamp}\",\"phase\":\"{build|debug|review|plan}\"}],\"remediation_history\":[],\"created_at\":\"{iso_timestamp}\",\"updated_at\":\"{iso_timestamp}\"}"
-)
-Write(
-  file_path="$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.events.jsonl",
-  content="{\"ts\":\"{iso_timestamp}\",\"wf\":\"{workflow_uuid}\",\"event\":\"workflow_started\",\"host\":\"claude-code\",\"phase\":\"{build|debug|review|plan}\",\"task_id\":\"{parent_task_id}\",\"agent\":\"router\",\"decision\":\"start\",\"reason\":\"User request\"}\n"
-)
-```
-
-**Conditional — only if `## 0.` recorded a `project_root_resolution_fallback` reason for this
-session** (i.e. `TOPLEVEL_EXIT != 0` and the outcome was `NO_REPO_FOUND` or
-`RESOLVE_SCRIPT_ERROR`): append a second `status_history` entry and a second events.jsonl line
-alongside `workflow_started`, using the same `{workflow_uuid}`/`{iso_timestamp}` values as step
-3 above — `{"event":"project_root_resolution_fallback","ts":"{iso_timestamp}","reason":"NO_REPO_FOUND"|"RESOLVE_SCRIPT_ERROR"}`.
-If `## 0.` did not fall back (the common, single-repo case), skip this — there is nothing to
-append.
-
-**Conditional — only if `## 0.` step 1a set `WORKSPACE_WRITABLE_PATHS_JSON` to something other
-than the empty-array default** (i.e. `TOPLEVEL_EXIT != 0` in `## 0.` AND that variable is set and
-`!= '[]'`): substitute that JSON array value in place of the `workspace_writable_paths:[]`
-default in the artifact `Write` above, instead of leaving it as `[]`. If `## 0.` never ran step 1a
-(the common single-repo path), or step 1a ran but the array is empty, leave the default `[]` in
-place — no substitution needed.
-
-Additionally, if `WORKSPACE_WRITABLE_PATHS_DROPPED_JSON` from `## 0.` is non-empty, append a
-second `status_history` entry and a second `events.jsonl` line alongside `workflow_started` (same
-mechanics as the `project_root_resolution_fallback` conditional above) —
-`{"event":"workspace_writable_paths_entries_dropped","ts":"{iso_timestamp}","dropped":{WORKSPACE_WRITABLE_PATHS_DROPPED_JSON}}`.
-
-4. Immediately after artifact creation, initialize the per-workflow state directory:
-
-```text
-Bash("mkdir -p \"$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}\"")
-```
-
-This directory is where the memory-finalize task will write workflow-scoped
-memory (activeContext.md, patterns.md, progress.md for this workflow only).
-
-Only create child tasks after the v10 artifact and state directory exist.
+Only create child tasks after the v10 artifact and state directory exist (step 1 guarantees both). The `workflows/{workflow_uuid}/` directory is where the memory-finalize task writes workflow-scoped memory (activeContext.md, patterns.md, progress.md for this workflow only).
 
 ### BUILD task graph
 
@@ -897,9 +849,7 @@ as written today — no behavior change on that path.
 
 **Shared with Cursor — canonical text lives in
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
-"Explicit Dispatcher (Phase-to-Agent Table)" (Phase 3d of the hooks-as-bridge redesign,
-backlog item 8). `Read()` that file now if you have not already this session; it has the
-full phase→agent mapping.** Claude Code resolves each row via `Task()`/`TaskCreate()`
+"Explicit Dispatcher (Phase-to-Agent Table)" (full phase→agent mapping).** Claude Code resolves each row via `Task()`/`TaskCreate()`
 against a registered subagent type using the `craftflow:` name directly — no host-specific
 resolution step needed here, unlike Cursor's `## Agent File Paths` literal-path mapping.
 
@@ -925,8 +875,7 @@ waiting on this agent.
 
 **Shared with Cursor — canonical text lives in
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` § "Dispatch
-Prompt Scaffold" (Phase 3 of the hooks-as-bridge redesign, backlog item 8). `Read()` that
-file now if you have not already this session; it has the full field list (`## Task
+Prompt Scaffold" (full field list: `## Task
 Context` including the `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json`
 Workflow Artifact line, `## User Request`, `## Requirements`, `## Memory Summary`, `##
 Project Patterns`, `## Domain Context`, `## SKILL_HINTS`), and the optional-sections
@@ -989,8 +938,7 @@ Record the assigned effort in `telemetry.effort.{agent}` in the workflow artifac
 
 Shared with Cursor — canonical text lives in
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
-"Previous Agent Findings Handoff". `Read()` that file now if you have not already this
-session. DEBUG skips hunter findings.
+"Previous Agent Findings Handoff". DEBUG skips hunter findings.
 
 ### Doubt-Verify Dispatch Rule
 
@@ -1344,12 +1292,10 @@ Convergence rule:
 
 **Shared with Cursor — canonical text lives in
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
-"Skill-Distill Approval Flow" (Phase 3c of the hooks-as-bridge redesign, backlog item 8).
-`Read()` that file now if you have not already this session; it has the full flow: the
-four options (Approve / Approve + register in SKILL_HINTS / Reject / Defer), the exact
+"Skill-Distill Approval Flow" (the four options (Approve / Approve + register in SKILL_HINTS / Reject / Defer), the exact
 `craftflow_skill_promote.py`/`craftflow_skill_ledger.py` invocations, the non-matching-reply
 re-ask rule, the JUST_GO carve-out (never auto-Approve), and the `STATUS: SKIPPED`/
-`STATUS: FAIL` handling.** Claude Code needs no host-specific additions here — this gate
+`STATUS: FAIL` handling).** Claude Code needs no host-specific additions here — this gate
 is presented via `AskUserQuestion` exactly as the shared doc describes; unlike Cursor's
 `## 5a. Skill-Distill Gate`, no plain-text-chat fallback or `cursor-wf.json`
 `pending_skill_approval` bookkeeping is needed.
@@ -1509,7 +1455,7 @@ documented today for every agent type — no behavior change on that path.
 
 Shared with Cursor — canonical text lives in
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
-"Verifier Findings Handoff". `Read()` that file now if you have not already this session.
+"Verifier Findings Handoff".
 
 **Stale `true` capability — router's own native Task* call fails mid-session:** the fallback
 branches above are all gated on `capabilities.task_tools_available == false`.
@@ -1627,6 +1573,8 @@ Memory finalization permit (required before any `.md` memory write):
   ```
   Bash("rm -f \"$PROJECT_ROOT/.craftflow/state/.memory-finalize\"")
   ```
+- Permit create and clear must each be their own **standalone Bash** call. Folding the `printf ... > .memory-finalize` into a compound command (`&&`, `;`, a second line) is denied by the bash guard (`bash-write-protected-path`).
+- **Batch alternative (preferred for 2+ `--apply` calls):** write one JSON file `{"project_root","workflow_uuid","applies":[{"target","payload"}...]}` (payloads = the usual `--apply` payloads) and run `python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_memory_merge.py" --finalize <batch.json>`. The script creates the permit, applies every item, and clears the permit in a `finally` block, so no separate permit Bash calls are needed. Exit 1 means at least one item failed (others still applied); the permit is already cleared.
 - If workflow_uuid is unavailable (fallback path), omit the permit steps — the guard will audit-log but not block in that case.
 
 The memory task also:

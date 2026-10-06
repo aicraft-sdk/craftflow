@@ -1329,8 +1329,8 @@ def test_parent_workflow_creation_anchored_to_project_root() -> None:
         fail(name, "could not bound ### Parent workflow creation section")
         return
     section = content[start:end]
-    if 'file_path="$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json"' not in section:
-        fail(name, "anchored workflow artifact Write() not found")
+    if '--project "$PROJECT_ROOT"' not in section or "--init-artifact" not in section:
+        fail(name, "anchored --init-artifact call (--project \"$PROJECT_ROOT\") not found")
         return
     if 'file_path=".craftflow/state/workflows/{workflow_uuid}.json"' in section:
         fail(name, "bare unanchored workflow artifact Write() still present")
@@ -1359,11 +1359,8 @@ def test_parent_workflow_creation_fallback_reason_wired() -> None:
     if "RESOLVE_SCRIPT_ERROR" not in fallback_block:
         fail(name, "RESOLVE_SCRIPT_ERROR reason literal not found in fallback conditional block")
         return
-    if "{workflow_uuid}" not in fallback_block:
-        fail(name, "{workflow_uuid} templating not found in fallback conditional block")
-        return
-    if "{iso_timestamp}" not in fallback_block:
-        fail(name, "{iso_timestamp} templating not found in fallback conditional block")
+    if "--fallback-reason" not in fallback_block:
+        fail(name, "--fallback-reason flag not found in fallback conditional block")
         return
     ok(name)
 
@@ -1729,6 +1726,911 @@ def test_workflow_id_script_present() -> None:
         if marker not in content:
             fail(name, f"craftflow_workflow_id.py missing expected symbol: {marker!r}")
             return
+    ok(name)
+
+
+_WF_ID_SCRIPT = SCRIPTS / "craftflow_workflow_id.py"
+
+# Top-level keys of the v10 artifact (references/workflow-artifact-and-hook-policy.md
+# schema list + keys the router writes at creation).
+_WF_ARTIFACT_KEYS = {
+    "workflow_uuid", "workflow_id", "workflow_type", "session_id", "state_root", "user_request",
+    "plan_file", "design_file", "research_files", "approved_decisions", "plan_mode",
+    "verification_rigor", "proof_status", "plan_file_stem", "bakeoff_n", "bakeoff_n_requested",
+    "bakeoff_models", "bakeoff_triggered", "bakeoff_all_failed", "bakeoff_candidate_failures",
+    "traceability", "intent", "normalized_phases", "phase_cursor", "capabilities",
+    "research_rounds", "research_backend_history", "research_quality", "task_ids", "phase_status",
+    "results", "evidence", "telemetry", "quality", "planning_review_runs",
+    "planning_review_findings", "planning_review_status", "build_mode", "fast_path_risk_signals",
+    "fast_path_escalated", "worktree_mode", "worktree_path", "worktree_branch",
+    "workspace_writable_paths", "memory_notes", "pending_gate", "circuit_breaker",
+    "status_history", "remediation_history", "created_at", "updated_at",
+}
+
+
+def _wf_run(*args: str, env: dict | None = None):
+    full_env = dict(os.environ)
+    full_env.pop("CLAUDE_CODE_SESSION_ID", None)
+    full_env.update(env or {})
+    return subprocess.run(
+        [sys.executable, str(_WF_ID_SCRIPT), *args], capture_output=True, text=True, env=full_env
+    )
+
+
+def test_workflow_id_emit_env_is_shell_safe_key_values() -> None:
+    name = "workflow-id/emit-env-router-style-parse"
+    r = _wf_run("--request", "Fix the 'auth' bug; rm -rf $HOME", "--branch", "main", "--emit-env",
+                env={"CLAUDE_CODE_SESSION_ID": "0123abcd-4567"})
+    if r.returncode != 0:
+        fail(name, f"exit {r.returncode}: {r.stderr}")
+        return
+    parsed = {}
+    for line in r.stdout.splitlines():
+        key, _, value = line.partition("=")
+        parsed[key] = value
+    expected = {"workflow_uuid", "iso_timestamp", "worktree_dir", "worktree_branch", "session_id", "session_id_json"}
+    if set(parsed) != expected:
+        fail(name, f"keys {sorted(parsed)} != {sorted(expected)}")
+        return
+    if not parsed["workflow_uuid"].startswith("wf-") or parsed["worktree_branch"] != "wf-" + parsed["worktree_dir"]:
+        fail(name, f"inconsistent ids: {parsed}")
+        return
+    if parsed["session_id"] != "0123abcd-4567" or json.loads(parsed["session_id_json"]) != "0123abcd-4567":
+        fail(name, f"session fields wrong: {parsed}")
+        return
+    if "$" in parsed["workflow_uuid"] or ";" in parsed["workflow_uuid"]:
+        fail(name, "workflow_uuid not sanitized")
+        return
+    ok(name)
+
+
+def _wf_init(tmp: Path, *extra: str, env: dict | None = None):
+    try:
+        (tmp / ".craftflow").mkdir(exist_ok=True)  # the router's memory-load step creates it first
+    except OSError:
+        pass
+    return _wf_run(
+        "--request", "Cost optimization", "--branch", "main", "--project", str(tmp),
+        "--init-artifact", "--workflow-type", "BUILD", "--task-tools-available", "true",
+        "--phase", "build", *extra, env=env,
+    )
+
+
+def test_workflow_id_init_artifact_writes_schema_and_events() -> None:
+    name = "workflow-id/init-artifact-schema"
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        r = _wf_init(tmp, "--task-id", "7", env={"CLAUDE_CODE_SESSION_ID": "0123abcd-4567"})
+        if r.returncode != 0:
+            fail(name, f"exit {r.returncode}: {r.stderr}")
+            return
+        wf = r.stdout.strip().splitlines()[-1]
+        wf_dir = tmp / ".craftflow" / "state" / "workflows"
+        art = json.loads((wf_dir / f"{wf}.json").read_text(encoding="utf-8"))
+        if set(art) != _WF_ARTIFACT_KEYS:
+            fail(name, f"key diff: missing={sorted(_WF_ARTIFACT_KEYS - set(art))} extra={sorted(set(art) - _WF_ARTIFACT_KEYS)}")
+            return
+        if art["circuit_breaker"] != {"remfix_count": 0, "broken": False}:
+            fail(name, f"circuit_breaker wrong: {art['circuit_breaker']!r}")
+            return
+        checks = {
+            "workflow_uuid": wf, "workflow_id": wf, "workflow_type": "BUILD",
+            "session_id": "0123abcd-4567", "state_root": ".craftflow/state",
+            "user_request": "Cost optimization", "proof_status": "gaps_found",
+            "verification_rigor": "standard", "workspace_writable_paths": [],
+        }
+        for key, want in checks.items():
+            if art[key] != want:
+                fail(name, f"{key}={art[key]!r}, want {want!r}")
+                return
+        if art["capabilities"]["task_tools_available"] != "true" or art["capabilities"]["brightdata_available"] != "unknown":
+            fail(name, f"capabilities wrong: {art['capabilities']!r}")
+            return
+        hist = art["status_history"]
+        if len(hist) != 1 or hist[0]["event"] != "workflow_started" or hist[0]["phase"] != "build" \
+                or hist[0]["ts"] != art["created_at"] or art["created_at"] != art["updated_at"]:
+            fail(name, f"status_history/timestamps wrong: {hist!r}")
+            return
+        lines = (wf_dir / f"{wf}.events.jsonl").read_text(encoding="utf-8").splitlines()
+        if len(lines) != 1:
+            fail(name, f"expected 1 event line, got {len(lines)}")
+            return
+        ev = json.loads(lines[0])
+        want_ev = {
+            "ts": art["created_at"], "wf": wf, "event": "workflow_started", "host": "claude-code",
+            "phase": "build", "task_id": "7", "agent": "router", "decision": "start", "reason": "User request",
+        }
+        if ev != want_ev:
+            fail(name, f"event line wrong: {ev!r}")
+            return
+        if not (wf_dir / wf).is_dir():
+            fail(name, "workflows/{wf}/ directory not created")
+            return
+    ok(name)
+
+
+def test_workflow_id_init_artifact_optional_flags_and_null_session() -> None:
+    name = "workflow-id/init-artifact-optional-flags"
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        r = _wf_init(
+            tmp,
+            "--workspace-writable-paths-json", '["/ws/README.md"]',
+            "--fallback-reason", "NO_REPO_FOUND",
+            "--writable-paths-dropped-json", '["/ws/x"]',
+        )
+        if r.returncode != 0:
+            fail(name, f"exit {r.returncode}: {r.stderr}")
+            return
+        wf = r.stdout.strip().splitlines()[-1]
+        wf_dir = tmp / ".craftflow" / "state" / "workflows"
+        art = json.loads((wf_dir / f"{wf}.json").read_text(encoding="utf-8"))
+        if art["session_id"] is not None or art["workspace_writable_paths"] != ["/ws/README.md"]:
+            fail(name, f"session/paths wrong: {art['session_id']!r} {art['workspace_writable_paths']!r}")
+            return
+        events = [e["event"] for e in art["status_history"]]
+        if events != ["workflow_started", "project_root_resolution_fallback", "workspace_writable_paths_entries_dropped"]:
+            fail(name, f"status_history events wrong: {events}")
+            return
+        if art["status_history"][1]["reason"] != "NO_REPO_FOUND" or art["status_history"][2]["dropped"] != ["/ws/x"]:
+            fail(name, f"conditional entries wrong: {art['status_history']!r}")
+            return
+        ev_lines = [json.loads(x) for x in (wf_dir / f"{wf}.events.jsonl").read_text(encoding="utf-8").splitlines()]
+        if [e["event"] for e in ev_lines] != events:
+            fail(name, f"events.jsonl lines {[e['event'] for e in ev_lines]} != {events}")
+            return
+    ok(name)
+
+
+def test_workflow_id_init_artifact_refuses_overwrite_and_bad_flags() -> None:
+    name = "workflow-id/init-artifact-no-overwrite"
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        wf_dir = tmp / ".craftflow" / "state" / "workflows"
+        r = _wf_init(tmp)
+        wf = r.stdout.strip().splitlines()[-1]
+        before = (wf_dir / f"{wf}.json").read_text(encoding="utf-8")
+        # Force same id by pre-seeding: re-run the writer directly through the module.
+        sys.path.insert(0, str(SCRIPTS))
+        import craftflow_workflow_id as wid
+        info = {"workflow_uuid": wf, "iso_timestamp": "2026-01-01T00:00:00Z", "session_id_json": "null"}
+        try:
+            wid.init_artifact(tmp, info, workflow_type="BUILD", request="x", phase="build",
+                              task_tools_available="true")
+        except FileExistsError:
+            pass
+        else:
+            fail(name, "init_artifact overwrote an existing artifact")
+            return
+        if (wf_dir / f"{wf}.json").read_text(encoding="utf-8") != before:
+            fail(name, "existing artifact modified")
+            return
+        bad = _wf_init(tmp, "--workspace-writable-paths-json", "{not json")
+        if bad.returncode == 0:
+            fail(name, "malformed --workspace-writable-paths-json accepted")
+            return
+        r2 = _wf_run("--request", "x", "--branch", "main", "--project", str(tmp), "--init-artifact",
+                     "--workflow-type", "BUILD", "--task-tools-available", "maybe", "--phase", "build")
+        if r2.returncode == 0:
+            fail(name, "invalid --task-tools-available accepted")
+            return
+    ok(name)
+
+
+def test_workflow_id_init_artifact_with_emit_env_one_call() -> None:
+    name = "workflow-id/init-artifact-with-emit-env-one-call"
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        r = _wf_init(tmp, "--emit-env")
+        if r.returncode != 0:
+            fail(name, f"exit {r.returncode}: {r.stderr}")
+            return
+        env = {}
+        for line in r.stdout.splitlines():
+            key, _, value = line.partition("=")
+            env[key] = value
+        wf = env.get("workflow_uuid", "")
+        if not (tmp / ".craftflow/state/workflows" / f"{wf}.json").is_file():
+            fail(name, f"artifact for emitted id {wf!r} not written")
+            return
+        art = json.loads((tmp / ".craftflow/state/workflows" / f"{wf}.json").read_text(encoding="utf-8"))
+        if art["created_at"] != env["iso_timestamp"]:
+            fail(name, "emitted iso_timestamp differs from artifact created_at")
+            return
+    ok(name)
+
+
+def test_memory_merge_finalize_batch_applies_and_clears_permit() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, t1 = _apply_seed(base, permit=None)
+        wf_target = proj / ".craftflow/state/workflows/wf-test/patterns.md"
+        wf_target.parent.mkdir(parents=True)
+        wf_target.write_text(_APPLY_GOTCHAS, encoding="utf-8")
+        batch = {
+            "project_root": str(proj),
+            "workflow_uuid": "wf-test",
+            "applies": [
+                {"target": str(t1), "payload": _apply_payload()},
+                {"target": str(wf_target), "payload": _apply_payload(archive=None, max_bullets=10)},
+            ],
+        }
+        bf = base / "batch.json"
+        bf.write_text(json.dumps(batch), encoding="utf-8")
+        r = _apply_run(None, "", argv=["--finalize", str(bf)])
+        if r.returncode != 0:
+            fail(name, f"exit {r.returncode}: {r.stderr}")
+            return
+        if "g4" not in t1.read_text(encoding="utf-8") or "g4" not in wf_target.read_text(encoding="utf-8"):
+            fail(name, "payloads not applied to both targets")
+            return
+        if (proj / ".craftflow/state/.memory-finalize").exists():
+            fail(name, "permit not cleared after success")
+            return
+    _apply_case("memory-merge/finalize-batch-applies-and-clears-permit", body)
+
+
+def test_memory_merge_finalize_clears_permit_on_failure_and_reports() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, t1 = _apply_seed(base, permit=None)
+        before = t1.read_text(encoding="utf-8")
+        batch = {
+            "project_root": str(proj),
+            "workflow_uuid": "wf-test",
+            "applies": [
+                {"target": str(proj / ".craftflow/state/project/progress.md"), "payload": _apply_payload()},
+                {"target": str(t1), "payload": _apply_payload(section="Common Gotchas")},
+            ],
+        }
+        bf = base / "batch.json"
+        bf.write_text(json.dumps(batch), encoding="utf-8")
+        r = _apply_run(None, "", argv=["--finalize", str(bf)])
+        if r.returncode == 0:
+            fail(name, "missing target must yield non-zero exit")
+            return
+        if (proj / ".craftflow/state/.memory-finalize").exists():
+            fail(name, "permit not cleared after failure")
+            return
+        if "g4" not in t1.read_text(encoding="utf-8") or t1.read_text(encoding="utf-8") == before:
+            fail(name, "valid item after a failed item was not applied")
+            return
+    _apply_case("memory-merge/finalize-clears-permit-on-failure", body)
+
+
+def test_memory_merge_finalize_rejects_bad_batches() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, t1 = _apply_seed(base, permit=None)
+        other_root = base / "other"
+        other_root.mkdir()
+        cases = {
+            "bad workflow id": {"project_root": str(proj), "workflow_uuid": "../x", "applies": []},
+            "missing applies": {"project_root": str(proj), "workflow_uuid": "wf-test"},
+            "root not dir": {"project_root": str(proj / "nope"), "workflow_uuid": "wf-test", "applies": []},
+            "target outside root": {
+                "project_root": str(other_root), "workflow_uuid": "wf-test",
+                "applies": [{"target": str(t1), "payload": _apply_payload()}],
+            },
+        }
+        for label, batch in cases.items():
+            bf = base / "b.json"
+            bf.write_text(json.dumps(batch), encoding="utf-8")
+            r = _apply_run(None, "", argv=["--finalize", str(bf)])
+            if r.returncode == 0:
+                fail(name, f"{label}: expected non-zero exit")
+                return
+            if (proj / ".craftflow/state/.memory-finalize").exists() or (other_root / ".craftflow/state/.memory-finalize").exists():
+                fail(name, f"{label}: permit left behind")
+                return
+        if "g4" in t1.read_text(encoding="utf-8"):
+            fail(name, "target modified by rejected batch")
+            return
+    _apply_case("memory-merge/finalize-rejects-bad-batches", body)
+
+
+def test_memory_finalize_permit_standalone_documented() -> None:
+    name = "router/memory-finalize-permit-standalone-documented"
+    content = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    for marker in ("standalone Bash", "--finalize"):
+        if marker not in content:
+            fail(name, f"SKILL.md missing {marker!r} guidance for the .memory-finalize permit")
+            return
+    ok(name)
+
+
+def test_router_one_call_minting_documented() -> None:
+    name = "router/one-call-workflow-minting-documented"
+    content = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    start = content.find("### Parent workflow creation")
+    end = content.find("\n### BUILD task graph", start)
+    section = content[start:end]
+    for marker in ("--emit-env", "--init-artifact"):
+        if marker not in section:
+            fail(name, f"### Parent workflow creation missing {marker!r}")
+            return
+    if '\\"workflow_uuid\\":' in section:
+        fail(name, "inline artifact JSON literal still present")
+        return
+    ok(name)
+
+
+def test_workflow_id_init_artifact_unwritable_project_fails_cleanly() -> None:
+    name = "workflow-id/init-artifact-unwritable-project-fails-cleanly"
+    with tempfile.TemporaryDirectory() as td:
+        blocker = Path(td) / "a-file"
+        blocker.write_text("x", encoding="utf-8")
+        r = _wf_init(blocker / "sub")
+        if r.returncode != 1 or r.stdout != "":
+            fail(name, f"expected exit 1 with empty stdout, got {r.returncode} / {r.stdout!r}")
+            return
+        if "Traceback" in r.stderr or not r.stderr.startswith("Error:"):
+            fail(name, f"expected a clean 'Error:' stderr, got {r.stderr!r}")
+            return
+    ok(name)
+
+
+def _wf_info(wf: str = "wf-atomic-20260101-000000-aaaaaaaa") -> dict:
+    return {"workflow_uuid": wf, "iso_timestamp": "2026-01-01T00:00:00Z", "session_id_json": "null"}
+
+
+def test_workflow_id_init_artifact_stale_events_leaves_no_orphan_and_retries() -> None:
+    name = "workflow-id/init-artifact-stale-events-no-orphan"
+    sys.path.insert(0, str(SCRIPTS))
+    import craftflow_workflow_id as wid
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        wf_dir = tmp / ".craftflow" / "state" / "workflows"
+        wf_dir.mkdir(parents=True)
+        info = _wf_info()
+        wf = info["workflow_uuid"]
+        (wf_dir / f"{wf}.events.jsonl").write_text("stale\n", encoding="utf-8")
+        kwargs = dict(workflow_type="BUILD", request="x", phase="build", task_tools_available="true")
+        try:
+            wid.init_artifact(tmp, info, **kwargs)
+        except FileExistsError as exc:
+            if not str(exc.filename).endswith(".events.jsonl"):
+                fail(name, f"error must name the events file, got filename={exc.filename!r}")
+                return
+        else:
+            fail(name, "stale events file must make init_artifact fail")
+            return
+        if (wf_dir / f"{wf}.json").exists():
+            fail(name, "orphan artifact left behind after events conflict")
+            return
+        if (wf_dir / f"{wf}.events.jsonl").read_text(encoding="utf-8") != "stale\n":
+            fail(name, "pre-existing events file must not be modified")
+            return
+        (wf_dir / f"{wf}.events.jsonl").unlink()
+        wid.init_artifact(tmp, info, **kwargs)
+        if not (wf_dir / f"{wf}.json").is_file() or not (wf_dir / f"{wf}.events.jsonl").is_file():
+            fail(name, "retry after cleanup must succeed")
+            return
+    ok(name)
+
+
+def test_workflow_id_init_artifact_removes_own_files_on_late_failure() -> None:
+    name = "workflow-id/init-artifact-rolls-back-on-late-failure"
+    sys.path.insert(0, str(SCRIPTS))
+    import craftflow_workflow_id as wid
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        wf_dir = tmp / ".craftflow" / "state" / "workflows"
+        wf_dir.mkdir(parents=True)
+        info = _wf_info()
+        wf = info["workflow_uuid"]
+        (wf_dir / wf).write_text("i am a file where the state dir must go", encoding="utf-8")
+        try:
+            wid.init_artifact(tmp, info, workflow_type="BUILD", request="x", phase="build",
+                              task_tools_available="true")
+        except OSError:
+            pass
+        else:
+            fail(name, "blocked state dir must make init_artifact fail")
+            return
+        if (wf_dir / f"{wf}.json").exists() or (wf_dir / f"{wf}.events.jsonl").exists():
+            fail(name, "files created by the failed call were not removed")
+            return
+    ok(name)
+
+
+def test_workflow_id_cli_reports_the_actual_conflicting_file() -> None:
+    name = "workflow-id/cli-error-names-conflicting-file"
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        wf_dir = tmp / ".craftflow" / "state" / "workflows"
+        wf_dir.mkdir(parents=True)
+        r = _wf_run("--request", "x", "--branch", "main", "--project", str(tmp), "--emit-env")
+        wf = [ln for ln in r.stdout.splitlines() if ln.startswith("workflow_uuid=")][0].split("=", 1)[1]
+        # An events file for a (different) future id cannot be pre-seeded deterministically, so
+        # pin the message format through the module: artifact-vs-events accuracy.
+        sys.path.insert(0, str(SCRIPTS))
+        import craftflow_workflow_id as wid
+        info = _wf_info(wf)
+        (wf_dir / f"{wf}.events.jsonl").write_text("stale\n", encoding="utf-8")
+        try:
+            wid.init_artifact(tmp, info, workflow_type="BUILD", request="x", phase="build",
+                              task_tools_available="true")
+        except FileExistsError as exc:
+            msg = wid.describe_init_error(exc)
+            if ".events.jsonl" not in msg or "existing artifact" in msg:
+                fail(name, f"message must name the events file, not the artifact: {msg!r}")
+                return
+        else:
+            fail(name, "expected FileExistsError")
+            return
+    ok(name)
+
+
+def test_workflow_id_request_file_and_stdin_preserve_hostile_text() -> None:
+    name = "workflow-id/request-file-and-stdin"
+    hostile = "fix it's \"broken\" $(touch pwned) `id` ; echo $HOME\nsecond line"
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        rf = tmp / "req.txt"
+        rf.write_text(hostile + "\n", encoding="utf-8")
+        for label, args, stdin in (("file", ["--request-file", str(rf)], None), ("stdin", ["--request-file", "-"], hostile + "\n")):
+            proj = tmp / label
+            (proj / ".craftflow").mkdir(parents=True)
+            full = [sys.executable, str(_WF_ID_SCRIPT), *args, "--branch", "main", "--project", str(proj),
+                    "--init-artifact", "--workflow-type", "BUILD", "--task-tools-available", "true",
+                    "--phase", "build", "--emit-env"]
+            r = subprocess.run(full, input=stdin, capture_output=True, text=True)
+            if r.returncode != 0:
+                fail(name, f"{label}: exit {r.returncode}: {r.stderr}")
+                return
+            wf = [ln for ln in r.stdout.splitlines() if ln.startswith("workflow_uuid=")][0].split("=", 1)[1]
+            art = json.loads((proj / ".craftflow/state/workflows" / f"{wf}.json").read_text(encoding="utf-8"))
+            if art["user_request"] != hostile:
+                fail(name, f"{label}: request not preserved byte-for-byte: {art['user_request']!r}")
+                return
+        if (Path.cwd() / "pwned").exists():
+            fail(name, "request text was executed")
+            return
+        both = _wf_run("--request", "a", "--request-file", str(rf), "--branch", "main")
+        if both.returncode == 0:
+            fail(name, "--request together with --request-file must be rejected")
+            return
+        missing = _wf_run("--request-file", str(tmp / "nope.txt"), "--branch", "main")
+        if missing.returncode != 1 or "Traceback" in missing.stderr:
+            fail(name, f"unreadable request file must exit 1 cleanly: {missing.returncode} {missing.stderr!r}")
+            return
+    ok(name)
+
+
+def test_resolve_workspace_root_accepts_request_file() -> None:
+    name = "resolve-workspace-root/request-file"
+    script = SCRIPTS / "craftflow_resolve_workspace_root.py"
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        rf = tmp / "req.txt"
+        rf.write_text("touch $(pwned) it's\n", encoding="utf-8")
+        r = subprocess.run([sys.executable, str(script), "--cwd", str(tmp), "--request-file", str(rf)],
+                           capture_output=True, text=True)
+        if r.returncode != 0 or json.loads(r.stdout).get("outcome") != "NO_REPO_FOUND":
+            fail(name, f"expected NO_REPO_FOUND via --request-file: {r.returncode} {r.stdout!r} {r.stderr!r}")
+            return
+        r2 = subprocess.run([sys.executable, str(script), "--cwd", str(tmp), "--request-file", "-"],
+                            input="x\n", capture_output=True, text=True)
+        if r2.returncode != 0:
+            fail(name, f"stdin request failed: {r2.stderr!r}")
+            return
+    ok(name)
+
+
+def test_router_snippets_avoid_llm_quoted_requests_and_eval() -> None:
+    name = "router/snippets-use-request-file-no-eval"
+    skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    shared = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md").read_text(encoding="utf-8")
+    for label, text in (("SKILL.md", skill), ("router-protocol.md", shared)):
+        if "USER_REQUEST_SHELL_ESCAPED" in text:
+            fail(name, f"{label} still passes the request as an LLM-quoted shell string")
+            return
+        if "--request-file" not in text:
+            fail(name, f"{label} must pass the request via --request-file")
+            return
+    start = skill.find("### Parent workflow creation")
+    section = skill[start: skill.find("\n### BUILD task graph", start)]
+    if 'eval "' in section:
+        fail(name, "eval of helper output is denied by the safe-shell guard; read the KEY=value lines instead")
+        return
+    for marker in ("exits non-zero", "workflow_uuid=", "STOP"):
+        if marker not in section:
+            fail(name, f"Parent workflow creation must state the mint-failure stop rule ({marker!r} missing)")
+            return
+    ok(name)
+
+
+def test_router_mint_command_passes_safe_shell_guard() -> None:
+    name = "router/mint-command-passes-safe-shell-guard"
+    skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    start = skill.find("### Parent workflow creation")
+    section = skill[start: skill.find("\n### BUILD task graph", start)]
+    blocks = [chunk.split("```", 1)[0] for chunk in section.split("```bash")[1:]]
+    if len(blocks) < 2:
+        fail(name, "expected the session-id and mint bash blocks")
+        return
+    commands = [c.strip() for blk in blocks for c in re.split(r"\n(?=[A-Za-z])", blk) if c.strip()]
+    for command in commands:
+        for script in ("craftflow_safe_shell_guard.py", "craftflow_pretooluse_bash_guard.py"):
+            env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+            payload = {"tool_name": "Bash", "cwd": str(PLUGIN_ROOT), "tool_input": {"command": command}}
+            _, out = run_hook(script, payload, env)
+            if "deny" in out:
+                fail(name, f"{script} denies documented command {command[:80]!r}: {out[:160]!r}")
+                return
+    ok(name)
+
+
+def test_memory_merge_finalize_rejects_empty_applies_and_symlinked_permit() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, t1 = _apply_seed(base, permit=None)
+        bf = base / "b.json"
+        bf.write_text(json.dumps({"project_root": str(proj), "workflow_uuid": "wf-test", "applies": []}), encoding="utf-8")
+        r = _apply_run(None, "", argv=["--finalize", str(bf)])
+        if r.returncode != 1 or "applies" not in r.stderr:
+            fail(name, f"empty applies must exit 1 naming 'applies': {r.returncode} {r.stderr!r}")
+            return
+        if (proj / ".craftflow/state/.memory-finalize").exists():
+            fail(name, "permit created for an empty batch")
+            return
+        decoy = base / "decoy"
+        decoy.write_text("wf-test", encoding="utf-8")
+        (proj / ".craftflow/state/.memory-finalize").symlink_to(decoy)
+        bf.write_text(json.dumps({"project_root": str(proj), "workflow_uuid": "wf-test",
+                                  "applies": [{"target": str(t1), "payload": _apply_payload()}]}), encoding="utf-8")
+        r = _apply_run(None, "", argv=["--finalize", str(bf)])
+        if r.returncode != 1 or "g4" in t1.read_text(encoding="utf-8"):
+            fail(name, "symlinked permit must be refused without applying anything")
+            return
+        if decoy.read_text(encoding="utf-8") != "wf-test":
+            fail(name, "symlink target was modified")
+            return
+    _apply_case("memory-merge/finalize-rejects-empty-applies-and-symlinked-permit", body)
+
+
+def test_memory_merge_finalize_reports_counts_and_survives_item_exception() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, t1 = _apply_seed(base, permit=None)
+        t2 = proj / ".craftflow/state/workflows/wf-test/patterns.md"
+        t2.parent.mkdir(parents=True)
+        t2.write_text(_APPLY_GOTCHAS, encoding="utf-8")
+        bf = base / "b.json"
+        bf.write_text(json.dumps({"project_root": str(proj), "workflow_uuid": "wf-test", "applies": [
+            {"target": str(t1), "payload": _apply_payload()},
+            {"target": str(t2), "payload": _apply_payload(archive=None, max_bullets=10)},
+        ]}), encoding="utf-8")
+        # Run in-process with the first item raising an unexpected exception.
+        real = memory_merge._apply_to_file
+        calls = []
+
+        def flaky(target, raw):
+            calls.append(target)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            return real(target, raw)
+
+        memory_merge._apply_to_file = flaky
+        import io
+        import contextlib
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+                rc = memory_merge._finalize_batch(str(bf))
+        finally:
+            memory_merge._apply_to_file = real
+        if rc != 1 or "g4" not in t2.read_text(encoding="utf-8"):
+            fail(name, f"remaining items must still apply after an exception (rc={rc})")
+            return
+        if f"applied 1/2; failed: {t1}" not in buf.getvalue():
+            fail(name, f"summary line missing/wrong: {buf.getvalue()!r}")
+            return
+        if (proj / ".craftflow/state/.memory-finalize").exists():
+            fail(name, "permit not cleared")
+            return
+        # Success path summary via CLI.
+        t1.write_text(_APPLY_GOTCHAS, encoding="utf-8")
+        r = _apply_run(None, "", argv=["--finalize", str(bf)])
+        if r.returncode != 0 or "applied 2/2; failed: none" not in r.stdout:
+            fail(name, f"success summary wrong: {r.returncode} {r.stdout!r}")
+            return
+    _apply_case("memory-merge/finalize-summary-and-exception-isolation", body)
+
+
+def _digest_mod():
+    sys.path.insert(0, str(SCRIPTS))
+    import craftflow_state_digest as sd
+    return sd
+
+
+def test_state_digest_marks_dropped_bullets_and_truncated_unreadable_constitution() -> None:
+    name = "state-digest/more-markers-and-constitution-status"
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td) / "repo"
+        base = root / ".craftflow/state/project"
+        base.mkdir(parents=True)
+        (base / "activeContext.md").write_text(
+            "## Decisions\n" + "".join(f"- d{i}\n" for i in range(5)) + "\n## Current Focus\nf\n", encoding="utf-8")
+        (base / "constitution.md").write_text("MUST " + "y" * 900, encoding="utf-8")
+        out = _digest_mod().build_digest(root, None, None)
+        if "(+3 more)" not in out:
+            fail(name, "section with 5 bullets must show '(+3 more)' when only 2 are kept")
+            return
+        if "### project/constitution.md [OK, truncated]" not in out:
+            fail(name, "oversized constitution must be marked truncated")
+            return
+        (base / "constitution.md").unlink()
+        (base / "constitution.md").mkdir()
+        out = _digest_mod().build_digest(root, None, None)
+        if "### project/constitution.md [UNREADABLE]" not in out:
+            fail(name, "unreadable constitution must be flagged, not silently dropped")
+            return
+    ok(name)
+
+
+def test_state_digest_truncation_keeps_missing_sections_and_names_dropped() -> None:
+    name = "state-digest/truncation-names-dropped-keeps-missing-sections"
+    sd = _digest_mod()
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td) / "repo"
+        ws = Path(td) / "ws"
+        for base in (root / ".craftflow/state/project", ws / ".craftflow/state/workspace",
+                     root / ".craftflow/state/workflows/wf-1"):
+            base.mkdir(parents=True)
+            (base / "activeContext.md").write_text(
+                "## Current Focus\n" + "".join(f"- focus {i} " + "z" * 100 + "\n" for i in range(4)), encoding="utf-8")
+        old = sd.DIGEST_MAX_CHARS
+        sd.DIGEST_MAX_CHARS = 1300
+        try:
+            out = sd.build_digest(root, ws, "wf-1")
+        finally:
+            sd.DIGEST_MAX_CHARS = old
+    if out.count("MISSING_SECTIONS:") != 3:
+        fail(name, f"all 3 MISSING_SECTIONS lines must survive truncation, got {out.count('MISSING_SECTIONS:')}")
+        return
+    if "digest truncated" not in out or "workflows/wf-1/activeContext.md" not in out.split("digest truncated", 1)[1]:
+        fail(name, "truncation must name the dropped tier/file bodies")
+        return
+    if "## Memory Summary" not in out or "## Project Patterns" not in out:
+        fail(name, "summary tail lost")
+        return
+    ok(name)
+
+
+def test_state_query_digest_validates_project_root_and_workflow_uuid() -> None:
+    name = "state-query/digest/validates-root-and-workflow-uuid"
+    with tempfile.TemporaryDirectory() as td:
+        bare = Path(td) / "bare"
+        bare.mkdir()
+        r = _run_digest("--project-root", str(bare))
+        if r.returncode != 1 or "ERROR: project-root not found" not in r.stderr + r.stdout:
+            fail(name, f"project-root without .craftflow must fail: {r.returncode} {r.stderr!r}")
+            return
+        good = Path(td) / "good"
+        (good / ".craftflow/state/project").mkdir(parents=True)
+        for bad in ("../../etc", "x y", "notwf-1", "wf-"):
+            r = _run_digest("--project-root", str(good), "--workflow-uuid", bad)
+            if r.returncode != 1 or "workflow-uuid" not in r.stderr:
+                fail(name, f"invalid --workflow-uuid {bad!r} must exit 1: {r.returncode} {r.stderr!r}")
+                return
+        r = _run_digest("--project-root", str(good), "--workflow-uuid", "wf-ok-1")
+        if r.returncode != 0:
+            fail(name, f"valid uuid rejected: {r.stderr!r}")
+            return
+    ok(name)
+
+
+def test_state_digest_required_sections_match_router_protocol_table() -> None:
+    name = "state-digest/required-sections-match-router-protocol"
+    shared = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md").read_text(encoding="utf-8")
+    parsed: dict[str, tuple[str, ...]] = {}
+    for line in shared.splitlines():
+        m = re.match(r"\|\s*`(activeContext\.md|progress\.md|patterns\.md)`\s*\|(.*)\|\s*$", line)
+        if m:
+            parsed[m.group(1)] = tuple(re.findall(r"`## ([^`]+)`", m.group(2)))
+    if parsed != _digest_mod().REQUIRED_SECTIONS:
+        fail(name, f"digest REQUIRED_SECTIONS drifted from router-protocol table: {parsed!r}")
+        return
+    ok(name)
+
+
+def test_router_memory_load_documents_digest_reread_rule() -> None:
+    name = "router/memory-load-digest-reread-rule"
+    skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    start = skill.find("## 2. Memory Load And Template Validation")
+    section = skill[start: skill.find("\n## 3.", start)]
+    for marker in ("--mode full", "(omitted for size", "(+N more)", "Decisions"):
+        if marker not in section:
+            fail(name, f"## 2 re-read rule missing {marker!r}")
+            return
+    ok(name)
+
+
+def test_workflow_id_rejects_empty_request() -> None:
+    name = "workflow-id/rejects-empty-request"
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        blank = tmp / "blank.txt"
+        blank.write_text("  \n\n", encoding="utf-8")
+        for args in (["--request", "   "], ["--request", ""], ["--request-file", str(blank)]):
+            r = _wf_run(*args, "--branch", "main")
+            if r.returncode != 1 or r.stdout != "" or not r.stderr.startswith("Error:"):
+                fail(name, f"{args}: expected clean exit 1, got {r.returncode} {r.stdout!r} {r.stderr!r}")
+                return
+    ok(name)
+
+
+def test_workflow_id_init_requires_existing_craftflow_dir_and_creates_nothing() -> None:
+    name = "workflow-id/init-requires-craftflow-dir"
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        r = _wf_run("--request", "x", "--branch", "main", "--project", str(tmp), "--init-artifact",
+                    "--workflow-type", "BUILD", "--task-tools-available", "true", "--phase", "build")
+        if r.returncode != 1 or r.stdout != "" or not r.stderr.startswith("Error:"):
+            fail(name, f"expected exit 1 / empty stdout / Error:, got {r.returncode} {r.stdout!r} {r.stderr!r}")
+            return
+        if list(tmp.iterdir()):
+            fail(name, f"nothing may be created in a project without .craftflow: {list(tmp.iterdir())}")
+            return
+        (tmp / ".craftflow").mkdir()
+        r = _wf_init(tmp)
+        if r.returncode != 0 or not (tmp / ".craftflow/state/workflows").is_dir():
+            fail(name, f"existing .craftflow must work and get state/workflows created: {r.stderr!r}")
+            return
+    ok(name)
+
+
+def test_workflow_id_reports_incomplete_rollback() -> None:
+    name = "workflow-id/reports-incomplete-rollback"
+    sys.path.insert(0, str(SCRIPTS))
+    import craftflow_workflow_id as wid
+    from unittest import mock
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        wf_dir = tmp / ".craftflow" / "state" / "workflows"
+        wf_dir.mkdir(parents=True)
+        info = _wf_info()
+        wf = info["workflow_uuid"]
+        (wf_dir / wf).write_text("blocker", encoding="utf-8")
+        real_unlink = Path.unlink
+
+        def stubborn(self, *a, **k):
+            if self.name.endswith(".events.jsonl"):
+                raise PermissionError(13, "Permission denied", str(self))
+            return real_unlink(self, *a, **k)
+
+        with mock.patch.object(Path, "unlink", stubborn):
+            try:
+                wid.init_artifact(tmp, info, workflow_type="BUILD", request="x", phase="build",
+                                  task_tools_available="true")
+            except OSError as exc:
+                msg = wid.describe_init_error(exc)
+            else:
+                fail(name, "expected failure")
+                return
+        if "rollback incomplete:" not in msg or f"{wf}.events.jsonl" not in msg:
+            fail(name, f"message must name the file left behind: {msg!r}")
+            return
+    ok(name)
+
+
+def test_workflow_id_request_file_is_consumed_fresh_and_pattern_scoped() -> None:
+    name = "workflow-id/request-file-consumed-fresh-pattern-scoped"
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        state = tmp / ".craftflow" / "state"
+        state.mkdir(parents=True)
+
+        def mint(path: Path):
+            return _wf_run("--request-file", str(path), "--branch", "main", "--project", str(tmp),
+                           "--init-artifact", "--workflow-type", "BUILD", "--task-tools-available", "true",
+                           "--phase", "build", "--emit-env")
+
+        fresh = state / ".router-request-sess1234.txt"
+        fresh.write_text("fresh request\n", encoding="utf-8")
+        r = mint(fresh)
+        if r.returncode != 0 or fresh.exists():
+            fail(name, f"matching request file under .craftflow/state must be unlinked after a mint: {r.returncode} {r.stderr!r}")
+            return
+        keep = tmp / "req.txt"
+        keep.write_text("keep me\n", encoding="utf-8")
+        elsewhere = tmp / ".router-request-sess1234.txt"
+        elsewhere.write_text("outside state dir\n", encoding="utf-8")
+        for f in (keep, elsewhere):
+            if mint(f).returncode != 0 or not f.exists():
+                fail(name, f"{f.name} must NOT be deleted (not under .craftflow/state with the router pattern)")
+                return
+        stale = state / ".router-request-sess9999.txt"
+        stale.write_text("foreign stale request\n", encoding="utf-8")
+        old = time.time() - 600
+        os.utime(stale, (old, old))
+        before = sorted(p.name for p in (state / "workflows").glob("*.json"))
+        r = mint(stale)
+        after = sorted(p.name for p in (state / "workflows").glob("*.json"))
+        if r.returncode != 1 or "stale" not in r.stderr or before != after:
+            fail(name, f"stale router request file must be rejected without minting: {r.returncode} {r.stderr!r}")
+            return
+        if not stale.exists():
+            fail(name, "rejected stale file must be left for the operator, not silently deleted")
+            return
+    ok(name)
+
+
+def test_router_request_paths_are_write_guard_safe() -> None:
+    name = "router/request-paths-write-guard-safe"
+    sid = "5e442470-7daf-40a2-9be9-2ef81b53a205"
+    with tempfile.TemporaryDirectory() as td:
+        nonrepo = Path(td).resolve() / "ws"
+        nonrepo.mkdir()
+        repo = Path(td).resolve() / "repo"
+        (repo / ".craftflow" / "state").mkdir(parents=True)
+        env = {"CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+
+        def decision(cwd: Path, path: Path) -> str:
+            payload = {"tool_name": "Write", "cwd": str(cwd), "session_id": sid,
+                       "tool_input": {"file_path": str(path), "content": "x"}}
+            _, out = run_hook("craftflow_pretooluse_guard.py", payload, {**env, "CLAUDE_PROJECT_DIR": str(cwd)})
+            return "deny" if '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out else "allow"
+
+        if decision(nonrepo, Path("/tmp") / "cf-request.txt") != "deny":
+            fail(name, "premise changed: /tmp is no longer denied from a non-repo cwd; revisit the doc choice")
+            return
+        if decision(repo, repo / ".craftflow" / "state" / f".router-request-{sid}.txt") != "allow":
+            fail(name, "SKILL.md request path (.craftflow/state/.router-request-{session_id}.txt) is denied by the Write guard")
+            return
+        scratch = hooklib.session_scratchpad_dir(sid, nonrepo)
+        if scratch is not None and decision(nonrepo, scratch / "cf-request.txt") != "allow":
+            fail(name, f"session scratchpad request path {scratch} is denied by the Write guard")
+            return
+    skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    shared = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md").read_text(encoding="utf-8")
+    if "TMPDIR" in shared or "/tmp/cf-request" in shared or "scratchpad" not in shared:
+        fail(name, "router-protocol 1a must use the session scratchpad dir, not TMPDIR or /tmp")
+        return
+    if ".router-request-{session_id}.txt" not in skill or "--session-id" not in skill:
+        fail(name, "SKILL.md must use a per-session request file named via craftflow_workflow_id.py --session-id")
+        return
+    ok(name)
+
+
+def test_memory_merge_finalize_keeps_a_preexisting_identical_permit() -> None:
+    def body(base: Path, name: str) -> None:
+        proj, t1 = _apply_seed(base, permit="wf-test")
+        permit = proj / ".craftflow/state/.memory-finalize"
+        bf = base / "b.json"
+        bf.write_text(json.dumps({"project_root": str(proj), "workflow_uuid": "wf-test",
+                                  "applies": [{"target": str(t1), "payload": _apply_payload()}]}), encoding="utf-8")
+        r = _apply_run(None, "", argv=["--finalize", str(bf)])
+        if r.returncode != 0 or "g4" not in t1.read_text(encoding="utf-8"):
+            fail(name, f"finalize with a pre-existing identical permit must still apply: {r.stderr!r}")
+            return
+        if not permit.exists() or permit.read_text(encoding="utf-8") != "wf-test":
+            fail(name, "a permit that existed before --finalize must be left in place")
+            return
+    _apply_case("memory-merge/finalize-keeps-preexisting-permit", body)
+
+
+def test_state_digest_header_is_first_line_and_survives_truncation() -> None:
+    name = "state-digest/header-first-line-and-survives-truncation"
+    sd = _digest_mod()
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td) / "repo"
+        base = root / ".craftflow/state/project"
+        base.mkdir(parents=True)
+        (base / "activeContext.md").write_text(
+            "## Decisions\n- d1\n\n## Current Focus\n" + "".join(f"- f{i} " + "z" * 100 + "\n" for i in range(4)),
+            encoding="utf-8")
+        normal = sd.build_digest(root, None, None)
+        old = sd.DIGEST_MAX_CHARS
+        sd.DIGEST_MAX_CHARS = 600
+        try:
+            truncated = sd.build_digest(root, None, None)
+        finally:
+            sd.DIGEST_MAX_CHARS = old
+    for label, out in (("normal", normal), ("truncated", truncated)):
+        if not out.startswith("# craftflow state digest"):
+            fail(name, f"{label}: first line must be the digest header, got {out.splitlines()[0]!r}")
+            return
+    if "digest truncated" not in truncated:
+        fail(name, "premise: the small limit must actually truncate")
+        return
     ok(name)
 
 
@@ -16932,16 +17834,13 @@ def test_router_template_stamps_session_id(tmp_dir: Path) -> None:
     name = "stop-gate/router-template-stamps-session-id"
     skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
     policy = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "workflow-artifact-and-hook-policy.md").read_text(encoding="utf-8")
-    # The artifact template is a JSON string literal inside SKILL.md, so its quotes are backslash-escaped.
-    template = skill.replace('\\"', '"')
-    if '"workflow_type":"{WORKFLOW}","session_id":{session_id_json},' not in template:
-        fail(name, "artifact template must paste the helper's session_id_json fragment directly after workflow_type")
+    # The artifact is now written by `craftflow_workflow_id.py --init-artifact`; the helper stamps session_id.
+    helper = (SCRIPTS / "craftflow_workflow_id.py").read_text(encoding="utf-8")
+    if '"session_id": session_id,' not in helper:
+        fail(name, "helper's build_artifact must stamp session_id from the minted info")
         return
-    if "session_id_json=$(printf '%s' \"$WF_INFO\"" not in skill:
-        fail(name, "router parse step lacks the literal session_id_json=$(printf '%s' \"$WF_INFO\" line")
-        return
-    if "Paste `{session_id_json}` verbatim" not in skill:
-        fail(name, "router must be told to paste session_id_json verbatim (no quote editing; null handled by the helper)")
+    if "--init-artifact" not in skill or "session_id_json" not in skill:
+        fail(name, "router must invoke --init-artifact and document the session_id_json binding")
         return
     # Anchor on the heading line itself; the title is also mentioned inline in earlier sections.
     resume = skill.split("\n## 4. Resume And Hydration\n", 1)
@@ -19152,16 +20051,6 @@ def test_workspace_root_config_read_gated_inside_step_1a() -> None:
     ok(name)
 
 
-_EXPECTED_WORKSPACE_WRITABLE_PATHS_SUBSTITUTION_PARAGRAPH = (
-    # Derived programmatically (not hand-typed) from the real, live SKILL.md content at the
-    # time this exact-match check was written: isolate the paragraph with the same start-marker
-    # regex + next-boundary logic below, collapse all whitespace runs to single spaces, then
-    # hardcode the verified result. Regenerate the same way if the real paragraph is
-    # intentionally edited.
-    "**Conditional — only if `## 0.` step 1a set `WORKSPACE_WRITABLE_PATHS_JSON` to something other than the empty-array default** (i.e. `TOPLEVEL_EXIT != 0` in `## 0.` AND that variable is set and `!= '[]'`): substitute that JSON array value in place of the `workspace_writable_paths:[]` default in the artifact `Write` above, instead of leaving it as `[]`. If `## 0.` never ran step 1a (the common single-repo path), or step 1a ran but the array is empty, leave the default `[]` in place — no substitution needed."
-)
-
-
 def test_workflow_artifact_template_includes_workspace_writable_paths_field() -> None:
     name = "router/workflow-artifact-template-includes-workspace-writable-paths-field"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
@@ -19172,67 +20061,15 @@ def test_workflow_artifact_template_includes_workspace_writable_paths_field() ->
         return
     next_heading = content.find("\n### ", parent_wf_start + 1)
     section = content[parent_wf_start: next_heading if next_heading != -1 else None]
-    if '\\"workspace_writable_paths\\"' not in section and '"workspace_writable_paths"' not in section:
-        fail(name, "workspace_writable_paths field not found in the artifact-write JSON literal")
-        return
-    # The key existing is not enough -- the JSON template's default value must be exactly an
-    # empty array, not merely present. Guards against the key surviving with a corrupted or
-    # non-empty hardcoded default.
-    if '\\"workspace_writable_paths\\":[]' not in section:
-        fail(name, "workspace_writable_paths default value is not exactly the empty array '[]' in the artifact-write JSON literal")
-        return
-    # --- Exact-match check on the substitution-instruction paragraph -----------------------
-    # A future bad edit could silently strip the router's ONLY prose instructions for actually
-    # populating the allowlist (the "Conditional -- only if `## 0.` step 1a set
-    # `WORKSPACE_WRITABLE_PATHS_JSON`..." substitution paragraph) while leaving the
-    # workspace_writable_paths:[] key above untouched -- the two checks above alone would not
-    # catch that.
-    #
-    # History: two remediation rounds each added ONE MORE independent substring anchor, and each
-    # was defeated by an adversarial edit preserving the newest anchor while corrupting whatever
-    # came after it. A third round replaced the anchors with a length-floor + multi-anchor
-    # structural check; that round was defeated by a "pad-and-anchor" attack -- fabricated filler
-    # text containing all the required anchor substrings, padded past the length floor, but
-    # semantically wrong. Chained substring/length heuristics cannot close that hole: any set of
-    # independently-checked fragments can be satisfied by content that says something different
-    # from what those fragments imply.
-    #
-    # Closing fix: exact string equality against a verified golden value. This is not a
-    # heuristic -- no amount of padding, anchor-preserving filler, or clause reordering can
-    # satisfy exact equality; only the literal correct paragraph can. Whitespace (line-wrap /
-    # reflow) is normalized away first since it carries no semantic content, so a harmless
-    # reflow of the same words still passes.
-    paragraph_marker_words = "**Conditional — only if `## 0.` step 1a set `WORKSPACE_WRITABLE_PATHS_JSON`".split(" ")
-    paragraph_marker_re = re.compile(r"\s+".join(re.escape(w) for w in paragraph_marker_words))
-    marker_match = paragraph_marker_re.search(section)
-    if marker_match is None:
-        fail(
-            name,
-            "workspace_writable_paths substitution-instruction paragraph not found (start marker "
-            "missing) in the '### Parent workflow creation' section",
-        )
-        return
-    paragraph_start = marker_match.start()
-    # End at the next paragraph boundary (blank line) or heading, whichever comes first.
-    boundary_candidates = [
-        idx
-        for idx in (
-            section.find("\n\n", paragraph_start),
-            section.find("\n## ", paragraph_start),
-            section.find("\n### ", paragraph_start),
-        )
-        if idx != -1
-    ]
-    paragraph_end = min(boundary_candidates) if boundary_candidates else len(section)
-    paragraph = section[paragraph_start:paragraph_end]
-
-    normalized = re.sub(r"\s+", " ", paragraph)
-    if normalized != _EXPECTED_WORKSPACE_WRITABLE_PATHS_SUBSTITUTION_PARAGRAPH:
-        fail(
-            name,
-            "workspace_writable_paths substitution-instruction paragraph does not exactly match "
-            f"the expected golden text -- got: {normalized!r}",
-        )
+    for flag in ("--workspace-writable-paths-json", "--writable-paths-dropped-json",
+                 "WORKSPACE_WRITABLE_PATHS_JSON", "WORKSPACE_WRITABLE_PATHS_DROPPED_JSON"):
+        if flag not in section:
+            fail(name, f"{flag} not wired in '### Parent workflow creation'")
+            return
+    # The default (empty array) now lives in the helper; behavior is covered by the workflow-id tests.
+    helper = (SCRIPTS / "craftflow_workflow_id.py").read_text(encoding="utf-8")
+    if '"workspace_writable_paths": list(workspace_writable_paths or [])' not in helper:
+        fail(name, "helper must default workspace_writable_paths to the empty array")
         return
     ok(name)
 
@@ -19616,6 +20453,123 @@ def test_state_query_summarize_markdown_real_shape_meaningful_reduction(tmp_dir:
     ratio = len(content) / len(out) if out else float("inf")
     if ratio < 10:
         fail(name, f"expected order-of-magnitude-ish compaction, got ratio {ratio:.1f}x ({len(content)} -> {len(out)})")
+        return
+    ok(name)
+
+
+# ---------------------------------------------------------------------------
+# craftflow_state_query.py: --mode digest (one fixed-size multi-tier memory load)
+# ---------------------------------------------------------------------------
+
+_DIGEST_AC_SECTIONS = (
+    "Current Focus", "Recent Changes", "Next Steps", "Decisions", "Learnings",
+    "References", "Blockers", "Session Settings", "Last Updated",
+)
+
+
+def _digest_write_memory(base: Path, focus: str, bullets: int = 3, huge: bool = False) -> None:
+    base.mkdir(parents=True, exist_ok=True)
+    ac = ""
+    for sec in _DIGEST_AC_SECTIONS:
+        ac += f"## {sec}\n"
+        if sec == "Current Focus":
+            ac += focus + "\n"
+        elif sec == "Last Updated":
+            ac += "2026-10-06\n"
+        else:
+            n = 4000 if huge else bullets
+            ac += "".join(f"- {sec} bullet {i} " + ("x" * 300) + "\n" for i in range(n))
+        ac += "\n"
+    (base / "activeContext.md").write_text(ac, encoding="utf-8")
+    (base / "patterns.md").write_text(
+        "## User Standards\n- standard-one\n\n## Common Gotchas\n- gotcha-one\n\n"
+        "## Project SKILL_HINTS\n- None\n\n## Last Updated\n2026-10-06\n", encoding="utf-8")
+    (base / "progress.md").write_text(
+        "## Current Workflow\nnone\n\n## Tasks\n- t1\n\n## Completed\n- c1\n\n"
+        "## Verification\n- v1\n\n## Last Updated\n2026-10-06\n", encoding="utf-8")
+
+
+def _run_digest(*extra: str) -> "subprocess.CompletedProcess[str]":
+    script = SCRIPTS / "craftflow_state_query.py"
+    return subprocess.run(
+        [sys.executable, str(script), "--mode", "digest", *extra],
+        capture_output=True, text=True,
+    )
+
+
+def test_state_query_digest_is_fixed_size_and_covers_all_tiers(tmp_dir: Path) -> None:
+    name = "state-query/digest/fixed-size-covers-project-workspace-workflow"
+    root = tmp_dir / "repo"
+    ws = tmp_dir / "ws"
+    _digest_write_memory(root / ".craftflow/state/project", "PROJECT-FOCUS", huge=True)
+    (root / ".craftflow/state/project/constitution.md").write_text("MUST: be tidy\n", encoding="utf-8")
+    _digest_write_memory(ws / ".craftflow/state/workspace", "WORKSPACE-FOCUS")
+    _digest_write_memory(root / ".craftflow/state/workflows/wf-1", "WORKFLOW-FOCUS")
+    result = _run_digest("--project-root", str(root), "--workspace-root", str(ws), "--workflow-uuid", "wf-1")
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}: {result.stderr}")
+        return
+    out = result.stdout
+    for marker in ("### project/activeContext.md", "### project/constitution.md", "MUST: be tidy",
+                   "### workspace/patterns.md", "### workflows/wf-1/progress.md",
+                   "## Memory Summary", "## Project Patterns", "standard-one"):
+        if marker not in out:
+            fail(name, f"missing marker {marker!r} in digest")
+            return
+    if len(out) > 9000:
+        fail(name, f"digest must stay fixed-size despite ~1.2MB project file, got {len(out)} chars")
+        return
+    summary = out.split("## Memory Summary", 1)[1].split("## Project Patterns", 1)[0]
+    if "WORKFLOW-FOCUS" not in summary or "PROJECT-FOCUS" in summary:
+        fail(name, "workflow tier Current Focus must override project/workspace in Memory Summary")
+        return
+    ok(name)
+
+
+def test_state_query_digest_flags_missing_files_and_sections(tmp_dir: Path) -> None:
+    name = "state-query/digest/flags-missing-files-and-sections"
+    root = tmp_dir / "repo"
+    base = root / ".craftflow/state/project"
+    base.mkdir(parents=True)
+    (base / "activeContext.md").write_text("## Current Focus\nonly focus\n", encoding="utf-8")
+    result = _run_digest("--project-root", str(root))
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}: {result.stderr}")
+        return
+    out = result.stdout
+    if "### project/patterns.md [MISSING]" not in out or "### project/progress.md [MISSING]" not in out:
+        fail(name, "absent files must be flagged [MISSING] so the router can auto-heal")
+        return
+    if "### project/activeContext.md [OK]" not in out or "MISSING_SECTIONS: " not in out or "Next Steps" not in out:
+        fail(name, "present file with absent required sections must list MISSING_SECTIONS")
+        return
+    if "workflows/" in out or "workspace/" in out:
+        fail(name, "no workflow uuid / workspace root given: those tiers must be absent")
+        return
+    ok(name)
+
+
+def test_state_query_digest_falls_back_to_root_flat_when_project_empty(tmp_dir: Path) -> None:
+    name = "state-query/digest/root-flat-fallback"
+    root = tmp_dir / "repo"
+    (root / ".craftflow/state/project").mkdir(parents=True)
+    _digest_write_memory(root / ".craftflow/state", "FLAT-FOCUS")
+    result = _run_digest("--project-root", str(root))
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}: {result.stderr}")
+        return
+    if "### root-flat/activeContext.md [OK]" not in result.stdout or "FLAT-FOCUS" not in result.stdout:
+        fail(name, "empty/missing project/ tier must fall back to root-flat files")
+        return
+    ok(name)
+
+
+def test_state_query_digest_requires_project_root(tmp_dir: Path) -> None:
+    name = "state-query/digest/requires-project-root"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    result = _run_digest()
+    if result.returncode != 1 or "--project-root" not in result.stderr:
+        fail(name, f"expected exit 1 mentioning --project-root, got {result.returncode}: {result.stderr!r}")
         return
     ok(name)
 
@@ -26792,6 +27746,38 @@ def main() -> int:
     test_cursor_adapter_logs_target_crash_but_stays_fail_open(tmp / "ca1")
     test_selfcheck_internal_budget_stays_under_registered_hook_timeout()
     test_workflow_id_script_present()
+    test_workflow_id_emit_env_is_shell_safe_key_values()
+    test_workflow_id_init_artifact_writes_schema_and_events()
+    test_workflow_id_init_artifact_optional_flags_and_null_session()
+    test_workflow_id_init_artifact_refuses_overwrite_and_bad_flags()
+    test_workflow_id_init_artifact_with_emit_env_one_call()
+    test_memory_merge_finalize_batch_applies_and_clears_permit()
+    test_memory_merge_finalize_clears_permit_on_failure_and_reports()
+    test_memory_merge_finalize_rejects_bad_batches()
+    test_memory_finalize_permit_standalone_documented()
+    test_router_one_call_minting_documented()
+    test_state_digest_header_is_first_line_and_survives_truncation()
+    test_workflow_id_rejects_empty_request()
+    test_workflow_id_init_requires_existing_craftflow_dir_and_creates_nothing()
+    test_workflow_id_reports_incomplete_rollback()
+    test_workflow_id_request_file_is_consumed_fresh_and_pattern_scoped()
+    test_router_request_paths_are_write_guard_safe()
+    test_memory_merge_finalize_keeps_a_preexisting_identical_permit()
+    test_workflow_id_init_artifact_unwritable_project_fails_cleanly()
+    test_workflow_id_init_artifact_stale_events_leaves_no_orphan_and_retries()
+    test_workflow_id_init_artifact_removes_own_files_on_late_failure()
+    test_workflow_id_cli_reports_the_actual_conflicting_file()
+    test_workflow_id_request_file_and_stdin_preserve_hostile_text()
+    test_resolve_workspace_root_accepts_request_file()
+    test_router_snippets_avoid_llm_quoted_requests_and_eval()
+    test_router_mint_command_passes_safe_shell_guard()
+    test_memory_merge_finalize_rejects_empty_applies_and_symlinked_permit()
+    test_memory_merge_finalize_reports_counts_and_survives_item_exception()
+    test_state_digest_marks_dropped_bullets_and_truncated_unreadable_constitution()
+    test_state_digest_truncation_keeps_missing_sections_and_names_dropped()
+    test_state_query_digest_validates_project_root_and_workflow_uuid()
+    test_state_digest_required_sections_match_router_protocol_table()
+    test_router_memory_load_documents_digest_reread_rule()
     test_resolve_workspace_root_script_present()
     test_reliability_gates_script_present()
     test_worktree_isolation_resolver_gated_on_toplevel_failure()
@@ -26995,6 +27981,10 @@ def main() -> int:
     test_state_query_summarize_markdown_no_headings_falls_back_to_generic(tmp / "q9")
     test_state_query_summarize_markdown_truncates_large_non_bulleted_section(tmp / "q10")
     test_state_query_summarize_markdown_real_shape_meaningful_reduction(tmp / "q11")
+    test_state_query_digest_is_fixed_size_and_covers_all_tiers(tmp / "qd1")
+    test_state_query_digest_flags_missing_files_and_sections(tmp / "qd2")
+    test_state_query_digest_falls_back_to_root_flat_when_project_empty(tmp / "qd3")
+    test_state_query_digest_requires_project_root(tmp / "qd4")
     test_state_query_summarize_markdown_short_non_bulleted_section_stays_verbatim(tmp / "q12")
 
     print()

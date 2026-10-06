@@ -5,7 +5,6 @@ model: opus
 color: red
 tools: Read, Edit, Write, Bash, Grep, Glob, Skill, LSP, WebFetch, TaskUpdate
 skills:
-  - craftflow:session-memory
   - craftflow:debugging-patterns
   - craftflow:test-driven-development
   - craftflow:verification-before-completion

@@ -326,7 +326,7 @@ Cursor's `Task`-dispatch model: instead of a `## Worktree` block appended to a
      "Resolve Project Root"'s "1a. Multi-repo workspace root resolution" step (`Read()`
      that file now if you have not already this session): invoke the same
      `craftflow_resolve_workspace_root.py` helper (located via the same
-     `installed_plugins.json` lookup) with `--cwd "$(pwd)" --request "<user request>"`, and:
+     `installed_plugins.json` lookup) with `--cwd "$(pwd)" --request "<user request>"` (the Claude-only `--request-file` + session-scratchpad flow in router-protocol 1a does not apply on Cursor; `--request` still works here), and:
      - `DETERMINISTIC` → set `PROJECT_ROOT` to the returned `project_root`.
      - `AMBIGUOUS` → ask the user once which candidate repo this workflow targets (Cursor has
        no `AskUserQuestion` tool; use a plain chat prompt listing the `candidates` and wait for

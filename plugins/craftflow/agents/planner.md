@@ -5,7 +5,6 @@ model: opus
 color: cyan
 tools: Read, Edit, Write, Bash, Grep, Glob, Skill, LSP, WebFetch, TaskUpdate
 skills:
-  - craftflow:session-memory
   - craftflow:planning-patterns
 ---
 
