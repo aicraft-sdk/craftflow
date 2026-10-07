@@ -5,7 +5,8 @@ Reads one workflow artifact (<state-dir>/workflows/<id>.json) and its events log
 (<state-dir>/workflows/<id>.events.jsonl) and prints friction signals with evidence.
 
 Usage:
-  python3 craftflow_retro.py (--wf <workflow-id> | --latest | --list) [--state-dir .craftflow/state]
+  python3 craftflow_retro.py (--wf <workflow-id> | --latest | --list) [--recurrence] [--state-dir .craftflow/state]
+  --recurrence also reads every workflow and <state-dir>/project/skill-candidates.json (never writes it).
 
 Exit codes:
   0  success (JSON on stdout; friction_found may be false)
@@ -25,7 +26,7 @@ from pathlib import Path
 
 # One-way import: the signals module is a leaf and never imports this module.
 from craftflow_retro_signals import (  # noqa: F401
-    EXCERPT_MAX, EXTRACTORS, RetroError, _excerpt, _history_entries, _type_name,
+    EXCERPT_MAX, EXTRACTORS, RetroError, _excerpt, _history_entries, _is_int, _type_name,
 )
 
 SCHEMA_VERSION = 1
@@ -34,6 +35,10 @@ WF_ID_RE = re.compile(r"^wf-[A-Za-z0-9][A-Za-z0-9-]*$")
 AMBIGUITY_WINDOW_SECONDS = 900
 LIST_LIMIT = 5
 LIST_REQUEST_MAX = 120
+RECURRENCE_EXAMPLES = 3
+LEDGER_LIST_LIMIT = 10
+LEDGER_SIGNATURE_MAX = 120
+LEDGER_GATE_MIN_WORKFLOWS = 2  # mirrors craftflow_skill_ledger.gate_eligible(); parity-tested
 
 # Optional containers: None means absent; a wrong non-null type is artifact_shape.
 _LIST_FIELDS = ("remediation_history", "status_history")
@@ -215,6 +220,70 @@ def run_list(state_dir: str) -> dict:
     }
 
 
+def scan_recurrence(state_dir: str, target_stem: str, fired_ids: list) -> dict:
+    """Read-only: for each fired signal id, how many parseable workflows (target included) fire it."""
+    base = Path(state_dir) / "workflows"
+    cands, skipped = _candidates(base)
+    hits = {sid: [] for sid in fired_ids}
+    scanned = 1
+    for c in cands:  # newest-first
+        if c["stem"] == target_stem:
+            continue
+        try:
+            out = extract_signals(c["artifact"], load_events(base / f"{c['stem']}.events.jsonl"))
+        except (RetroError, ValueError, TypeError, KeyError, AttributeError):
+            skipped += 1
+            continue
+        scanned += 1
+        for s in out["signals"]:
+            if s["id"] in hits:
+                hits[s["id"]].append(c["stem"])
+    return {
+        "corpus": {"workflows_scanned": scanned, "skipped_unparseable": skipped},
+        "signals": [{"id": sid, "workflows": 1 + len(hits[sid]),
+                     "other_examples": hits[sid][:RECURRENCE_EXAMPLES]} for sid in fired_ids],
+    }
+
+
+def _skill_distill_eligible(c: dict) -> bool:
+    dw = c.get("distinct_workflows")
+    return _is_int(dw) and dw >= LEDGER_GATE_MIN_WORKFLOWS and c.get("status") == "candidate"
+
+
+def ledger_crossref(state_dir: str, target_stem: str) -> dict:
+    """Read-only view of skill-candidates.json entries this workflow fed. Never locks or writes."""
+    path = Path(state_dir) / "project" / "skill-candidates.json"
+    res = {"path": str(path), "status": "absent", "error": None, "candidates": [], "omitted": 0}
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return res
+    except (OSError, UnicodeDecodeError) as exc:
+        res.update(status="unreadable", error=f"cannot read: {exc}")
+        return res
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        res.update(status="unreadable", error=f"not valid JSON: {exc}")
+        return res
+    cands = data.get("candidates") if isinstance(data, dict) else None
+    if not isinstance(cands, list):
+        res.update(status="unreadable", error="candidates is not a list")
+        return res
+    rows = []
+    for c in cands:
+        if not isinstance(c, dict) or not isinstance(c.get("workflows"), list) or target_stem not in c["workflows"]:
+            continue
+        dw = c.get("distinct_workflows")
+        rows.append({"id": str(c.get("id")), "status": c.get("status") if isinstance(c.get("status"), str) else None,
+                     "distinct_workflows": dw if _is_int(dw) else 0, "surface": _clip(c.get("surface") or "", 60),
+                     "signature": _clip(c.get("signature") or "", LEDGER_SIGNATURE_MAX),
+                     "skill_distill_eligible": _skill_distill_eligible(c)})
+    rows.sort(key=lambda r: (-r["distinct_workflows"], r["id"]))
+    res.update(status="ok", candidates=rows[:LEDGER_LIST_LIMIT], omitted=max(0, len(rows) - LEDGER_LIST_LIMIT))
+    return res
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Read-only workflow retrospective signal extractor.")
     parser.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
@@ -222,7 +291,11 @@ def main(argv=None) -> int:
     group.add_argument("--wf", help="workflow id (wf-...)")
     group.add_argument("--latest", action="store_true", help="newest workflow (fails if ambiguous)")
     group.add_argument("--list", action="store_true", help="list up to 5 newest candidates")
+    parser.add_argument("--recurrence", action="store_true",
+                        help="also report read-only cross-workflow recurrence and skill-ledger cross-reference (with --wf/--latest)")
     args = parser.parse_args(argv)
+    if args.recurrence and args.list:
+        parser.error("--recurrence cannot be used with --list")
     try:
         if args.list:
             result = run_list(args.state_dir)
@@ -230,6 +303,11 @@ def main(argv=None) -> int:
             result = run_latest(args.state_dir)
         else:
             result = run(args.wf, args.state_dir)
+        if args.recurrence and not args.list:
+            stem = Path(result["inputs"]["artifact"]).name[: -len(".json")]
+            rec = scan_recurrence(args.state_dir, stem, [s["id"] for s in result["signals"]])
+            rec["ledger"] = ledger_crossref(args.state_dir, stem)
+            result["recurrence"] = rec
     except RetroError as exc:
         sys.stderr.write(f"ERROR: {exc.code}: {exc.message}\n")
         return 1
