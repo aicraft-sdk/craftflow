@@ -196,7 +196,8 @@ It is read-only and router-exempt: it creates no tasks and writes nothing.
 
 - Claude Code: `/craftflow:retro` (latest workflow) or `/craftflow:retro <wf-id>`
 - Cursor: say "retro" (needs `~/.cursor/skills/retro`, linked by `install-cursor.sh`)
-- Terminal: `alias cfretro='python3 /path/to/craftflow_retro.py'`, then `cfretro --latest`
+- Terminal: `alias cfretro='python3 /path/to/craftflow_retro.py'`, then `cfretro --latest` (add `--recurrence` for the cross-workflow view)
+- Cross-workflow view: the skill passes `--recurrence`, which shows how many recorded workflows hit each signal and which skill-ledger candidates this workflow fed. Retro never writes the ledger; the router's Skill-Distill Gate acts on it.
 - To act on a proposal, ask for it as a normal request; it goes through the router.
 
 ---

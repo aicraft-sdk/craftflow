@@ -68,8 +68,10 @@ craftflow_retro.py not found next to this skill. craftflow:retro needs the whole
 ## Step 3 — Run the Extractor
 
 ```bash
-python3 "$SCRIPT" --state-dir .craftflow/state (--wf <id> | --latest)
+python3 "$SCRIPT" --state-dir .craftflow/state (--wf <id> | --latest) --recurrence
 ```
+
+If it exits 2 and stderr contains "unrecognized arguments: --recurrence" (an older installed script), rerun the same command without `--recurrence` and skip every recurrence and skill-ledger line below.
 
 On any non-zero exit: show the stderr `ERROR:` line verbatim, say the retro could not run, and stop. Never report "no friction" on an error. Do not `Read` the artifact or events files directly (oversized state reads are redirected by the PreToolUse hook, and the script is the single source of truth).
 
@@ -103,6 +105,7 @@ Rules:
 - Every proposal cites ≥1 evidence item verbatim as `artifact:<key>` or `events:L<line>`. If a proposal has no citable evidence, drop it.
 - Any fired signal id not cited by any surviving proposal (dropped for lack of evidence, or beyond the cap) MUST be listed on one line after the proposals: `Signals with no mappable proposal: <id>, <id>`. If every signal is in that line, `m = 0` and the header still shows `<n> signals, 0 proposals`. It is never reported as "No friction found".
 - Rank proposals by the highest `weight` of the signals they cite; at most 5 proposals.
+- Recurrence never changes a proposal's category or rank, or the cap; it is context only (`recurrence.signals`). Never propose a new skill from recurrence: skill candidates belong to the skill-candidates ledger and the Skill-Distill Gate.
 - Do not editorialize beyond the evidence; if a cause is unclear, say "cause unclear from evidence".
 - Pruning proposals (row 4) MUST state the observed compaction count and cite the `compact_occurred` events (`events:L<line>`). They MUST NOT assert that memory or context caused or amplified any friction; say "cause unclear from evidence" unless the script's evidence itself shows the cause.
 
@@ -122,9 +125,18 @@ Then numbered proposals, each followed by indented `Evidence:` and `Why:` lines:
 N. [category] <title> → <destination>
    Evidence: artifact:<key> | events:L<line> ...
    Why: <one sentence tied to the evidence>
+   Recurrence: <id> <k>/<N>[, <id> <k>/<N>] workflows
 ```
 
-Then the `Signals with no mappable proposal: <ids>` line if any fired signal is uncited. Closing line:
+`Recurrence:` has one entry per cited signal id: `k` = `recurrence.signals[].workflows`, `N` = `recurrence.corpus.workflows_scanned`.
+
+Then the `Signals with no mappable proposal: <ids>` line if any fired signal is uncited. Then exactly one `Skill ledger:` line, chosen by `recurrence.ledger.status`:
+
+- `ok`: `Skill ledger: <c> candidates from this workflow, <e> eligible for the Skill-Distill Gate (<ids or none>). Retro never writes the ledger.` (`c` = `len(candidates) + omitted`, `e` = count of `skill_distill_eligible`). When `c` is 0, append ` (not observed yet, or evicted by the 200-candidate cap)`, because the ledger is fed only at the router's memory-finalize and evicts old candidates.
+- `absent`: `Skill ledger: no ledger yet. Retro never writes the ledger.`
+- `unreadable`: `Skill ledger: unreadable (<error>). Retro never writes the ledger.`
+
+Closing line:
 
 `To act on a proposal, ask for it as a normal request — it will go through craftflow-router (PLAN/BUILD).`
 
@@ -134,7 +146,7 @@ Then the `Signals with no mappable proposal: <ids>` line if any fired signal is 
 
 **Do NOT call craftflow-router. Do NOT create tasks. Do NOT modify files.**
 
-No ledger writes (v2), no transcript mining (v2). Proposals are text only; applying one is a separate normal request that goes through craftflow-router.
+No ledger writes: retro only reads `.craftflow/state/project/skill-candidates.json`; `craftflow_skill_ledger.py` (run by the router at memory-finalize) is its only writer (ADR-0068). No transcript mining. Proposals are text only; applying one is a separate normal request that goes through craftflow-router.
 
 ---
 
@@ -147,4 +159,5 @@ alias cfretro='python3 /path/to/craftflow_retro.py'
 cfretro --state-dir .craftflow/state --latest
 cfretro --state-dir .craftflow/state --list
 cfretro --state-dir .craftflow/state --wf <wf-id>
+cfretro --state-dir .craftflow/state --wf <wf-id> --recurrence
 ```

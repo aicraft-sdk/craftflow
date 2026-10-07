@@ -407,6 +407,54 @@ def test_rec_no_ledger_module() -> None:
     check("rec_no_ledger_module", not found, f"found banned tokens: {found}")
 
 
+# --- Phase 4: skill, README and LV-R7 (SPEC-0032 FR-005) -------------------------
+
+
+def test_skill_recurrence_text() -> None:
+    _, body = frontmatter(SKILL.read_text(encoding="utf-8"))
+    s3, s4, s5 = section(body, "Step 3"), section(body, "Step 4"), section(body, "Step 5")
+    s6, s7, tu = section(body, "Step 6"), section(body, "Step 7"), section(body, "Terminal Usage")
+    check("skill_step3_recurrence_flag", "--recurrence" in s3, "Step 3 lacks --recurrence")
+    check("skill_step3_old_script_fallback",
+          "unrecognized arguments" in s3 and "without `--recurrence`" in s3,
+          "Step 3 lacks the older-script fallback")
+    check("skill_step5_context_only",
+          "Recurrence never changes a proposal's category or rank" in s5, "Step 5 lacks context-only rule")
+    check("skill_step6_recurrence_line", "Recurrence: <id> <k>/<N>" in s6, "Step 6 lacks Recurrence line")
+    check("skill_step6_ledger_line",
+          "Skill ledger:" in s6 and "Retro never writes the ledger" in s6, "Step 6 lacks Skill ledger line")
+    check("skill_step6_no_router_word",
+          "craftflow-router" not in s6.split("To act on a proposal")[0],
+          "craftflow-router appears before the handoff line in Step 6")
+    check("skill_step7_ledger_boundary", "ADR-0068" in s7 and "only writer" in s7,
+          "Step 7 lacks the ledger boundary")
+    check("skill_step7_no_v2_promise", "No ledger writes (v2)" not in body, "stale v2 promise remains")
+    check("skill_terminal_recurrence", "--recurrence" in tu, "Terminal Usage lacks --recurrence")
+    check("skill_step4_unchanged",
+          "Recurrence" not in s4 and "Skill ledger" not in s4 and "No friction found" in s4,
+          "Step 4 changed")
+
+
+def test_readme_retro_recurrence() -> None:
+    text = README_PLUGIN.read_text(encoding="utf-8")
+    start = text.find("## Retrospective on one workflow")
+    end = text.find("\n---", start)
+    sec = text[start:end] if start >= 0 and end > start else ""
+    check("readme_retro_recurrence", "--recurrence" in sec and "never writes the ledger" in sec,
+          "README retro section lacks --recurrence / ledger boundary")
+
+
+def test_lvr7_manifest() -> None:
+    m = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    sc = [s for s in m["scenarios"] if s["name"].startswith("LV-R7")]
+    check("lvr7_present", len(sc) == 1, f"found {len(sc)} LV-R7 scenarios")
+    cmd = sc[0]["command"] if sc else ""
+    check("lvr7_uses_recurrence", "--recurrence" in cmd and "skill-candidates.json" in cmd,
+          "LV-R7 command lacks --recurrence / ledger path")
+    check("lvr7_read_only_check", "same_ledger=" in cmd and "same_git=" in cmd,
+          "LV-R7 command lacks read-only checks")
+
+
 def main() -> int:
     tests = [
         test_manifest_valid_for_runner,
@@ -431,6 +479,9 @@ def main() -> int:
         test_ledger_gate_parity,
         test_rec_read_only_snapshot_and_no_lock,
         test_rec_no_ledger_module,
+        test_skill_recurrence_text,
+        test_readme_retro_recurrence,
+        test_lvr7_manifest,
     ]
     for t in tests:
         try:
