@@ -31,26 +31,29 @@ development task — an explicitly allowed exception to the always-route rule.
 
 ## Step 1 — Resolve Script Path
 
-Read the plugin registry to find the installed script:
+The first rule that yields an existing file wins.
 
-```
-Read(file_path="~/.claude/plugins/installed_plugins.json")
-```
+**(a) Skill-relative (both hosts).** `SKILL_FILE` is this skill's own SKILL.md: in Claude Code, `<Base directory for this skill>/SKILL.md`; in Cursor (context contains `CRAFTFLOW_PLATFORM: cursor`), `~/.cursor/skills/status/SKILL.md`. Run:
 
-Extract the `craftflow@craftflow` entry → `installPath`. The status script is at:
-
-```
-SCRIPT="<installPath>/scripts/craftflow_status_report.py"
+```bash
+python3 -c "import pathlib,sys; p=pathlib.Path(sys.argv[1]).expanduser().resolve().parents[2]/'scripts'/'craftflow_status_report.py'; print(p if p.is_file() else '')" "<SKILL_FILE>"
 ```
 
-If the registry is absent or the entry is missing, the script lives relative to
-this SKILL.md at:
+A non-empty output is `SCRIPT`. `resolve()` follows the Cursor symlink into the plugin checkout, and in Claude Code it points at the same plugin copy the skill was loaded from.
+
+**(b) Claude Code only, and only if (a) printed nothing.** Read `~/.claude/plugins/installed_plugins.json`, take `craftflow@craftflow` → `installPath`, then run:
+
+```bash
+test -f "<installPath>/scripts/craftflow_status_report.py"
+```
+
+Use it only if that exits 0. Never use an `installPath` script without that check (an `installPath` without the script is unusable).
+
+**(c) Otherwise** print exactly the following and stop. Never fall back to reading `.craftflow/state` by hand.
 
 ```
-SCRIPT="$(dirname <this-skill-file>)/../../scripts/craftflow_status_report.py"
+craftflow_status_report.py not found next to this skill. craftflow:status needs the whole craftflow plugin (skill + scripts/). Claude Code: update the craftflow plugin. Cursor: run install-cursor.sh from a local craftflow checkout (npx skills add copies only the skill folder and is not supported for status).
 ```
-
-Resolve that path with `python3 -c "import pathlib; print(pathlib.Path('...').resolve())"`.
 
 ---
 
@@ -116,7 +119,7 @@ python3 "$SCRIPT" --specs --spec-dir docs/ai/specs      # override the spec dire
 - Display the output exactly as returned — it is already formatted.
 - If the report shows `⚠️ BLOCKED` with a pending gate, highlight the block reason.
 - If `--all` returns an empty table, note that no Craftflow workflows have run yet.
-- If the script is not found, tell the user and show the terminal alias from below.
+- If Step 1 printed the not-found message, show it and stop.
 - **Do NOT call craftflow-router. Do NOT create tasks. Do NOT modify files.**
 
 ---
@@ -137,6 +140,9 @@ try:
 except Exception as e:
     print(f'# Not found: {e}')
 "
+
+# Cursor-only install (no Claude Code): resolve via the linked skill instead:
+python3 -c "import pathlib; print(pathlib.Path('~/.cursor/skills/status/SKILL.md').expanduser().resolve().parents[2]/'scripts'/'craftflow_status_report.py')"
 
 # Add a shell alias (replace PATH with the output above):
 alias cfstatus='python3 /path/to/craftflow_status_report.py'

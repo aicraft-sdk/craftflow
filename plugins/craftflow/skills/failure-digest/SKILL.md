@@ -36,21 +36,28 @@ every workflow, ranked, so a recurring cluster can be read as "build this" or
 
 ## Step 1 — Resolve Script Path
 
-```
-Read(file_path="~/.claude/plugins/installed_plugins.json")
+The first rule that yields an existing file wins.
+
+**(a) Skill-relative (both hosts).** `SKILL_FILE` is this skill's own SKILL.md: in Claude Code, `<Base directory for this skill>/SKILL.md`; in Cursor (context contains `CRAFTFLOW_PLATFORM: cursor`), `~/.cursor/skills/failure-digest/SKILL.md`. Run:
+
+```bash
+python3 -c "import pathlib,sys; p=pathlib.Path(sys.argv[1]).expanduser().resolve().parents[2]/'scripts'/'craftflow_learn_scan.py'; print(p if p.is_file() else '')" "<SKILL_FILE>"
 ```
 
-Extract the `craftflow@craftflow` entry → `installPath`. The miner script is at:
+A non-empty output is `SCRIPT`. `resolve()` follows the Cursor symlink into the plugin checkout, and in Claude Code it points at the same plugin copy the skill was loaded from.
+
+**(b) Claude Code only, and only if (a) printed nothing.** Read `~/.claude/plugins/installed_plugins.json`, take `craftflow@craftflow` → `installPath`, then run:
+
+```bash
+test -f "<installPath>/scripts/craftflow_learn_scan.py"
+```
+
+Use it only if that exits 0. Never use an `installPath` script without that check (an `installPath` without the script is unusable).
+
+**(c) Otherwise** print exactly the following and stop. Never fall back to reading `.craftflow/state` by hand.
 
 ```
-SCRIPT="<installPath>/scripts/craftflow_learn_scan.py"
-```
-
-If the registry is absent or the entry is missing, the script lives relative to
-this SKILL.md at:
-
-```
-SCRIPT="$(dirname <this-skill-file>)/../../scripts/craftflow_learn_scan.py"
+craftflow_learn_scan.py not found next to this skill. craftflow:failure-digest needs the whole craftflow plugin (skill + scripts/). Claude Code: update the craftflow plugin. Cursor: run install-cursor.sh from a local craftflow checkout (npx skills add copies only the skill folder and is not supported for failure-digest).
 ```
 
 ## Step 2 — Run the Miner
@@ -82,4 +89,4 @@ failure history recorded yet" and stop — do not fabricate findings.
   changes no agent behavior.
 - If the user wants to act on a finding (fix a recurring failure, add a
   guard), that is a normal development task — route it through
-  `craftflow:craftflow-router` as usual; this skill's job ends at reporting.
+  `craftflow:craftflow-router` as usual (in Cursor: ask for it as a normal request; the Cursor router handles it); this skill's job ends at reporting.
