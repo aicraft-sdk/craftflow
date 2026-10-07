@@ -46,6 +46,8 @@ python3 -c "import pathlib,sys; p=pathlib.Path(sys.argv[1]).expanduser().resolve
 
 A non-empty output is `SCRIPT`. `resolve()` follows the Cursor symlink into the plugin checkout, and in Claude Code it points at the same plugin copy the skill was loaded from.
 
+**Cursor workspace copy.** In Cursor only, if (a) printed nothing, run the same command once more from the workspace root with `SKILL_FILE` = `tools/craftflow-plugin/plugins/craftflow/skills/failure-digest/SKILL.md` (a Conductor-provisioned workspace carries this copy and the scripts it needs). A non-empty output is `SCRIPT`.
+
 **(b) Claude Code only, and only if (a) printed nothing.** Read `~/.claude/plugins/installed_plugins.json`, take `craftflow@craftflow` → `installPath`, then run:
 
 ```bash

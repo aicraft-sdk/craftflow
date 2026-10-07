@@ -139,7 +139,9 @@ this before routing" does not apply: nothing is routed) and the § 10 ALWAYS-wri
 Do not create a workflow artifact, do not write `cursor-wf.json`, do not dispatch any `Task`, do
 not run memory finalization. Each skill is read-only. Only these three skills are exempt; every other
 request is routed normally. If the row's skill directory under `~/.cursor/skills/` is missing,
-tell the user to re-run `install-cursor.sh` from a local checkout and stop. A message that matches
+read the workspace copy `tools/craftflow-plugin/plugins/craftflow/skills/<skill>/SKILL.md` instead (a
+Conductor-provisioned workspace carries it with its scripts); only if that is missing too, tell the user
+to re-run `install-cursor.sh` from a local checkout and stop. A message that matches
 a row's "NOT exempt" column, or matches no row clearly, is a normal development request — it is
 NOT exempt and falls through to the routing table below.
 
