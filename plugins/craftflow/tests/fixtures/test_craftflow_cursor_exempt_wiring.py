@@ -217,6 +217,24 @@ def test_carve_out() -> None:
           "carve-out bullet missing")
 
 
+def test_docs() -> None:
+    docs = DOCS_CRAFTFLOW.read_text(encoding="utf-8")
+    check("docs_craftflow_no_gap_note", "have no Cursor wiring yet" not in docs,
+          "docs/craftflow.md still says status/failure-digest have no Cursor wiring")
+    line = next((ln for ln in docs.splitlines() if "All 34 skills" in ln), "")
+    check("docs_craftflow_lists_three", "run router-exempt in Cursor" in line,
+          "All 34 skills line lacks 'run router-exempt in Cursor'")
+    readme = README_PLUGIN.read_text(encoding="utf-8")
+    check("readme_install_lists_four",
+          "symlinks the `cursor-router`, `retro`, `status` and `failure-digest` skills" in readme,
+          "README install text does not list four linked skills")
+    check("readme_npx_note_all_three",
+          "`craftflow:retro`, `craftflow:status` and `craftflow:failure-digest` run a script" in readme,
+          "README npx note does not name all three script skills")
+    check("readme_status_cursor_line", 'In Cursor, say "craftflow status"' in readme,
+          "README lacks the Cursor status line")
+
+
 def main() -> int:
     for s, script in SKILLS.items():
         test_step1_resolution(s, script)
@@ -228,6 +246,7 @@ def main() -> int:
     test_curl_hints()
     test_exempt_block()
     test_carve_out()
+    test_docs()
     print(f"\n{_passes} passed, {len(_errors)} failed")
     for e in _errors:
         print(e)

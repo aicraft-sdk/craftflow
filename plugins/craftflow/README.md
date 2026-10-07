@@ -183,6 +183,8 @@ You can also invoke it in-session (between agent turns) with:
 craftflow status
 ```
 
+In Cursor, say "craftflow status" (needs `~/.cursor/skills/status`, linked by `install-cursor.sh`); "failure digest" works the same way.
+
 ---
 
 ## Retrospective on one workflow — /retro
@@ -214,7 +216,7 @@ Then add to `~/.claude/CLAUDE.md`:
 
 ## Install — Cursor AI
 
-If you have a local checkout of this plugin, run the script directly — it wires up the MDC rules **and** symlinks the `cursor-router` and `retro` skills into `~/.cursor/skills/` automatically (idempotent; backs up any stale content it finds there):
+If you have a local checkout of this plugin, run the script directly — it wires up the MDC rules **and** symlinks the `cursor-router`, `retro`, `status` and `failure-digest` skills into `~/.cursor/skills/` automatically (idempotent; backs up any stale content it finds there):
 
 ```bash
 bash tools/craftflow-plugin/plugins/craftflow/install-cursor.sh
@@ -230,7 +232,7 @@ npx skills add aicraft-sdk/craftflow --skill cursor-router
 curl -fsSL https://raw.githubusercontent.com/aicraft-sdk/craftflow/main/plugins/craftflow/install-cursor.sh | bash
 ```
 
-`craftflow:retro` runs a script that ships next to the skill, so it needs a local checkout linked by `install-cursor.sh`; `npx skills add` copies only the skill folder and does not work for retro.
+`craftflow:retro`, `craftflow:status` and `craftflow:failure-digest` run a script that ships next to the skill, so they need a local checkout linked by `install-cursor.sh`; `npx skills add` copies only the skill folder and does not work for them.
 
 Craftflow will activate automatically on every dev request via `alwaysApply: true`.
 
