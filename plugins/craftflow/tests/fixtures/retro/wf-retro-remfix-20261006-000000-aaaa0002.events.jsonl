@@ -1,0 +1,5 @@
+{"event": "workflow_started"}
+{"event": "remediation_created", "phase": "phase_2"}
+{"event": "agent_completed", "agent": "builder"}
+{"event": "remediation_created", "phase": "phase_2"}
+{"event": "remfix_created", "phase": "phase_2"}
