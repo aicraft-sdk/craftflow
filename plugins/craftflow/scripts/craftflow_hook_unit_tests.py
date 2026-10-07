@@ -26968,6 +26968,91 @@ def test_safe_shell_strip_heredoc_fuzz_matches_strict_shape_oracle() -> None:
     ok(name)
 
 
+# ---------------------------------------------------------------------------
+# Split-skill preload budget tests (agent `skills:` frontmatter cost)
+# ---------------------------------------------------------------------------
+
+# Core SKILL.md of each split skill is preloaded on every agent turn, so its
+# size is budgeted; detail lives in references/ and is read on demand.
+SPLIT_SKILL_CORE_BUDGETS = {
+    "verification-before-completion": 3300,
+    "code-generation": 3400,
+    "test-driven-development": 3400,
+}
+
+
+# Hot-path rules that must stay in the preloaded core (not only in references/).
+CORE_REQUIRED_PHRASES = {
+    "verification-before-completion": [
+        "NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE",
+        "Claim requires:",
+        "a linter is not a build",
+        "revert the fix, it must FAIL",
+        "run the scans in references/stub-and-wiring-checks.md",
+        "sensitive route without auth check",
+    ],
+    "code-generation": [
+        "NO CODE BEFORE UNDERSTANDING",
+        "Minimal diffs",
+        "grep every caller",
+    ],
+    "test-driven-development": [
+        "NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST",
+        "MANDATORY: it must fail",
+        "Before claiming the phase complete: coverage >= 80%",
+    ],
+}
+
+
+def _split_skill_check(skill: str, budget: int) -> None:
+    name = f"split-skill/{skill}"
+    skill_dir = PLUGIN_ROOT / "skills" / skill
+    core = skill_dir / "SKILL.md"
+    size = len(core.read_bytes())
+    if size > budget:
+        fail(name, f"core SKILL.md is {size} bytes, budget {budget}")
+        return
+    text = core.read_text(encoding="utf-8")
+    for phrase in CORE_REQUIRED_PHRASES.get(skill, []):
+        if phrase not in text:
+            fail(name, f"core is missing hot-path phrase {phrase!r}")
+            return
+    pointed = set(re.findall(r"references/([A-Za-z0-9_.-]+\.md)", text))
+    if not pointed:
+        fail(name, "core points to no references/*.md file")
+        return
+    for ref in sorted(pointed):
+        if not (skill_dir / "references" / ref).is_file():
+            fail(name, f"core points to missing reference references/{ref}")
+            return
+    on_disk = {p.name for p in (skill_dir / "references").glob("*.md")}
+    orphans = sorted(on_disk - pointed)
+    if orphans:
+        fail(name, f"reference files never pointed to from core: {orphans}")
+        return
+    ok(name)
+
+
+def test_split_skill_cores_stay_within_budget_and_references_resolve() -> None:
+    for skill, budget in SPLIT_SKILL_CORE_BUDGETS.items():
+        _split_skill_check(skill, budget)
+
+
+def test_agents_only_read_references_of_their_own_skills() -> None:
+    name = "split-skill/agent-reference-reads"
+    for agent in sorted((PLUGIN_ROOT / "agents").glob("*.md")):
+        body = agent.read_text(encoding="utf-8")
+        listed = set(re.findall(r"craftflow:([a-z0-9-]+)", body.split("---", 2)[1]))
+        for skill, ref in re.findall(r"skills/([a-z0-9-]+)/references/([A-Za-z0-9_.-]+\.md)", body):
+            if skill not in listed:
+                fail(name, f"{agent.name} reads references of {skill}, which it does not list in skills:")
+                return
+            if not (PLUGIN_ROOT / "skills" / skill / "references" / ref).is_file():
+                fail(name, f"{agent.name} reads missing reference {skill}/{ref}")
+                return
+    ok(name)
+
+
 def main() -> int:
     print("craftflow_hook_unit_tests: running")
     print()
@@ -28370,6 +28455,11 @@ def main() -> int:
         test_safe_shell_allows_strict_shape_python_heredocs(hh_tmp / "hh-3r2-3")
         test_safe_shell_unit_strict_shape_strip_results()
         test_safe_shell_strip_heredoc_fuzz_matches_strict_shape_oracle()
+
+        print()
+        print("[ split-skill preload budgets ]")
+        test_split_skill_cores_stay_within_budget_and_references_resolve()
+        test_agents_only_read_references_of_their_own_skills()
 
     print()
     if _errors:
