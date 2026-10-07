@@ -10,7 +10,7 @@
 
 Craftflow turns every development request into a **tracked, verified workflow**. One router classifies the request, dispatches a chain of specialist agents, enforces quality gates, and refuses to call anything done without evidence. State lives in plain files under `.craftflow/state/`, shared by Claude Code and Cursor.
 
-**Current version:** 1.26.0
+**Current version:** 1.27.0
 
 > Working on this plugin itself? Read [`AGENT_CRITICAL_GUARDRAILS.md`](AGENT_CRITICAL_GUARDRAILS.md) first.
 

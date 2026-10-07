@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.27.0] - 2026-10-07
+
+### Features
+
+- retro skill shows recurrence and skill-ledger context; LV-R7 live proof (SPEC-0032 FR-005)
+- retro --recurrence shows cross-workflow recurrence and skill-ledger links read-only (SPEC-0032 FR-001..FR-004)
+
+### Tests
+
+- LV-R4 proves all four Cursor skill links (SPEC-0032 FR-006)
+
 ## [1.26.0] - 2026-10-07
 
 ### Features
