@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.24.3] - 2026-10-07
+
+### Fixes
+
+- build the stop-gate fixture's fake AWS key at runtime
+
 ## [1.24.2] - 2026-10-07
 
 ### Performance
