@@ -527,7 +527,7 @@ def test_choice_re():
 
 
 def test_secret_text_and_secret_paths():
-    for text in ("-----BEGIN RSA PRIVATE KEY-----\nabc", "key AKIAABCDEFGHIJKLMNOP end",
+    for text in ("-----BEGIN RSA PRIVATE KEY-----\nabc", "key AKIA" + "ABCDEFGHIJKLMNOP" + " end",
                  "token ghp_" + "a" * 24, "API_KEY=abc", "db_password = hunter2", "sk-" + "b" * 24,
                  "xoxb-12345", "export GITHUB_TOKEN=x"):
         assert core.has_secret_text(text), text
