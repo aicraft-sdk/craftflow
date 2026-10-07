@@ -1,6 +1,10 @@
+<p align="center">
+  <img src="../../docs/images/craftflow-banner.svg" alt="craftflow: router-first AI development orchestration for Claude Code and Cursor" width="100%">
+</p>
+
 # Craftflow
 
-Router-first AI development orchestration for Claude Code and Cursor AI.
+Router-first AI development orchestration for Claude Code and Cursor AI. This is the full plugin reference; the [project overview](../../README.md) has the short version.
 
 Every build, debug, review, and plan task routes through a single entry point that dispatches the right agent chain, tracks workflow state, and enforces quality gates before marking anything complete.
 
@@ -10,8 +14,8 @@ Every build, debug, review, and plan task routes through a single entry point th
 
 - **Routes all dev tasks** — one router (`craftflow-router`) classifies intent and dispatches to the right agent chain automatically
 - **Agent chain** — 14 specialized agents: planner, component-builder, bug-investigator, code-reviewer, silent-failure-hunter, integration-verifier, and more
-- **29 skills** — planning patterns, TDD, code generation, debugging, diff-driven docs, workflow status, and others
-- **Hook system** — Python lifecycle hooks for memory protection, write guards, URL caching, and session continuity
+- **34 skills** — planning patterns, TDD, code generation, debugging, diff-driven docs, workflow status, and others; the large ones keep a small core and load detail from `references/` on demand
+- **Hook system** — 29 hook bindings across 11 lifecycle events (Python) for memory protection, write guards, URL caching, and session continuity
 - **Shared state** — `.craftflow/state/` is readable by both Claude Code and Cursor
 - **Feature-named workflows** — workflow folders, files, and worktrees are named after the feature (`wf-auth-refactor-20260706-d4e5f6a7`) so you can identify them at a glance
 - **Live statusline progress** — a `⚡ feature-name 60% · 🟢 phase_2` segment appended to claude-hud, updates every ~300ms without interrupting the running agent
@@ -51,12 +55,18 @@ Precedence: a per-dispatch `model` parameter > the frontmatter pin > `CLAUDE_COD
 
 ## Workflow types
 
+<p align="center">
+  <img src="../../docs/images/workflow-lanes.svg" alt="The four craftflow workflows: PLAN, BUILD, DEBUG and REVIEW, each with its agent chain" width="100%">
+</p>
+
 | Signal | Workflow | Agent chain |
 |--------|----------|-------------|
-| build, implement, create | BUILD | component-builder → code-reviewer → silent-failure-hunter → integration-verifier |
-| error, bug, fix, crash | DEBUG | bug-investigator → code-reviewer → integration-verifier |
-| plan, design, spec | PLAN | planner → plan-gap-reviewer |
-| review, audit | REVIEW | code-reviewer (advisory) |
+| error, bug, fix, crash | DEBUG | bug-investigator → code-reviewer → integration-verifier (+ doubt-verifier fix-verify) |
+| plan, design, spec | PLAN | brainstorming → planner → plan-gap-reviewer (bounded fresh review loop) |
+| review, audit | REVIEW | code-reviewer (advisory, read-only) |
+| everything else (build, implement, create) | BUILD | **fast path** (no risk keywords): component-builder → integration-verifier. **Full chain** (risk keywords such as auth, schema, payment, secret): component-builder → code-reviewer ‖ silent-failure-hunter → integration-verifier → doc-syncer |
+
+Signals are matched in priority order (error, plan, review, then BUILD), so a request with an error word is always DEBUG. Every chain ends with inline memory finalization.
 
 ---
 
