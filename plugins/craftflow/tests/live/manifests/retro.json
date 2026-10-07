@@ -42,12 +42,12 @@
       "timeout_seconds": 120
     },
     {
-      "name": "LV-R4 Cursor install links retro (scratch HOME)",
+      "name": "LV-R4 Cursor install links cursor-router, retro, status, failure-digest (scratch HOME)",
       "mode": "proof",
       "given": "a scratch dir that is HOME, the Cursor home and the cwd, with raw.githubusercontent.com reachable",
       "when": "install-cursor.sh runs from the plugin under test with stdin closed",
-      "then": "exit 0; installer_rc=0 links_ok=1; scratch removed. Offline: prints 'connection refused: ...' so the runner reports BLOCKED, not FAIL",
-      "command": "if ! curl -fsSI --max-time 10 https://raw.githubusercontent.com/aicraft-sdk/craftflow/main/plugins/craftflow/rules/craftflow-router.mdc >/dev/null 2>&1; then echo \"connection refused: raw.githubusercontent.com unreachable (offline); LV-R4 needs network\"; exit 1; fi; SCR=$(mktemp -d); INSTALLER=\"$PWD/plugins/craftflow/install-cursor.sh\"; PR=\"$PWD/plugins/craftflow/skills\"; (cd \"$SCR\" && HOME=\"$SCR\" CURSOR_HOME=\"$SCR/.cursor\" CURSOR_SKILLS_DIR=\"$SCR/.cursor/skills\" bash \"$INSTALLER\" </dev/null >/dev/null 2>&1); RC=$?; OK=1; for n in cursor-router retro; do { test -L \"$SCR/.cursor/skills/$n\" && test \"$(cd \"$SCR/.cursor/skills/$n\" && pwd -P)\" = \"$(cd \"$PR/$n\" && pwd -P)\"; } || OK=0; done; rm -rf \"$SCR\"; echo \"installer_rc=$RC links_ok=$OK\"; test \"$RC\" = 0 && test \"$OK\" = 1",
+      "then": "exit 0; installer_rc=0 links_ok=1 (cursor-router, retro, status and failure-digest are symlinks resolving to the plugin under test); scratch removed. Offline: prints 'connection refused: ...' so the runner reports BLOCKED, not FAIL",
+      "command": "if ! curl -fsSI --max-time 10 https://raw.githubusercontent.com/aicraft-sdk/craftflow/main/plugins/craftflow/rules/craftflow-router.mdc >/dev/null 2>&1; then echo \"connection refused: raw.githubusercontent.com unreachable (offline); LV-R4 needs network\"; exit 1; fi; SCR=$(mktemp -d); INSTALLER=\"$PWD/plugins/craftflow/install-cursor.sh\"; PR=\"$PWD/plugins/craftflow/skills\"; (cd \"$SCR\" && HOME=\"$SCR\" CURSOR_HOME=\"$SCR/.cursor\" CURSOR_SKILLS_DIR=\"$SCR/.cursor/skills\" bash \"$INSTALLER\" </dev/null >/dev/null 2>&1); RC=$?; OK=1; for n in cursor-router retro status failure-digest; do { test -L \"$SCR/.cursor/skills/$n\" && test \"$(cd \"$SCR/.cursor/skills/$n\" && pwd -P)\" = \"$(cd \"$PR/$n\" && pwd -P)\"; } || OK=0; done; rm -rf \"$SCR\"; echo \"installer_rc=$RC links_ok=$OK\"; test \"$RC\" = 0 && test \"$OK\" = 1",
       "expected": "exit 0; installer_rc=0 links_ok=1",
       "timeout_seconds": 180
     },
