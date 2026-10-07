@@ -1,0 +1,65 @@
+{
+  "name": "retro",
+  "workdir": ".",
+  "required_env": [],
+  "environment": {
+    "CI": "true"
+  },
+  "healthcheck": {
+    "name": "real friction + clean workflow artifacts and claude CLI present",
+    "command": "MAIN=\"$(dirname \"$(git rev-parse --path-format=absolute --git-common-dir)\")\" && W=\"$MAIN/.craftflow/state/workflows\" && for id in wf-adr-0044-audit-only-opt-pre-20260927-130317-27b13b3e wf-jev-client-remove-craftflow-jev-20261001-211114-31b6d506; do test -f \"$W/$id.json\" && test -f \"$W/$id.events.jsonl\" || exit 1; done && command -v claude",
+    "expected": "exit 0; both workflow artifact+events pairs exist in the main tree and claude is on PATH"
+  },
+  "scenarios": [
+    {
+      "name": "LV-R1 Friction workflow is cited",
+      "mode": "proof",
+      "given": "the real wf-adr-0044 artifact and events log in the main tree",
+      "when": "craftflow_retro.py --wf wf-adr-0044-... runs against the main-tree state dir",
+      "then": "exit 0; friction_found true; signal ids include remfix_cycles (count >= 9), circuit_breaker_tripped, loop_counts, compactions; first remfix_cycles evidence key is remediation_history[0]",
+      "command": "MAIN=\"$(dirname \"$(git rev-parse --path-format=absolute --git-common-dir)\")\" && python3 plugins/craftflow/scripts/craftflow_retro.py --state-dir \"$MAIN/.craftflow/state\" --wf wf-adr-0044-audit-only-opt-pre-20260927-130317-27b13b3e | python3 -c 'import json,sys; d=json.load(sys.stdin); s={x[\"id\"]:x for x in d[\"signals\"]}; need=(\"remfix_cycles\",\"circuit_breaker_tripped\",\"loop_counts\",\"compactions\"); miss=[i for i in need if i not in s]; assert d[\"friction_found\"] is True, \"friction_found not true\"; assert not miss, \"missing signals: %s\" % miss; assert s[\"remfix_cycles\"][\"count\"] >= 9, \"remfix count %s\" % s[\"remfix_cycles\"][\"count\"]; k=s[\"remfix_cycles\"][\"evidence\"][0][\"key\"]; assert k == \"remediation_history[0]\", \"first evidence key %s\" % k; print(\"lv_r1 friction_found=true remfix_count=%s first_key=%s ids=%s\" % (s[\"remfix_cycles\"][\"count\"], k, sorted(s)))'",
+      "expected": "exit 0; lv_r1 line printed",
+      "timeout_seconds": 120
+    },
+    {
+      "name": "LV-R2 Clean workflow reports no friction",
+      "mode": "proof",
+      "given": "the real wf-jev-client-remove artifact and events log",
+      "when": "the same command runs with that id",
+      "then": "exit 0; friction_found false; signals == []",
+      "command": "MAIN=\"$(dirname \"$(git rev-parse --path-format=absolute --git-common-dir)\")\" && python3 plugins/craftflow/scripts/craftflow_retro.py --state-dir \"$MAIN/.craftflow/state\" --wf wf-jev-client-remove-craftflow-jev-20261001-211114-31b6d506 | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d[\"friction_found\"] is False and d[\"signals\"] == [], \"unexpected signals: %s\" % [x[\"id\"] for x in d[\"signals\"]]; print(\"lv_r2 friction_found=false signals=[]\")'",
+      "expected": "exit 0; lv_r2 friction_found=false signals=[]",
+      "timeout_seconds": 120
+    },
+    {
+      "name": "LV-R3 Read-only on real state",
+      "mode": "proof",
+      "given": "sha256 of both workflows' artifact+events files and git status --porcelain of the main tree captured",
+      "when": "the LV-R1 and LV-R2 commands run",
+      "then": "both hashes and the porcelain output are identical afterwards",
+      "command": "MAIN=\"$(dirname \"$(git rev-parse --path-format=absolute --git-common-dir)\")\" && W=\"$MAIN/.craftflow/state/workflows\" && F=\"$W/wf-adr-0044-audit-only-opt-pre-20260927-130317-27b13b3e.json $W/wf-adr-0044-audit-only-opt-pre-20260927-130317-27b13b3e.events.jsonl $W/wf-jev-client-remove-craftflow-jev-20261001-211114-31b6d506.json $W/wf-jev-client-remove-craftflow-jev-20261001-211114-31b6d506.events.jsonl\" && H0=$(shasum -a 256 $=F) && G0=$(git -C \"$MAIN\" status --porcelain) && python3 plugins/craftflow/scripts/craftflow_retro.py --state-dir \"$MAIN/.craftflow/state\" --wf wf-adr-0044-audit-only-opt-pre-20260927-130317-27b13b3e >/dev/null && python3 plugins/craftflow/scripts/craftflow_retro.py --state-dir \"$MAIN/.craftflow/state\" --wf wf-jev-client-remove-craftflow-jev-20261001-211114-31b6d506 >/dev/null && H1=$(shasum -a 256 $=F) && G1=$(git -C \"$MAIN\" status --porcelain); echo \"same_hash=$([ \"$H0\" = \"$H1\" ] && echo 1 || echo 0) same_git=$([ \"$G0\" = \"$G1\" ] && echo 1 || echo 0)\"; [ \"$H0\" = \"$H1\" ] && [ \"$G0\" = \"$G1\" ]",
+      "expected": "exit 0; same_hash=1 same_git=1",
+      "timeout_seconds": 120
+    },
+    {
+      "name": "LV-R4 Cursor install links retro (scratch HOME)",
+      "mode": "proof",
+      "given": "a scratch dir that is HOME, the Cursor home and the cwd, with raw.githubusercontent.com reachable",
+      "when": "install-cursor.sh runs from the plugin under test with stdin closed",
+      "then": "exit 0; installer_rc=0 links_ok=1; scratch removed. Offline: prints 'connection refused: ...' so the runner reports BLOCKED, not FAIL",
+      "command": "if ! curl -fsSI --max-time 10 https://raw.githubusercontent.com/aicraft-sdk/craftflow/main/plugins/craftflow/rules/craftflow-router.mdc >/dev/null 2>&1; then echo \"connection refused: raw.githubusercontent.com unreachable (offline); LV-R4 needs network\"; exit 1; fi; SCR=$(mktemp -d); INSTALLER=\"$PWD/plugins/craftflow/install-cursor.sh\"; PR=\"$PWD/plugins/craftflow/skills\"; (cd \"$SCR\" && HOME=\"$SCR\" CURSOR_HOME=\"$SCR/.cursor\" CURSOR_SKILLS_DIR=\"$SCR/.cursor/skills\" bash \"$INSTALLER\" </dev/null >/dev/null 2>&1); RC=$?; OK=1; for n in cursor-router retro; do { test -L \"$SCR/.cursor/skills/$n\" && test \"$(cd \"$SCR/.cursor/skills/$n\" && pwd -P)\" = \"$(cd \"$PR/$n\" && pwd -P)\"; } || OK=0; done; rm -rf \"$SCR\"; echo \"installer_rc=$RC links_ok=$OK\"; test \"$RC\" = 0 && test \"$OK\" = 1",
+      "expected": "exit 0; installer_rc=0 links_ok=1",
+      "timeout_seconds": 180
+    },
+    {
+      "name": "LV-R6 Claude Code end-to-end",
+      "mode": "proof",
+      "given": "the plugin under test via absolute --plugin-dir, a scratch project holding byte copies of the real wf-adr-0044 artifact and events, CLAUDE_PLUGIN_ROOT/CLAUDE_CODE_SESSION_ID unset, CLAUDE_PROJECT_DIR = scratch project",
+      "when": "claude -p --model haiku is asked to use the craftflow:retro skill on that workflow",
+      "then": "exit 0; rc=0 header>=1 cited>=1 router_outside_handoff=0 wf_artifacts=1 same_hash=1 same_git=1",
+      "command": "MAIN=\"$(dirname \"$(git rev-parse --path-format=absolute --git-common-dir)\")\"; PLUGIN=\"$PWD/plugins/craftflow\"; ID=wf-adr-0044-audit-only-opt-pre-20260927-130317-27b13b3e; SCR=$(mktemp -d); W=\"$SCR/p/.craftflow/state/workflows\"; mkdir -p \"$W\" && cp \"$MAIN/.craftflow/state/workflows/$ID.json\" \"$MAIN/.craftflow/state/workflows/$ID.events.jsonl\" \"$W/\" || exit 1; H0=$(cat \"$W/$ID.json\" \"$W/$ID.events.jsonl\" | shasum -a 256); G0=$(git -C \"$MAIN\" status --porcelain); printf '%s' \"Use the craftflow:retro skill on workflow $ID\" | (cd \"$SCR/p\" && env -u CLAUDE_PLUGIN_ROOT -u CLAUDE_CODE_SESSION_ID -u TYPESAFE_API_KEY CLAUDE_PROJECT_DIR=\"$SCR/p\" claude -p --plugin-dir \"$PLUGIN\" --model haiku --allowedTools Skill \"Bash(python3:*)\" Read Glob) > \"$SCR/out\" 2>&1; RC=$?; H1=$(cat \"$W/$ID.json\" \"$W/$ID.events.jsonl\" | shasum -a 256); G1=$(git -C \"$MAIN\" status --porcelain); HDR=$(grep -c 'Retro: wf-adr-0044' \"$SCR/out\"); CITE=$(grep -Ec 'remediation_history\\[|events:L' \"$SCR/out\"); ROUTER=$(grep 'craftflow-router' \"$SCR/out\" | grep -v 'NOT go through craftflow-router' | grep -v 'skills/craftflow-router/' | grep -vc 'To act on a proposal'); WF=$(ls \"$W\" | grep -c '^wf-.*\\.json$'); rm -rf \"$SCR\"; echo \"rc=$RC header=$HDR cited=$CITE router_outside_handoff=$ROUTER wf_artifacts=$WF same_hash=$([ \"$H0\" = \"$H1\" ] && echo 1 || echo 0) same_git=$([ \"$G0\" = \"$G1\" ] && echo 1 || echo 0)\"; test \"$RC\" = 0 && test \"$HDR\" -ge 1 && test \"$CITE\" -ge 1 && test \"$ROUTER\" = 0 && test \"$WF\" = 1 && [ \"$H0\" = \"$H1\" ] && [ \"$G0\" = \"$G1\" ]",
+      "expected": "exit 0; rc=0 header>=1 cited>=1 router_outside_handoff=0 wf_artifacts=1 same_hash=1 same_git=1",
+      "timeout_seconds": 600
+    }
+  ]
+}
