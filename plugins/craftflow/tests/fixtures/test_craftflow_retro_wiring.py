@@ -268,6 +268,22 @@ def test_symlink_realpath_resolution() -> None:
     check("step_c_message", "craftflow_retro.py not found" in t and "install-cursor.sh" in t, "step (c) message missing")
 
 
+def test_pruning_row_no_speculative_causation() -> None:
+    text = read_skill()
+    row = next((ln for ln in text.splitlines() if ln.startswith("| 4 |")), "")
+    check("pruning_row_states_count",
+          "observed compaction count" in text and "compact_occurred" in text,
+          "rules must require the observed compaction count and cite the compact_occurred events")
+    check("pruning_row_no_causation",
+          "MUST NOT assert that memory or context caused or amplified" in text,
+          "rules must forbid asserting that memory/context caused or amplified friction")
+    check("pruning_row_cause_unclear",
+          "pruning" in row
+          and "cause unclear from evidence" in text
+          and "unless the script's evidence itself shows the cause" in text,
+          "pruning proposals must say 'cause unclear from evidence' unless the evidence shows the cause")
+
+
 def main() -> int:
     test_skill_exists()
     test_frontmatter()
@@ -283,6 +299,7 @@ def main() -> int:
     test_cursor_router_hard_rules_carve_out()
     test_readme_counts_and_install()
     test_symlink_realpath_resolution()
+    test_pruning_row_no_speculative_causation()
     print(f"\n{_passes} passed, {len(_errors)} failed")
     for e in _errors:
         print(e)

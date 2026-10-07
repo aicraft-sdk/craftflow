@@ -104,6 +104,7 @@ Rules:
 - Any fired signal id not cited by any surviving proposal (dropped for lack of evidence, or beyond the cap) MUST be listed on one line after the proposals: `Signals with no mappable proposal: <id>, <id>`. If every signal is in that line, `m = 0` and the header still shows `<n> signals, 0 proposals`. It is never reported as "No friction found".
 - Rank proposals by the highest `weight` of the signals they cite; at most 5 proposals.
 - Do not editorialize beyond the evidence; if a cause is unclear, say "cause unclear from evidence".
+- Pruning proposals (row 4) MUST state the observed compaction count and cite the `compact_occurred` events (`events:L<line>`). They MUST NOT assert that memory or context caused or amplified any friction; say "cause unclear from evidence" unless the script's evidence itself shows the cause.
 
 ---
 
