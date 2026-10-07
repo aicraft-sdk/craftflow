@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 360" width="1280" height="360" role="img" aria-labelledby="t d">
+  <title id="t">craftflow</title>
+  <desc id="d">Craftflow: router-first orchestration for Claude Code and Cursor. A request flows through the router, an agent chain, verification and memory.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#020617"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="0.5" stop-color="#a78bfa"/>
+      <stop offset="1" stop-color="#34d399"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#1e293b" stroke-width="1" opacity="0.55"/>
+    </pattern>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L10 5L0 10z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <rect width="1280" height="360" fill="url(#bg)"/>
+  <rect width="1280" height="360" fill="url(#grid)"/>
+  <rect x="0" y="352" width="1280" height="8" fill="url(#accent)"/>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace">
+    <text x="72" y="140" font-size="76" font-weight="700" fill="#ffffff" letter-spacing="-2">craft<tspan fill="#22d3ee">flow</tspan></text>
+    <text x="74" y="188" font-size="22" fill="#94a3b8">Router-first AI development orchestration</text>
+    <text x="74" y="220" font-size="22" fill="#94a3b8">for Claude Code and Cursor.</text>
+
+    <g font-size="13" fill="#cbd5e1">
+      <rect x="74" y="256" width="150" height="30" rx="15" fill="#0c2234" stroke="#22d3ee"/>
+      <text x="149" y="276" text-anchor="middle">one entry point</text>
+      <rect x="236" y="256" width="170" height="30" rx="15" fill="#271955" stroke="#a78bfa"/>
+      <text x="321" y="276" text-anchor="middle">14 specialist agents</text>
+      <rect x="418" y="256" width="152" height="30" rx="15" fill="#0b2d31" stroke="#34d399"/>
+      <text x="494" y="276" text-anchor="middle">proof, not prose</text>
+    </g>
+
+    <!-- flow motif: request > router > builder, then review > verifier > memory -->
+    <g font-size="13" text-anchor="middle">
+      <rect x="700" y="96" width="150" height="46" rx="10" fill="#172032" stroke="#475569"/>
+      <text x="775" y="124" fill="#e2e8f0">your request</text>
+
+      <rect x="900" y="96" width="150" height="46" rx="10" fill="#0c2234" stroke="#22d3ee" stroke-width="2"/>
+      <text x="975" y="124" fill="#67e8f9">router</text>
+
+      <rect x="1100" y="96" width="130" height="46" rx="10" fill="#0b2d31" stroke="#34d399"/>
+      <text x="1165" y="124" fill="#6ee7b7">builder</text>
+
+      <rect x="1100" y="216" width="130" height="46" rx="10" fill="#2e2022" stroke="#fbbf24"/>
+      <text x="1165" y="244" fill="#fde68a">review + hunt</text>
+
+      <rect x="900" y="216" width="150" height="46" rx="10" fill="#3f152f" stroke="#fb7185"/>
+      <text x="975" y="244" fill="#fda4af">verifier</text>
+
+      <rect x="700" y="216" width="150" height="46" rx="10" fill="#271955" stroke="#a78bfa"/>
+      <text x="775" y="244" fill="#c4b5fd">memory</text>
+    </g>
+    <g stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arr)">
+      <path d="M850 119H898"/>
+      <path d="M1050 119H1098"/>
+      <path d="M1165 142V214"/>
+      <path d="M1098 239H1052"/>
+      <path d="M898 239H852"/>
+    </g>
+  </g>
+</svg>

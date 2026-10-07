@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.24.4] - 2026-10-07
+
+### Fixes
+
+- professional README with banner and workflow diagrams
+
+### Documentation
+
+- refresh plugin README with banner, overview diagram and corrected counts
+
 ## [1.24.3] - 2026-10-07
 
 ### Fixes

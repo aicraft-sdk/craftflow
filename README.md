@@ -1,133 +1,151 @@
-# Craftflow Plugin
+<p align="center">
+  <img src="docs/images/craftflow-banner.svg" alt="craftflow: router-first AI development orchestration for Claude Code and Cursor" width="100%">
+</p>
 
-Router-first AI development orchestration for Claude Code. Every build, debug, review, and plan task routes through `craftflow:craftflow-router`, which dispatches the right agent chain and tracks workflow state in `.craftflow/state/`.
+<p align="center">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-22d3ee?style=flat-square">
+  <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-a78bfa?style=flat-square">
+  <img alt="Cursor" src="https://img.shields.io/badge/Cursor-supported-34d399?style=flat-square">
+</p>
 
-**Current version:** 1.24.3
+Craftflow turns every development request into a **tracked, verified workflow**. One router classifies the request, dispatches a chain of specialist agents, enforces quality gates, and refuses to call anything done without evidence. State lives in plain files under `.craftflow/state/`, shared by Claude Code and Cursor.
 
-**Hard rules, scannable:** see [`AGENT_CRITICAL_GUARDRAILS.md`](AGENT_CRITICAL_GUARDRAILS.md) before touching this plugin.
+**Current version:** 1.24.4
 
----
+> Working on this plugin itself? Read [`AGENT_CRITICAL_GUARDRAILS.md`](AGENT_CRITICAL_GUARDRAILS.md) first.
 
-## What it does
+## Why craftflow
 
-- **Routes all dev tasks** — one entry point (`craftflow-router`) dispatches to the right agent automatically
-- **Agent chain** — 14 specialized agents: planner, component-builder, bug-investigator, code-reviewer, integration-verifier, and more
-- **34 skills** — planning, TDD, code-generation, debugging patterns, diff-driven docs, and others
-- **Hook system** — 18 wired Python lifecycle hooks (44 total scripts in `scripts/`) for memory protection, write guards, URL caching, and session continuity
-- **Shared state** — `.craftflow/state/` is readable by both Claude Code and Cursor
-- **Quality layer** — gap classification (Missing/Partial/Contradicts/Unrequested × CRITICAL/HIGH/MEDIUM/LOW), constitution MUST/SHOULD checks, tech-agnostic AC lint, `[NEEDS CLARIFICATION]` blocking, `[P]` parallel plan markers, `FR-###`/`SC-###` traceability — all enforced by `craftflow_contract_validate.py`
-- **Reliability-gates ledger** — `craftflow_reliability_gates.py` tracks proven invariants
-  (append-only, fail-closed evidence log) across workflows
-- **Skill-distillation pipeline** — `craftflow_skill_ledger.py` mines recurring workflow patterns
-  into candidate skills, staged via `craftflow_skill_propose.py` and promoted via
-  `craftflow_skill_promote.py`
-- **Safe-shell / stop-verify / hook-trust guards** — `craftflow_safe_shell_guard.py` blocks
-  catastrophic shell command patterns pre-execution, `craftflow_stop_verify.py` is an opt-in
-  end-of-session verification gate (inert by default), and `craftflow_hook_trust.py` is a standalone
-  hash-manifest trust gate for repo-local hook scripts (not itself wired into `hooks.json`)
+| | |
+|---|---|
+| **One entry point** | Build, debug, review and plan requests all go through `craftflow-router`. No ad-hoc agent juggling. |
+| **Proof, not prose** | An agent's "done" is only accepted with command output, exit codes and scenario evidence. A failing verifier opens a bounded remediation loop. |
+| **Memory that survives** | Workflow and project state are written to files, protected by hooks, and rehydrated after compaction or a new session. |
+| **Safe by construction** | BUILD runs in an isolated git worktree. Hooks confine writes, block catastrophic shell patterns and protect memory files. |
 
----
-
-## Quality layer
-
-All conventions are active on every workflow. Sources of truth: `AI_FIRST.md` rules 11–14, `plugins/craftflow/agents/`, `plugins/craftflow/scripts/craftflow_contract_validate.py`.
-
-### Spec traceability
-
-- `FR-###` / `SC-###` stable identifiers in `docs/ai/specs/` — plans and verifier scenarios cross-reference these IDs
-- `[NEEDS CLARIFICATION]` on any unresolved spec or plan item — `plan-gap-reviewer` blocks advancement until resolved
-- Success criteria must be user-observable, not technical: "User sees results in 3 s" not "API < 200 ms" (`AI_FIRST.md` rule 14)
-
-### Plan quality
-
-- `[P]` marks steps within a plan phase that can run concurrently (no shared file deps)
-- Each phase declares a delivery strategy: `mvp_first` | `incremental` | `parallel_team`
-
-### Gap classification
-
-Classifies every FAIL scenario before remediation:
-
-| Type | Meaning |
-|------|---------|
-| `Missing` | Required work entirely absent |
-| `Partial` | Incompletely satisfies the criterion |
-| `Contradicts` | Conflicts with spec, plan, or a MUST constitution constraint |
-| `Unrequested` | Implements behavior not in the accepted plan (scope creep) |
-
-Severity: `CRITICAL` / `HIGH` / `MEDIUM` / `LOW`
-
-Written by `integration-verifier` (step 3.5) and `silent-failure-hunter`. Machine-validated in the `GAP_CLASSIFICATION` YAML field by `craftflow_contract_validate.py`.
-
-### Constitution
-
-`.craftflow/state/project/constitution.md` holds project MUST/SHOULD principles. The PLAN workflow checks it before brainstorming; MUST violations are blockers, SHOULD violations are advisories.
+**Contents:** [How it works](#how-it-works) · [Architecture](#architecture) · [A BUILD run, step by step](#a-build-run-step-by-step) · [Agents](#agents) · [Quality and safety](#quality-and-safety) · [Install](#install) · [Benchmarks](#benchmarks) · [State and layout](#state-and-layout) · [Releases](#releases)
 
 ---
 
-## Benchmarks
+## How it works
 
-Craftflow ships three benchmark scripts that measure structural coverage, runtime cost, and behavior correctness. Pre-computed results live in [`docs/benchmarks/`](docs/benchmarks/).
+The router reads your request and picks the first matching workflow. Each workflow is a fixed agent chain that ends in memory finalization.
 
-### Latest results (2026-06-30)
+<p align="center">
+  <img src="docs/images/workflow-lanes.svg" alt="The four craftflow workflows: PLAN, BUILD, DEBUG and REVIEW, each with its agent chain" width="100%">
+</p>
 
-**Signal coverage** — 15 trust-harness signals (orchestration ownership, durable state, plan/build trust gates, skill precedence, debug generalization, fail-closed verification, replay coverage):
+| Priority | Signal | Workflow | Chain |
+|---|---|---|---|
+| 1 | error, bug, fix, broken, crash, debug | **DEBUG** | bug-investigator → code-reviewer → integration-verifier (+ fix-verify) |
+| 2 | plan, design, architect, spec, brainstorm | **PLAN** | brainstorming → planner → bounded fresh review loop |
+| 3 | review, audit, analyze, assess | **REVIEW** | code-reviewer (read-only, advisory) |
+| 4 | everything else | **BUILD** | fast path: builder → verifier → memory. Full chain: builder → reviewer ‖ hunter → verifier → memory |
 
-**33/33 signals passing**
+BUILD takes the **fast path** when the request has no risk keywords. Words such as `auth`, `password`, `migration`, `payment` or `secret` switch it to the **full chain** with the extra review and hunt phases.
 
-**Runtime metrics:**
+## Architecture
 
-| Dimension | Score |
-|-----------|-------|
-| Enforcement gates | 9/9 |
-| Context management signals | 6/6 |
-| Parallelism signals | 4/4 |
-
-**Behavior bakeoff** — 8 critical orchestration scenarios (plan divergence, phase gating, memory persistence, fail-closed verification, etc.): all **pass**.
-
-**Real telemetry** from 46 production workflows (BUILD=38, DEBUG=2, PLAN=6):
-
-| Metric | Value |
-|--------|-------|
-| Mean events per workflow | 9.09 (median 8, max 35) |
-| Re-review triggered | 13% of runs |
-| Re-verify triggered | 2.2% of runs |
-
-### Run benchmarks yourself
-
-All scripts run from the plugin root (`tools/craftflow-plugin`):
-
-```bash
-# Signal benchmark — scores craftflow against any ref repos in ref-/
-python3 plugins/craftflow/scripts/craftflow_reference_benchmark.py
-
-# Runtime complexity — context load, chain depth, gates, parallelism + real telemetry
-python3 plugins/craftflow/scripts/craftflow_runtime_benchmark.py
-
-# Full suite — inventory, delta register, behavior bakeoff, roadmap (needs ref repos)
-python3 plugins/craftflow/scripts/craftflow_worldclass_benchmark.py
+```mermaid
+flowchart LR
+    U([Your request]) --> R[craftflow-router]
+    R -->|dispatch| A[14 specialist agents]
+    R -.->|loads on demand| S[34 skills]
+    A -->|BUILD only| W[(isolated git worktree)]
+    R <-->|read / write| ST[(.craftflow/state)]
+    H{{Hooks: guards, memory protection, stop gates}} -.->|enforce| R
+    H -.->|enforce| A
 ```
 
-The first two scripts score craftflow on its own even without reference repos. The worldclass script produces the full comparative suite; see [`docs/benchmarks/`](docs/benchmarks/) for the last generated outputs.
+- The **router** owns orchestration state. Agents propose, the router decides.
+- **Agents** are narrow specialists with a machine-readable *Router Contract* the router validates before advancing.
+- **Skills** carry reusable method (TDD, code generation, verification) and load on demand.
+- **Hooks** run outside the model, so the guarantees do not depend on the model behaving.
 
----
+## A BUILD run, step by step
 
-## Install (new machine)
+```mermaid
+sequenceDiagram
+    autonumber
+    actor You
+    participant R as router
+    participant B as component-builder
+    participant V as reviewer + hunter
+    participant I as integration-verifier
+    participant M as memory
+    You->>R: "Add password reset"
+    R->>R: classify BUILD, mint workflow id, create worktree
+    R->>B: dispatch phase (TDD, confined to the worktree)
+    B-->>R: Router Contract with RED/GREEN exit codes and scenarios
+    R->>V: review and hunt in parallel (full chain only)
+    V-->>R: findings
+    R->>I: verify end to end
+    alt verifier FAIL or critical findings
+        R->>B: remediation, at most 3 cycles before a human checkpoint
+    end
+    I-->>R: PASS with evidence
+    R->>R: merge worktree under a lock, then finalize memory inline
+```
 
-Requires Claude Code CLI and a GitHub account with access to `aicraft-sdk/ai-craft`.
+Every transition is recorded in a per-workflow artifact (`.craftflow/state/workflows/<id>.json`) and an append-only event log, so a session can resume exactly where it stopped.
 
-### 1. Install the plugin
+## Agents
+
+Each agent pins its model in its `model:` frontmatter.
+
+| Agent | Model | Role |
+|---|---|---|
+| `planner` | opus | Saved execution plan or decision RFC |
+| `plan-gap-reviewer` | opus | Fresh, anti-anchoring review of a saved plan |
+| `plan-bakeoff-judge` | opus | Compares competing plans and synthesizes one |
+| `bug-investigator` | opus | Root-cause proof before any fix |
+| `doubt-verifier` | opus | Adversarial verification of claims and fixes |
+| `component-builder` | sonnet | TDD execution of an approved phase |
+| `code-reviewer` | sonnet | Diff review |
+| `silent-failure-hunter` | sonnet | Error-handling and swallowed-failure review |
+| `integration-verifier` | sonnet | End-to-end verification with an evidence array |
+| `doc-syncer` | sonnet | Documentation sync from the current diff |
+| `web-researcher` / `github-researcher` | sonnet | Research with a Router Contract |
+| `learn-distiller` | sonnet | Distills workflow learnings into notes |
+| `skill-author` | sonnet | Drafts skill proposals from recurring patterns |
+
+A per-dispatch `model` parameter overrides the pin. Cursor cannot select custom subagent types, so it inherits the session model.
+
+## Quality and safety
+
+**Gates the router enforces:** plan trust, phase exit, failure stop and memory sync. Remediation is capped at three cycles before a human checkpoint, and a verifier PASS needs scenario totals that reconcile with the evidence.
+
+**Hooks (29 bindings across 11 lifecycle events):**
+
+| Hook family | What it does |
+|---|---|
+| `PreToolUse` | Confines writes to the session folder or workflow worktree, blocks catastrophic shell patterns, protects memory files, redirects oversized state reads |
+| `PostToolUse` | Validates workflow artifacts, throttles repeated identical calls |
+| `SessionStart`, `PreCompact`, `PostCompact` | Resumes workflow context and keeps state across compaction |
+| `Stop`, `SubagentStop`, `TaskCompleted` | Completion gates and per-agent usage audit |
+
+**Optional features, off by default:** Jev routing hints (TypeSafe AI), a context-size nudge, and an armed stop gate. See the [plugin reference](plugins/craftflow/README.md) for configuration.
+
+**Quality layer:**
+
+- `FR-###` / `SC-###` identifiers keep specs, plans and verifier scenarios traceable.
+- `[NEEDS CLARIFICATION]` blocks advancement until resolved; `[P]` marks plan steps that can run concurrently.
+- Every failing scenario is classified (`Missing`, `Partial`, `Contradicts`, `Unrequested`) with a severity (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`) before remediation.
+- `.craftflow/state/project/constitution.md` holds project MUST/SHOULD principles. MUST violations block; SHOULD violations advise.
+- A reliability-gates ledger and a skill-distillation pipeline turn repeated workflow patterns into reviewed skills.
+
+## Install
+
+Requires the Claude Code CLI. Cursor is covered in the [plugin reference](plugins/craftflow/README.md).
+
+**1. Install the plugin**
 
 ```bash
-# Sparse-clones only what's needed from the repo
-claude plugin marketplace add aicraft-sdk/ai-craft --sparse .claude-plugin tools/craftflow-plugin
-
-# Install at user scope (available across all projects)
+claude plugin marketplace add aicraft-sdk/craftflow
 claude plugin install craftflow@craftflow --scope user
 ```
 
-### 2. Add the router to `~/.claude/CLAUDE.md`
-
-Open `~/.claude/CLAUDE.md` (create it if it doesn't exist) and add:
+**2. Add the router to `~/.claude/CLAUDE.md`**
 
 ```markdown
 # Craftflow Orchestration (Always On)
@@ -145,9 +163,9 @@ IMPORTANT: NEVER use Edit, Write, or Bash (for code changes) without first invok
 [Craftflow]|entry: craftflow:craftflow-router
 ```
 
-### 3. Add permissions to `~/.claude/settings.json`
+**3. Allow the state folders in `~/.claude/settings.json`**
 
-Add the following entries to the `permissions` array:
+Add these entries to the `permissions` array:
 
 ```json
 "Bash(mkdir -p .craftflow)",
@@ -158,88 +176,73 @@ Add the following entries to the `permissions` array:
 "Write(.claude/craftflow/*)"
 ```
 
-### 4. Restart Claude Code
+**4. Restart Claude Code.** Craftflow is now active on every development task.
 
-Fully quit and reopen. Craftflow-router is now active on every dev task across all projects.
+**Update:** `claude plugin update craftflow`
 
----
+## Benchmarks
 
-## Updating
+Three scripts measure structural coverage, runtime cost and behavior. Reports are written to [`docs/benchmarks/`](docs/benchmarks/).
+
+| Measure (2026-10-07, v1.24.x) | Result |
+|---|---|
+| Trust-harness signals | **33 / 33** |
+| Enforcement gates | **9 / 9** |
+| Context-management signals | **6 / 6** |
+| Parallelism signals | **4 / 4** |
+| Hook unit-test suite | **951 passing** |
+
+Run them from the repository root. They take no flags and write a dated report into `docs/benchmarks/`:
 
 ```bash
-claude plugin update craftflow
+python3 plugins/craftflow/scripts/craftflow_reference_benchmark.py   # signal coverage
+python3 plugins/craftflow/scripts/craftflow_runtime_benchmark.py     # context load, chain depth, gates
+python3 plugins/craftflow/scripts/craftflow_worldclass_benchmark.py  # full suite (needs reference repos)
 ```
 
----
+The first two score craftflow on its own. These are structural signals measured against the plugin's own contract, not a claim of absolute superiority.
+
+## State and layout
+
+State lives in `.craftflow/state/` at the project root:
+
+| Path | Purpose |
+|---|---|
+| `project/` | Long-lived state across sessions: decisions, patterns, blockers |
+| `workflows/<wf-id>/` | Per-workflow state for a single run |
+| `workflows/<wf-id>.json` | Router-owned workflow artifact, with a companion `.events.jsonl` log |
+
+```
+plugins/craftflow/
+├── agents/       # 14 agent definitions
+├── skills/       # 34 skills, each with SKILL.md and on-demand references/
+├── scripts/      # 80 Python and shell scripts: hooks, validators, benchmarks
+├── hooks/        # hook bindings for Claude Code
+├── hooks.json    # hook bindings for Cursor
+├── config/       # hook mode, model prices, optional-feature settings
+├── templates/    # reusable doc and harness templates
+└── tests/        # fixture-based replay tests
+```
 
 ## Releases
 
-Releases are fully automatic. Merging to `main` with changes under
-`tools/craftflow-plugin/**` triggers `.github/workflows/publish-craftflow-plugin.yml`, which
-bumps the version, writes a `CHANGELOG.md` entry, runs a fail-closed consistency gate across all
-6 version-bearing files, commits + tags (`craftflow-vX.Y.Z` on `ai-craft`), splits and pushes
-`tools/craftflow-plugin` to `craftflow-public`, and cuts a GitHub release (`vX.Y.Z`) there. This
-push trigger was armed deliberately in a separate commit, only after a dry run, a determinism
-cross-check, and one human-initiated real release had all proven the pipeline safe — see
-`docs/ai/decisions/0030-craftflow-plugin-release-automation.md`.
-
-**Bump rules** (from conventional-commit messages in the range since the last `craftflow-v*`
-tag):
+Releases are automatic. Merging to `main` with changes under `tools/craftflow-plugin/**` bumps the version, writes a `CHANGELOG.md` entry, runs a fail-closed consistency gate across all version-bearing files, tags the release and publishes it here.
 
 | Commit type | Bump |
 |---|---|
 | `feat` | minor |
 | `fix`, `perf`, `revert` | patch |
 | `!` suffix or `BREAKING CHANGE:` footer | major |
-| everything else (`docs`, `chore`, `refactor`, `test`, ...) | no bump — still listed in the CHANGELOG |
+| `docs`, `chore`, `refactor`, `test`, other | no bump, still listed in the changelog |
 
-**Manual dispatch** (`workflow_dispatch`) inputs:
+Do not hand-edit released `CHANGELOG.md` sections or any version field. CI owns them, and manual edits fail the consistency gate. `workflow_dispatch` takes `dry_run`, `resume_publish` and `resume_version` to validate a bump or recover a failed publish.
 
-| Input | Purpose |
-|---|---|
-| `dry_run` | Compute and validate the bump, but perform no commit/tag/push/release |
-| `resume_publish` | Skip bump/commit/tag; re-run split + push + release for an already-tagged version (recovery from a failed push) |
-| `resume_version` | The version to resume publishing; required when `resume_publish` is true |
+## Documentation
 
-**Why there is no bump override.** A docs/chore-only batch does not cut a release on its own —
-that is deliberate, not a gap. Forcing a version bump over a range with no release-worthy
-commits would publish a version with an empty CHANGELOG section, which is exactly what the
-pipeline's fail-closed design forbids. To ship such a batch, land it alongside a real `feat`/
-`fix` commit instead.
+- [Plugin reference](plugins/craftflow/README.md): install for Cursor, optional features, statusline, workflow status
+- [Changelog](CHANGELOG.md)
+- [Agent guardrails](AGENT_CRITICAL_GUARDRAILS.md)
 
-**Do not hand-edit `CHANGELOG.md`'s released sections or any version field.** CI owns all 10
-fields across the 6 version-bearing files (see the ADR for the full file/field table). Manual
-edits will be overwritten or will fail the consistency gate on the next release.
+## License
 
----
-
-## Plugin structure
-
-```
-plugins/craftflow/
-├── agents/          # 14 agent definitions (markdown)
-├── skills/          # 34 skill definitions (each has SKILL.md)
-├── scripts/         # 44 Python hook scripts (18 wired in hooks.json)
-├── hooks/           # Hook event bindings for Claude Code
-├── hooks.json       # Hook bindings for Cursor
-├── config/          # hook-mode.json (audit vs enforce)
-├── templates/       # Reusable doc and harness templates
-└── tests/           # Fixture-based replay tests (28 fixtures)
-```
-
-## State convention
-
-State lives in `.craftflow/state/` at the project root:
-
-| Path | Purpose |
-|------|---------|
-| `project/` | Long-lived state across sessions (architecture decisions, blockers) |
-| `workflows/<wf-id>/` | Per-workflow state scoped to a single run |
-| `activeContext.md` / `patterns.md` / `progress.md` | Fallback root files |
-
----
-
-## Detailed docs
-
-- [Installation guide](../../docs/craftflow-install.md)
-- [Full reference](../../docs/craftflow.md)
+MIT. See [`plugins/craftflow/LICENSE`](plugins/craftflow/LICENSE) and [`NOTICE`](NOTICE).
