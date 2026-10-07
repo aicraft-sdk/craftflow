@@ -30,6 +30,7 @@ CURSOR_ROUTER = PLUGIN_ROOT / "skills" / "cursor-router" / "SKILL.md"
 DECOY = "aaaa0004"
 STATE_ARG = '--state-dir "<WS_ROOT>/.craftflow/state"'
 PROJECT_ARG = '--project "<WS_ROOT>"'
+WS_EXPR = '"$(git rev-parse --show-toplevel || pwd)"'  # the quoted expression the skills tell the agent to write
 FALLBACK_ALLOWLIST = [
     "craftflow_retro.py",
     "craftflow_retro_signals.py",
@@ -167,6 +168,9 @@ def test_text(s: str) -> None:
           "workspace fallback paragraph (anchored to <WS_ROOT>) missing")
     check(f"ws_root_derivation_{s}", "`git rev-parse --show-toplevel`" in s1,
           "Step 1 must derive WS_ROOT with git rev-parse --show-toplevel")
+    check(f"ws_quoting_rule_{s}",
+          f"`{WS_EXPR}`" in s1 and "instead of pasting the printed path" in s1 and "never leave it unquoted" in s1,
+          "Step 1 must tell the agent to write the quoted expression, never paste or leave WS_ROOT unquoted")
     arg = STATE_ARG if s != "status" else PROJECT_ARG
     check(f"ws_anchored_arg_{s}", arg in s1, f"Step 1 must tell the agent to pass {arg}")
     a = s1.find(f"~/.cursor/skills/{s}/SKILL.md")
@@ -293,6 +297,39 @@ def test_nested_cwd(s: str) -> None:
                   "control: the old cwd-relative command must silently return [] from a nested dir")
 
 
+def test_quoted_expression_safe_in_hostile_path(s: str) -> None:
+    """The documented quoted expression never lets a workspace path run code; pasting the path into double quotes would."""
+    hostile = "ws $(touch PWNED) it's"
+    with tempfile.TemporaryDirectory() as tmp:
+        parent = Path(tmp) / "parent"
+        copy_fixture("wf-retro-breaker", parent / ".craftflow" / "state" / "workflows")
+        wt = parent / hostile
+        make_ws(wt, s, True)
+        subprocess.run(["git", "init", "-q"], cwd=wt, check=True)
+        copy_fixture("wf-retro-clean", wt / ".craftflow" / "state" / "workflows")
+        copy_fixture("wf-retro-remfix", wt / ".craftflow" / "state" / "workflows")
+        deep = wt / "sub" / "deep"
+        deep.mkdir(parents=True)
+        inner = WS_EXPR[:-1] + f"/{WS}/skills/{s}/SKILL.md\""
+        oneliner = extract_oneliner(s).replace('"<SKILL_FILE>"', inner)
+        tail = {
+            "status": f'--project {WS_EXPR} --all',
+            "retro": f'--state-dir "{WS_EXPR[1:-1]}/.craftflow/state" --latest',
+            "failure-digest": f'--state-dir "{WS_EXPR[1:-1]}/.craftflow/state"',
+        }[s]
+        r = subprocess.run(["bash", "-c", f'SCRIPT=$({oneliner}) && python3 "$SCRIPT" {tail}'], cwd=deep,
+                           env=clean_env(), capture_output=True, text=True)
+        out = r.stdout + r.stderr
+        ran = r.returncode == 0 and DECOY not in out
+        ran = ran and (clusters(r.stdout) != [] if s == "failure-digest" else ("aaaa0001" in out or "aaaa0002" in out))
+        pwned = [p for p in Path(tmp).rglob("PWNED")]
+        check(f"quoted_expression_runs_in_hostile_path_{s}", ran and not pwned, f"rc={r.returncode} pwned={pwned} out={out[:160]!r}")
+        # Control: pasting the printed path inside double quotes DOES execute the $(...) in the directory name.
+        subprocess.run(["bash", "-c", f'echo "{wt}"'], cwd=deep, capture_output=True, text=True)
+        check(f"pasted_path_in_double_quotes_is_the_hazard_{s}", (deep / "PWNED").exists(),
+              "control: expected the pasted path to expand $(touch PWNED)")
+
+
 def test_status_project_not_shadowed() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         parent = Path(tmp) / "parent"
@@ -370,6 +407,7 @@ def main() -> int:
         test_oneliner(s)
         test_run_readonly(s)
         test_nested_cwd(s)
+        test_quoted_expression_safe_in_hostile_path(s)
     test_status_no_walkup_leak()
     test_status_project_not_shadowed()
     test_allowlist_parser()

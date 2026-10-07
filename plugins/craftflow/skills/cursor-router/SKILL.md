@@ -140,7 +140,7 @@ Do not create a workflow artifact, do not write `cursor-wf.json`, do not dispatc
 not run memory finalization. Each skill is read-only. Only these three skills are exempt; every other
 request is routed normally. If the row's skill directory under `~/.cursor/skills/` is missing,
 read the workspace copy `tools/craftflow-plugin/plugins/craftflow/skills/<skill>/SKILL.md` instead,
-under the workspace root from `git rev-parse --show-toplevel` (a
+under the workspace root from `git rev-parse --show-toplevel` (write it as the quoted expression `"$(git rev-parse --show-toplevel || pwd)"`, never unquoted or pasted; a
 Conductor-provisioned workspace carries it with its scripts); only if that is missing too, tell the user
 to re-run `install-cursor.sh` from a local checkout and stop. A message that matches
 a row's "NOT exempt" column, or matches no row clearly, is a normal development request — it is
