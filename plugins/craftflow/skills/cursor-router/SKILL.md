@@ -118,22 +118,29 @@ message** (mirrors § 2 Memory Load's "Run this before routing" note): read
 
 ### Router-exempt inspection skills
 
-Precedence: this block runs only AFTER the pending-answer check above. While
-`pending_skill_approval` or `pending_gate` is non-null, a retro request is handled by that
-check like any other reply (the pending question is re-asked); tell the user to answer it
-first, then ask for the retro again. The exemption never clears or consumes pending state.
+Three read-only Craftflow skills are inspection tools, not development requests. Each mirrors the
+router exemption it has in Claude Code.
 
-When both are null and the message asks to *run* a Craftflow retrospective on a workflow
-(e.g. "retro", "/retro", "craftflow:retro", "retro this workflow", "run a retrospective on
-wf-…"), do NOT route it. Read `~/.cursor/skills/retro/SKILL.md` and follow it exactly, then
-stop. This path overrides § 2 Memory Load ("Run this before routing" does not apply: nothing
-is routed) and the § 10 ALWAYS-write rules: Do not create a workflow artifact, do not write
-`cursor-wf.json`, do not dispatch any `Task`, do not run memory finalization. The skill is
-read-only; it mirrors the router exemption `craftflow:retro` has in Claude Code. In
-Cursor this block exempts ONLY the retro skill; every other request, including status
-or failure-digest requests, is still routed normally. If `~/.cursor/skills/retro` is missing,
-tell the user to re-run `install-cursor.sh` from a local checkout and stop. A message that
-asks to implement, apply, or fix a retro proposal is a normal development request — it is
+| Skill | Exempt when the message asks to… (examples) | Skill file | NOT exempt (route normally) |
+|---|---|---|---|
+| retro | *run* a Craftflow retrospective on a workflow ("retro", "/retro", "craftflow:retro", "retro this workflow", "run a retrospective on wf-…") | `~/.cursor/skills/retro/SKILL.md` | a request to implement, apply, or fix a retro proposal |
+| status | *show* the status or progress of a Craftflow workflow ("craftflow status", "/status", "workflow status", "wf status", "where am I", "what phase am I in", "what's done", "what's pending", "show progress", "status --all") | `~/.cursor/skills/status/SKILL.md` | a request to continue, resume, or change a workflow; a status question about something that is not a Craftflow workflow (a PR, a deploy, a ticket) |
+| failure-digest | *show* recurring failures across Craftflow workflows ("failure digest", "craftflow failure report", "what keeps failing", "recurring failures", "top blockers") | `~/.cursor/skills/failure-digest/SKILL.md` | a request to fix a recurring failure, add a guard, or otherwise act on a finding |
+
+Precedence: this block runs only AFTER the pending-answer check above. While
+`pending_skill_approval` or `pending_gate` is non-null, a request for any skill in the table is
+handled by that check like any other reply (the pending question is re-asked); tell the user to
+answer it first, then ask again. For status, the `cfstatus` terminal alias (status skill, Terminal
+Usage) works at any time. The exemption never clears or consumes pending state.
+
+When both are null and the message matches a row's "Exempt when" column, do NOT route it. Read
+that row's skill file and follow it exactly, then stop. This path overrides § 2 Memory Load ("Run
+this before routing" does not apply: nothing is routed) and the § 10 ALWAYS-write rules:
+Do not create a workflow artifact, do not write `cursor-wf.json`, do not dispatch any `Task`, do
+not run memory finalization. Each skill is read-only. Only these three skills are exempt; every other
+request is routed normally. If the row's skill directory under `~/.cursor/skills/` is missing,
+tell the user to re-run `install-cursor.sh` from a local checkout and stop. A message that matches
+a row's "NOT exempt" column, or matches no row clearly, is a normal development request — it is
 NOT exempt and falls through to the routing table below.
 
 Route using the first matching signal:

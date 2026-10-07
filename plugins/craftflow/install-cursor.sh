@@ -60,7 +60,7 @@ echo ""
 echo "Craftflow will activate automatically on every dev request (alwaysApply: true)."
 
 echo ""
-echo "→ Craftflow skills (cursor-router, retro)..."
+echo "→ Craftflow skills (cursor-router, retro, status, failure-digest)..."
 
 # Only wire up the skills symlink when running from a real local file — a
 # curl-piped invocation (curl ... | bash) has no accessible plugin checkout to
@@ -117,7 +117,7 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
   }
 # <<< link_cursor_skill
 
-  for SKILL_NAME in cursor-router retro; do
+  for SKILL_NAME in cursor-router retro status failure-digest; do
     link_cursor_skill "$SKILL_NAME"
   done
 
@@ -327,6 +327,8 @@ else
   echo "    at a real local craftflow plugin checkout to pick up craftflow content. Run:"
   echo "      ln -s /path/to/your/craftflow-plugin/skills/cursor-router ~/.cursor/skills/cursor-router"
   echo "      ln -s /path/to/your/craftflow-plugin/skills/retro ~/.cursor/skills/retro"
+  echo "      ln -s /path/to/your/craftflow-plugin/skills/status ~/.cursor/skills/status"
+  echo "      ln -s /path/to/your/craftflow-plugin/skills/failure-digest ~/.cursor/skills/failure-digest"
   echo ""
   echo "  ⚠ Also skipping Cursor write-guard hooks.json install for the same reason — it"
   echo "    needs a real local checkout of this plugin to resolve script paths from. Re-run"
