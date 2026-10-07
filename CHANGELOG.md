@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.26.0] - 2026-10-07
+
+### Features
+
+- wire status and failure-digest into Cursor (skill links + router-exempt table)
+
+### Fixes
+
+- resolve status/failure-digest scripts skill-relative first (SPEC-0031 FR-003)
+
+### Documentation
+
+- document Cursor support for status and failure-digest
+
 ## [1.25.0] - 2026-10-07
 
 ### Features
