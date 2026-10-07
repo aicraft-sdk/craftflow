@@ -1,0 +1,11 @@
+{"event": "workflow_started"}
+{"event": "remediation_created", "phase": "phase_1"}
+{"event": "remediation_created", "phase": "phase_1"}
+{"event": "remediation_created", "phase": "phase_1"}
+{"event": "contradiction_logged", "detail": "plan vs code"}
+{"event": "doubt_verify_refuted", "phase": "phase_1"}
+{"event": "stop_failure", "agent": "builder"}
+{"event": "worktree_fallback", "reason": "dirty tree"}
+{"event": "parallel_fallback", "reason": "overlap"}
+{"event": "agent_completed", "agent": "reviewer", "duration_seconds": 950}
+{"event": "compact_occurred"}

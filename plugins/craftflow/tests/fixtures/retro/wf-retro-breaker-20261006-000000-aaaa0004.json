@@ -1,0 +1,25 @@
+{
+  "workflow_uuid": "wf-retro-breaker-20261006-000000-aaaa0004",
+  "workflow_id": "wf-retro-breaker-20261006-000000-aaaa0004",
+  "workflow_type": "BUILD",
+  "user_request": "fixture request for wf-retro-breaker-20261006-000000-aaaa0004",
+  "created_at": "2026-10-06T09:00:00Z",
+  "updated_at": "2026-10-06T11:00:00Z",
+  "phase_status": {
+    "phase_1": "completed"
+  },
+  "proof_status": "passed",
+  "pending_gate": null,
+  "remediation_history": [],
+  "status_history": [
+    {"event": "workflow_started", "ts": "2026-10-06T09:00:00Z"}
+  ],
+  "telemetry": {
+    "loop_counts": {"re_review": 0},
+    "agent_wall_clock_seconds": {"builder": 0}
+  },
+  "circuit_breaker": {
+    "remfix_count": 0,
+    "tripped": true
+  }
+}

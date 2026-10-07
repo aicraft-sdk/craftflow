@@ -1,0 +1,43 @@
+{
+  "workflow_uuid": "wf-retro-all-20261006-000000-aaaa0003",
+  "workflow_id": "wf-retro-all-20261006-000000-aaaa0003",
+  "workflow_type": "BUILD",
+  "user_request": "fixture request for wf-retro-all-20261006-000000-aaaa0003",
+  "created_at": "2026-10-06T08:00:00Z",
+  "updated_at": "2026-10-06T14:00:00Z",
+  "phase_status": {
+    "phase_1": "completed",
+    "phase_2": "partial"
+  },
+  "proof_status": "gaps_found",
+  "pending_gate": "worktree_dirty_main_tree",
+  "remediation_history": [
+    {"phase": "phase_1", "cycle": 1, "scope": "builder", "origin": ["reviewer"], "reason": "reason 1"},
+    {"phase": "phase_1", "cycle": 2, "scope": "builder", "origin": "verifier", "reason": "reason 2"},
+    {"phase": "phase_1", "cycle": 3, "scope": "builder", "origin": ["reviewer"], "reason": "reason 3"}
+  ],
+  "status_history": [
+    {"event": "workflow_started", "ts": "2026-10-06T08:00:00Z"},
+    {"event": "contradiction_logged", "ts": "2026-10-06T09:00:00Z"},
+    {"event": "doubt_verify_refuted_hard_cap", "ts": "2026-10-06T10:00:00Z"}
+  ],
+  "telemetry": {
+    "loop_counts": {
+      "re_review": 3,
+      "re_hunt": 2,
+      "re_verify": 0,
+      "doubt_verify": 1,
+      "fix_verify": 1,
+      "remfix": 3,
+      "weird": "x"
+    },
+    "agent_wall_clock_seconds": {
+      "builder": 1200,
+      "verifier": 0
+    }
+  },
+  "circuit_breaker": {
+    "remfix_count": 3,
+    "broken": true
+  }
+}

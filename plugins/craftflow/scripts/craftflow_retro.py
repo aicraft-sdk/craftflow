@@ -22,49 +22,20 @@ import re
 import sys
 from pathlib import Path
 
+# One-way import: the signals module is a leaf and never imports this module.
+from craftflow_retro_signals import (  # noqa: F401
+    EXCERPT_MAX, EXTRACTORS, RetroError, _excerpt, _history_entries, _type_name,
+)
+
 SCHEMA_VERSION = 1
 DEFAULT_STATE_DIR = ".craftflow/state"
 WF_ID_RE = re.compile(r"^wf-[A-Za-z0-9][A-Za-z0-9-]*$")
-EXCERPT_MAX = 200
-EVIDENCE_CAP = 10
-SLOW_AGENT_SECONDS = 900
 AMBIGUITY_WINDOW_SECONDS = 900
 LIST_LIMIT = 5
-
-REMFIX_WEIGHT = 3
-REMFIX_EVENTS = ("remediation_created", "remfix_created")
 
 # Optional containers: None means absent; a wrong non-null type is artifact_shape.
 _LIST_FIELDS = ("remediation_history", "status_history")
 _DICT_FIELDS = ("telemetry", "circuit_breaker", "phase_status")
-
-
-class RetroError(Exception):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-
-
-def _type_name(value) -> str:
-    return type(value).__name__
-
-
-def _excerpt(text) -> str:
-    text = str(text)
-    if len(text) <= EXCERPT_MAX:
-        return text
-    return text[: EXCERPT_MAX - 3] + "..."
-
-
-def _ev(source: str, key_or_line, event=None, excerpt: str = "") -> dict:
-    if source == "artifact":
-        return {"source": "artifact", "key": key_or_line, "excerpt": _excerpt(excerpt)}
-    return {"source": "events", "line": key_or_line, "event": event, "excerpt": _excerpt(excerpt)}
-
-
-def _cap(evidence: list) -> tuple:
-    return evidence[:EVIDENCE_CAP], len(evidence)
 
 
 def load_artifact(path: Path) -> dict:
@@ -74,6 +45,8 @@ def load_artifact(path: Path) -> dict:
         raise RetroError("artifact_not_found", f"no workflow artifact at {path}")
     except OSError as exc:
         raise RetroError("artifact_unparseable", f"cannot read {path}: {exc}")
+    except UnicodeDecodeError as exc:
+        raise RetroError("artifact_unparseable", f"{path} is not valid UTF-8: {exc.reason} at byte {exc.start}")
     try:
         data = json.loads(raw)
     except ValueError as exc:
@@ -97,13 +70,19 @@ def load_artifact(path: Path) -> dict:
 
 def load_events(path: Path) -> list:
     try:
-        raw = path.read_text(encoding="utf-8")
+        data = path.read_bytes()
     except FileNotFoundError:
         raise RetroError("events_not_found", f"no events log at {path}")
     except OSError as exc:
         raise RetroError("events_unparseable", f"line 0: cannot read {path}: {exc}")
+    try:
+        raw = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        lineno = data[: exc.start].count(b"\n") + 1
+        raise RetroError("events_unparseable", f"line {lineno}: not valid UTF-8: {exc.reason} at byte {exc.start}")
     events = []
-    for lineno, line in enumerate(raw.splitlines(), start=1):
+    # Split on "\n" only: str.splitlines() also breaks on U+2028/U+0085/form-feed inside JSON strings.
+    for lineno, line in enumerate(raw.split("\n"), start=1):
         if not line.strip():
             continue
         try:
@@ -116,60 +95,10 @@ def load_events(path: Path) -> list:
     return events
 
 
-def _history_entries(artifact: dict, field: str, gaps: list) -> list:
-    """Return [(index, dict)] for dict entries; record skipped non-dict entries in gaps."""
-    entries = []
-    for i, item in enumerate(artifact.get(field) or []):
-        if isinstance(item, dict):
-            entries.append((i, item))
-        else:
-            gaps.append(f"{field}[{i}] is {_type_name(item)}, skipped")
-    return entries
-
-
-def _sig_remfix_cycles(artifact: dict, events: list, gaps: list):
-    entries = _history_entries(artifact, "remediation_history", gaps)
-    breaker = (artifact.get("circuit_breaker") or {}).get("remfix_count")
-    breaker_count = breaker if isinstance(breaker, int) and not isinstance(breaker, bool) else 0
-    event_hits = [(n, e) for n, e in events if e.get("event") in REMFIX_EVENTS]
-    count = max(len(entries), breaker_count, len(event_hits))
-    if count < 1:
-        return None
-    by_phase: dict = {}
-    evidence = []
-    for i, entry in entries:
-        phase = entry.get("phase") or entry.get("phase_id") or "unknown"
-        by_phase[phase] = by_phase.get(phase, 0) + 1
-        text = "{} cycle={} scope={} origin={}: {}".format(
-            phase, entry.get("cycle"), entry.get("scope"), entry.get("origin"), entry.get("reason"))
-        evidence.append(_ev("artifact", f"remediation_history[{i}]", excerpt=text))
-    for lineno, e in event_hits:
-        evidence.append(_ev("events", lineno, e.get("event"), json.dumps(e, sort_keys=True)))
-    shown, total = _cap(evidence)
-    return {
-        "id": "remfix_cycles",
-        "weight": REMFIX_WEIGHT * count,
-        "count": count,
-        "summary": "{} REM-FIX cycles ({})".format(
-            count, ", ".join(f"{p}: {n}" for p, n in sorted(by_phase.items())) or "no phase detail"),
-        "details": {
-            "history_entries": len(entries),
-            "breaker_remfix_count": breaker_count,
-            "event_count": len(event_hits),
-            "by_phase": by_phase,
-        },
-        "evidence_total": total,
-        "evidence": shown,
-    }
-
-
-# Registry: tuple of (signal_id, extractor). Phase 3 extends it; the skill reads the ids.
-EXTRACTORS = (("remfix_cycles", _sig_remfix_cycles),)
-
-
 def extract_signals(artifact: dict, events: list) -> dict:
     """Pure: artifact dict + [(line, event)] -> result dict (selection/inputs filled by caller)."""
     gaps: list = []
+    _history_entries(artifact, "status_history", gaps)  # report non-dict entries once
     if not events:
         gaps.append("events log is empty")
     signals = []
@@ -199,7 +128,7 @@ def extract_signals(artifact: dict, events: list) -> dict:
 
 
 def run(wf_id: str, state_dir: str) -> dict:
-    if not WF_ID_RE.match(wf_id):
+    if not WF_ID_RE.fullmatch(wf_id):
         raise RetroError("invalid_wf_id", f"invalid workflow id {wf_id!r}")
     base = Path(state_dir) / "workflows"
     artifact_path = base / f"{wf_id}.json"

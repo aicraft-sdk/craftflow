@@ -247,12 +247,244 @@ def test_missing_selector_usage_error() -> None:
         check("missing selector exits 2", p.returncode == 2 and p.stdout == "", f"rc={p.returncode}")
 
 
+CATALOG_ORDER = ["remfix_cycles", "circuit_breaker_tripped", "pending_gate", "loop_counts", "doubt_refutations",
+                 "proof_gaps", "stop_failures", "fallbacks", "slow_agents", "contradictions", "compactions"]
+ALL = "wf-retro-all-20261006-000000-aaaa0003"
+BREAKER = "wf-retro-breaker-20261006-000000-aaaa0004"
+
+
 def test_extractors_match_catalog() -> None:
+    print("\n[catalog]")
     import craftflow_retro as cr
     pairs = cr.EXTRACTORS
-    check("EXTRACTORS tuple of (id, fn) pairs",
+    check("EXTRACTORS tuple of (id, fn) pairs in catalog order",
           isinstance(pairs, tuple) and all(isinstance(p, tuple) and len(p) == 2 and callable(p[1]) for p in pairs)
-          and [p[0] for p in pairs] == ["remfix_cycles"], repr(pairs))
+          and [p[0] for p in pairs] == CATALOG_ORDER, repr([p[0] for p in pairs]))
+
+
+def inline(mutate=None, events=None) -> tuple:
+    """Run the CLI on a clean-based inline artifact; return (proc, parsed_out)."""
+    tmp = tempfile.TemporaryDirectory()
+    try:
+        state = Path(tmp.name)
+        art = base_artifact("wf-a")
+        if mutate:
+            mutate(art)
+        ev = "" if events is None else "".join(json.dumps(e) + "\n" for e in events)
+        write_wf(state, "wf-a", art, ev)
+        p = run_cli(["--wf", "wf-a"], state)
+        return p, (json.loads(p.stdout) if p.returncode == 0 else {})
+    finally:
+        tmp.cleanup()
+
+
+def sig_of(out: dict, sid: str):
+    return next((s for s in out.get("signals", []) if s["id"] == sid), None)
+
+
+def _all_out() -> dict:
+    with tempfile.TemporaryDirectory() as tmp:
+        state = materialize(Path(tmp), [ALL])
+        p = run_cli(["--wf", ALL], state)
+        return json.loads(p.stdout) if p.returncode == 0 else {}
+
+
+def test_sort_order_all_fixture() -> None:
+    out = _all_out()
+    got = [(s["id"], s["weight"]) for s in out.get("signals", [])]
+    want = [("circuit_breaker_tripped", 10), ("remfix_cycles", 9), ("proof_gaps", 8), ("loop_counts", 7),
+            ("contradictions", 6), ("doubt_refutations", 6), ("pending_gate", 5), ("fallbacks", 2),
+            ("slow_agents", 2), ("stop_failures", 2), ("compactions", 1)]
+    check("all fixture exact ranking", got == want, repr(got))
+    check("all fixture data_gaps", out.get("data_gaps") == ["telemetry.loop_counts.weird is str, skipped"],
+          repr(out.get("data_gaps")))
+
+
+def test_all_fixture_evidence() -> None:
+    out = _all_out()
+
+    def first(sid):
+        s = sig_of(out, sid) or {}
+        e = (s.get("evidence") or [{}])[0]
+        return (s.get("count"), e.get("key") or e.get("line"))
+    check("all: breaker", first("circuit_breaker_tripped") == (1, "circuit_breaker"), repr(first("circuit_breaker_tripped")))
+    check("all: pending_gate", first("pending_gate") == (1, "pending_gate"), repr(first("pending_gate")))
+    check("all: loop_counts", first("loop_counts") == (7, "telemetry.loop_counts.re_review"), repr(first("loop_counts")))
+    check("all: doubt", first("doubt_refutations") == (2, "status_history[2]"), repr(first("doubt_refutations")))
+    check("all: proof_gaps", first("proof_gaps") == (2, "proof_status"), repr(first("proof_gaps")))
+    check("all: stop_failures", first("stop_failures") == (1, 7), repr(first("stop_failures")))
+    check("all: fallbacks", first("fallbacks") == (2, 8), repr(first("fallbacks")))
+    check("all: slow_agents", first("slow_agents") == (2, "telemetry.agent_wall_clock_seconds.builder"),
+          repr(first("slow_agents")))
+    check("all: contradictions", first("contradictions") == (2, "status_history[1]"), repr(first("contradictions")))
+    check("all: compactions", first("compactions") == (1, 11), repr(first("compactions")))
+    loops = sig_of(out, "loop_counts") or {}
+    check("all: loop_counts excludes remfix", "remfix" not in json.dumps(loops.get("evidence")), repr(loops))
+
+
+def test_breaker_variant_key() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state = materialize(Path(tmp), [BREAKER])
+        p = run_cli(["--wf", BREAKER], state)
+        out = json.loads(p.stdout) if p.returncode == 0 else {}
+        check("breaker variant tripped only", [s["id"] for s in out.get("signals", [])] == ["circuit_breaker_tripped"],
+              p.stderr + p.stdout)
+
+
+def test_breaker_event_fires() -> None:
+    _, out = inline(events=[{"event": "circuit_breaker_tripped"}])
+    s = sig_of(out, "circuit_breaker_tripped") or {}
+    check("breaker event fires", s.get("evidence", [{}])[-1].get("line") == 1, repr(s))
+
+
+def test_pending_gate_variants() -> None:
+    for val in ("none", "", None):
+        _, out = inline(lambda a, v=val: a.__setitem__("pending_gate", v))
+        check(f"pending_gate {val!r} ignored", sig_of(out, "pending_gate") is None, repr(out.get("signals")))
+    _, out = inline(lambda a: a.__setitem__("pending_gate", {"kind": "dirty_tree", "x": 1}))
+    s = sig_of(out, "pending_gate") or {}
+    check("pending_gate dict uses kind", "dirty_tree" in s.get("summary", "") and s.get("weight") == 5, repr(s))
+    _, out = inline(lambda a: a.__setitem__("pending_gate", {"x": 1}))
+    check("pending_gate dict without kind uses json", '"x": 1' in (sig_of(out, "pending_gate") or {}).get("summary", ""),
+          repr(out.get("signals")))
+
+
+def test_loop_counts_excludes_remfix_and_flags_non_int() -> None:
+    def mut(a):
+        a["telemetry"]["loop_counts"] = {"remfix": 9, "re_review": 2, "bad": "x", "flag": True, "neg": -1}
+    _, out = inline(mut)
+    s = sig_of(out, "loop_counts") or {}
+    check("loop_counts sum excludes remfix", (s.get("count"), s.get("weight")) == (2, 2), repr(s))
+    gaps = out.get("data_gaps", [])
+    check("loop_counts non-int gaps", "telemetry.loop_counts.bad is str, skipped" in gaps
+          and "telemetry.loop_counts.flag is bool, skipped" in gaps, repr(gaps))
+    _, out = inline(lambda a: a["telemetry"].__setitem__("loop_counts", {"remfix": 5}))
+    check("loop_counts remfix-only no signal", sig_of(out, "loop_counts") is None, repr(out.get("signals")))
+
+
+def test_proof_gaps_tokens() -> None:
+    def mut(a):
+        a["proof_status"] = "passed"
+        a["phase_status"] = {"p1": "verified_passed_with_disclosed_gap", "p2": "completed_with_disclosed_descope",
+                             "p3": "failed", "p4": "blocked", "p5": "completed", "p6": "verified_passed", "p7": 5}
+    _, out = inline(mut)
+    s = sig_of(out, "proof_gaps") or {}
+    keys = [e["key"] for e in s.get("evidence", [])]
+    check("proof_gaps tokens", s.get("count") == 4 and s.get("weight") == 16
+          and keys == ["phase_status.p1", "phase_status.p2", "phase_status.p3", "phase_status.p4"], repr(s))
+    _, out = inline(lambda a: a.__setitem__("proof_status", "human_needed"))
+    check("proof_gaps human_needed", (sig_of(out, "proof_gaps") or {}).get("count") == 1, repr(out.get("signals")))
+    _, out = inline(lambda a: a.__setitem__("proof_status", "passed"))
+    check("proof_gaps passed none", sig_of(out, "proof_gaps") is None, repr(out.get("signals")))
+
+
+def test_slow_agents_threshold() -> None:
+    def mut(a):
+        a["telemetry"]["agent_wall_clock_seconds"] = {"a": 899, "b": 900, "c": 0, "d": "x", "e": True}
+    _, out = inline(mut, events=[{"event": "agent_completed", "duration_seconds": 899},
+                                 {"event": "agent_completed", "duration_seconds": 900},
+                                 {"event": "agent_completed", "duration_seconds": 0}])
+    s = sig_of(out, "slow_agents") or {}
+    check("slow_agents threshold", s.get("count") == 2 and [e.get("key") or e.get("line") for e in s["evidence"]]
+          == ["telemetry.agent_wall_clock_seconds.b", 2], repr(s))
+
+
+def test_contradictions_both_sources() -> None:
+    def mut(a):
+        a["status_history"].append({"event": "contradiction_logged"})
+    _, out = inline(mut, events=[{"event": "contradiction_logged"}])
+    s = sig_of(out, "contradictions") or {}
+    check("contradictions both sources", (s.get("count"), s.get("weight"), s.get("evidence_total")) == (2, 6, 2)
+          and s["evidence"][0].get("key") == "status_history[1]" and s["evidence"][1].get("line") == 1, repr(s))
+
+
+def test_doubt_refutations_prefix() -> None:
+    def mut(a):
+        a["status_history"].append({"event": "doubt_verify_refuted_hard_cap"})
+        a["status_history"].append({"event": "doubt_verify_passed"})
+    _, out = inline(mut, events=[{"event": "doubt_verify_refuted"}, {"event": "doubt_verify_confirmed"}])
+    s = sig_of(out, "doubt_refutations") or {}
+    check("doubt_refutations prefix", (s.get("count"), s.get("weight")) == (2, 6), repr(s))
+
+
+def test_fallbacks_both_events() -> None:
+    _, out = inline(events=[{"event": "parallel_fallback"}, {"event": "worktree_fallback"}])
+    s = sig_of(out, "fallbacks") or {}
+    check("fallbacks both events", (s.get("count"), s.get("weight")) == (2, 2)
+          and [e["line"] for e in s["evidence"]] == [1, 2], repr(s))
+
+
+def test_compactions() -> None:
+    _, out = inline(events=[{"event": "compact_occurred"}, {"event": "compact_occurred"}])
+    s = sig_of(out, "compactions") or {}
+    check("compactions", (s.get("count"), s.get("weight")) == (2, 2), repr(s))
+
+
+def test_stop_failures() -> None:
+    _, out = inline(events=[{"event": "stop_failure"}, {"event": "agent_completed"}, {"event": "stop_failure"}])
+    s = sig_of(out, "stop_failures") or {}
+    check("stop_failures", (s.get("count"), s.get("weight")) == (2, 4)
+          and [e["line"] for e in s["evidence"]] == [1, 3], repr(s))
+
+
+def test_evidence_cap_and_excerpt_truncation() -> None:
+    _, out = inline(events=[{"event": "stop_failure", "note": "y" * 500} for _ in range(15)])
+    s = sig_of(out, "stop_failures") or {}
+    check("evidence cap", len(s.get("evidence", [])) == 10 and s.get("evidence_total") == 15 and s.get("count") == 15,
+          repr(s)[:300])
+    ex = s.get("evidence", [{}])[0].get("excerpt", "")
+    check("excerpt truncated", len(ex) == 200 and ex.endswith("..."), repr(ex))
+
+
+def test_zero_signals_friction_false() -> None:
+    _, out = inline()
+    check("zero signals", out.get("friction_found") is False and out.get("signals") == [], repr(out))
+
+
+def test_leaf_shape_gaps() -> None:
+    def mut(a):
+        a["status_history"].append("oops")
+    _, out = inline(mut)
+    check("status_history non-dict gap", "status_history[1] is str, skipped" in out.get("data_gaps", []),
+          repr(out.get("data_gaps")))
+
+
+def test_f1_non_utf8_artifact() -> None:
+    print("\n[F1-F3]")
+    with tempfile.TemporaryDirectory() as tmp:
+        state = Path(tmp)
+        write_wf(state, "wf-a", base_artifact("wf-a"), "")
+        (state / "workflows" / "wf-a.json").write_bytes(b'{"a": "\xff\xfe"}')
+        expect_error("F1 non-utf8 artifact", run_cli(["--wf", "wf-a"], state), "artifact_unparseable")
+
+
+def test_f1_non_utf8_events() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state = Path(tmp)
+        write_wf(state, "wf-a", base_artifact("wf-a"), "")
+        (state / "workflows" / "wf-a.events.jsonl").write_bytes(b'{"event": "x"}\n{"event": "\xff"}\n')
+        expect_error("F1 non-utf8 events", run_cli(["--wf", "wf-a"], state), "events_unparseable", "line ")
+
+
+def test_f2_trailing_newline_wf_id() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        expect_error("F2 trailing newline wf id", run_cli(["--wf", "wf-a\n"], Path(tmp)), "invalid_wf_id")
+
+
+def test_f3_unicode_line_separator_in_event() -> None:
+    ev = '{"event": "stop_failure", "note": "a b\u0085c"}\n{"event": "stop_failure"}\n{bad\n'
+    with tempfile.TemporaryDirectory() as tmp:
+        state = Path(tmp)
+        write_wf(state, "wf-a", base_artifact("wf-a"), ev)
+        expect_error("F3 U+2028 keeps physical line numbers", run_cli(["--wf", "wf-a"], state),
+                     "events_unparseable", "line 3")
+    with tempfile.TemporaryDirectory() as tmp:
+        state = Path(tmp)
+        write_wf(state, "wf-a", base_artifact("wf-a"), ev.rsplit("{bad", 1)[0])
+        p = run_cli(["--wf", "wf-a"], state)
+        out = json.loads(p.stdout) if p.returncode == 0 else {}
+        check("F3 valid event with U+2028 parses", p.returncode == 0 and out["inputs"]["events_lines"] == 2
+              and (sig_of(out, "stop_failures") or {}).get("count") == 2, p.stderr)
 
 
 def test_output_deterministic() -> None:
@@ -286,16 +518,24 @@ def test_read_only_snapshot() -> None:
 
 
 def test_import_cheap() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        env = dict(os.environ)
-        env["PYTHONPATH"] = str(SCRIPTS)
-        t0 = time.monotonic()
-        proc = subprocess.run([sys.executable, "-c", "import craftflow_retro"], cwd=tmp,
-                              stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=10)
-        elapsed = time.monotonic() - t0
-        listing = os.listdir(tmp)
-        check("import cheap", proc.returncode == 0 and proc.stdout == "" and elapsed < 0.5 and listing == [],
-              f"rc={proc.returncode} out={proc.stdout!r} err={proc.stderr!r} t={elapsed:.2f} ls={listing}")
+    for mod in ("craftflow_retro", "craftflow_retro_signals"):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(SCRIPTS)
+            t0 = time.monotonic()
+            proc = subprocess.run([sys.executable, "-c", f"import {mod}"], cwd=tmp,
+                                  stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=10)
+            elapsed = time.monotonic() - t0
+            listing = os.listdir(tmp)
+            check(f"import cheap {mod}", proc.returncode == 0 and proc.stdout == "" and elapsed < 0.5 and listing == [],
+                  f"rc={proc.returncode} out={proc.stdout!r} err={proc.stderr!r} t={elapsed:.2f} ls={listing}")
+
+
+def test_signals_module_is_leaf() -> None:
+    src = (SCRIPTS / "craftflow_retro_signals.py").read_text()
+    check("signals module never imports craftflow_retro",
+          "import craftflow_retro\n" not in src and "from craftflow_retro " not in src
+          and "from craftflow_retro import" not in src)
 
 
 def main() -> int:
@@ -305,7 +545,13 @@ def main() -> int:
         test_events_unparseable_line, test_events_non_object_line, test_events_empty_file,
         test_events_blank_lines_ignored, test_non_dict_history_entry_skipped, test_invalid_wf_id,
         test_missing_selector_usage_error, test_extractors_match_catalog, test_output_deterministic,
-        test_read_only_snapshot, test_import_cheap,
+        test_read_only_snapshot, test_import_cheap, test_signals_module_is_leaf,
+        test_sort_order_all_fixture, test_all_fixture_evidence, test_breaker_variant_key, test_breaker_event_fires,
+        test_pending_gate_variants, test_loop_counts_excludes_remfix_and_flags_non_int, test_proof_gaps_tokens,
+        test_slow_agents_threshold, test_contradictions_both_sources, test_doubt_refutations_prefix,
+        test_fallbacks_both_events, test_compactions, test_stop_failures, test_evidence_cap_and_excerpt_truncation,
+        test_zero_signals_friction_false, test_leaf_shape_gaps, test_f1_non_utf8_artifact, test_f1_non_utf8_events,
+        test_f2_trailing_newline_wf_id, test_f3_unicode_line_separator_in_event,
     ]
     for t in tests:
         try:
