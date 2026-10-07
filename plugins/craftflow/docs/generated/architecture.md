@@ -101,7 +101,6 @@ flowchart LR
   agent_planner["planner"]
   agent_silent_failure_hunter["silent-failure-hunter"]
   agent_skill_author["skill-author"]
-  skill_craftflow_session_memory(["craftflow:session-memory"])
   skill_craftflow_debugging_patterns(["craftflow:debugging-patterns"])
   skill_craftflow_test_driven_development(["craftflow:test-driven-development"])
   skill_craftflow_verification_before_completion(["craftflow:verification-before-completion"])
@@ -110,22 +109,18 @@ flowchart LR
   skill_craftflow_diff_driven_docs(["craftflow:diff-driven-docs"])
   skill_craftflow_planning_patterns(["craftflow:planning-patterns"])
   skill_craftflow_skill_distillation(["craftflow:skill-distillation"])
-  agent_bug_investigator --> skill_craftflow_session_memory
   agent_bug_investigator --> skill_craftflow_debugging_patterns
   agent_bug_investigator --> skill_craftflow_test_driven_development
   agent_bug_investigator --> skill_craftflow_verification_before_completion
   agent_code_reviewer --> skill_craftflow_code_review_patterns
   agent_code_reviewer --> skill_craftflow_verification_before_completion
-  agent_component_builder --> skill_craftflow_session_memory
   agent_component_builder --> skill_craftflow_test_driven_development
   agent_component_builder --> skill_craftflow_code_generation
   agent_component_builder --> skill_craftflow_verification_before_completion
   agent_doc_syncer --> skill_craftflow_diff_driven_docs
   agent_doc_syncer --> skill_craftflow_verification_before_completion
   agent_integration_verifier --> skill_craftflow_verification_before_completion
-  agent_plan_bakeoff_judge --> skill_craftflow_session_memory
   agent_plan_bakeoff_judge --> skill_craftflow_planning_patterns
-  agent_planner --> skill_craftflow_session_memory
   agent_planner --> skill_craftflow_planning_patterns
   agent_silent_failure_hunter --> skill_craftflow_code_review_patterns
   agent_skill_author --> skill_craftflow_skill_distillation
@@ -154,5 +149,5 @@ flowchart LR
 ## Inventory
 
 - 14 agents (`agents/*.md`)
-- 33 skills (`skills/*/SKILL.md`)
+- 34 skills (`skills/*/SKILL.md`)
 - 24 hook scripts wired in `hooks/hooks.json`

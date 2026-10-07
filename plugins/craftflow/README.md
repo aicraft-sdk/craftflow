@@ -10,7 +10,7 @@ Every build, debug, review, and plan task routes through a single entry point th
 
 - **Routes all dev tasks** — one router (`craftflow-router`) classifies intent and dispatches to the right agent chain automatically
 - **Agent chain** — 14 specialized agents: planner, component-builder, bug-investigator, code-reviewer, silent-failure-hunter, integration-verifier, and more
-- **29 skills** — planning patterns, TDD, code generation, debugging, diff-driven docs, workflow status, and others
+- **34 skills** — planning patterns, TDD, code generation, debugging, diff-driven docs, workflow status, workflow retrospectives, and others
 - **Hook system** — Python lifecycle hooks for memory protection, write guards, URL caching, and session continuity
 - **Shared state** — `.craftflow/state/` is readable by both Claude Code and Cursor
 - **Feature-named workflows** — workflow folders, files, and worktrees are named after the feature (`wf-auth-refactor-20260706-d4e5f6a7`) so you can identify them at a glance
@@ -175,6 +175,20 @@ craftflow status
 
 ---
 
+## Retrospective on one workflow — /retro
+
+`craftflow:retro` reads one finished workflow and shows its friction (REM-FIX cycles, tripped
+breaker, gates, loop counts, refutations, proof gaps, stop failures, fallbacks, slow agents,
+contradictions, compactions) with ranked, evidence-cited proposals for fixing the environment.
+It is read-only and router-exempt: it creates no tasks and writes nothing.
+
+- Claude Code: `/craftflow:retro` (latest workflow) or `/craftflow:retro <wf-id>`
+- Cursor: say "retro" (needs `~/.cursor/skills/retro`, linked by `install-cursor.sh`)
+- Terminal: `alias cfretro='python3 /path/to/craftflow_retro.py'`, then `cfretro --latest`
+- To act on a proposal, ask for it as a normal request; it goes through the router.
+
+---
+
 ## Install — Claude Code
 
 ```bash
@@ -190,7 +204,7 @@ Then add to `~/.claude/CLAUDE.md`:
 
 ## Install — Cursor AI
 
-If you have a local checkout of this plugin, run the script directly — it wires up the MDC rules **and** symlinks the `cursor-router` skill into `~/.cursor/skills/cursor-router` automatically (idempotent; backs up any stale content it finds there):
+If you have a local checkout of this plugin, run the script directly — it wires up the MDC rules **and** symlinks the `cursor-router` and `retro` skills into `~/.cursor/skills/` automatically (idempotent; backs up any stale content it finds there):
 
 ```bash
 bash tools/craftflow-plugin/plugins/craftflow/install-cursor.sh
@@ -205,6 +219,8 @@ npx skills add aicraft-sdk/craftflow --skill cursor-router
 # 2. Install MDC rules (auto-activates Craftflow on every dev request)
 curl -fsSL https://raw.githubusercontent.com/aicraft-sdk/craftflow/main/plugins/craftflow/install-cursor.sh | bash
 ```
+
+`craftflow:retro` runs a script that ships next to the skill, so it needs a local checkout linked by `install-cursor.sh`; `npx skills add` copies only the skill folder and does not work for retro.
 
 Craftflow will activate automatically on every dev request via `alwaysApply: true`.
 

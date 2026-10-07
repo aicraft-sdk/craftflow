@@ -168,6 +168,95 @@ def test_steps_present() -> None:
     check("line_count", len(text.splitlines()) < 400, f"{len(text.splitlines())} lines")
 
 
+INSTALL = PLUGIN_ROOT / "install-cursor.sh"
+CURSOR_ROUTER = PLUGIN_ROOT / "skills" / "cursor-router" / "SKILL.md"
+README_PLUGIN = PLUGIN_ROOT / "README.md"
+README_ROOT = PLUGIN_ROOT.parents[1] / "README.md"
+
+
+def test_install_link_function_hermetic() -> None:
+    import os
+    import subprocess
+    import tempfile
+    text = INSTALL.read_text(encoding="utf-8")
+    m = re.search(r"^# >>> link_cursor_skill\n(.*?)^# <<< link_cursor_skill", text, re.M | re.S)
+    check("link_fn_markers", m is not None, "link_cursor_skill markers missing")
+    if not m:
+        return
+    fn = m.group(1)
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp) / "skills"
+        env = {"PATH": os.environ["PATH"], "HOME": tmp, "PLUGIN_ROOT": str(PLUGIN_ROOT),
+               "CURSOR_SKILLS_DIR": str(home)}
+        cmd = fn + "\nlink_cursor_skill cursor-router; link_cursor_skill retro\n"
+        r1 = subprocess.run(["bash", "-c", cmd], env=env, capture_output=True, text=True)
+        check("link_fresh_exit", r1.returncode == 0, r1.stderr)
+        for n in ("cursor-router", "retro"):
+            e = home / n
+            check(f"link_fresh_{n}", e.is_symlink() and os.path.realpath(e) == os.path.realpath(PLUGIN_ROOT / "skills" / n), f"{n} not linked")
+        r2 = subprocess.run(["bash", "-c", cmd], env=env, capture_output=True, text=True)
+        check("link_idempotent", r2.stdout.count("already correctly linked") == 2, r2.stdout)
+    with tempfile.TemporaryDirectory() as tmp2:
+        home = Path(tmp2) / "skills"
+        (home / "retro").mkdir(parents=True)
+        env = {"PATH": os.environ["PATH"], "HOME": tmp2, "PLUGIN_ROOT": str(PLUGIN_ROOT),
+               "CURSOR_SKILLS_DIR": str(home)}
+        r3 = subprocess.run(["bash", "-c", fn + "\nlink_cursor_skill retro\n"], env=env, capture_output=True, text=True)
+        backups = [p.name for p in home.iterdir() if p.name.startswith("retro.stale-backup-")]
+        check("link_stale_backup", len(backups) == 1, f"backups={backups} {r3.stderr}")
+        check("link_stale_relinked", (home / "retro").is_symlink() and os.path.realpath(home / "retro") == os.path.realpath(PLUGIN_ROOT / "skills" / "retro"), "retro not relinked")
+
+
+def test_install_curl_piped_hint_mentions_retro() -> None:
+    check("curl_hint_retro", "skills/retro ~/.cursor/skills/retro" in INSTALL.read_text(encoding="utf-8"), "hint missing")
+
+
+def test_cursor_router_exemption_block() -> None:
+    t = CURSOR_ROUTER.read_text(encoding="utf-8")
+    i = t.find("### Router-exempt inspection skills")
+    a = t.find("Only when both `pending_skill_approval` and `pending_gate` are null")
+    b = t.find("Route using the first matching signal:")
+    check("exempt_order", a != -1 and a < i < b, f"a={a} i={i} b={b}")
+    if i == -1 or b == -1:
+        return
+    blk = t[i:b]
+    for needle in ("~/.cursor/skills/retro/SKILL.md", "Do not create a workflow artifact",
+                   "implement, apply, or fix", "pending_gate", "overrides § 2", "§ 10"):
+        check(f"exempt_has_{needle[:20]}", needle in blk, f"missing {needle}")
+
+
+def test_cursor_router_hard_rules_carve_out() -> None:
+    t = CURSOR_ROUTER.read_text(encoding="utf-8")
+    i = t.find("## 10. Hard Rules (Cursor)")
+    check("carve_out", i != -1 and '- The § 1 "Router-exempt inspection skills" path is not a workflow' in t[i:], "carve-out bullet missing")
+
+
+def test_readme_counts_and_install() -> None:
+    n = len(list((PLUGIN_ROOT / "skills").glob("*/SKILL.md")))
+    for rd in (README_ROOT, README_PLUGIN):
+        t = rd.read_text(encoding="utf-8")
+        check(f"no_29_{rd.parent.name}", "29 skill" not in t, "still says 29 skill")
+        check(f"count_{rd.parent.name}", f"{n} skill" in t, f"no '{n} skill'")
+    check("no_npx_retro", "--skill retro" not in README_PLUGIN.read_text(encoding="utf-8"), "npx retro line present")
+
+
+def test_symlink_realpath_resolution() -> None:
+    import shutil
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        sk = Path(tmp) / "skills"
+        sk.mkdir()
+        (sk / "retro").symlink_to(PLUGIN_ROOT / "skills" / "retro")
+        check("symlink_reaches_script", (sk / "retro" / "SKILL.md").resolve().parents[2].joinpath("scripts", "craftflow_retro.py").exists(), "script not reached")
+    with tempfile.TemporaryDirectory() as tmp2:
+        sk = Path(tmp2) / "skills"
+        sk.mkdir()
+        shutil.copytree(PLUGIN_ROOT / "skills" / "retro", sk / "retro")
+        check("copy_misses_script_step_c", not (sk / "retro" / "SKILL.md").resolve().parents[2].joinpath("scripts", "craftflow_retro.py").exists(), "copy unexpectedly resolves")
+    t = read_skill()
+    check("step_c_message", "craftflow_retro.py not found" in t and "install-cursor.sh" in t, "step (c) message missing")
+
+
 def main() -> int:
     test_skill_exists()
     test_frontmatter()
@@ -176,6 +265,12 @@ def main() -> int:
     test_rubric_no_mappable_line()
     test_skill_resolution_order()
     test_steps_present()
+    test_install_link_function_hermetic()
+    test_install_curl_piped_hint_mentions_retro()
+    test_cursor_router_exemption_block()
+    test_cursor_router_hard_rules_carve_out()
+    test_readme_counts_and_install()
+    test_symlink_realpath_resolution()
     print(f"\n{_passes} passed, {len(_errors)} failed")
     for e in _errors:
         print(e)

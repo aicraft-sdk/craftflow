@@ -116,6 +116,26 @@ message** (mirrors § 2 Memory Load's "Run this before routing" note): read
 - Only when both `pending_skill_approval` and `pending_gate` are null does Intent
   Routing below apply to the incoming message.
 
+### Router-exempt inspection skills
+
+Precedence: this block runs only AFTER the pending-answer check above. While
+`pending_skill_approval` or `pending_gate` is non-null, a retro request is handled by that
+check like any other reply (the pending question is re-asked); tell the user to answer it
+first, then ask for the retro again. The exemption never clears or consumes pending state.
+
+When both are null and the message asks to *run* a Craftflow retrospective on a workflow
+(e.g. "retro", "/retro", "craftflow:retro", "retro this workflow", "run a retrospective on
+wf-…"), do NOT route it. Read `~/.cursor/skills/retro/SKILL.md` and follow it exactly, then
+stop. This path overrides § 2 Memory Load ("Run this before routing" does not apply: nothing
+is routed) and the § 10 ALWAYS-write rules: Do not create a workflow artifact, do not write
+`cursor-wf.json`, do not dispatch any `Task`, do not run memory finalization. The skill is
+read-only; it mirrors the router exemption `craftflow:retro` has in Claude Code. In
+Cursor this block exempts ONLY the retro skill; every other request, including status
+or failure-digest requests, is still routed normally. If `~/.cursor/skills/retro` is missing,
+tell the user to re-run `install-cursor.sh` from a local checkout and stop. A message that
+asks to implement, apply, or fix a retro proposal is a normal development request — it is
+NOT exempt and falls through to the routing table below.
+
 Route using the first matching signal:
 
 | Priority | Signal | Keywords | Workflow | Chain |
@@ -1148,6 +1168,9 @@ When an agent file contains `TaskList()`, `TaskGet()`, or `Agent(...)` calls:
   violate this rule's intent.
 - ALWAYS write cursor-wf.json after each phase completes
 - ALWAYS write the main workflow artifact for hook and resume compatibility
+- The § 1 "Router-exempt inspection skills" path is not a workflow: the ALWAYS-write
+  `cursor-wf.json` / main-artifact rules, § 2 Memory Load and memory finalization do not
+  apply to it. It stays read-only and stops after the skill's output.
 - NEVER auto-select Approve or Approve + register in SKILL_HINTS for the § 5a
   Skill-Distill Gate under `AUTO_PROCEED: true` — both require an explicit human
   answer regardless of that setting; the fail-closed default is Defer.
