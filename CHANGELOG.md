@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.25.0] - 2026-10-07
+
+### Features
+
+- wire craftflow:retro into Cursor (skill link + router-exempt branch)
+- add craftflow:retro skill (read-only, router-exempt)
+- add deterministic retro workflow selection (--latest/--list)
+- extract all retro friction signals with cited evidence
+- add read-only craftflow_retro signal extractor (remfix tracer)
+
+### Fixes
+
+- make LV-R5 script restore survive lost shell state, bash and zsh safe
+- forbid speculative causation in retro pruning proposals
+
+### Tests
+
+- add LV-R5 cursor end-to-end human-verify script
+- add retro live harness manifest
+- assert install-cursor loop links retro
+
 ## [1.24.4] - 2026-10-07
 
 ### Fixes
