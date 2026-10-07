@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.24.2] - 2026-10-07
+
+### Performance
+
+- split preloaded agent skills into core + on-demand references (PR 2)
+- cut router prompt and memory-load token cost (PR 1)
+
 ## [1.24.1] - 2026-10-01
 
 ### Fixes
