@@ -5,7 +5,7 @@ Reads one workflow artifact (<state-dir>/workflows/<id>.json) and its events log
 (<state-dir>/workflows/<id>.events.jsonl) and prints friction signals with evidence.
 
 Usage:
-  python3 craftflow_retro.py --wf <workflow-id> [--state-dir .craftflow/state]
+  python3 craftflow_retro.py (--wf <workflow-id> | --latest | --list) [--state-dir .craftflow/state]
 
 Exit codes:
   0  success (JSON on stdout; friction_found may be false)
@@ -20,6 +20,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # One-way import: the signals module is a leaf and never imports this module.
@@ -32,6 +33,7 @@ DEFAULT_STATE_DIR = ".craftflow/state"
 WF_ID_RE = re.compile(r"^wf-[A-Za-z0-9][A-Za-z0-9-]*$")
 AMBIGUITY_WINDOW_SECONDS = 900
 LIST_LIMIT = 5
+LIST_REQUEST_MAX = 120
 
 # Optional containers: None means absent; a wrong non-null type is artifact_shape.
 _LIST_FIELDS = ("remediation_history", "status_history")
@@ -127,7 +129,7 @@ def extract_signals(artifact: dict, events: list) -> dict:
     }
 
 
-def run(wf_id: str, state_dir: str) -> dict:
+def run(wf_id: str, state_dir: str, mode: str = "explicit") -> dict:
     if not WF_ID_RE.fullmatch(wf_id):
         raise RetroError("invalid_wf_id", f"invalid workflow id {wf_id!r}")
     base = Path(state_dir) / "workflows"
@@ -136,6 +138,7 @@ def run(wf_id: str, state_dir: str) -> dict:
     artifact = load_artifact(artifact_path)
     events = load_events(events_path)
     result = extract_signals(artifact, events)
+    result["selection"] = {"mode": mode}
     result["inputs"] = {
         "artifact": str(artifact_path),
         "events": str(events_path),
@@ -144,13 +147,89 @@ def run(wf_id: str, state_dir: str) -> dict:
     return result
 
 
+def _sort_time(artifact: dict, path: Path) -> float:
+    """Epoch seconds from artifact updated_at (naive = UTC), else file mtime."""
+    raw = artifact.get("updated_at")
+    if isinstance(raw, str):
+        try:
+            dt = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except ValueError:
+            pass
+    return path.stat().st_mtime
+
+
+def _candidates(workflows_dir: Path):
+    """Return (candidates newest-first, skipped_unparseable). Candidates are dicts with 'stem', 'ts', 'artifact'."""
+    found, skipped = [], 0
+    if workflows_dir.is_dir():
+        for path in sorted(workflows_dir.glob("wf-*.json")):
+            if not path.is_file():
+                continue
+            try:
+                artifact = load_artifact(path)
+            except RetroError:
+                skipped += 1
+                continue
+            wf_id = artifact.get("workflow_uuid") or artifact.get("workflow_id")
+            found.append({"id": str(wf_id), "stem": path.name[: -len(".json")],
+                          "ts": _sort_time(artifact, path), "artifact": artifact})
+    found.sort(key=lambda c: (-c["ts"], c["id"]))
+    return found, skipped
+
+
+def _clip(text, limit: int) -> str:
+    text = str(text)
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _is_ambiguous(cands: list) -> bool:
+    return len(cands) >= 2 and cands[0]["ts"] - cands[1]["ts"] <= AMBIGUITY_WINDOW_SECONDS
+
+
+def run_latest(state_dir: str) -> dict:
+    cands, _ = _candidates(Path(state_dir) / "workflows")
+    if not cands:
+        raise RetroError("no_workflows", f"no workflow artifacts under {Path(state_dir) / 'workflows'}")
+    if _is_ambiguous(cands):
+        raise RetroError("ambiguous_selection",
+                         f"{cands[0]['id']}, {cands[1]['id']} updated within {AMBIGUITY_WINDOW_SECONDS}s; "
+                         f"rerun with --wf <id> (see --list)")
+    return run(cands[0]["stem"], state_dir, mode="latest")
+
+
+def run_list(state_dir: str) -> dict:
+    cands, skipped = _candidates(Path(state_dir) / "workflows")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "candidates": [
+            {"workflow_uuid": c["id"], "workflow_type": c["artifact"].get("workflow_type"),
+             "updated_at": c["artifact"].get("updated_at"),
+             "user_request": _clip(c["artifact"].get("user_request") or "", LIST_REQUEST_MAX)}
+            for c in cands[:LIST_LIMIT]
+        ],
+        "ambiguous": _is_ambiguous(cands),
+        "skipped_unparseable": skipped,
+    }
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Read-only workflow retrospective signal extractor.")
     parser.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
-    parser.add_argument("--wf", required=True, help="workflow id (wf-...)")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--wf", help="workflow id (wf-...)")
+    group.add_argument("--latest", action="store_true", help="newest workflow (fails if ambiguous)")
+    group.add_argument("--list", action="store_true", help="list up to 5 newest candidates")
     args = parser.parse_args(argv)
     try:
-        result = run(args.wf, args.state_dir)
+        if args.list:
+            result = run_list(args.state_dir)
+        elif args.latest:
+            result = run_latest(args.state_dir)
+        else:
+            result = run(args.wf, args.state_dir)
     except RetroError as exc:
         sys.stderr.write(f"ERROR: {exc.code}: {exc.message}\n")
         return 1

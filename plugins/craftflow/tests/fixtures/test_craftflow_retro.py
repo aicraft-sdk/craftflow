@@ -247,6 +247,121 @@ def test_missing_selector_usage_error() -> None:
         check("missing selector exits 2", p.returncode == 2 and p.stdout == "", f"rc={p.returncode}")
 
 
+NEAR = "wf-retro-near-20261006-000000-aaaa0005"
+
+
+def _inline(state: Path, name: str, updated_at) -> None:
+    art = base_artifact(name)
+    if updated_at is None:
+        del art["updated_at"]
+    else:
+        art["updated_at"] = updated_at
+    write_wf(state, name, art, '{"event": "workflow_started"}\n')
+
+
+def test_latest_picks_newest() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state = materialize(Path(tmp), [CLEAN, REMFIX])
+        p = run_cli(["--latest"], state)
+        out = json.loads(p.stdout) if p.returncode == 0 else {}
+        check("latest picks remfix", p.returncode == 0 and out["workflow"]["workflow_uuid"] == REMFIX
+              and out["selection"] == {"mode": "latest"}, f"rc={p.returncode} {p.stderr}")
+        e = run_cli(["--wf", REMFIX], state)
+        check("explicit mode", json.loads(e.stdout)["selection"] == {"mode": "explicit"})
+
+
+def test_latest_ambiguous_within_window() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state = materialize(Path(tmp), [CLEAN, REMFIX, NEAR])
+        p = run_cli(["--latest"], state)
+        expect_error("ambiguous", p, "ambiguous_selection", REMFIX)
+        check("ambiguous names both", NEAR in p.stderr, p.stderr)
+        # exactly 900s apart is still ambiguous; 901s is not
+        s2 = Path(tmp) / "s2"
+        _inline(s2, "wf-a-1", "2026-10-06T12:00:00Z")
+        _inline(s2, "wf-b-2", "2026-10-06T11:45:00Z")
+        expect_error("boundary 900s", run_cli(["--latest"], s2), "ambiguous_selection")
+        _inline(s2, "wf-b-2", "2026-10-06T11:44:59Z")
+        check("901s ok", run_cli(["--latest"], s2).returncode == 0)
+
+
+def test_list_shape_and_order() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state = materialize(Path(tmp), [CLEAN, REMFIX, NEAR])
+        p = run_cli(["--list"], state)
+        out = json.loads(p.stdout)
+        exp = [{"workflow_uuid": REMFIX, "workflow_type": "BUILD", "updated_at": "2026-10-06T12:00:00Z"},
+               {"workflow_uuid": NEAR, "workflow_type": "BUILD", "updated_at": "2026-10-06T11:50:00Z"},
+               {"workflow_uuid": CLEAN, "workflow_type": "BUILD", "updated_at": "2026-10-06T10:00:00Z"}]
+        got = [{k: c[k] for k in ("workflow_uuid", "workflow_type", "updated_at")} for c in out["candidates"]]
+        check("list order/fields", p.returncode == 0 and got == exp, str(got))
+        check("list keys", list(out) == ["schema_version", "candidates", "ambiguous", "skipped_unparseable"]
+              and out["ambiguous"] is True and out["skipped_unparseable"] == 0
+              and all("user_request" in c for c in out["candidates"]), str(out))
+
+
+def test_list_limit_5() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state = Path(tmp)
+        for i in range(7):
+            _inline(state, f"wf-x-{i}", f"2026-10-0{i + 1}T00:00:00Z")
+        out = json.loads(run_cli(["--list"], state).stdout)
+        ids = [c["workflow_uuid"] for c in out["candidates"]]
+        check("limit 5 newest first", ids == [f"wf-x-{i}" for i in (6, 5, 4, 3, 2)] and out["ambiguous"] is False, str(ids))
+
+
+def test_latest_skips_unparseable_and_counts() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state = materialize(Path(tmp), [CLEAN, REMFIX])
+        bad = state / "workflows" / "wf-zzz-bad.json"
+        bad.write_text("{bad")
+        os.utime(bad, (4102444800, 4102444800))  # far-future mtime: would be newest
+        p = run_cli(["--latest"], state)
+        check("latest skips bad", p.returncode == 0 and json.loads(p.stdout)["workflow"]["workflow_uuid"] == REMFIX, p.stderr)
+        check("list counts skipped", json.loads(run_cli(["--list"], state).stdout)["skipped_unparseable"] == 1)
+
+
+def test_updated_at_fallback_mtime() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state = Path(tmp)
+        _inline(state, "wf-has-ts", "2026-10-06T12:00:00Z")
+        _inline(state, "wf-no-ts", None)
+        nots = state / "workflows" / "wf-no-ts.json"
+        t12 = 1791288000  # 2026-10-06T12:00:00Z
+        os.utime(nots, (t12 + 100000, t12 + 100000))
+        out = json.loads(run_cli(["--list"], state).stdout)
+        ids = [c["workflow_uuid"] for c in out["candidates"]]
+        check("mtime fallback ranks newer", ids == ["wf-no-ts", "wf-has-ts"], str(ids))
+        os.utime(nots, (t12 - 100000, t12 - 100000))
+        ids = [c["workflow_uuid"] for c in json.loads(run_cli(["--list"], state).stdout)["candidates"]]
+        check("mtime fallback ranks older", ids == ["wf-has-ts", "wf-no-ts"], str(ids))
+
+
+def test_no_workflows() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state = Path(tmp)
+        (state / "workflows").mkdir()
+        expect_error("empty dir latest", run_cli(["--latest"], state), "no_workflows")
+        expect_error("missing dir latest", run_cli(["--latest"], state / "nope"), "no_workflows")
+        out = json.loads(run_cli(["--list"], state).stdout)
+        check("empty list ok", out["candidates"] == [] and out["ambiguous"] is False and out["skipped_unparseable"] == 0, str(out))
+
+
+def test_events_jsonl_not_listed_as_candidate() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state = materialize(Path(tmp), [CLEAN])
+        ids = [c["workflow_uuid"] for c in json.loads(run_cli(["--list"], state).stdout)["candidates"]]
+        out = json.loads(run_cli(["--list"], state).stdout)
+        check("only artifact listed", ids == [CLEAN] and out["skipped_unparseable"] == 0, str(out))
+
+
+def test_selectors_mutually_exclusive() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        for args in (["--wf", "wf-x", "--latest"], ["--latest", "--list"], ["--wf", "wf-x", "--list"]):
+            p = run_cli(args, Path(tmp))
+            check(f"exclusive {args}", p.returncode == 2 and p.stdout == "", f"rc={p.returncode}")
+
+
 CATALOG_ORDER = ["remfix_cycles", "circuit_breaker_tripped", "pending_gate", "loop_counts", "doubt_refutations",
                  "proof_gaps", "stop_failures", "fallbacks", "slow_agents", "contradictions", "compactions"]
 ALL = "wf-retro-all-20261006-000000-aaaa0003"
@@ -544,7 +659,10 @@ def main() -> int:
         test_artifact_unparseable, test_artifact_not_object, test_artifact_no_id, test_history_not_list,
         test_events_unparseable_line, test_events_non_object_line, test_events_empty_file,
         test_events_blank_lines_ignored, test_non_dict_history_entry_skipped, test_invalid_wf_id,
-        test_missing_selector_usage_error, test_extractors_match_catalog, test_output_deterministic,
+        test_missing_selector_usage_error, test_extractors_match_catalog,
+        test_latest_picks_newest, test_latest_ambiguous_within_window, test_list_shape_and_order, test_list_limit_5,
+        test_latest_skips_unparseable_and_counts, test_updated_at_fallback_mtime, test_no_workflows,
+        test_events_jsonl_not_listed_as_candidate, test_selectors_mutually_exclusive, test_output_deterministic,
         test_read_only_snapshot, test_import_cheap, test_signals_module_is_leaf,
         test_sort_order_all_fixture, test_all_fixture_evidence, test_breaker_variant_key, test_breaker_event_fires,
         test_pending_gate_variants, test_loop_counts_excludes_remfix_and_flags_non_int, test_proof_gaps_tokens,

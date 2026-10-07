@@ -1,0 +1,3 @@
+{"event": "workflow_started"}
+{"event": "agent_completed", "agent": "builder"}
+{"event": "workflow_completed"}
