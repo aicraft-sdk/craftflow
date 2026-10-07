@@ -211,6 +211,17 @@ def test_install_curl_piped_hint_mentions_retro() -> None:
     check("curl_hint_retro", "skills/retro ~/.cursor/skills/retro" in INSTALL.read_text(encoding="utf-8"), "hint missing")
 
 
+def test_install_loop_links_both_skills() -> None:
+    text = INSTALL.read_text(encoding="utf-8")
+    m = re.search(r"^\s*for SKILL_NAME in ([^;\n]*); do", text, re.M)
+    check("install_loop_present", m is not None, "for SKILL_NAME loop missing")
+    if not m:
+        return
+    names = m.group(1).split()
+    check("install_loop_cursor_router", "cursor-router" in names, f"loop names={names}")
+    check("install_loop_retro", "retro" in names, f"loop names={names}")
+
+
 def test_cursor_router_exemption_block() -> None:
     t = CURSOR_ROUTER.read_text(encoding="utf-8")
     i = t.find("### Router-exempt inspection skills")
@@ -267,6 +278,7 @@ def main() -> int:
     test_steps_present()
     test_install_link_function_hermetic()
     test_install_curl_piped_hint_mentions_retro()
+    test_install_loop_links_both_skills()
     test_cursor_router_exemption_block()
     test_cursor_router_hard_rules_carve_out()
     test_readme_counts_and_install()
