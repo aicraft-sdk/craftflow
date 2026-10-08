@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.28.0] - 2026-10-08
+
+### Features
+
+- Cursor inspection skills fall back to the Conductor workspace copy (SPEC-0033 FR-002)
+
+### Fixes
+
+- LV-CU5 proves the workspace copy was used; smoke read-only snapshot covers the whole workspace; quote WS_ROOT safely
+- anchor Cursor inspection fallback to the workspace root; make LV-CU5 evidence non-vacuous
+
 ## [1.27.0] - 2026-10-07
 
 ### Features
