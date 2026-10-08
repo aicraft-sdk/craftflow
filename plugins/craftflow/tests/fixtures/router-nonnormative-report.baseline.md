@@ -1,0 +1,456 @@
+# Non-normative units at 0439c33932463d257b881ce50f136ab7661c0a39
+
+Total: 35474 bytes over 428 whole units.
+
+## skills/craftflow-router/SKILL.md (158 units, 16194 bytes)
+
+- L59 [0a. task tool capability detection] 20 B: Detection procedure:
+- L153 [2. memory load and template validation] 15 B: Auto-heal rule:
+- L154 [2. memory load and template validation] 51 B: - Insert missing sections before `## Last Updated`.
+- L157 [2. memory load and template validation] 8 B: JUST_GO:
+- L160 [2. memory load and template validation] 137 B: - While `JUST_GO=true`, auto-default all non-REVERT AskUserQuestion gates to the recommended option and log the choice in `## Decisions`.
+- L165 [2. memory load and template validation] 15 B: v10 trust rule:
+- L171 [2a. workflow artifact and hook policy] 9 B: Core law:
+- L172 [2a. workflow artifact and hook policy] 98 B: - Durable router state lives under `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json`
+- L173 [2a. workflow artifact and hook policy] 105 B: - Companion event log lives under `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.events.jsonl`
+- L174 [2a. workflow artifact and hook policy] 141 B: - Router-owned gates still include `plan_trust_gate`, `phase_exit_gate`, `failure_stop_gate`, `memory_sync_gate`, and `skill_precedence_gate`
+- L178 [2a. workflow artifact and hook policy] 216 B: - That reference contains the verbatim artifact schema, event log contract, hook policy, and gate wording extracted from the prior router monolith. Treat it as load-bearing orchestration law, not optional background.
+- L182 [3. task metadata contract] 71 B: Every CRAFTFLOW task description starts with normalized metadata lines:
+- L194 [3. task metadata contract] 6 B: Rules:
+- L225 [4. resume and hydration] 16 B: Hydration rules:
+- L226 [4. resume and hydration] 133 B: - Find active parent workflow tasks by subject prefix `CRAFTFLOW BUILD:`, `CRAFTFLOW DEBUG:`, `CRAFTFLOW REVIEW:`, `CRAFTFLOW PLAN:`.
+- L234 [4. resume and hydration] 17 B: Resume algorithm:
+- L241 [4. resume and hydration] 22 B: Scope-decision resume:
+- L243 [4. resume and hydration] 63 B: - `[SCOPE-DECISION-PENDING: wf:{workflow_uuid} reason:{...}]`
+- L246 [4. resume and hydration] 70 B: - `all issues` -> create the pending REM-FIX with `scope:ALL_ISSUES`
+- L249 [4. resume and hydration] 49 B: - remove the pending marker from `## Decisions`
+- L254 [4. resume and hydration] 569 B: - Interrupted jev-auto-decide: if `## Decisions` instead contains a `[jev-auto-decided: wf:{workflow_uuid} choice:{choice} confidence:{confidence}]` marker (the `### Scope resolution` procedure's Jev auto-decide branch writes this marker, creates the REM-FIX, then rewrites the marker a second time to append `consumed:true` — a session interrupted between the write and that final `consumed:true` rewrite leaves the marker without the tag) that does **not** already end in `consumed:true`, treat it as an interrupted auto-decide, not a pending human ask.
+- L281 [4. resume and hydration] 183 B: - immediately rewrite the marker to append `consumed:true`, exactly as the happy path in `### Scope resolution` does, so a later resume does not re-process the same marker again
+- L290 [4. resume and hydration] 13 B: Safety rules:
+- L312 [shared preparation] 30 B: Router-owned interface fields:
+- L313 [shared preparation] 59 B: - `plan_mode`: `direct` | `execution_plan` | `decision_rfc`
+- L314 [shared preparation] 52 B: - `verification_rigor`: `standard` | `critical_path`
+- L315 [shared preparation] 74 B: - `checkpoint_type`: `none` | `human_verify` | `decision` | `human_action`
+- L316 [shared preparation] 58 B: - `proof_status`: `passed` | `gaps_found` | `human_needed`
+- L329 [fast path detection] 28 B: Perform `risk_keyword_scan`:
+- L333 [fast path detection] 66 B: - `fast_path_risk_signals == []` → `build_mode = "fast_path"`
+- L334 [fast path detection] 65 B: - `fast_path_risk_signals != []` → `build_mode = "standard"`
+- L337 [fast path detection] 54 B: - Fast path: `-> FAST-PATH BUILD (no risk signals)`
+- L338 [fast path detection] 65 B: - Standard: `-> FULL BUILD (risk signals: {matched keywords})`
+- L342 [worktree isolation (build default)] 85 B: Every new BUILD workflow attempts to isolate file writes in a dedicated git worktree:
+- L371 [worktree isolation (build default)] 113 B: - **Otherwise** (`MKDIR_EXIT == 0` AND `WORKTREE_ADD_EXIT == 0`): proceed to step 2 ("On success") below.
+- L378 [worktree isolation (build default)] 78 B: - Add `## Worktree` section to every builder and verifier task description:
+- L390 [worktree isolation (build default)] 80 B: - Omit the `## Worktree` section from task descriptions when in fallback mode
+- L443 [worktree isolation (build default)] 348 B: (A non-zero `CRAFTFLOW_INSTALL_EXIT` here is not handled as a separate branch — it surfaces downstream as an empty/unusable `$CRAFTFLOW_INSTALL` path in whichever script it is used to invoke next, e.g. the lock-staleness `DECISION_EXIT` capture and default `case` arm in step 4b below, or `COPY_FALLBACK_EXIT` in step 4e.)
+- L546 [worktree isolation (build default)] 84 B: - `CONTENDED <workflow_uuid>` → record that `workflow_uuid` as the holder.
+- L547 [worktree isolation (build default)] 74 B: - `CONTENDED_UNKNOWN_HOLDER` → record `"unknown"` as the holder.
+- L548 [worktree isolation (build default)] 370 B: - `LOCK_READ_ERROR <exception_class_name>` → record the exception class name itself (e.g. `"PermissionError"`) as the holder value — **not** `"unknown"` and **not** a `workflow_uuid` — since this outcome is not evidence of any other workflow at all, and recording it as `"unknown"` would blur it back into ordinary contention.
+- L569 [worktree isolation (build default)] 59 B: - Resuming this workflow re-enters this step from 4a.
+- L589 [worktree isolation (build default)] 61 B: - Resuming this workflow re-enters this step from 4a.
+- L592 [worktree isolation (build default)] 179 B: e. **Finalize** (destination behavior unchanged from before this fix, now guarded — and now covers the copy-fallback path explicitly and executably for the first time):
+- L601 [worktree isolation (build default)] 82 B: (from `$PROJECT_ROOT`; read `worktree_branch` from the workflow artifact.)
+- L641 [worktree isolation (build default)] 61 B: - Resuming this workflow re-enters this step from 4a.
+- L656 [worktree isolation (build default)] 111 B: - Resuming this workflow re-enters this step from 4a once the user has resolved the conflict.
+- L677 [worktree isolation (build default)] 61 B: - Resuming this workflow re-enters this step from 4a.
+- L698 [worktree isolation (build default)] 63 B: - Resuming this workflow re-enters this step from 4a.
+- L719 [worktree isolation (build default)] 65 B: - Resuming this workflow re-enters this step from 4a.
+- L721 [worktree isolation (build default)] 71 B: - Update artifact: `worktree_mode → "merged_and_removed"`
+- L725 [worktree isolation (build default)] 60 B: - Continue to doc-sync/memory-finalize as today.
+- L727 [worktree isolation (build default)] 688 B: Safety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: "auto_created"` already set, re-use `worktree_path` from the artifact rather than creating a new worktree. If `worktree_path` is null despite `worktree_mode: "auto_created"`, treat as fallback and proceed with main tree. If a resume finds `pending_gate` set to `worktree_merge_locked`, `worktree_dirty_main_tree`, `worktree_merge_conflict`, `worktree_merge_unrecognized_failure`, `worktree_copy_fallback_failed`, or `worktree_cleanup_failed`, re-enter this step from 4a — none of these gates require any bespoke resume branch beyond the generic resume algorithm in `## 4. Resume And Hydration`.
+- L753 [parent workflow creation] 200 B: a. Resolve the install dir and the session id (no workflow id is needed for this). `CRAFTFLOW_INSTALL` is resolved by this one-line bootstrap, the canonical form that other sections reuse verbatim:
+- L760 [parent workflow creation] 352 B: b. Write the user request VERBATIM with the `Write` tool to `$PROJECT_ROOT/.craftflow/state/.router-request-{session_id}.txt` (`{session_id}` = the line printed above; use `nosession` when it is empty). The per-session name keeps concurrent sessions apart; the Write guard allows this path (`.craftflow/state/` is inside the project, unlike `/tmp`).
+- L762 [parent workflow creation] 184 B: c. Mint (the helper reads the file, mints, writes the artifact, then deletes the request file; it rejects a request file older than 120 s as a stale leftover, and an empty request):
+- L775 [parent workflow creation] 168 B: - `--task-id "{parent_task_id}"` is optional and normally omitted: the artifact is written before `TaskCreate()`, so the `workflow_started` event's `task_id` is `null`.
+- L821 [marker rules] 50 B: - BUILD writes `[BUILD-START: wf:{workflow_uuid}]`
+- L822 [marker rules] 50 B: - DEBUG writes `[DEBUG-RESET: wf:{workflow_uuid}]`
+- L823 [marker rules] 48 B: - PLAN writes `[PLAN-START: wf:{workflow_uuid}]`
+- L850 [explicit dispatcher] 445 B: **Shared with Cursor — canonical text lives in `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` § "Explicit Dispatcher (Phase-to-Agent Table)" (full phase→agent mapping).** Claude Code resolves each row via `Task()`/`TaskCreate()` against a registered subagent type using the `craftflow:` name directly — no host-specific resolution step needed here, unlike Cursor's `## Agent File Paths` literal-path mapping.
+- L856 [explicit dispatcher] 1010 B: **Task*-tool fallback (Design Success Criterion 3):** when `capabilities.task_tools_available == false`, dispatch every agent via the `Agent` tool directly instead of `Task()`/`TaskCreate()`. The `## Task Context` scaffold (per `### Prompt scaffold for every agent` below) already embeds `wf:`/`kind:`/`phase:` metadata directly in the prompt text — this is the metadata a dispatched agent relies on in place of a `TaskCreate()`-backed task description's structured fields, which do not exist in this state. Substitute the scaffold's `Task ID:` field with the same no-real-task-id placeholder defined in `### Prompt scaffold for every agent` below (`'n/a — task-tool fallback active (capabilities.task_tools_available=false)'`). This mirrors the pattern already documented as used ad hoc across multiple prior sessions before this rule existed. When `capabilities.task_tools_available == true`, dispatch continues via `Task()`/`TaskCreate()` exactly as documented today — no behavior change on that path.
+- L909 [effort dispatch rule] 39 B: - fast-path `build-implement` → `low`
+- L910 [effort dispatch rule] 51 B: - standard/escalated `build-implement` → `medium`
+- L911 [effort dispatch rule] 43 B: - `build-review`, `build-hunt` → `medium`
+- L912 [effort dispatch rule] 42 B: - `build-verify`, all re-verify → `high`
+- L913 [effort dispatch rule] 81 B: - `planner`, `plan-gap-reviewer`, `doubt-verifier`, `bug-investigator` → `high`
+- L914 [effort dispatch rule] 81 B: - `build-doc-sync`, `memory-finalize`, `learn-distill`, `skill-distill` → `low`
+- L915 [effort dispatch rule] 33 B: - All research tasks → `medium`
+- L922 [deterministic skill hints] 101 B: - Agents may not self-activate `frontend-patterns`, `architecture-patterns`, or `debugging-patterns`.
+- L929 [deterministic skill hints] 29 B: - Skill precedence is strict:
+- L946 [doubt-verify dispatch rule] 69 B: - `verification_rigor: critical_path` is set in the workflow artifact
+- L947 [doubt-verify dispatch rule] 117 B: - The phase included irreversible operations: data migration, schema change, auth flow, payment path, secret rotation
+- L948 [doubt-verify dispatch rule] 82 B: - The phase changed ≥3 files across ≥2 directories (cross-module blast radius)
+- L951 [doubt-verify dispatch rule] 56 B: - `verification_rigor: standard` and no irreversible ops
+- L953 [doubt-verify dispatch rule] 65 B: - A doubt cycle already returned DOUBT_THEATER (escalate instead)
+- L955 [doubt-verify dispatch rule] 28 B: **Doubt-verify task shape:**
+- L979 [doubt-verify dispatch rule] 112 B: - `DOUBT_VERDICT: REFUTED` → create REM-FIX task (same as normal verification failure), increment loop counter
+- L985 [doubt-verify dispatch rule] 462 B: **Reliability-gates evidence recording (best-effort, non-blocking):** After the `DOUBT_VERDICT` is captured, check whether this cycle's `plan:`/`reason:` text loosely matches any seeded gate in `.craftflow/state/project/reliability-gates.json` — a case-insensitive substring match against 3+ significant words from the gate's `title`, or against any `assertionRefs` basename, is sufficient (this is bookkeeping, not a hard gate). For every matching gate, call:
+- L1024 [fix-verify dispatch rule] 26 B: **Fix-verify task shape:**
+- L1047 [fix-verify dispatch rule] 216 B: - `FIX_VERDICT: NOT_LOAD_BEARING` or `SIBLING_FOUND` → create a REM-FIX task (same shape as any other verification failure — `origin:router`, `phase:fix-verify`), increment `telemetry.loop_counts.fix_verify`.
+- L1050 [fix-verify dispatch rule] 294 B: - Contract-override check (`## 8. Post-Agent Validation → Contract overrides`): a claimed `FIX_VERDICT: LOAD_BEARING` where `PRE_FIX_OUTPUT` does not actually differ from `POST_FIX_OUTPUT` in the direction the fix claims is downgraded to `NOT_LOAD_BEARING` before the router acts on it.
+- L1087 [task metrics and timing telemetry] 43 B: **Router-owned timestamp instrumentation:**
+- L1090 [task metrics and timing telemetry] 169 B: - At memory-finalize, for each agent that ran in this workflow, compute `completed_ts - started_ts` in seconds and write to `telemetry.agent_wall_clock_seconds.{agent}`.
+- L1091 [task metrics and timing telemetry] 133 B: - Compute `workflow_wall_clock_seconds` as the delta between the `workflow_started` event `ts` and the `memory_finalized` event `ts`.
+- L1094 [task metrics and timing telemetry] 43 B: **Legacy path (Claude Code task metrics):**
+- L1099 [task metrics and timing telemetry] 44 B: **Verifier workload telemetry (unchanged):**
+- L1101 [task metrics and timing telemetry] 46 B: - `telemetry.verifier.phase_exit_proof_runs`
+- L1102 [task metrics and timing telemetry] 44 B: - `telemetry.verifier.extended_audit_runs`
+- L1103 [task metrics and timing telemetry] 41 B: - `telemetry.verifier.workload_seconds`
+- L1111 [read-only contracts] 265 B: Primary signal and fallback heading conventions — shared with Cursor — canonical list lives in `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` § "Agent Verdict Headings". `Read()` that file now if you have not already this session.
+- L1115 [read-only contracts] 19 B: Verdict extraction:
+- L1123 [read-only contracts] 22 B: - `SCENARIOS_TOTAL`
+- L1124 [read-only contracts] 23 B: - `SCENARIOS_PASSED`
+- L1125 [read-only contracts] 23 B: - `SCENARIOS_FAILED`
+- L1130 [read-only contracts] 34 B: - `REMEDIATION_NEEDED: true|false`
+- L1131 [read-only contracts] 27 B: - `REMEDIATION_REASON: ...`
+- L1132 [read-only contracts] 61 B: - `REMEDIATION_SCOPE_REQUESTED: N/A|CRITICAL_ONLY|ALL_ISSUES`
+- L1133 [read-only contracts] 34 B: - `REVERT_RECOMMENDED: true|false`
+- L1134 [read-only contracts] 41 B: - `PLANNING_REVIEW_STATUS: PASS|FINDINGS`
+- L1135 [read-only contracts] 37 B: - `BLOCKING_FINDINGS_COUNT: [number]`
+- L1136 [read-only contracts] 29 B: - `REPLAN_NEEDED: true|false`
+- L1137 [read-only contracts] 22 B: - `REPLAN_REASON: ...`
+- L1139 [read-only contracts] 19 B: Compatibility rule:
+- L1140 [read-only contracts] 67 B: - Accept legacy self-healed blocked task behavior during migration.
+- L1141 [read-only contracts] 89 B: - Prefer the new structured remediation fields over task-state inference when both exist.
+- L1147 [write-agent yaml contracts] 16 B: Expected fields:
+- L1184 [write-agent contract schema validation (pilot: component-builder, planner)] 422 B: `component-builder` and `planner` emit their Router Contract YAML body as two nested top-level keys, `verdict:` (strictly typed: enums, booleans, numbers, nullable numbers) and `rationale:` (free text: summaries, prose lists, `MEMORY_NOTES`) — see each agent's `.md` file for the exact per-field split. Before applying any Contract Overrides row below for these two agents, mechanically validate the extracted YAML body:
+- L1198 [write-agent contract schema validation (pilot: component-builder, planner)] 56 B: (substitute `--agent planner` for the planner agent).
+- L1210 [write-agent contract schema validation (pilot: component-builder, planner)] 146 B: Field-to-section map for the two pilot agents (single source of truth: `scripts/schemas/component-builder.json` / `scripts/schemas/planner.json`):
+- L1224 [write-agent contract schema validation (pilot: component-builder, planner)] 469 B: **Known gap (not fixed by this pilot):** `skills/cursor-router/SKILL.md`'s own "Verdict by agent" table still documents `component-builder`/`planner` using the old flat field names, because Cursor dispatches the same `agents/component-builder.md`/`agents/planner.md` files and will therefore receive the new nested output without its own routing doc being updated. This is a known, tracked follow-up, not an oversight — see the schema-validation plan's Risks section.
+- L1240 [intent interview gate (plan only)] 72 B: - `AUTO_PROCEED` is NOT `true` in `activeContext.md ## Session Settings`
+- L1241 [intent interview gate (plan only)] 80 B: - No saved plan file exists for this request in `activeContext.md ## References`
+- L1242 [intent interview gate (plan only)] 18 B: - At least ONE of:
+- L1243 [intent interview gate (plan only)] 56 B: - Request is ≤3 sentences with no success definition
+- L1244 [intent interview gate (plan only)] 109 B: - Request contains scope-ambiguous terms: "improve", "refactor", "clean up", "make it better", "fix things"
+- L1245 [intent interview gate (plan only)] 67 B: - Request touches ≥2 systems or modules with no stated boundary
+- L1249 [intent interview gate (plan only)] 41 B: - A saved plan file is already referenced
+- L1250 [intent interview gate (plan only)] 68 B: - Request explicitly names the file, function, or behavior to change
+- L1253 [intent interview gate (plan only)] 34 B: - Workflow artifact `intent` field
+- L1254 [intent interview gate (plan only)] 102 B: - Planner prompt under `## Intent Contract (Pre-Interview)` (planner treats it as user-approved input)
+- L1262 [inline brainstorming handoff] 15 B: - `DESIGN_FILE`
+- L1266 [inline brainstorming handoff] 40 B: - pass it to planner as `## Design File`
+- L1287 [contract overrides] 17 B: Convergence rule:
+- L1396 [after every agent completion] 41 B: Pre-check before processing agent output:
+- L1397 [after every agent completion] 70 B: - Did the agent address the assigned scope (not a subset or superset)?
+- L1398 [after every agent completion] 94 B: - Did tests, builds, or checks referenced in the contract actually run (not merely described)?
+- L1399 [after every agent completion] 167 B: - Is follow-up work needed that the agent did not self-remediate? If any answer is "no" or "unknown", treat as incomplete and apply the fallback validation path below.
+- L1407 [after every agent completion] 70 B: - They should already have called `TaskUpdate(status="completed")`.
+- L1432 [after every agent completion] 62 B: - intent contract fields from planner output when available
+- L1433 [after every agent completion] 13 B: - task ids
+- L1434 [after every agent completion] 17 B: - phase status
+- L1436 [after every agent completion] 29 B: - structured agent results
+- L1437 [after every agent completion] 302 B: - the WRITE agent's `SUMMARY` field, into `results.{agent}.summary` and echoed into the matching `agent_completed` event-log entry as `"summary"` — gives a one-line round handoff scannable from `status_history`/the event log without re-parsing every structured field on every resume
+- L1441 [after every agent completion] 39 B: - scenario evidence grouped by agent
+- L1442 [after every agent completion] 36 B: - plan/design/research file paths
+- L1443 [after every agent completion] 66 B: - capabilities and chosen research backend path when applicable
+- L1444 [after every agent completion] 56 B: - research quality and round metadata when applicable
+- L1445 [after every agent completion] 15 B: - telemetry:
+- L1446 [after every agent completion] 43 B: - task metrics duration when available
+- L1447 [after every agent completion] 20 B: - loop counters
+- L1448 [after every agent completion] 52 B: - verifier workload classification when present
+- L1449 [after every agent completion] 30 B: - quality/convergence state
+- L1450 [after every agent completion] 88 B: - status_history and remediation_history entries when decisions change workflow state
+- L1451 [after every agent completion] 42 B: - pending gate if waiting on user input
+- L1456 [verifier findings handoff] 155 B: Shared with Cursor — canonical text lives in `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` § "Verifier Findings Handoff".
+- L1504 [13. memory finalization] 75 B: Memory is written to two tiers. Route each `MEMORY_NOTES` field as follows:
+- L1513 [13. memory finalization] 381 B: Cross-workflow promotion rule: If a `learnings` item is a project-wide constraint (not specific to the current task), also copy it to `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Learnings`. Use judgment: workflow-local observations stay in `$PROJECT_ROOT/.craftflow/state/workflows/{wf}/`; durable project truths belong in `$PROJECT_ROOT/.craftflow/state/project/`.
+- L1544 [13. memory finalization] 75 B: - Immediately after the observe call above, run the ledger's anti-rot pass:
+- L1580 [13. memory finalization] 21 B: The memory task also:
+- L1581 [13. memory finalization] 125 B: - Replaces `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md ## Tasks` with the active workflow snapshot.
+- L1585 [13. memory finalization] 174 B: - Removes the matching `[craftflow-internal]` or legacy `[cc10x-internal]` `memory_task_id` line from `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References`.
+- L1589 [13. memory finalization] 235 B: Fallback: If `workflow_uuid` is unavailable, write to root-flat files (`$PROJECT_ROOT/.craftflow/state/activeContext.md`, `$PROJECT_ROOT/.craftflow/state/patterns.md`, `$PROJECT_ROOT/.craftflow/state/progress.md`) as in prior versions.
+- L1593 [13. memory finalization] 9 B: For PLAN:
+- L1594 [13. memory finalization] 122 B: - Ensure `- Plan: {plan_file}` remains correct in `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References`.
+- L1595 [13. memory finalization] 147 B: - Ensure `- Design: {design_file}` remains correct in `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References` when a design exists.
+- L1599 [13. memory finalization] 10 B: For DEBUG:
+- L1600 [13. memory finalization] 205 B: - Preserve the latest `[DEBUG-RESET: wf:{workflow_uuid}]` section in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## Recent Changes` and summarize the final result beneath it.
+
+## skills/_shared/router-protocol.md (25 units, 3662 bytes)
+
+- L31 [agent verdict headings] 49 B: - Line 1: `CONTRACT {"s":"...","b":...,"cr":...}`
+- L33 [agent verdict headings] 27 B: Fallback heading on line 2:
+- L34 [agent verdict headings] 40 B: - `## Review: Approve|Changes Requested`
+- L35 [agent verdict headings] 47 B: - `## Error Handling Audit: CLEAN|ISSUES_FOUND`
+- L37 [agent verdict headings] 68 B: - `## Fix Verification: LOAD_BEARING|NOT_LOAD_BEARING|SIBLING_FOUND`
+- L38 [agent verdict headings] 37 B: - `## Planning Review: Pass|Findings`
+- L105 [resolve project root] 38 B: - **Otherwise**, parse the outcome:
+- L137 [resolve project root] 131 B: - **`DETERMINISTIC`** (exactly one candidate nested repo exists, or the request text uniquely names one among several):
+- L186 [jev auto-detect consent request contract] 97 B: - Then run the embedded `--record-consent {granted|declined}` command matching the user's answer.
+- L188 [jev auto-detect consent request contract] 210 B: - Granting consent activates Jev starting at the next automatic session check (next `SessionStart` firing), not immediately within the current turn/session — this latency is disclosed to the user at ask-time.
+- L190 [jev auto-detect consent request contract] 86 B: See `docs/ai/decisions/0038-craftflow-jev-auto-detect-consent.md` for the full design.
+- L196 [intent routing] 38 B: Route using the first matching signal:
+- L205 [intent routing] 6 B: Rules:
+- L209 [intent routing] 297 B: - BUILD uses fast path (builder → verifier → memory) by default when no risk keywords are detected in the request. Full chain (builder → reviewer → hunter → verifier → memory) is used when risk keywords match. See each binding doc's own fast-path detection reference for keyword rules.
+- L248 [prompt scaffold for every agent] 18 B: Optional sections:
+- L249 [prompt scaffold for every agent] 82 B: - `## Pre-Answered Requirements` for BUILD when router already gathered decisions.
+- L250 [prompt scaffold for every agent] 121 B: - `## Intent Contract` when a plan or design already defined goal, constraints, acceptance criteria, and named scenarios.
+- L254 [prompt scaffold for every agent] 316 B: - `## Target Plan File` for `planner`/`plan-bakeoff-judge` dispatches where the router assigns a non-default target path (every PLAN scout/candidate/judge dispatch under the bake-off mechanism; omitted for a direct/manual planner invocation that self-derives its own filename per `planner.md` Process step 14).
+- L300 [verifier findings handoff] 76 B: - Build `## Previous Agent Findings` exactly in the format verifier expects.
+- L318 [skill-distill approval flow] 22 B: - **Approve** → run:
+- L329 [skill-distill approval flow] 96 B: - **Reject** → the router does NOT call `craftflow_skill_promote.py` for this option. It runs:
+- L333 [skill-distill approval flow] 236 B: This tombstones the candidate (`status: rejected`, permanent unless `distinct_workflows` at least doubles from the value recorded at rejection time — enforced by the ledger's own revival logic in `--observe`, not by the router).
+- L336 [skill-distill approval flow] 214 B: - **Defer** → take no script action. Leave the candidate as `status: proposed`/`candidate` as-is; it remains gate-eligible and will be re-surfaced the next time `skill-distill` gates in for a future workflow.
+- L345 [skill-distill approval flow] 515 B: **JUST_GO carve-out:** This `AskUserQuestion` gate is treated as a de facto REVERT-class gate for JUST_GO purposes, overriding the general "auto-default all non-REVERT `AskUserQuestion` gates to the recommended option" rule in `## 2. Memory Load And Template Validation` — there is no textual "recommended option" signal for this gate, and the highest-consequence misread (auto-Approve) would promote an LLM-authored skill into `.claude/skills` with zero human review. Under `JUST_GO=true` (`AUTO_PROCEED: true`):
+- L411 [explicit dispatcher (phase-to-agent table)] 795 B: (Host-specific: this table states WHICH agent role handles each phase — the routing intent itself, shared across hosts. HOW each host turns an agent role into something invocable is host-specific and stays in each binding doc: Claude Code resolves these via `Task()`/ `TaskCreate()` against registered subagent types using the `craftflow:` name directly; Cursor's `Task` tool cannot select custom subagent types by name at all, so `cursor-router/SKILL.md`'s `## Agent File Paths` maps each role to a literal `.md` file path instead. See each binding doc's own section for its resolution mechanics. `craftflow-router/SKILL.md` also keeps its own short trailing note on `skill-author` not being a `kind:remfix` origin inline, since it cross-references that file's own `## 6.` section numbering.)
+
+## skills/craftflow-router/references/workflow-artifact-and-hook-policy.md (180 units, 7239 bytes)
+
+- L3 [2a. workflow artifact and hook policy] 47 B: CRAFTFLOW durable orchestration state lives in:
+- L10 [2a. workflow artifact and hook policy] 18 B: - `workflow_uuid`
+- L11 [2a. workflow artifact and hook policy] 15 B: - `workflow_id`
+- L12 [2a. workflow artifact and hook policy] 17 B: - `workflow_type`
+- L14 [2a. workflow artifact and hook policy] 233 B: - Context-nudge binding: the nudge binds a payload `session_id` to the artifact whose `session_id` matches exactly. After `/clear` or a new session the nudge sees `no_live_candidate` for stamped artifacts until the router restamps.
+- L16 [2a. workflow artifact and hook policy] 251 B: - The plan-then-build ambiguity (A4): a plan workflow and the build workflow that follows it can run in the same session, so the chosen artifact's `session_id` equalling the payload `session_id` does not by itself identify which of the two is meant.
+- L17 [2a. workflow artifact and hook policy] 14 B: - `state_root`
+- L18 [2a. workflow artifact and hook policy] 16 B: - `user_request`
+- L19 [2a. workflow artifact and hook policy] 13 B: - `plan_file`
+- L20 [2a. workflow artifact and hook policy] 18 B: - `plan_file_stem`
+- L21 [2a. workflow artifact and hook policy] 15 B: - `design_file`
+- L22 [2a. workflow artifact and hook policy] 18 B: - `research_files`
+- L23 [2a. workflow artifact and hook policy] 22 B: - `approved_decisions`
+- L24 [2a. workflow artifact and hook policy] 13 B: - `bakeoff_n`
+- L25 [2a. workflow artifact and hook policy] 23 B: - `bakeoff_n_requested`
+- L26 [2a. workflow artifact and hook policy] 18 B: - `bakeoff_models`
+- L27 [2a. workflow artifact and hook policy] 21 B: - `bakeoff_triggered`
+- L28 [2a. workflow artifact and hook policy] 22 B: - `bakeoff_all_failed`
+- L29 [2a. workflow artifact and hook policy] 30 B: - `bakeoff_candidate_failures`
+- L30 [2a. workflow artifact and hook policy] 10 B: - `intent`
+- L31 [2a. workflow artifact and hook policy] 16 B: - `capabilities`
+- L32 [2a. workflow artifact and hook policy] 16 B: - `phase_cursor`
+- L33 [2a. workflow artifact and hook policy] 21 B: - `normalized_phases`
+- L34 [2a. workflow artifact and hook policy] 19 B: - `research_rounds`
+- L35 [2a. workflow artifact and hook policy] 28 B: - `research_backend_history`
+- L36 [2a. workflow artifact and hook policy] 20 B: - `research_quality`
+- L37 [2a. workflow artifact and hook policy] 12 B: - `task_ids`
+- L38 [2a. workflow artifact and hook policy] 16 B: - `phase_status`
+- L39 [2a. workflow artifact and hook policy] 11 B: - `results`
+- L40 [2a. workflow artifact and hook policy] 12 B: - `evidence`
+- L41 [2a. workflow artifact and hook policy] 13 B: - `telemetry`
+- L42 [2a. workflow artifact and hook policy] 11 B: - `quality`
+- L43 [2a. workflow artifact and hook policy] 24 B: - `planning_review_runs`
+- L44 [2a. workflow artifact and hook policy] 28 B: - `planning_review_findings`
+- L45 [2a. workflow artifact and hook policy] 26 B: - `planning_review_status`
+- L46 [2a. workflow artifact and hook policy] 14 B: - `build_mode`
+- L47 [2a. workflow artifact and hook policy] 26 B: - `fast_path_risk_signals`
+- L48 [2a. workflow artifact and hook policy] 23 B: - `fast_path_escalated`
+- L49 [2a. workflow artifact and hook policy] 16 B: - `memory_notes`
+- L50 [2a. workflow artifact and hook policy] 16 B: - `pending_gate`
+- L51 [2a. workflow artifact and hook policy] 19 B: - `circuit_breaker`
+- L52 [2a. workflow artifact and hook policy] 18 B: - `status_history`
+- L53 [2a. workflow artifact and hook policy] 23 B: - `remediation_history`
+- L54 [2a. workflow artifact and hook policy] 14 B: - `created_at`
+- L55 [2a. workflow artifact and hook policy] 14 B: - `updated_at`
+- L57 [2a. workflow artifact and hook policy] 6 B: Rules:
+- L58 [2a. workflow artifact and hook policy] 82 B: - Router creates the workflows directory before the first workflow artifact write.
+- L60 [2a. workflow artifact and hook policy] 80 B: - Resume uses task metadata first, then workflow artifact, then memory markdown.
+- L61 [2a. workflow artifact and hook policy] 128 B: - Verifier handoff and memory finalization read structured data from the workflow artifact, not transient conversation recovery.
+- L62 [2a. workflow artifact and hook policy] 125 B: - The workflow UUID is generated independently of Claude task ids and is the canonical workflow identifier everywhere in v10.
+- L66 [2a. workflow artifact and hook policy] 69 B: - `normalized_phases` stores planner-approved executable phases with:
+- L67 [2a. workflow artifact and hook policy] 14 B: - `phase_id`
+- L68 [2a. workflow artifact and hook policy] 11 B: - `title`
+- L69 [2a. workflow artifact and hook policy] 15 B: - `objective`
+- L70 [2a. workflow artifact and hook policy] 11 B: - `files`
+- L71 [2a. workflow artifact and hook policy] 12 B: - `checks`
+- L72 [2a. workflow artifact and hook policy] 21 B: - `checkpoint_type`
+- L73 [2a. workflow artifact and hook policy] 19 B: - `exit_criteria`
+- L76 [2a. workflow artifact and hook policy] 111 B: - `capabilities` records the session-level research backend availability model, plus Task*-tool availability:
+- L78 [2a. workflow artifact and hook policy] 26 B: - `brightdata_available`
+- L79 [2a. workflow artifact and hook policy] 24 B: - `octocode_available`
+- L80 [2a. workflow artifact and hook policy] 25 B: - `websearch_available`
+- L81 [2a. workflow artifact and hook policy] 24 B: - `webfetch_available`
+- L98 [2a. workflow artifact and hook policy] 175 B: - `bakeoff_n_requested` (integer or `null`) — the user's raw requested candidate count before qualify is known; independent of whether the bake-off ever actually triggers.
+- L102 [2a. workflow artifact and hook policy] 175 B: - `bakeoff_models` (array, default `[]`) — the fixed-rotation slice of models dispatched for this bake-off (`[opus, sonnet, haiku, fable]`, first `bakeoff_n - 1` entries).
+- L104 [2a. workflow artifact and hook policy] 138 B: - `bakeoff_triggered` (boolean, default `false`) — whether the scout's own contract qualified this PLAN workflow for bake-off fan-out.
+- L106 [2a. workflow artifact and hook policy] 173 B: - `bakeoff_all_failed` (boolean, default `false`) — set when every bake-off candidate (scout included) is contract-invalid, triggering the fresh single-planner fallback.
+- L108 [2a. workflow artifact and hook policy] 124 B: - `bakeoff_candidate_failures` (array, default `[]`) — dispatch/contract failures recorded per candidate during fan-out.
+- L110 [2a. workflow artifact and hook policy] 59 B: - `intent` stores the durable spec header for the workflow:
+- L111 [2a. workflow artifact and hook policy] 10 B: - `goal`
+- L112 [2a. workflow artifact and hook policy] 15 B: - `non_goals`
+- L113 [2a. workflow artifact and hook policy] 17 B: - `constraints`
+- L114 [2a. workflow artifact and hook policy] 25 B: - `acceptance_criteria`
+- L115 [2a. workflow artifact and hook policy] 20 B: - `open_decisions`
+- L116 [2a. workflow artifact and hook policy] 107 B: - `approved_decisions` stores decisions explicitly approved by the user or already fixed in the saved plan.
+- L117 [2a. workflow artifact and hook policy] 51 B: - `evidence` stores proof-of-work grouped by agent:
+- L118 [2a. workflow artifact and hook policy] 13 B: - `builder`
+- L119 [2a. workflow artifact and hook policy] 18 B: - `investigator`
+- L120 [2a. workflow artifact and hook policy] 14 B: - `reviewer`
+- L121 [2a. workflow artifact and hook policy] 12 B: - `hunter`
+- L122 [2a. workflow artifact and hook policy] 14 B: - `verifier`
+- L123 [2a. workflow artifact and hook policy] 37 B: - `quality` stores convergence state:
+- L124 [2a. workflow artifact and hook policy] 16 B: - `confidence`
+- L125 [2a. workflow artifact and hook policy] 23 B: - `evidence_complete`
+- L126 [2a. workflow artifact and hook policy] 23 B: - `scenario_coverage`
+- L127 [2a. workflow artifact and hook policy] 22 B: - `research_quality`
+- L128 [2a. workflow artifact and hook policy] 23 B: - `convergence_state`
+- L129 [2a. workflow artifact and hook policy] 42 B: - PLAN-local fresh review tracking stores:
+- L130 [2a. workflow artifact and hook policy] 26 B: - `planning_review_runs`
+- L131 [2a. workflow artifact and hook policy] 30 B: - `planning_review_findings`
+- L132 [2a. workflow artifact and hook policy] 28 B: - `planning_review_status`
+- L134 [2a. workflow artifact and hook policy] 81 B: - `build_mode`: `"fast_path"` | `"fast_path_escalated"` | `"standard"` | `null`
+- L135 [2a. workflow artifact and hook policy] 79 B: - `fast_path_risk_signals`: matched risk keywords (`[]` when fast path taken)
+- L136 [2a. workflow artifact and hook policy] 43 B: - `fast_path_escalated`: `false` | `true`
+- L137 [2a. workflow artifact and hook policy] 185 B: - Migration note: Artifacts created before fast-path was implemented have `build_mode: null`. On resume, treat `build_mode: null` as `"standard"` — the standard BUILD chain applies.
+- L139 [2a. workflow artifact and hook policy] 28 B: - `task_metrics_available`
+- L140 [2a. workflow artifact and hook policy] 33 B: - `workflow_wall_clock_seconds`
+- L141 [2a. workflow artifact and hook policy] 30 B: - `agent_wall_clock_seconds`
+- L142 [2a. workflow artifact and hook policy] 17 B: - `loop_counts`
+- L143 [2a. workflow artifact and hook policy] 14 B: - `verifier`
+- L144 [2a. workflow artifact and hook policy] 129 B: - `telemetry.agent_wall_clock_seconds` stores per-agent wall-clock timings when task metrics or explicit telemetry are available:
+- L145 [2a. workflow artifact and hook policy] 13 B: - `builder`
+- L146 [2a. workflow artifact and hook policy] 18 B: - `investigator`
+- L147 [2a. workflow artifact and hook policy] 14 B: - `reviewer`
+- L148 [2a. workflow artifact and hook policy] 12 B: - `hunter`
+- L149 [2a. workflow artifact and hook policy] 14 B: - `verifier`
+- L150 [2a. workflow artifact and hook policy] 13 B: - `planner`
+- L151 [2a. workflow artifact and hook policy] 74 B: - `telemetry.effort` stores per-agent effort profile assigned at dispatch:
+- L152 [2a. workflow artifact and hook policy] 13 B: - `builder`
+- L153 [2a. workflow artifact and hook policy] 14 B: - `reviewer`
+- L154 [2a. workflow artifact and hook policy] 12 B: - `hunter`
+- L155 [2a. workflow artifact and hook policy] 14 B: - `verifier`
+- L156 [2a. workflow artifact and hook policy] 13 B: - `planner`
+- L157 [2a. workflow artifact and hook policy] 18 B: - `investigator`
+- L158 [2a. workflow artifact and hook policy] 16 B: - `doc_syncer`
+- L159 [2a. workflow artifact and hook policy] 33 B: - `telemetry.loop_counts` stores:
+- L160 [2a. workflow artifact and hook policy] 15 B: - `re_review`
+- L161 [2a. workflow artifact and hook policy] 13 B: - `re_hunt`
+- L162 [2a. workflow artifact and hook policy] 15 B: - `re_verify`
+- L163 [2a. workflow artifact and hook policy] 30 B: - `telemetry.verifier` stores:
+- L164 [2a. workflow artifact and hook policy] 27 B: - `phase_exit_proof_runs`
+- L165 [2a. workflow artifact and hook policy] 25 B: - `extended_audit_runs`
+- L166 [2a. workflow artifact and hook policy] 22 B: - `workload_seconds`
+- L167 [2a. workflow artifact and hook policy] 47 B: - `telemetry.verifier.workload_seconds` stores:
+- L168 [2a. workflow artifact and hook policy] 11 B: - `tests`
+- L169 [2a. workflow artifact and hook policy] 11 B: - `build`
+- L170 [2a. workflow artifact and hook policy] 10 B: - `scan`
+- L171 [2a. workflow artifact and hook policy] 15 B: - `reconcile`
+- L172 [2a. workflow artifact and hook policy] 15 B: - `reasoning`
+- L177 [2a. workflow artifact and hook policy] 141 B: - `remfix_count` — non-decreasing for the life of the workflow; incremented each time a new REM-FIX task is created for the workflow.
+- L182 [2a. workflow artifact and hook policy] 234 B: - BUILD's worktree merge-safety guard uses 6 `pending_gate` values (canonical logic lives in `skills/craftflow-router/SKILL.md` → "### Worktree Isolation (BUILD Default)" step 4; this is a summary, not a duplicate of the logic):
+- L185 [2a. workflow artifact and hook policy] 130 B: - `worktree_merge_conflict` — a real textual git merge conflict. Ask the user to resolve it in the main tree, then resume.
+- L187 [2a. workflow artifact and hook policy] 477 B: - `worktree_merge_locked` — another BUILD workflow currently holds `.claude/worktrees/.merge.lock`, OR the lock's metadata could not be read due to a real filesystem/permission error, OR the local `git worktree list` check itself failed (distinct conditions — see step 4c). Wait for the other workflow to finish, fix the underlying filesystem/permission/environment issue, or confirm the lock is actually dead before manually clearing it, then resume.
+- L210 [2a. workflow artifact and hook policy] 17 B: v10 router gates:
+- L211 [2a. workflow artifact and hook policy] 19 B: - `plan_trust_gate`
+- L212 [2a. workflow artifact and hook policy] 19 B: - `phase_exit_gate`
+- L213 [2a. workflow artifact and hook policy] 21 B: - `failure_stop_gate`
+- L214 [2a. workflow artifact and hook policy] 20 B: - `memory_sync_gate`
+- L215 [2a. workflow artifact and hook policy] 25 B: - `skill_precedence_gate`
+- L217 [2a. workflow artifact and hook policy] 50 B: These are router-owned checks, not advisory hints.
+- L219 [2a. workflow artifact and hook policy] 19 B: Workflow event log:
+- L227 [2a. workflow artifact and hook policy] 8 B: - `ts`
+- L228 [2a. workflow artifact and hook policy] 8 B: - `wf`
+- L229 [2a. workflow artifact and hook policy] 11 B: - `event`
+- L230 [2a. workflow artifact and hook policy] 11 B: - `phase`
+- L231 [2a. workflow artifact and hook policy] 13 B: - `task_id`
+- L232 [2a. workflow artifact and hook policy] 11 B: - `agent`
+- L233 [2a. workflow artifact and hook policy] 14 B: - `decision`
+- L234 [2a. workflow artifact and hook policy] 12 B: - `reason`
+- L235 [2a. workflow artifact and hook policy] 20 B: - Optionally append:
+- L236 [2a. workflow artifact and hook policy] 22 B: - `duration_seconds`
+- L237 [2a. workflow artifact and hook policy] 19 B: - `work_category`
+- L238 [2a. workflow artifact and hook policy] 13 B: - `details`
+- L239 [2a. workflow artifact and hook policy] 12 B: - `effort`
+- L240 [2a. workflow artifact and hook policy] 14 B: - Event types:
+- L241 [2a. workflow artifact and hook policy] 22 B: - `workflow_started`
+- L242 [2a. workflow artifact and hook policy] 19 B: - `agent_started`
+- L243 [2a. workflow artifact and hook policy] 21 B: - `agent_completed`
+- L244 [2a. workflow artifact and hook policy] 21 B: - `contract_parsed`
+- L245 [2a. workflow artifact and hook policy] 25 B: - `remediation_created`
+- L246 [2a. workflow artifact and hook policy] 30 B: - `scope_decision_requested`
+- L247 [2a. workflow artifact and hook policy] 29 B: - `scope_decision_resolved`
+- L248 [2a. workflow artifact and hook policy] 22 B: - `memory_finalized`
+- L249 [2a. workflow artifact and hook policy] 24 B: - `workflow_completed`
+- L250 [2a. workflow artifact and hook policy] 21 B: - `workflow_failed`
+- L251 [2a. workflow artifact and hook policy] 22 B: - `contract_invalid`
+- L252 [2a. workflow artifact and hook policy] 21 B: - `learn_distilled`
+- L253 [2a. workflow artifact and hook policy] 31 B: - `skill_candidates_observed`
+- L254 [2a. workflow artifact and hook policy] 29 B: - `skill_candidates_pruned`
+- L255 [2a. workflow artifact and hook policy] 20 B: - `skill_proposed`
+- L256 [2a. workflow artifact and hook policy] 20 B: - `skill_promoted`
+- L257 [2a. workflow artifact and hook policy] 20 B: - `skill_rejected`
+- L258 [2a. workflow artifact and hook policy] 27 B: - `skill_distill_skipped`
+- L259 [2a. workflow artifact and hook policy] 26 B: - `skill_distill_failed`
+- L261 [2a. workflow artifact and hook policy] 12 B: Hook policy:
+- L262 [2a. workflow artifact and hook policy] 100 B: - CRAFTFLOW plugin hooks live in the plugin bundle under `hooks/hooks.json` and should stay minimal:
+- L264 [2a. workflow artifact and hook policy] 324 B: - `SessionStart` for resume context (fires on startup|resume|compact); optional Jev auto-detect consent-ask and session-scoped canary gating (second registration, same matcher `startup|resume|compact`, inert unless `TYPESAFE_API_KEY` is set and `config/jev.json` has neither `enabled:true` nor `consent.status="declined"`)
+- L265 [2a. workflow artifact and hook policy] 119 B: - `PostToolUse` for workflow artifact integrity audit and memory placeholder restore (defensive, fires on Edit/Write)
+- L268 [2a. workflow artifact and hook policy] 83 B: - `SubagentStop` for agent contract presence audit and memory placeholder restore
+- L276 [2a. workflow artifact and hook policy] 82 B: - Repo-local `.claude/settings.json` is not part of the shipped CRAFTFLOW product.
+
+## skills/craftflow-router/references/build-workflow.md (28 units, 3239 bytes)
+
+- L12 [build preparation] 219 B: - Cross-check `intent.constraints` against approved decisions. If any approved decision explicitly contradicts an `intent.constraint`, emit NOGO with the contradiction and ask the user to resolve before BUILD starts.
+- L20 [build preparation] 45 B: - `Plan first` -> switch to PLAN workflow.
+- L21 [build preparation] 49 B: - `Build directly` -> continue without a plan.
+- L24 [build preparation] 53 B: - `Build without plan` -> continue with `plan:N/A`
+- L25 [build preparation] 47 B: - `Re-plan first` -> switch to PLAN workflow
+- L29 [build preparation] 16 B: - `objective`
+- L30 [build preparation] 13 B: - `inputs`
+- L31 [build preparation] 21 B: - `files/surfaces`
+- L32 [build preparation] 25 B: - `expected_artifacts`
+- L33 [build preparation] 22 B: - `required_checks`
+- L34 [build preparation] 22 B: - `checkpoint_type`
+- L35 [build preparation] 20 B: - `exit_criteria`
+- L47 [build task graph] 27 B: BUILD is sequential in v10:
+- L48 [build task graph] 41 B: - one approved executable phase at a time
+- L100 [learn-distill gate] 70 B: **Gate check:** Read `remediation_history` from the workflow artifact.
+- L103 [learn-distill gate] 15 B: - Non-empty →
+- L120 [skill-distill gate] 84 B: **Gate check** (run once, regardless of whether the Learn-Distill Gate above fired):
+- L127 [skill-distill gate] 181 B: - `distinct_workflows >= 2` (the same threshold `gate_eligible()` applies internally for `--backtest`; plain `--query` does not pre-filter, so the router applies this filter itself)
+- L131 [skill-distill gate] 132 B: - One or more satisfy both → pick the one with the highest `distinct_workflows` (ties broken by earliest `first_seen`) and create:
+- L143 [skill-distill gate] 111 B: - `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`SKILL.md` § 8) before Memory Update proceeds.
+- L144 [skill-distill gate] 98 B: - `STATUS: SKIPPED` → passing state — proceed straight to Memory Update, no `AskUserQuestion`.
+- L147 [skill-distill gate] 228 B: **Feature Backlog (advisory):** before creating the Memory Update task below, when `integration-verifier` returned PASS on the final phase, run the complete + VCR calls per `references/harness-self-checks.md § Feature Backlog`.
+- L149 [skill-distill gate] 373 B: **Clean-State Check (advisory):** when `worktree_mode != "auto_created"` (no worktree exists — `SKILL.md`'s Worktree Isolation step already covers the worktree-exists case) and `integration-verifier` returned PASS on the final phase, also run the clean-state check per `references/harness-self-checks.md § Clean-State Check` before creating the Memory Update task below.
+- L160 [skill-distill gate] 326 B: `chain_tail_task_id` at this point is `skill_distill_task_id` if the Skill-Distill Gate fired, else `learn_distill_task_id` if the Learn-Distill Gate fired, else `doc_sync_task_id` (or `verifier_task_id` if doc-sync itself was skipped) — i.e. `addBlockedBy: [skill_distill_task_id]` in the common case where both gates fire.
+- L170 [build task graph — fast path] 230 B: Agents skipped: code-reviewer, silent-failure-hunter, doc-syncer. Gates surviving: phase_exit_gate, failure_stop_gate, memory_sync_gate. Gates/rules dropped: 1a-SCOPE rule (no reviewer/hunter findings to scope), doubt_verify_gate.
+- L191 [build task graph — fast path] 228 B: **Feature Backlog (advisory):** before creating the Memory Update task below, when `integration-verifier` returned PASS on the final phase, run the complete + VCR calls per `references/harness-self-checks.md § Feature Backlog`.
+- L193 [build task graph — fast path] 373 B: **Clean-State Check (advisory):** when `worktree_mode != "auto_created"` (no worktree exists — `SKILL.md`'s Worktree Isolation step already covers the worktree-exists case) and `integration-verifier` returned PASS on the final phase, also run the clean-state check per `references/harness-self-checks.md § Clean-State Check` before creating the Memory Update task below.
+- L206 [build task graph — fast path] 170 B: **Context boundary (advisory):** after each fast-path `phase_exit_gate` pass, run the check per `references/context-boundary.md` before the next phase or memory-finalize.
+
+## skills/craftflow-router/references/fast-path.md (20 units, 2537 bytes)
+
+- L3 [fast path reference] 162 B: This file is canonical law for fast-path BUILD routing. Read by the router before BUILD preparation when `build_mode` is `"fast_path"` or `"fast_path_escalated"`.
+- L7 [risk_keyword_scan — keyword table] 89 B: Scans request text (case-insensitive). Returns matched keywords. Empty array = fast path.
+- L16 [risk_keyword_scan — keyword table] 225 B: **Conservative principle:** When in doubt, add the keyword to the list. The cost of a false positive (full chain on a simple request) is wasted tokens. The cost of a false negative (fast path on auth code) is a missed review.
+- L38 [workflow artifact fields] 83 B: Three fields are added to the artifact schema and initialized at workflow creation:
+- L48 [workflow artifact fields] 7 B: Values:
+- L49 [workflow artifact fields] 70 B: - `build_mode`: `"fast_path"` | `"fast_path_escalated"` | `"standard"`
+- L50 [workflow artifact fields] 94 B: - `fast_path_risk_signals`: `[]` (fast path taken) or `["auth", "schema change"]` (full chain)
+- L51 [workflow artifact fields] 41 B: - `fast_path_escalated`: `false` | `true`
+- L68 [effort steering directives] 117 B: The router appends a one-line steering directive to each dispatched agent prompt based on the phase's effort profile:
+- L98 [skill-distill gate] 319 B: - `STATUS: SKIPPED` → passing state, append `skill_distill_skipped` (if not already logged this workflow) and proceed straight to `memory-finalize`, no `AskUserQuestion`. (Distinct from `skill_candidates_observed`, which is reserved for the unconditional `--observe` step at memory-finalize — see `SKILL.md` § 13.)
+- L101 [skill-distill gate] 203 B: Runs identically on standard BUILD and both fast-path variants (clean and escalated) — the gate check itself has no fast-path-specific behavior, unlike Learn-Distill's `remediation_history` dependency.
+- L116 [gate table] 444 B: `1a-SCOPE rule`: dropped on fast path (no reviewer/hunter findings to scope); RESTORED on escalated path. On escalated fast path, `1a-SCOPE` applies using the same CRITICAL+HIGH threshold (at least one CRITICAL and at least one HIGH in the escalated reviewer+hunter output) as the standard parallel review phase. Rationale: the escalated spawn produces equivalent output to the standard parallel review phase — same agents, same output shape.
+- L128 [escalation cap] 70 B: Max one REM-FIX cycle after escalation. After one REM-FIX + re-verify:
+- L129 [escalation cap] 45 B: - Re-verify PASS → memory-finalize → done
+- L131 [escalation cap] 44 B: - No further escalation cycles are permitted
+- L135 [announcement protocol] 65 B: Router announces path before child task creation (one line each):
+- L136 [announcement protocol] 60 B: - `-> FAST-PATH BUILD (no risk signals)` — fast path taken
+- L137 [announcement protocol] 76 B: - `-> FULL BUILD (risk signals: {matched keywords})` — standard path taken
+- L142 [fast-path verifier prompt note] 222 B: On fast path, the `## Previous Agent Findings` section is OMITTED from the verifier prompt (no reviewer/hunter ran). The verifier runs its own independent scenario coverage rather than reconciling reviewer/hunter findings.
+- L144 [fast-path verifier prompt note] 101 B: On escalated path, the standard merged findings handoff is used (same as standard BUILD §5 pattern).
+
+## skills/craftflow-router/references/plan-workflow.md (13 units, 1385 bytes)
+
+- L6 [plan preparation] 49 B: - Derive `plan_file_stem` (collision-guarded):
+- L36 [plan preparation] 180 B: - Brainstorming may ask the user questions and may save a `*-design.md` file. After it completes, parse `### Brainstorming Handoff (MACHINE-READABLE)` and capture `DESIGN_FILE`.
+- L47 [plan preparation] 39 B: - `direct` for trivial low-risk work
+- L48 [plan preparation] 54 B: - `execution_plan` for standard implementation work
+- L49 [plan preparation] 57 B: - `decision_rfc` for architecture or multi-option work
+- L51 [plan preparation] 86 B: - `standard` by default (covers most work; keeps verification proportional to risk)
+- L52 [plan preparation] 202 B: - `critical_path` for security, money, state-machine, concurrency, or irreversible-migration work (failure in these domains is irreversible or high-blast-radius; justifies extended scenario coverage)
+- L63 [plan preparation] 105 B: - Every saved plan artifact enters that DAG, including `direct`, `execution_plan`, and `decision_rfc`.
+- L66 [plan preparation] 36 B: - Maximum fresh-review passes: 2.
+- L95 [plan task graph] 237 B: Each invocation also persists `task_ids.plan_bakeoff_judge`/the relevant candidate task id (see the artifact schema in `workflow-artifact-and-hook-policy.md`) so `upstream_task_id` is durably recoverable, not just an in-session variable.
+- L206 [plan bake-off fan-out] 126 B: Runs immediately after `### PLAN qualify branch`'s `ELSE` arm persists `bakeoff_triggered`, `bakeoff_n`, and `bakeoff_models`.
+- L209 [plan bake-off fan-out] 36 B: **N-1 parallel candidate dispatch:**
+- L270 [plan bake-off fan-out] 178 B: Once every dispatched candidate has either returned validly or been marked failed (and, for any failed candidate, its own leftover file already reconciled per the cleanup above):
+
+## skills/craftflow-router/references/debug-workflow.md (4 units, 1218 bytes)
+
+- L31 [debug task graph] 410 B: DEBUG has no doc-sync step, so `chain_tail_task_id` starts as `verifier_task_id` directly (unlike BUILD, where it starts as `doc_sync_task_id`). Apply the SAME Learn-Distill Gate and Skill-Distill Gate documented in `build-workflow.md` (identical gate checks, identical `phase:learn-distill` / `phase:skill-distill` `TaskCreate` shape, identical `chain_tail_task_id` update rule) before creating Memory Update:
+- L33 [debug task graph] 308 B: - `references/fast-path.md`'s own Learn-Distill Gate section already states `learn-distill` is dispatched "at the end of BUILD (standard and fast-path) and DEBUG workflows" — DEBUG was already in scope for that gate by design, it simply had no `TaskCreate` to back it, exactly like BUILD's dead-wiring gap.
+- L34 [debug task graph] 242 B: - The Skill-Distill Gate's eligibility check (`craftflow_skill_ledger.py --query`) is workflow-type agnostic — it reads a project-wide ledger, not anything DEBUG-specific — so there is no reason to exclude DEBUG from it once BUILD has it.
+- L36 [debug task graph] 258 B: **Clean-State Check (advisory):** before creating the Memory Update task below, run the check per `references/harness-self-checks.md § Clean-State Check` and fold any findings AND any skipped (unscannable) entries into this task's own deferred memory notes.
+
+## skills/craftflow-router/references/review-workflow.md (0 units, 0 bytes)
+
+

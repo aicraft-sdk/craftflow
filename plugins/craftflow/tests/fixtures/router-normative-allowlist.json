@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "entries": [
+    {"text": "debug skips hunter findings.", "source": "skills/_shared/router-protocol.md:289@0439c339", "reason": "States a DEBUG routing rule (the hunter sub-block is omitted) in a sentence with no trigger keyword; also appears inside the SKILL.md:941 paragraph (B2.4 seed)."}
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "describes": "BASELINE_SHA 0439c339: when the router reads each runtime file today",
+  "variants": {
+    "BUILD": ["fast_path", "standard"],
+    "PLAN": ["standard"],
+    "DEBUG": ["standard"],
+    "REVIEW": ["standard"]
+  },
+  "files": [
+    {"file": "skills/craftflow-router/SKILL.md", "class": "kernel", "workflows": ["ALL"], "trigger": "skill load", "happy_path": true},
+    {"file": "skills/_shared/router-protocol.md", "class": "kernel", "workflows": ["ALL"], "trigger": "read before routing (SKILL.md section 1 pointer)", "happy_path": true},
+    {"file": "skills/craftflow-router/references/workflow-artifact-and-hook-policy.md", "class": "start", "workflows": ["ALL"], "trigger": "workflow start", "happy_path": true},
+    {"file": "skills/craftflow-router/references/build-workflow.md", "class": "start", "workflows": ["BUILD"], "trigger": "BUILD preparation", "happy_path": true},
+    {"file": "skills/craftflow-router/references/fast-path.md", "class": "start", "workflows": ["BUILD"], "trigger": "fast-path routing during BUILD preparation", "happy_path": true},
+    {"file": "skills/craftflow-router/references/plan-workflow.md", "class": "start", "workflows": ["PLAN"], "trigger": "PLAN preparation", "happy_path": true},
+    {"file": "skills/craftflow-router/references/debug-workflow.md", "class": "start", "workflows": ["DEBUG"], "trigger": "DEBUG preparation", "happy_path": true},
+    {"file": "skills/craftflow-router/references/review-workflow.md", "class": "start", "workflows": ["REVIEW"], "trigger": "REVIEW preparation", "happy_path": true},
+    {"file": "skills/craftflow-router/references/harness-self-checks.md", "class": "stage", "workflows": ["BUILD", "REVIEW", "DEBUG"], "trigger": "before code-reviewer dispatch / clean-state check", "happy_path": true},
+    {"file": "skills/craftflow-router/references/remediation-and-research.md", "class": "stage", "workflows": ["ALL"], "trigger": "remediation or research is triggered", "happy_path": false},
+    {"file": "skills/craftflow-router/references/context-boundary.md", "class": "stage", "workflows": ["BUILD", "PLAN"], "trigger": "phase exit", "happy_path": true},
+    {"file": "skills/craftflow-router/references/fast-path.md", "class": "stage", "workflows": ["PLAN", "DEBUG", "REVIEW"], "trigger": "first agent dispatch effort lookup (SKILL.md:907)", "happy_path": true}
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "entries": [
+    {"file": "skills/craftflow-router/SKILL.md", "anchor_text": "read `references/fast-path.md` for the canonical keyword table, agent dispatch table, gate table, and escalation protocol", "claim": "fast-path.md still holds the keyword table, agent dispatch table, gate table and escalation protocol (SKILL.md:322, no heading is named)", "owning_phase": "P11", "outcome": "", "reviewed_by": ""},
+    {"file": "skills/craftflow-router/SKILL.md", "anchor_text": "the `1a.` multi-repo branch with its dedicated resolver script", "claim": "The shared Resolve Project Root section still contains the 1a multi-repo branch (SKILL.md:39-41)", "owning_phase": "P11", "outcome": "", "reviewed_by": ""},
+    {"file": "skills/craftflow-router/SKILL.md", "anchor_text": "the Skill-Distill Approval Flow's `AskUserQuestion` (§ 8)", "claim": "The Skill-Distill Approval Flow is still reachable as the numbered section the sentence names (SKILL.md:161)", "owning_phase": "P11", "outcome": "", "reviewed_by": ""},
+    {"file": "skills/craftflow-router/references/fast-path.md", "anchor_text": "apply the Skill-Distill Approval Flow (`craftflow-router/SKILL.md` § 8)", "claim": "SKILL.md section 8 still holds the Skill-Distill Approval Flow (fast-path.md:97)", "owning_phase": "P11", "outcome": "", "reviewed_by": ""},
+    {"file": "skills/craftflow-router/references/build-workflow.md", "anchor_text": "apply the Skill-Distill Approval Flow (`SKILL.md` § 8)", "claim": "SKILL.md section 8 still holds the Skill-Distill Approval Flow (build-workflow.md:143)", "owning_phase": "P11", "outcome": "", "reviewed_by": ""},
+    {"file": "skills/craftflow-router/references/build-workflow.md", "anchor_text": "described above in the standard BUILD task graph", "claim": "The standard BUILD task graph above still contains the Learn-Distill and Skill-Distill gate text this fast-path paragraph points at (build-workflow.md:189)", "owning_phase": "P11", "outcome": "", "reviewed_by": ""},
+    {"file": "skills/craftflow-router/SKILL.md", "anchor_text": "(per `### Prompt scaffold for every agent` below)", "claim": "The bare mention of the Prompt scaffold heading still has a heading to point at (SKILL.md:858)", "owning_phase": "P9", "outcome": "", "reviewed_by": ""},
+    {"file": "skills/craftflow-router/SKILL.md", "anchor_text": "placeholder defined in `### Prompt scaffold for every agent` below", "claim": "The bare mention of the Prompt scaffold heading still has a heading to point at (SKILL.md:862)", "owning_phase": "P9", "outcome": "", "reviewed_by": ""},
+    {"file": "skills/craftflow-router/SKILL.md", "anchor_text": "no-real-task-id placeholder defined in `### Prompt scaffold for every agent`", "claim": "The bare mention of the Prompt scaffold heading still has a heading to point at (SKILL.md:968)", "owning_phase": "P9", "outcome": "", "reviewed_by": ""}
+  ]
+}
