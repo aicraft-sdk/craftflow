@@ -9,16 +9,15 @@ from __future__ import annotations
 
 import argparse
 import bisect
-import fcntl
 import json
-import os
 import re
 import subprocess
 import sys
-import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
+
+from craftflow_router_util import atomic_write, fence_mask, fence_scan, load_json, parse_frontmatter  # noqa: F401
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 SKILL = "skills/craftflow-router/SKILL.md"
@@ -57,7 +56,10 @@ def runtime_files(plugin_root=None, ref: Optional[str] = None, readmap: Optional
     else:
         names = [p.relative_to(root).as_posix() for d in ROUTER_DIRS for p in (root / d).rglob("*.md")]
     maintainer = {e["file"] for e in (readmap or {}).get("files", []) if e.get("class") == "maintainer"}
-    return sorted(n for n in names if n and _is_runtime(n) and n not in maintainer)
+    found = sorted(n for n in names if n and _is_runtime(n) and n not in maintainer)
+    if not found:  # an empty corpus would read as "0 rules lost" downstream (H-H1)
+        raise RuntimeError(f"no router files found under {root} at {ref or 'working tree'}")
+    return found
 
 
 def read_text(plugin_root, rel: str, ref: Optional[str] = None) -> str:
@@ -93,50 +95,7 @@ def plugin_loader(plugin_root=None) -> Callable[[str], Optional[str]]:
     return load
 
 
-def atomic_write(path, data: bytes) -> None:
-    """Write via mkstemp + os.replace while holding an flock on the directory."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    dfd = os.open(str(path.parent), os.O_RDONLY)
-    try:
-        fcntl.flock(dfd, fcntl.LOCK_EX)
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".")
-        try:
-            os.fchmod(fd, 0o644)  # mkstemp creates 0600; these are committed, world-readable files
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(data)
-            os.replace(tmp, str(path))
-        except BaseException:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-            raise
-    finally:
-        fcntl.flock(dfd, fcntl.LOCK_UN)
-        os.close(dfd)
-
-
 # --------------------------------------------------------------------------------------- markdown
-
-
-def fence_mask(lines: List[str], prose_text_fences: bool = False) -> List[bool]:
-    """True for lines inside a fenced block or on its delimiters.
-
-    With `prose_text_fences`, the inner lines of a fence whose info string is `text` count as prose (the router
-    keeps numbered rule lists in such fences, e.g. the Task*-tool fallback loop), so only its delimiters are masked."""
-    mask, opener, prose = [], None, False
-    for line in lines:
-        s = line.strip()
-        if opener is None:
-            m = re.match(r"^(`{3,}|~{3,})\s*(\w*)", s)
-            if m:
-                opener, prose = m.group(1), prose_text_fences and m.group(2) == "text"
-            mask.append(opener is not None)
-        else:
-            closing = s.startswith(opener[0] * len(opener)) and not s.strip(opener[0])
-            mask.append(closing or not prose)
-            if closing:
-                opener = None
-    return mask
 
 
 def headings(text: str) -> List[Tuple[int, int, str]]:
@@ -193,37 +152,6 @@ def section_any(heading: str, file_hint: Optional[str] = None, corpus: Optional[
     if len(files) > 1:
         raise AmbiguousHeading(f"{heading!r} exists in {files}; pass file_hint")
     return files[0], find_section(corpus[files[0]], heading)
-
-
-def parse_frontmatter(text: str) -> Dict[str, object]:
-    """Port of gen-craftflow-graph.mjs parseFrontmatter (scalars, lists, `key: |` block scalars)."""
-    m = re.match(r"^---\n([\s\S]*?)\n---\n", text)
-    if not m:
-        return {}
-    lines, fields, i = m.group(1).split("\n"), {}, 0
-    while i < len(lines):
-        kv = re.match(r"^([a-zA-Z_-]+):\s*(.*)$", lines[i])
-        if not kv:
-            i += 1
-            continue
-        key, rest = kv.group(1), kv.group(2)
-        if rest in ("|", ">"):
-            block, i = [], i + 1
-            while i < len(lines) and (lines[i].startswith("  ") or lines[i].strip() == ""):
-                block.append(re.sub(r"^ {2}", "", lines[i]))
-                i += 1
-            fields[key] = "\n".join(block).strip()
-            continue
-        if rest == "":
-            items, j = [], i + 1
-            while j < len(lines) and re.match(r"^\s*-\s+", lines[j]):
-                items.append(re.sub(r"^\s*-\s+", "", lines[j]).strip())
-                j += 1
-            fields[key], i = (items, j) if items else ("", i + 1)
-            continue
-        fields[key] = re.sub(r'^"(.*)"$', r"\1", rest.strip())
-        i += 1
-    return fields
 
 
 def skill_descriptions(plugin_root=None) -> Dict[str, str]:
@@ -389,25 +317,31 @@ def _head_ok(ref: str, found: str, loose: bool) -> bool:
     return found == ref or found.startswith(ref + " (")
 
 
-def resolve(xref: Xref, corpus: Dict[str, str], loader=None) -> bool:
-    """True when the reference's heading exists in the named file (and, for `## N` forms, its sub-heading in N)."""
+def resolution(xref: Xref, corpus: Dict[str, str], loader=None) -> str:
+    """`ok`, `missing`, or `ambiguous` (the named heading occurs more than once in the target file, H-M2)."""
     text = _lookup(xref.target_file, corpus, loader)
     if text is None:
-        return False
+        return "missing"
     hs = headings(text)
     if not xref.num:
-        return any(_head_ok(xref.heading, norm_text(h[2]), xref.loose) for h in hs)
+        hits = [norm_text(h[2]) for h in hs if _head_ok(xref.heading, norm_text(h[2]), xref.loose)]
+        return "missing" if not hits else ("ambiguous" if len(set(hits)) < len(hits) else "ok")
     for idx, (ln, level, raw) in enumerate(hs):
         h = norm_text(raw)
         want = xref.heading
         if not (h.startswith(xref.num + ".") if want == xref.num + "." else _head_ok(want, h, False)):
             continue
         if not xref.sub:
-            return True
+            return "ok"
         end = next((x[0] for x in hs[idx + 1:] if x[1] <= level), 10 ** 9)
         if any(ln < x[0] < end and _head_ok(xref.sub, norm_text(x[2]), False) for x in hs):
-            return True
-    return False
+            return "ok"
+    return "missing"
+
+
+def resolve(xref: Xref, corpus: Dict[str, str], loader=None) -> bool:
+    """True when the reference's heading exists exactly once in the named file (and, for `## N` forms, its sub-heading)."""
+    return resolution(xref, corpus, loader) == "ok"
 
 
 def all_xrefs(plugin_root=None, ref: Optional[str] = None) -> List[Xref]:
@@ -420,15 +354,41 @@ def all_xrefs(plugin_root=None, ref: Optional[str] = None) -> List[Xref]:
     return out
 
 
+def _key(file: str, raw: str, target: str) -> Tuple[str, str, str]:
+    return (file, " ".join(raw.split()), target)
+
+
+def _budget(entries: List[dict]) -> Counter:
+    for e in entries:
+        if not isinstance(e, dict) or not all(isinstance(e.get(k), str) and e.get(k) for k in ("file", "raw", "target")):
+            raise ValueError(f"xref allowlist entry needs string file, raw and target: {e!r}")
+    return Counter(_key(e["file"], e["raw"], e["target"]) for e in entries)
+
+
 def diff_allowlist(xrefs: List[Xref], entries: List[dict]) -> List[Xref]:
-    """Xrefs not covered by the allowlist (multiset match on file + raw text, so line drift is tolerated)."""
-    budget = Counter((e["file"], " ".join(e["raw"].split())) for e in entries)
-    out = []
+    """Xrefs not covered by the allowlist (multiset match on file + raw text + target, so line drift is tolerated)."""
+    budget, out = _budget(entries), []
     for x in xrefs:
-        if budget[(x.file, x.raw)] > 0:
-            budget[(x.file, x.raw)] -= 1
+        k = _key(x.file, x.raw, x.target_file)
+        if budget[k] > 0:
+            budget[k] -= 1
         else:
             out.append(x)
+    return out
+
+
+def stale_allowlist(xrefs: List[Xref], entries: List[dict]) -> List[dict]:
+    """Allowlist entries that no unresolved xref consumes (a fixed or renamed dangler must leave the list, H-M3)."""
+    budget, out = _budget(entries), []
+    for x in xrefs:
+        k = _key(x.file, x.raw, x.target_file)
+        if budget[k] > 0:
+            budget[k] -= 1
+    for e in entries:
+        k = _key(e["file"], e["raw"], e["target"])
+        if budget[k] > 0:
+            budget[k] -= 1
+            out.append(e)
     return out
 
 
@@ -436,12 +396,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Print the unresolved router cross-references as one JSON line")
     ap.add_argument("--ref", default=None)
     ap.add_argument("--plugin-root", default=None)
+    ap.add_argument("--allowlist", default=None, help="xref allowlist JSON; unresolved refs it lists are expected")
+    ap.add_argument("--strict", action="store_true", help="exit 1 on an unresolved ref not allowlisted or a stale entry")
     args = ap.parse_args(argv)
     root = args.plugin_root or PLUGIN_ROOT
-    corpus, loader = read_corpus(root, args.ref), plugin_loader(root)
-    items = [x for x in all_xrefs(root, args.ref) if not resolve(x, corpus, loader)]
-    print(json.dumps({"unresolved": [x._asdict() for x in items], "count": len(items)}, sort_keys=True))
-    return 0
+    try:
+        corpus, loader = read_corpus(root, args.ref), plugin_loader(root)
+        items = [x for x in all_xrefs(root, args.ref) if not resolve(x, corpus, loader)]
+        entries = load_json(args.allowlist)["entries"] if args.allowlist else []
+        new, stale = diff_allowlist(items, entries), stale_allowlist(items, entries)
+    except (ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
+        print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}, sort_keys=True), file=sys.stderr)
+        return 1
+    print(json.dumps({"unresolved": [x._asdict() for x in items], "count": len(items),
+                      "not_allowlisted": len(new), "stale_allowlist": stale}, sort_keys=True))
+    return 1 if args.strict and (new or stale) else 0
 
 
 if __name__ == "__main__":

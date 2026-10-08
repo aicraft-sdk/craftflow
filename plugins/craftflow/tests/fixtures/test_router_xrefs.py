@@ -23,6 +23,7 @@ MANUAL = FIXTURES / "router-xref-manual-review.json"
 BUDGET = FIXTURES / "router-budget.json"
 
 _passes = 0
+_skips = 0
 _errors: list = []
 
 
@@ -30,6 +31,13 @@ def ok(name: str) -> None:
     global _passes
     _passes += 1
     print(f"  PASS: {name}")
+
+
+def skip(name: str, reason: str) -> None:
+    """A skipped check is not a pass: it is counted separately and printed in the summary line."""
+    global _skips
+    _skips += 1
+    print(f"  SKIP: {name}: {reason}")
 
 
 def fail(name: str, reason: str) -> None:
@@ -90,7 +98,7 @@ def test_e69_duplicate_headings_resolve_by_named_file() -> None:
 
 def test_e70_allowlist_blocks_new_danglers_and_growth() -> None:
     bad = cor.find_xrefs("See `references/fast-path.md → Nope Table` here.\n", SK)
-    entry = {"file": SK, "line": 1, "raw": bad[0].raw, "reason": "fixture"}
+    entry = {"file": SK, "line": 1, "raw": bad[0].raw, "target": bad[0].target_file, "reason": "fixture"}
     unmatched_empty = cor.diff_allowlist(bad, [])
     unmatched_listed = cor.diff_allowlist(bad, [entry])
     grown = len([entry, entry]) > len([entry])
@@ -294,7 +302,7 @@ def test_allowlist_only_shrinks() -> None:
     rel = "tools/craftflow-plugin/plugins/craftflow/tests/fixtures/router-xref-allowlist.json"
     shown = subprocess.run(["git", "-C", str(PLUGIN_ROOT), "show", f"origin/main:{rel}"], capture_output=True, text=True)
     if shown.returncode != 0:
-        ok("allowlist_only_shrinks (skip: no origin)")
+        skip("allowlist_only_shrinks", "no origin/main in this clone")
         return
     origin = json.loads(shown.stdout)["entries"]
     now = json.loads(ALLOWLIST.read_text(encoding="utf-8"))["entries"]
@@ -308,8 +316,79 @@ def test_corpus_xrefs_resolve() -> None:
     unresolved = [x for x in xs if not cor.resolve(x, corpus, loader=loader)]
     entries = json.loads(ALLOWLIST.read_text(encoding="utf-8"))["entries"]
     unmatched = cor.diff_allowlist(unresolved, entries)
+    stale = cor.stale_allowlist(unresolved, entries)
     check("corpus_xrefs_resolve", not unmatched, "; ".join(f"{x.file}:{x.line} {x.raw}" for x in unmatched[:10]))
+    check("corpus_allowlist_has_no_stale_entries", not stale, "; ".join(f"{e['file']} {e['raw']}" for e in stale[:10]))
     print(f"  xrefs={len(xs)} unresolved={len(unresolved)} allowlist={len(entries)}")
+
+
+def test_h_m2_ambiguous_target_heading_is_unresolved() -> None:
+    text = "See `references/build-workflow.md → ### BUILD preparation` first.\n"
+    dup = {SK: text, BW: "### BUILD preparation\n\na\n\n### BUILD preparation\n\nb\n"}
+    one = {SK: text, BW: "### BUILD preparation\n\na\n"}
+    xs = cor.find_xrefs(text, SK)
+    check("H-M2 duplicate target headings are ambiguous, not resolved",
+          cor.resolution(xs[0], dup) == "ambiguous" and not cor.resolve(xs[0], dup) and cor.resolve(xs[0], one),
+          f"{cor.resolution(xs[0], dup)} {cor.resolve(xs[0], one)}")
+
+
+def test_h_m3_allowlist_keyed_by_target_and_reports_stale() -> None:
+    xs = cor.find_xrefs("See `references/fast-path.md → Nope Table` here.\n", SK)
+    right = {"file": SK, "line": 1, "raw": xs[0].raw, "target": xs[0].target_file, "reason": "fixture"}
+    wrong = dict(right, target="skills/_shared/router-protocol.md")
+    gone = dict(right, raw="`## Removed Heading`")
+    check("H-M3 an entry for another target does not cover the xref", cor.diff_allowlist(xs, [wrong]) == xs)
+    check("H-M3 a covering entry is consumed", cor.diff_allowlist(xs, [right]) == [] and cor.stale_allowlist(xs, [right]) == [])
+    check("H-M3 entries matching no unresolved xref are reported stale", cor.stale_allowlist(xs, [right, gone]) == [gone])
+    try:
+        cor.diff_allowlist(xs, ["not a dict"])
+        bad = False
+    except ValueError:
+        bad = True
+    check("H-L3 a non-dict allowlist entry is a ValueError", bad)
+
+
+def _run_cli(*args) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(PLUGIN_ROOT / "scripts" / "craftflow_router_corpus.py"), *map(str, args)],
+                          capture_output=True, text=True)
+
+
+def test_h_h1_empty_corpus_and_cli_errors() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        empty = _run_cli("--plugin-root", tmp)
+        check("H-H1 empty plugin root exits non-zero with a structured stderr error",
+              empty.returncode == 1 and empty.stdout == "" and "error" in json.loads(empty.stderr.strip()), empty.stdout + empty.stderr)
+        miss = _run_cli("--plugin-root", PLUGIN_ROOT, "--allowlist", Path(tmp) / "gone.json")
+        check("H-L2 missing allowlist file is a structured error, not a traceback",
+              miss.returncode == 1 and "Traceback" not in miss.stderr and "error" in miss.stderr, miss.stderr)
+        bad = Path(tmp) / "bad.json"
+        bad.write_text(json.dumps({"entries": ["x"]}))
+        nondict = _run_cli("--plugin-root", PLUGIN_ROOT, "--allowlist", bad)
+        check("H-L3 non-dict allowlist entry is a structured error", nondict.returncode == 1 and "Traceback" not in nondict.stderr, nondict.stderr)
+    with_list = _run_cli("--plugin-root", PLUGIN_ROOT, "--allowlist", ALLOWLIST, "--strict")
+    check("H-L1 --strict with the committed allowlist exits 0", with_list.returncode == 0, with_list.stdout[-200:] + with_list.stderr)
+    strict = _run_cli("--plugin-root", PLUGIN_ROOT, "--strict")
+    check("H-L1 --strict without an allowlist exits 1 while danglers exist", strict.returncode == 1, strict.stdout[-200:])
+    plain = _run_cli("--plugin-root", PLUGIN_ROOT)
+    check("H-L1 default stays exit 0 (report only)", plain.returncode == 0)
+
+
+def test_h_l5_nan_rejected_in_fixture_json() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "a.json"
+        p.write_text('{"entries": [], "x": NaN}')
+        try:
+            cor.load_json(p)
+            rejected = False
+        except ValueError:
+            rejected = True
+    check("H-L5 NaN in a fixture is rejected", rejected)
+
+
+def test_h_m4_unclosed_fence_reported() -> None:
+    mask, unclosed = cor.fence_scan(["a", "```bash", "echo"])
+    mask2, unclosed2 = cor.fence_scan(["a", "```bash", "echo", "```", "b"])
+    check("H-M4 fence_scan reports the opener of an unclosed fence", unclosed == 2 and unclosed2 is None and mask2 == [False, True, True, True, False])
 
 
 def main() -> int:
@@ -319,7 +398,7 @@ def main() -> int:
                 fn()
             except Exception as exc:  # report per-test crashes without hiding the rest
                 fail(name, f"{type(exc).__name__}: {exc}")
-    print(f"Results: {_passes} passed, {len(_errors)} failed")
+    print(f"Results: {_passes} passed, {len(_errors)} failed, {_skips} skipped")
     for e in _errors:
         print(e)
     return 1 if _errors else 0

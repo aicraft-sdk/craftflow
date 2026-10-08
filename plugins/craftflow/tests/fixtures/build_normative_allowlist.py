@@ -1,4 +1,8 @@
-"""One-off: fold the doubt-verifier normative review into router-normative-allowlist.json.
+"""ONE-OFF, DO NOT RE-RUN: it already ran once to fold the doubt-verifier normative review into
+router-normative-allowlist.json; re-running appends nothing new but rewrites the committed file. Kept as the
+provenance of that file. The write is atomic (mkstemp + os.replace) in case it is ever run again.
+
+Fold the doubt-verifier normative review into router-normative-allowlist.json.
 
 Matches each review entry to a baseline unit by (file, line), falling back to a raw-prefix match,
 and stores the unit's normalized text via the inventory's own `normalize` (via unit["norm"]).
@@ -16,7 +20,7 @@ import craftflow_rule_inventory as inv  # noqa: E402
 SHA = sys.argv[1] if len(sys.argv) > 1 else "0439c339"
 REVIEW = json.loads((HERE / "router-normative-review.doubt-verifier.json").read_text(encoding="utf-8"))
 ALLOW_PATH = HERE / "router-normative-allowlist.json"
-allow = json.loads(ALLOW_PATH.read_text(encoding="utf-8"))
+allow = inv.cor.load_json(ALLOW_PATH)
 
 rm = inv.load_readmap(str(HERE / "router-readmap.baseline.json"))
 corpus = inv.cor.read_corpus(PLUGIN, SHA, rm)
@@ -41,8 +45,8 @@ for e in REVIEW["entries"]:
     seen.add(u["norm"])
     allow["entries"].append({"text": u["norm"], "source": f"{e['file']}:{u['line']}@{SHA}", "reason": e["reason"]})
 
-ALLOW_PATH.write_text(
-    '{\n  "version": %d,\n  "entries": [\n%s\n  ]\n}\n'
-    % (allow["version"], ",\n".join("    " + json.dumps(x, ensure_ascii=False) for x in allow["entries"])),
-    encoding="utf-8")
+inv.cor.atomic_write(
+    ALLOW_PATH,
+    ('{\n  "version": %d,\n  "entries": [\n%s\n  ]\n}\n'
+     % (allow["version"], ",\n".join("    " + json.dumps(x, ensure_ascii=False) for x in allow["entries"]))).encode("utf-8"))
 print(json.dumps({"review_entries": len(REVIEW["entries"]), "distinct_texts": len(allow["entries"]), "fallback_matches": fallback}))

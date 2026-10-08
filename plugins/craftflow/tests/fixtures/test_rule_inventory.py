@@ -24,6 +24,7 @@ POLICY_MAP = PLUGIN_ROOT.parents[1] / "docs" / "router-policy-map.md"
 BASELINE_JSON = FIXTURES / "router-rule-inventory.baseline.json"
 
 _passes = 0
+_skips = 0
 _errors: list = []
 
 
@@ -31,6 +32,13 @@ def ok(name: str) -> None:
     global _passes
     _passes += 1
     print(f"  PASS: {name}")
+
+
+def skip(name: str, reason: str) -> None:
+    """A skipped check is not a pass: it is counted separately and printed in the summary line."""
+    global _skips
+    _skips += 1
+    print(f"  SKIP: {name}: {reason}")
 
 
 def fail(name: str, reason: str) -> None:
@@ -338,7 +346,7 @@ def test_baseline_matches_ref() -> None:
     ref = base["ref"]
     have = subprocess.run(["git", "-C", str(PLUGIN_ROOT), "cat-file", "-e", f"{ref}^{{commit}}"], capture_output=True)
     if have.returncode != 0:
-        ok("baseline_matches_ref (skip: baseline commit not in this clone)")
+        skip("baseline_matches_ref", "baseline commit not in this clone")
         return
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "regen.json"
@@ -372,7 +380,7 @@ def main() -> int:
                 fn()
             except Exception as exc:  # report per-test crashes without hiding the rest
                 fail(name, f"{type(exc).__name__}: {exc}")
-    print(f"Results: {_passes} passed, {len(_errors)} failed")
+    print(f"Results: {_passes} passed, {len(_errors)} failed, {_skips} skipped")
     for e in _errors:
         print(e)
     return 1 if _errors else 0
