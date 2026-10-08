@@ -234,6 +234,8 @@ def dump_inventory(inv: dict) -> bytes:
 def _check_baseline(base) -> None:
     try:
         ok = base["version"] == 2 and isinstance(base["entries"], list) and bool(base["entries"])
+        if len({e["id"] for e in base["entries"]}) != len(base["entries"]):
+            raise ValueError("malformed baseline inventory: duplicate unit ids")
         for e in base["entries"]:
             ok = ok and bool(e["id"]) and isinstance(e["normative"], bool) and bool(e["occurrences"])
             for o in e["occurrences"]:
@@ -326,9 +328,13 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
         if not new_ids or any(n not in after_ids for n in new_ids):
             errors.append(f"rewrite row names replacement ids that do not exist: {c[1]}")
             continue
-        rewrites.update({i: kind for i in known(c[0])})
+        ids = known(c[0])
+        errors.extend(f"duplicate rewrite row for id {i}" for i in ids if i in rewrites)
+        rewrites.update({i: kind for i in ids})
 
     occs = [(e["id"], o["heading_ctx"], o["file"]) for e in baseline["entries"] for o in e["occurrences"]]
+    occ_cov = {(e["id"], o["heading_ctx"], o["file"]): frozenset(map(tuple, o["applicability"]))
+               for e in baseline["entries"] for o in e["occurrences"]}
     narrowed: Dict[Tuple[str, str, str], Set[Tuple[str, str]]] = {}  # per occurrence, never per unit id (H-H3)
     for c in rows["applicability"]:
         if not c[3].strip(' "`'):
@@ -352,6 +358,10 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
             errors.append(f"applicability row quotes words that are not in the named rule: {c[3]}")
         elif any(t in narrowed for t in targets):
             errors.append(f"duplicate applicability row for an occurrence of {c[0]}")
+        elif any(occ_cov[t] != pairs_of(c[1], errors) for t in targets):  # the cell must state the real baseline coverage
+            errors.append(f"applicability row's baseline coverage '{c[1]}' differs from the occurrence's real coverage: {c[0]}")
+        elif any(not pairs <= occ_cov[t] for t in targets):
+            errors.append(f"applicability row narrowed coverage is outside the baseline coverage:{c[2]}")
         else:
             narrowed.update({t: pairs for t in targets})
 
@@ -492,6 +502,17 @@ def _refuse_other_ref(out: str, sha: Optional[str]) -> None:
         raise ValueError(f"{out} holds a baseline for ref {have!r}, not {sha!r}; pass --force to overwrite it")
 
 
+def _refuse_baseline_clobber(out: str) -> None:
+    """The report mode must never replace a baseline-shaped inventory (version + ref keys)."""
+    if Path(out).is_file():
+        try:
+            have = cor.load_json(out)
+        except ValueError:
+            return
+        if isinstance(have, dict) and {"version", "ref"} <= set(have):
+            raise ValueError(f"{out} holds a baseline inventory; --report-nonnormative will not overwrite it")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Occurrence-aware router rule inventory")
     mode = ap.add_mutually_exclusive_group(required=True)
@@ -560,13 +581,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         files = list(dict.fromkeys(files))  # a path named twice must not be counted twice (H-L4)
         res = report_nonnormative({f: cor.read_text(root, f, sha) for f in files}, files, _allowlist(a.allowlist), a.list)
         text = render_markdown(res, sha) if a.format == "md" else json.dumps(res, sort_keys=True)
-        if a.out:  # write the full listing to a file; stdout stays a one-line JSON summary
+        if a.out:
+            _refuse_baseline_clobber(a.out)  # write the full listing to a file; stdout stays a one-line JSON summary
             cor.atomic_write(a.out, (text + "\n").encode("utf-8"))
             text = json.dumps({"total": res["total"], "units": sum(v["units"] for v in res["files"].values()),
                                "out": a.out}, sort_keys=True)
         print(text)
         return 0
-    except (ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
+    except (ValueError, OSError, RuntimeError, KeyError, TypeError, AttributeError, IndexError) as exc:
         return _fail(f"{type(exc).__name__}: {exc}")
 
 

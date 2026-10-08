@@ -325,16 +325,17 @@ def resolution(xref: Xref, corpus: Dict[str, str], loader=None) -> str:
     hs = headings(text)
     if not xref.num:
         hits = [norm_text(h[2]) for h in hs if _head_ok(xref.heading, norm_text(h[2]), xref.loose)]
-        return "missing" if not hits else ("ambiguous" if len(set(hits)) < len(hits) else "ok")
-    for idx, (ln, level, raw) in enumerate(hs):
-        h = norm_text(raw)
-        want = xref.heading
-        if not (h.startswith(xref.num + ".") if want == xref.num + "." else _head_ok(want, h, False)):
-            continue
-        if not xref.sub:
-            return "ok"
+        dup = len(hits) > 1 if not xref.loose else len(set(hits)) < len(hits)  # `Bar (x)` + `Bar (y)` are two candidates
+        return "missing" if not hits else ("ambiguous" if dup else "ok")
+    want = xref.heading
+    cands = [i for i, (_, _, raw) in enumerate(hs)
+             if (norm_text(raw).startswith(xref.num + ".") if want == xref.num + "." else _head_ok(want, norm_text(raw), False))]
+    if len(cands) > 1:
+        return "ambiguous"
+    for idx in cands:
+        ln, level, _ = hs[idx]
         end = next((x[0] for x in hs[idx + 1:] if x[1] <= level), 10 ** 9)
-        if any(ln < x[0] < end and _head_ok(xref.sub, norm_text(x[2]), False) for x in hs):
+        if not xref.sub or any(ln < x[0] < end and _head_ok(xref.sub, norm_text(x[2]), False) for x in hs):
             return "ok"
     return "missing"
 

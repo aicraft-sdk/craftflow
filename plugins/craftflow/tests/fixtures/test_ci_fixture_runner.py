@@ -29,7 +29,10 @@ def check(name: str, cond: bool, reason: str = "") -> None:
         print(f"  FAIL: {name}: {reason or 'assertion false'}")
 
 
-def make_fixture(directory: Path, name: str, failed: int) -> None:
+def make_fixture(directory: Path, name: str, failed) -> None:
+    if isinstance(failed, str):  # a raw script body
+        (directory / name).write_text(failed, encoding="utf-8")
+        return
     body = f"print('Results: 4 passed, {failed} failed')\nraise SystemExit({1 if failed else 0})\n"
     (directory / name).write_text(body, encoding="utf-8")
 
@@ -77,6 +80,30 @@ def test_malformed_entry_fails() -> None:
 def test_no_env_means_no_excuses() -> None:
     check("an empty allowance passes when everything passes", run({"test_a.py": 0}, "").returncode == 0)
     check("an empty allowance fails on any failure", run({"test_a.py": 1}, "").returncode != 0)
+
+
+def test_l3_count_is_read_from_the_final_results_line_only() -> None:
+    known = "test_agent_structure.py | 11 | stale assertions\n"
+    crash = "print('Traceback: 11 failed to import')\nraise SystemExit(1)\n"
+    res = run({"test_agent_structure.py": crash}, known)
+    check("L3a a crash printing '11 failed' without a Results line is not excused",
+          res.returncode != 0 and "pins 11" in res.stdout, res.stdout)
+    mixed = "print('note: 11 failed earlier')\nprint('Results: 4 passed, 3 failed')\nraise SystemExit(1)\n"
+    res = run({"test_agent_structure.py": mixed}, known)
+    check("L3a the final Results line wins over earlier '11 failed' text", res.returncode != 0 and "pins 11" in res.stdout, res.stdout)
+    pinned = "print('3 failed in a log line')\nprint('Results: 4 passed, 11 failed')\nraise SystemExit(1)\n"
+    res = run({"test_agent_structure.py": pinned}, known)
+    check("L3a a matching final Results line is excused", res.returncode == 0, res.stdout)
+
+
+def test_l3_duplicate_stale_and_empty() -> None:
+    dup = "test_a.py | 1 | first\ntest_a.py | 2 | second\n"
+    res = run({"test_a.py": 1}, dup)
+    check("L3b duplicate entries for one file are an error", res.returncode != 0 and "more than once" in res.stdout, res.stdout)
+    res = run({"test_a.py": 0, "helper.py": "print('x')\n"}, "helper.py | 1 | not a test file\n")
+    check("L3c an entry naming a non-test file is an error", res.returncode != 0 and "test_*.py" in res.stdout, res.stdout)
+    res = run({}, "")
+    check("L3d an empty fixture directory says so and fails", res.returncode != 0 and "no test_*.py fixtures" in res.stdout, res.stdout)
 
 
 def test_workflow_uses_the_wrapper_with_a_pinned_count() -> None:

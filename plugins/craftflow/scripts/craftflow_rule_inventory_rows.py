@@ -40,7 +40,9 @@ def parse_tables(doc: str) -> Tuple[Dict[str, List[List[str]]], List[str]]:
     rows: Dict[str, List[List[str]]] = {k: [] for k in HEADERS}
     errors: List[str] = []
     lines = doc.split("\n")
-    mask = cor.fence_mask(lines)
+    mask, unclosed = cor.fence_scan(lines)
+    if unclosed:  # an open fence hides every later heading, so the section errors would only mislead
+        return rows, [f"policy map: unclosed fence opened at line {unclosed}"]
     heads = cor.headings(doc)
     for key, title in SECTIONS.items():
         idx = next((n for n, h in enumerate(heads) if cor.norm_text(h[2]).lstrip("§ ").strip() == title), None)

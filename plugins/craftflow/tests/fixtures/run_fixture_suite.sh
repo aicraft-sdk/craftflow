@@ -3,6 +3,8 @@
 #
 # CRAFTFLOW_CI_KNOWN_ENV_FAILURES: one entry per line, "<test file> | <expected failed count> | <reason>".
 # A listed file is excused ONLY while it fails with exactly that many failed checks (its "N failed" summary).
+# The count is read only from the final "Results: N passed, M failed" line of the file's output. Each file may be listed
+# once, and only a test_*.py name is accepted.
 # A different count, an unparseable summary, or a listed file that now passes (or no longer exists) fails the job:
 # the entry must be updated or removed. File names are compared literally, never as a regex.
 #
@@ -14,6 +16,7 @@ tmp="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 known="${CRAFTFLOW_CI_KNOWN_ENV_FAILURES:-}"
 out="$tmp/fixture.out"
 failed=0
+seen=""
 
 # expected_for <file>: prints the pinned failed count for an exact file name, or nothing when it is not listed.
 expected_for() {
@@ -35,6 +38,20 @@ while IFS= read -r line; do
       failed=1
       ;;
   esac
+  case "$name" in
+    test_*.py) ;;
+    *)
+      echo "::error::CRAFTFLOW_CI_KNOWN_ENV_FAILURES entry '$name' is not a test_*.py fixture; it would never run"
+      failed=1
+      ;;
+  esac
+  case "$seen" in
+    *"|$name|"*)
+      echo "::error::CRAFTFLOW_CI_KNOWN_ENV_FAILURES lists $name more than once; keep a single entry"
+      failed=1
+      ;;
+  esac
+  seen="$seen|$name|"
   if [ ! -f "$dir/$name" ]; then
     echo "::error::CRAFTFLOW_CI_KNOWN_ENV_FAILURES lists $name but no such fixture exists; remove the entry"
     failed=1
@@ -42,6 +59,12 @@ while IFS= read -r line; do
 done <<EOF
 $known
 EOF
+
+set -- "$dir"/test_*.py
+if [ ! -e "$1" ]; then
+  echo "::error::no test_*.py fixtures found in $dir"
+  exit 1
+fi
 
 for t in "$dir"/test_*.py; do
   name="$(basename "$t")"
@@ -58,7 +81,7 @@ for t in "$dir"/test_*.py; do
     continue
   fi
   if [ -n "$want" ]; then
-    got="$(grep -Eo '[0-9]+ failed' "$out" | tail -1 | grep -Eo '[0-9]+')"
+    got="$(grep -E '^Results: [0-9]+ passed, [0-9]+ failed' "$out" | tail -1 | sed -E 's/^Results: [0-9]+ passed, ([0-9]+) failed.*/\1/')"
     if [ "$got" = "$want" ]; then
       echo "::warning::$name failed $got check(s) as pinned in CRAFTFLOW_CI_KNOWN_ENV_FAILURES"
       continue

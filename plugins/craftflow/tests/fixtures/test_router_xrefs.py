@@ -332,6 +332,26 @@ def test_h_m2_ambiguous_target_heading_is_unresolved() -> None:
           f"{cor.resolution(xs[0], dup)} {cor.resolve(xs[0], one)}")
 
 
+def test_m2_numbered_and_parenthetical_ambiguity() -> None:
+    num = cor.Xref(SK, 1, BW, "2. foo", "`2. Foo`", num="2")
+    two = {BW: "## 2. Foo\n\na\n\n## 2. Foo\n\nb\n"}
+    one = {BW: "## 2. Foo\n\na\n\n## 3. Bar\n\nb\n"}
+    check("M2 two identical numbered headings are ambiguous, not ok",
+          cor.resolution(num, two) == "ambiguous" and cor.resolution(num, one) == "ok",
+          f"{cor.resolution(num, two)} {cor.resolution(num, one)}")
+    sub = cor.Xref(SK, 1, BW, "2. foo", "`2. Foo -> Step`", sub="step", num="2")
+    check("M2 numbered ambiguity is reported even with a sub-heading",
+          cor.resolution(sub, {BW: two[BW] + "### Step\n"}) == "ambiguous", cor.resolution(sub, {BW: two[BW] + "### Step\n"}))
+    bare = cor.Xref(SK, 1, BW, "2.", "`2.`", num="2")
+    check("M2 bare number matching two headings is ambiguous",
+          cor.resolution(bare, {BW: "## 2. Foo\n\na\n\n## 2. Bar\n\nb\n"}) == "ambiguous")
+    plain = cor.Xref(SK, 1, BW, "bar", "`bar`")
+    paren = {BW: "## Bar (x)\n\na\n\n## Bar (y)\n\nb\n"}
+    check("M2 two parenthetical variants of one heading are ambiguous", cor.resolution(plain, paren) == "ambiguous",
+          cor.resolution(plain, paren))
+    check("M2 one parenthetical variant still resolves", cor.resolution(plain, {BW: "## Bar (x)\n\na\n"}) == "ok")
+
+
 def test_h_m3_allowlist_keyed_by_target_and_reports_stale() -> None:
     xs = cor.find_xrefs("See `references/fast-path.md → Nope Table` here.\n", SK)
     right = {"file": SK, "line": 1, "raw": xs[0].raw, "target": xs[0].target_file, "reason": "fixture"}

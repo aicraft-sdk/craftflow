@@ -12,6 +12,7 @@ import craftflow_router_corpus as cor
 from craftflow_rule_inventory_rows import VARIANTS
 
 CLASSES = ("kernel", "start", "stage", "maintainer")
+ENTRY_KEYS = frozenset({"file", "class", "workflows", "variant", "trigger", "happy_path"})
 
 
 def coverage(readmap: dict) -> Dict[str, Set[Tuple[str, str]]]:
@@ -20,23 +21,35 @@ def coverage(readmap: dict) -> Dict[str, Set[Tuple[str, str]]]:
     Fails closed on a read map with no entries, an unknown workflow or an unknown variant (H-H2): a silent `[]`
     applicability would make every reachability check vacuous."""
     variants = readmap.get("variants", VARIANTS)
+    if not isinstance(variants, dict) or not all(isinstance(v, list) and v for v in variants.values()):
+        raise ValueError("read map 'variants' must map each workflow to a non-empty list")
     if not isinstance(readmap.get("files"), list) or not readmap["files"]:
         raise ValueError("read map has no 'files' entries")
     out: Dict[str, Set[Tuple[str, str]]] = {}
+    seen: Set[Tuple[str, str]] = set()
     for e in readmap["files"]:
+        if not isinstance(e, dict):
+            raise ValueError(f"malformed read map entry: {e!r}")
+        if set(e) - ENTRY_KEYS:  # a misspelled key would silently widen coverage
+            raise ValueError(f"unknown key(s) {sorted(set(e) - ENTRY_KEYS)} in read map entry {e.get('file')!r}")
         cls, wfs = e.get("class"), e.get("workflows", [])
         if cls not in CLASSES or not e.get("file") or not isinstance(wfs, list):
             raise ValueError(f"malformed read map entry: {e}")
+        if (e["file"], cls) in seen:
+            raise ValueError(f"duplicate read map entry for {e['file']} (class {cls})")
+        seen.add((e["file"], cls))
         pairs = out.setdefault(e["file"], set())
         if cls == "maintainer":
             continue
         if cls != "kernel" and not wfs:
             raise ValueError(f"read map entry has no workflows: {e}")
+        v = e.get("variant")
+        if v is not None and not (isinstance(v, str) or (isinstance(v, list) and v and all(isinstance(x, str) for x in v))):
+            raise ValueError(f"read map 'variant' must be a string or a non-empty list of strings: {e}")
         for wf in (list(variants) if cls == "kernel" or "ALL" in wfs else wfs):
             if wf not in variants:
                 raise ValueError(f"unknown workflow {wf!r} in read map")
-            v = e.get("variant")
-            chosen = [v] if isinstance(v, str) else (v or variants[wf])
+            chosen = variants[wf] if v is None else ([v] if isinstance(v, str) else v)
             bad = [x for x in chosen if x not in variants[wf]]
             if bad:
                 raise ValueError(f"unknown variant {bad[0]!r} for {wf} in read map entry {e['file']}")

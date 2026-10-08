@@ -267,6 +267,102 @@ def test_low_allowlist_validation() -> None:
     check("build_inventory reports allowlist_unmatched", inventory["allowlist_unmatched"] == ["matches no unit"], repr(inventory.get("allowlist_unmatched")))
 
 
+# --------------------------------------------------------------------------------- REM-FIX 2 (re-hunt)
+
+PL = "skills/craftflow-router/references/plan-x.md"
+RM2 = {"version": 1, "files": [{"file": K, "class": "kernel", "workflows": ["ALL"]},
+                               {"file": STD, "class": "start", "workflows": ["BUILD"], "variant": "standard"},
+                               {"file": PL, "class": "start", "workflows": ["PLAN"]}]}
+BETA = "- Never do the beta thing."
+
+
+def diff2(row: str, after_file: str = PL, extra: str = "") -> dict:
+    base2 = inv.build_inventory({K: "## K\n\nStay.\n", STD: "## r\n\n" + BETA + "\n"}, RM2, set(), ref="f")
+    return inv.diff_inventory(base2, {K: "## K\n\nStay.\n", after_file: "## r\n\n" + BETA + "\n"}, RM2,
+                              policy_doc(applic=[row] if row else []), plugin_root=PLUGIN_ROOT)
+
+
+def test_m1_narrowing_validated_against_baseline_coverage() -> None:
+    q, name = '"beta thing"', STD.split("/")[-1]
+    disjoint = diff2(f"| {name}#r | BUILD:standard | PLAN:standard | {q} | David |")
+    check("M1 narrowed coverage outside the baseline coverage is a row error and the loss is not forgiven",
+          any("narrowed" in e for e in disjoint["row_errors"]) and disjoint["unmapped_removed"] == 1 and not passes(disjoint),
+          repr(disjoint))
+    garbage = diff2(f"| {name}#r | ZZZ | BUILD:standard | {q} | David |", STD)
+    check("M1 garbage baseline coverage is a row error", bool(garbage["row_errors"]) and not passes(garbage), repr(garbage))
+    wrong = diff2(f"| {name}#r | BUILD | BUILD:standard | {q} | David |", STD)
+    check("M1 a baseline coverage cell that differs from the occurrence's real coverage is a row error",
+          any("baseline coverage" in e for e in wrong["row_errors"]), repr(wrong))
+    good = diff2(f"| {name}#r | BUILD:standard | BUILD:standard | {q} | David |", STD)
+    check("M1 a truthful narrowing that matches the baseline still passes", passes(good), repr(good))
+
+
+def test_m3_readmap_rejects_widening_unknown_keys_and_duplicates() -> None:
+    ent = {"file": STD, "class": "start", "workflows": ["BUILD"]}
+    with_v = lambda **kw: {"version": 1, "files": [dict(ent, **kw)]}
+    check("M3 empty variant list is rejected, not widened to all variants",
+          bool(raises(lambda: inv.coverage(with_v(variant=[])))))
+    check("M3 misspelled key is rejected", "varient" in raises(lambda: inv.coverage(with_v(varient="standard"))))
+    check("M3 extra class_ key is rejected", bool(raises(lambda: inv.coverage(with_v(class_="x")))))
+    check("M3 duplicate entries for one file and class are rejected",
+          bool(raises(lambda: inv.coverage({"version": 1, "files": [ent, dict(ent, variant="standard")]}))))
+    check("M3 a variant list of strings still works",
+          inv.coverage(with_v(variant=["standard"]))[STD] == {("BUILD", "standard")})
+    check("M3 the committed read map still validates", not raises(lambda: inv.load_readmap(PLUGIN_ROOT / "config" / "router-readmap.json")))
+
+
+def test_l1_malformed_readmap_shapes_emit_the_json_error_contract() -> None:
+    check("L1 a string files entry raises ValueError", bool(raises(lambda: inv.coverage({"version": 1, "files": ["x"]}))))
+    check("L1 variants as a list raises ValueError",
+          bool(raises(lambda: inv.coverage({"version": 1, "variants": [1], "files": [RM["files"][0]]}))))
+    with tempfile.TemporaryDirectory() as tmp:
+        root = mini_root(tmp)
+        for label, body in (("string entry", {"version": 1, "files": ["x"]}),
+                            ("variants list", {"version": 1, "variants": [1], "files": [RM["files"][0]]})):
+            (root / "rm.json").write_text(json.dumps(body))
+            r = cli("--emit", "--plugin-root", root, "--readmap-baseline", root / "rm.json", "--allowlist", root / "al.json",
+                    "--out", Path(tmp) / "o.json")
+            check(f"L1 CLI {label} exits 1 with a JSON error, no traceback",
+                  r.returncode == 1 and "Traceback" not in r.stderr and "error" in json.loads(r.stderr.strip()), r.stderr)
+
+
+def test_l2_report_mode_does_not_clobber_a_baseline() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = mini_root(tmp)
+        out = Path(tmp) / "baseline.json"
+        keep = '{"entries":[],"ref":"deadbeef","version":2}\n'
+        out.write_text(keep)
+        r = cli("--report-nonnormative", "--plugin-root", root, "--files", "skills/craftflow-router/SKILL.md", "--out", out)
+        check("L2 --report-nonnormative --out refuses to overwrite a baseline-shaped file",
+              r.returncode != 0 and out.read_text() == keep, r.stdout + r.stderr)
+        plain = Path(tmp) / "report.json"
+        ok1 = cli("--report-nonnormative", "--plugin-root", root, "--files", "skills/craftflow-router/SKILL.md", "--out", plain)
+        ok2 = cli("--report-nonnormative", "--plugin-root", root, "--files", "skills/craftflow-router/SKILL.md", "--out", plain)
+        check("L2 a report file can still be re-written", ok1.returncode == 0 and ok2.returncode == 0, ok2.stderr)
+
+
+def test_l4_duplicate_rewrite_rows_for_one_id_are_an_error() -> None:
+    before = {K: "## A\n\n" + GATE + "\n", FP: "## B\n\n" + GATE + "\n"}
+    r1 = f"| {id_of(GATE)} | {id_of(GATE)} | dedupe | same | kept copy covers all | David |"
+    r2 = f"| {id_of(GATE)} | {id_of(GATE)} | pointer | same | pointer | David |"
+    res = run_diff(before, {K: before[K]}, policy_doc(rewrites=[r1, r2]))
+    check("L4 two rewrite rows for one id are a row error", any("duplicate rewrite" in e for e in res["row_errors"]), repr(res))
+    check("L4 a single rewrite row is fine", passes(run_diff(before, {K: before[K]}, policy_doc(rewrites=[r1]))))
+
+
+def test_l5_duplicate_baseline_ids_are_rejected() -> None:
+    b = base.baseline_of({K: "## A\n\n" + GATE + "\n"})
+    b["entries"].append(json.loads(json.dumps(b["entries"][0])))
+    check("L5 a baseline with a repeated unit id is rejected",
+          "duplicate" in raises(lambda: inv.diff_inventory(b, {K: "## A\n\nx\n"}, RM, policy_doc())))
+
+
+def test_policy_map_unclosed_fence_is_surfaced_first() -> None:
+    _, errs = inv.parse_tables(policy_doc().replace("## Rewrites", "```\n\n## Rewrites", 1))
+    check("policy map with an unclosed fence reports the fence, not missing sections",
+          len(errs) == 1 and "fence" in errs[0], repr(errs))
+
+
 def main() -> int:
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn) and fn.__module__ == __name__:
