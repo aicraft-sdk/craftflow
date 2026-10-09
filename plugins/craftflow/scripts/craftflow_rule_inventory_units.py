@@ -4,7 +4,8 @@
 A unit is the smallest span a reviewer would call one rule: a list item with its continuation lines, a table header or
 body row, a paragraph, a fenced block, an [EASY TO MISS ...] bracket or a skill's frontmatter description. A unit's id
 hashes its normalized text; its place is the heading path plus, for list items, the label paragraph that introduces
-the list (`label_ctx`). Python 3.9 compatible.
+the list (`label_ctx`) and the ids of the list's enclosing list items and preceding paragraph (`parent_ctx`, R1).
+Python 3.9 compatible.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import re
 from typing import FrozenSet, List, Optional, Set, Tuple
 
 import craftflow_router_corpus as cor
+from craftflow_rule_inventory_frontmatter import keys_unit_text, parse_strict
 
 KEYWORDS = re.compile(r"(?i)\b(never|must|do not|always|only|required|requires|shall|fail closed)\b|MUST|MANDATORY|\[EASY TO MISS")
 VERBS3 = re.compile(r"(?i)\b(skips?|stops?|blocks?|denies|fails?|advances?|halts?|aborts?|should|anything (?:other than|else)"
@@ -82,45 +84,48 @@ def _bracket_close(lines: List[str], mask: List[bool], i: int, cur_lines: List[s
     return None
 
 
-FM_ACCOUNTED = re.compile(r"^([a-zA-Z_-]+:|\s+\S|\s*-\s)")  # a key line, an indented continuation or a list item
-
-
-def _frontmatter_description(lines: List[str], close: int, file: str) -> str:
-    """The description of a `---` frontmatter block; a block that does not parse to one, or that holds lines the
-    parser does not account for, raises instead of being skipped (H-M2)."""
-    desc = cor.parse_frontmatter("\n".join(lines[:close + 1]) + "\n").get("description")
+def _frontmatter(lines: List[str], close: int, file: str) -> Tuple[str, str]:
+    """(description, whole-frontmatter text) of a `---` block. A block outside the strict subset, or one without a
+    non-empty string description, raises instead of being skipped (H-M2, F1-F6)."""
+    where = file or "text"
+    try:
+        fields = parse_strict(lines[1:close])
+    except ValueError as exc:
+        raise ValueError(f"frontmatter of {where} is not valid: {exc}")
+    desc = fields.get("description")
     if not isinstance(desc, str) or not desc.strip():
-        raise ValueError(f"frontmatter of {file or 'text'} does not parse to a non-empty string description")
-    stray = [n + 1 for n in range(1, close) if lines[n].strip() and not FM_ACCOUNTED.match(lines[n])]
-    if stray:
-        raise ValueError(f"frontmatter of {file or 'text'} has unaccounted line(s) {stray}")
-    return desc
+        raise ValueError(f"frontmatter of {where} does not parse to a non-empty string description")
+    return desc, keys_unit_text(fields)
 
 
 def extract_units(text: str, file: str = "") -> List[dict]:
-    """Units in file order: {kind, raw, norm, id, line, numbered, heading_ctx, heading_path, label_ctx}."""
+    """Units in file order: {kind, raw, norm, id, line, numbered, heading_ctx, heading_path, label_ctx, parent_ctx}."""
     lines = text.replace("\r\n", "\n").split("\n")
-    i, front = 0, None
+    i, front, keys = 0, None, ""
     if lines and lines[0].strip() == "---":
         close = next((k for k in range(1, len(lines)) if lines[k].strip() == "---"), None)
         if close is not None:
-            i, front = close + 1, _frontmatter_description(lines, close, file)
+            i = close + 1
+            front, keys = _frontmatter(lines, close, file)
     mask, unclosed = cor.fence_scan(lines)
     if unclosed:  # an unclosed fence would silently swallow the rest of the file as one block
         raise ValueError(f"unclosed fence opened at line {unclosed} of {file or 'text'}")
     units: List[dict] = []
     stack: List[Tuple[int, str]] = []
     labels: List[Tuple[int, str]] = []  # (indent, norm) of the open label units; a paragraph is indent -1
+    parents: List[Tuple[int, str]] = []  # (indent, id) of the open list items, whatever their trailing punctuation (R1)
+    para: List[str] = []  # [id] of the paragraph that directly precedes the current list, else []
     cur: Optional[dict] = None
     table: Optional[str] = None  # normalized header row of the table being read
 
     def emit(kind: str, raw_lines: List[str], line: int, numbered: bool = False, label: str = "",
-             norm: Optional[str] = None) -> str:
+             norm: Optional[str] = None, parent: Optional[List[str]] = None) -> str:
         raw = "\n".join(x.rstrip() for x in raw_lines).strip("\n")
         norm = norm if norm is not None else (normalize_fence(raw) if kind == "fence" else normalize(raw))
         path = [h for _, h in stack]
         units.append({"kind": kind, "raw": raw, "norm": norm, "id": make_id(norm), "line": line, "numbered": numbered,
-                      "heading_ctx": path[-1] if path else "", "heading_path": path, "label_ctx": label})
+                      "heading_ctx": path[-1] if path else "", "heading_path": path, "label_ctx": label,
+                      "parent_ctx": parent or []})
         if kind in ("list_item", "paragraph"):
             for span in _bracket_spans(raw):
                 if normalize(span) != norm:
@@ -130,25 +135,41 @@ def extract_units(text: str, file: str = "") -> List[dict]:
     def flush() -> None:
         nonlocal cur
         if cur:
-            norm = emit(cur["kind"], cur["lines"], cur["line"], cur["numbered"], cur["label"])
+            norm = emit(cur["kind"], cur["lines"], cur["line"], cur["numbered"], cur["label"], parent=cur["parent"])
             if norm.endswith(":"):
                 labels.append((cur["indent"], norm))
+            if cur["kind"] == "list_item":
+                parents.append((cur["indent"], make_id(norm)))
+            else:
+                para[:] = [make_id(norm)]
         cur = None
 
     def begin(kind: str, line: str, no: int, numbered: bool) -> dict:
         indent = -1 if kind == "paragraph" else len(line) - len(line.lstrip())
         while labels and labels[-1][0] >= indent:
             labels.pop()
+        while parents and parents[-1][0] >= indent:
+            parents.pop()
         return {"kind": kind, "lines": [line], "line": no, "numbered": numbered, "indent": indent,
-                "label": labels[-1][1] if kind == "list_item" and labels else ""}
+                "label": labels[-1][1] if kind == "list_item" and labels else "",
+                "parent": para + [pid for _, pid in parents] if kind == "list_item" else []}
+
+    def reset(keep_table: bool = False) -> None:
+        nonlocal table
+        table = table if keep_table else None
+        labels[:] = []
+        parents[:] = []
+        para[:] = []
 
     if isinstance(front, str) and front.strip():  # the description is loaded into context on every turn (A6)
         emit("frontmatter", [front], 1)
+    if keys:  # the whole block: a changed name or an added disable-model-invocation unloads every kernel rule (F2, F6)
+        emit("frontmatter_keys", [keys], 1, norm=keys)
     while i < len(lines):
         line, s = lines[i], lines[i].strip()
         if mask[i]:
             flush()
-            table, labels[:] = None, []
+            reset()
             opener = FENCE_OPEN.match(s).group(1)
             j = i + 1
             while j < len(lines) and not (lines[j].strip().startswith(opener[0] * len(opener))
@@ -160,7 +181,7 @@ def extract_units(text: str, file: str = "") -> List[dict]:
         h = re.match(r"^(#{1,6})\s+(.*?)\s*#*\s*$", line)
         if h:
             flush()
-            table, labels[:] = None, []
+            reset()
             while stack and stack[-1][0] >= len(h.group(1)):
                 stack.pop()
             stack.append((len(h.group(1)), cor.norm_text(h.group(2))))
@@ -173,10 +194,10 @@ def extract_units(text: str, file: str = "") -> List[dict]:
             flush()
             table = None
             if s:
-                labels[:] = []
+                reset()
         elif s.startswith("|"):
             flush()
-            labels[:] = []
+            reset(keep_table=True)
             if table is None:
                 table = normalize(line)
                 emit("table_header", [line], i + 1)
@@ -202,7 +223,7 @@ def classify_normative(unit: dict, allowlist: FrozenSet[str] = frozenset(), keyw
         return True
     if not keywords:
         return False
-    if unit["kind"] in ("table_row", "table_header", "fence", "easy_to_miss", "frontmatter") or unit["numbered"]:
+    if unit["kind"] in ("table_row", "table_header", "fence", "easy_to_miss", "frontmatter", "frontmatter_keys") or unit["numbered"]:
         return True
     first = unit["norm"].split(" ")[0].strip(":,.;`*_(").lower() if unit["norm"] else ""
     return bool(KEYWORDS.search(unit["norm"]) or VERBS3.search(unit["norm"]) or first in IMPERATIVES)

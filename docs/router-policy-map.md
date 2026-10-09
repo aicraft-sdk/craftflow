@@ -3,7 +3,7 @@
 Maintainer ledger for the router context cut (SPEC-0034, ADR-0073). Not loaded at runtime.
 `craftflow_rule_inventory.py --diff` parses the five tables below and fails closed when a header differs.
 Every removed baseline rule occurrence must be accounted for here, or still be present, under the same heading path
-and list label, in a runtime file that every workflow and variant that read it at `BASELINE_SHA` still reads, at least
+list label, enclosing list items and preceding paragraph (an occurrence's `parent_ctx`), in a runtime file that every workflow and variant that read it at `BASELINE_SHA` still reads, at least
 as early (kernel and start files at workflow start, then happy-path stage files, then conditional stage files such as
 remediation and research).
 
@@ -29,11 +29,13 @@ Kind is one of `pointer`, `dedupe`, `trigger`, `literal-to-key`, `xref`, `split`
 
 - `heading` maps `file.md#old heading` (first cell) to `file.md#new heading` (second cell). The rename is scoped to that
   file, the old heading must exist in the baseline file and the new heading must exist in the current file. It renames one
-  heading element; it cannot drop a path element (use `section-move`).
+  heading element; it cannot drop a path element (use `section-move`). The new heading must keep at least 60% of the old
+  heading's words and its guarded tokens (below) must match both ways, so `Hard Rules` -> `Soft Suggestions (...)` is
+  rejected.
 - `section-move` maps `file.md#a > b > c` to `file.md#x > y` (headings joined with ` > `, lower-cased, backticks and
   quotes removed). Every baseline occurrence in the source file whose heading path starts with the source path is
-  accounted for by the unit with the same id, label and remaining path under the destination path in the destination
-  file; the depth may change. One signed row moves a whole section, including its `[EASY TO MISS]` units. Reach is
+  accounted for by the unit with the same id, label, parent context and remaining path under the destination path in the
+  destination file; the depth may change. One signed row moves a whole section, including its `[EASY TO MISS]` units. Reach is
   preserved as for every kind: a section moved into a file read later (a conditional stage file) is `unmapped_removed`
   unless an Applicability row narrows it with `@reach`.
 - `group` is many-to-many: several old ids, several new ids (comma separated). Each new id must relate to at least one
@@ -43,13 +45,23 @@ Kind is one of `pointer`, `dedupe`, `trigger`, `literal-to-key`, `xref`, `split`
   both ways (below). `[EASY TO MISS]` units contained in a listed unit are added to their side automatically.
 - Every other kind names replacement ids that exist in the current inventory and must relate them to the old rule: the
   new units together keep at least 60% of the old unit's tokens, each new unit is at least 60% old tokens (a verbatim move,
-  a dedupe and a split of one rule pass) and the negation tokens match both ways: any of `never`, `not`, `no`, `only`,
-  `must`, `always`, `cannot`, `unless`, `without`, `nor`, `neither` or an `n't` form (`don't`, `isn't`, ...) present on
-  only one side, or with fewer occurrences kept than the old text had, is no relation (a negation inside a code span
-  counts like any other token). A table row is compared on its body only, never on the header text that is folded into
+  a dedupe and a split of one rule pass) and the guarded tokens match both ways: any of `never`, `not`, `no`, `only`,
+  `must`, `always`, `cannot`, `unless`, `without`, `nor`, `neither`, an `n't` form (`don't`, `isn't`, ...), the modal,
+  obligation and sequencing words `shall`, `required`, `mandatory`, `optional`, `may`, `should`, `before`, `after`,
+  `until`, `skip`, `run`, `allow`, `deny`, `stop`, `advance` (and their `-s` forms), `fail closed` / `fail open`, any
+  numeral and the operators `>=`, `<=`, `>`, `<`, `==`, `!=` present on only one side, or with fewer occurrences kept than
+  the old text had, is no relation (a token inside a code span counts like any other token). A `dedupe`, `split` or
+  `literal-to-key` row, and each old id of a `group` row, must also keep at least 50% of the old text's adjacent word
+  pairs (bigrams) in the new units, which catches a subject/object swap built from distinct phrases. A table row is compared on its body only, never on the header text that is folded into
   its id. A `pointer` row may instead have a new unit that names the old unit's heading, the file the rule now lives in and
   a heading of that file whose section holds at least 60% of the old unit's tokens (and its negation tokens) or a unit
   that relates by the rules above; an unrelated heading of the named file does not qualify.
+
+An occurrence also carries its context: the ids of the list items that enclose it (any trailing punctuation) and of the
+paragraph that directly precedes its list, so a child that ends up under the other branch of an `If ... failed` /
+`If ... succeeded` pair is a lost occurrence even when its text is unchanged. A row that rewrites a parent item or intro
+paragraph 1:1 carries its children with it; a many-to-many rewrite of a parent needs the children moved by a
+`section-move` or listed in the same row.
 
 Reach is checked on every kind except `heading`: each replacement id (for `group`, each id related to the old one) must be
 read by every workflow and variant that read the removed occurrence, at least as early. A `dedupe` kept copy, a `pointer`
@@ -64,9 +76,9 @@ the original reach.
 
 A row narrows where a rule must still be readable, and only for the occurrences it names: a `file#heading` section
 row narrows the occurrences under that heading in that file, an id row narrows every occurrence of that id, and two
-rows may not narrow the same occurrence. It must quote the rule's own scope words, and the quote must appear in the
-first 100 normalized characters of a named rule (its inventory excerpt); a quote found nowhere in the named rule is
-rejected. Coverage cells are `WORKFLOW` or `WORKFLOW:variant` tokens separated by commas; a narrowed token may add
+rows may not narrow the same occurrence. It must quote the rule's own scope words: at least two whole words, found on
+word boundaries in the full normalized text of every rule the row names. A section row whose quote is missing from any
+rule it covers is rejected; give each such rule its own id row instead. Coverage cells are `WORKFLOW` or `WORKFLOW:variant` tokens separated by commas; a narrowed token may add
 `@happy_path_stage` or `@conditional_stage` to also accept a later reach for that pair (`@kernel` and `@start` are the
 default, the baseline reach).
 
@@ -93,6 +105,26 @@ then marks as read everywhere would look reachable.
 
 | File | Baseline coverage | Widened coverage | Justification | Reviewed by | Evidence |
 |---|---|---|---|---|---|
+
+## Structural limit: what the mechanical checks cannot see
+
+The mechanical checks (retention >= 60%, two-way negation on an 11-word list, reach, read-map pinning, lock,
+section-content for pointers) catch gross loss and the most common polarity flips. They **cannot** see semantic
+inversions expressed lexically: token-order inversions (`before`<->`after`, subject/object swaps, a negation moved to
+another clause), numeric changes (`3`->`30`, `>=`->`>`), obligation-word substitutions outside the guarded list
+(`required`->`optional`, `MANDATORY`->`advisory`, `fail closed`->`fail open`, `skip`<->`run`), heading-text rewording
+(`Hard Rules`->`Soft Suggestions`), up to 40% added exception text in a group reflow, and pointer sections that merely
+contain the rule's tokens. The guarded-token set, the bigram check and the heading check narrow this gap but do not close
+it. **The signed reviewer is the control for meaning.** Every Rewrites/Applicability/Widening/Policy/Rationale row must be
+read by the signer against the old and new text; the Evidence column should cite the doubt-verifier output that reviewed
+the row.
+
+Also not covered: an override sentence ("the following rules are obsolete") near a rule is reported only as
+`added_normative_near_rule`, and under a different heading it is invisible; and the read map is self-attested (nothing
+checks it against what SKILL.md tells the router to `Read()`; P2's read-set measurer should derive it from the kernel's
+Read Map table). `[rebaseline]` is free text and a direct push to main skips the PR-only gate, so branch protection with
+required code-owner review is the real gate (a repository setting). `.github/CODEOWNERS` also names the inventory
+scripts, their tests, the CI workflow, the fixture runner and the read map.
 
 ## Rebaseline
 

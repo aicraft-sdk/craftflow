@@ -131,9 +131,10 @@ def _squash(text: str) -> str:
     return " ".join(re.sub(r"[`\"“”]|\*\*|__", "", text).split()).lower()
 
 
-def quote_in_excerpt(quote_cell: str, excerpt: str) -> bool:
-    """The quoted scope words appear in the rule's inventory excerpt (its first EXCERPT_LEN normalized characters)."""
-    q, ex = _squash(quote_cell), _squash(excerpt)
-    if not q:
+def quote_in_text(quote_cell: str, text: str) -> bool:
+    """The quoted scope words are at least two whole words and appear, on word boundaries, in the rule's full normalized
+    text (a one-character or one-word quote matches nearly anything, so it scopes nothing; AQ)."""
+    q, body = _squash(quote_cell), _squash(text)
+    if len(re.findall(r"\w+", q)) < 2:
         return False
-    return q in ex or (len(excerpt) >= EXCERPT_LEN and q.startswith(ex))
+    return re.search(r"(?<!\w)" + re.escape(q) + r"(?!\w)", body) is not None

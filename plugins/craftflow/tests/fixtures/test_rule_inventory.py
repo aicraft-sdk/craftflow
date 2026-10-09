@@ -252,8 +252,8 @@ def test_applicability_row_requires_quote() -> None:
 
 def test_heading_rename_requires_row() -> None:
     before = {K: "## Old Name\n\n" + GATE + "\n"}
-    after = {K: "## New Name\n\n" + GATE + "\n"}
-    row = f"| {K}#old name | {K}#new name | heading | rename | same section | David Gracia (2026-10-08) |"  # file-scoped (H-L4)
+    after = {K: "## Old Name Updated\n\n" + GATE + "\n"}  # REM-FIX 6 (HD): a heading row must keep >= 60% of the old words
+    row = f"| {K}#old name | {K}#old name updated | heading | rename | same section | David Gracia (2026-10-08) |"  # file-scoped (H-L4)
     bad = run_diff(before, after)
     good = run_diff(before, after, policy_doc(rewrites=[row]))
     check("heading_rename_requires_row", not passes(bad) and bad["unmapped_removed"] == 1 and passes(good),

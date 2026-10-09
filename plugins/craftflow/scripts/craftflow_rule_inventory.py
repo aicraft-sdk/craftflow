@@ -27,12 +27,12 @@ from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 import craftflow_router_corpus as cor
-from craftflow_rule_inventory_reach import (covers, group_relations, narrowed_cover, near_rule_count, related,  # noqa: F401
+from craftflow_rule_inventory_reach import (covers, heading_related, group_relations, narrowed_cover, near_rule_count, related,  # noqa: F401
                                             verify_lock, widening)
 from craftflow_rule_inventory_readmap import (CLASSES, RANK, check_readmap_files, coverage,  # noqa: F401
                                                load_readmap)
 from craftflow_rule_inventory_rows import (EXCERPT_LEN, HEADERS, KINDS, REVIEWER, SECTIONS, STATUSES,  # noqa: F401
-                                           VARIANTS, file_is, pairs_of, parse_tables, quote_in_excerpt, split_loc,
+                                           VARIANTS, file_is, pairs_of, parse_tables, quote_in_text, split_loc,
                                            symbol_ok, tokens_of)
 from craftflow_rule_inventory_units import (ROW_SEP, classify_normative, extract_units, load_allowlist,  # noqa: F401
                                             make_id, normalize, normalize_fence)
@@ -42,7 +42,7 @@ FIXTURES = PLUGIN_ROOT / "tests" / "fixtures"
 DEFAULT_ALLOWLIST = FIXTURES / "router-normative-allowlist.json"
 DEFAULT_READMAP_BASELINE = FIXTURES / "router-readmap.baseline.json"
 DEFAULT_LOCK = FIXTURES / "router-baseline.lock.json"
-BASELINE_VERSION = 3
+BASELINE_VERSION = 4
 HEX_ID = re.compile(r"\b[0-9a-f]{12}\b")
 RANGE = re.compile(r"([\w./-]+\.md):(\d+)-(\d+)@([0-9a-f]{7,40})")
 
@@ -67,7 +67,7 @@ def build_inventory(corpus: Dict[str, str], readmap: dict, allowlist, ref: Optio
             if len(u["norm"]) > EXCERPT_LEN:  # the full text is only kept when the excerpt is not already all of it
                 e["text"] = u["norm"]
             e["occurrences"].append({"file": rel, "heading_ctx": u["heading_ctx"], "heading_path": u["heading_path"],
-                                     "label_ctx": u["label_ctx"], "applicability": applic})
+                                     "label_ctx": u["label_ctx"], "parent_ctx": u["parent_ctx"], "applicability": applic})
     entries = [ents[k] for k in sorted(ents)]
     for e in entries:
         e["occurrences"].sort(key=lambda o: json.dumps(o, sort_keys=True))
@@ -89,12 +89,13 @@ def _check_baseline(base) -> None:
             for o in e["occurrences"]:
                 ok = ok and isinstance(o["file"], str) and isinstance(o["heading_ctx"], str) \
                     and isinstance(o["label_ctx"], str) and isinstance(o["heading_path"], list) \
+                    and isinstance(o["parent_ctx"], list) and all(isinstance(p, str) for p in o["parent_ctx"]) \
                     and isinstance(o["applicability"], list) and all(len(t) == 3 for t in o["applicability"])
     except (KeyError, TypeError):
         ok = False
     if not ok:
         raise ValueError(f"malformed baseline inventory (expected version {BASELINE_VERSION} with non-empty "
-                         "entries/occurrences, heading paths, label_ctx and (workflow, variant, reach) applicability)")
+                         "entries/occurrences, heading paths, label_ctx, parent_ctx and (workflow, variant, reach) applicability)")
 
 
 # --------------------------------------------------------------------------------------- policy map
@@ -198,6 +199,7 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
     renames: Dict[Tuple[str, str], str] = {}  # (file, new heading) -> old heading, per file (H-L4)
     moves: List[Tuple[List[str], List[str], str]] = []  # section-move: (source path, destination path, destination file)
     label_renames: Dict[str, str] = {}  # a reworded label paragraph: its new text -> the baseline text
+    ctx_renames: Dict[str, str] = {}  # a reworded parent list item or intro paragraph: its new id -> the baseline id
     base_occ = [(e["id"], o) for e in baseline["entries"] for o in e["occurrences"]]
     after_occ = [(e["id"], o) for e in after["entries"] for o in e["occurrences"]]
     for c in rows["rewrites"]:
@@ -220,6 +222,9 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
                 errors.append(f"heading row: '{p1[0]}' is not a heading of {f1}")
             elif not one and not any(file_is(f1, o["file"]) and has(o, p1) for _, o in after_occ):
                 errors.append(f"section-move row: destination '{c[1]}' holds no unit in the current corpus")
+            elif one and not heading_related(p0[0], p1[0]):
+                errors.append(f"heading row: the new heading keeps under 60% of the old heading's words or changes a guarded "
+                              f"word: {p0[0]} -> {p1[0]}")
             elif one:
                 renames[(f1, p1[0])] = p0[0]
             else:
@@ -237,7 +242,8 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
                 errors.append(f"group row has ids that relate to nothing on the other side ({', '.join(lone)}): {c[0]} -> {c[1]}")
                 continue
             if weak:
-                errors.append(f"group row ids keep under 60% retention or change a negation token ({', '.join(weak)}): {c[0]} -> {c[1]}")
+                errors.append(f"group row ids keep under 60% retention, change a guarded token or reorder words ({', '.join(weak)}): "
+                              f"{c[0]} -> {c[1]}")
                 continue
             errors.extend(f"duplicate rewrite row for id {i}" for i in ids if i in rewrites)
             rewrites.update({i: ("group", rel[i]) for i in ids})
@@ -246,15 +252,19 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
         unrelated = [i for i in ids if not related(_body(base[i]), news, kind,
                                                    sorted({o["heading_ctx"] for o in base[i]["occurrences"]}), dests)]
         if unrelated:  # the new ids exist, but a row may not point a rule at text that does not carry it (A8r)
-            errors.append(f"rewrite row relates ids with under 60% token overlap: {c[0]} -> {c[1]}")
+            errors.append(f"rewrite row relates ids with under 60% token overlap, a changed guarded word or number, or "
+                          f"reordered words: {c[0]} -> {c[1]}")
             continue
         errors.extend(f"duplicate rewrite row for id {i}" for i in ids if i in rewrites)
         rewrites.update({i: (kind, new_ids) for i in ids})
-        if len(ids) == len(new_ids) == 1 and _text(base[ids[0]]).endswith(":"):
-            label_renames[_text(after_by_id[new_ids[0]])] = _text(base[ids[0]])
+        if len(ids) == len(new_ids) == 1:  # a reworded parent or intro paragraph keeps the place of its children
+            ctx_renames[new_ids[0]] = ids[0]
+            if _text(base[ids[0]]).endswith(":"):
+                label_renames[_text(after_by_id[new_ids[0]])] = _text(base[ids[0]])
 
-    # an occurrence is identified by its unit id, last heading, file, full heading path and list label (D4, A4, A10)
-    occ_cov = {(e["id"], o["heading_ctx"], o["file"], tuple(o["heading_path"]), o["label_ctx"]):
+    # an occurrence is identified by its unit id, last heading, file, full heading path, list label and the ids of its
+    # enclosing list items and preceding paragraph (D4, A4, A10, R1)
+    occ_cov = {(e["id"], o["heading_ctx"], o["file"], tuple(o["heading_path"]), o["label_ctx"], tuple(o["parent_ctx"])):
                frozenset(map(tuple, o["applicability"])) for e in baseline["entries"] for o in e["occurrences"]}
     occs = list(occ_cov)
     narrowed: Dict[tuple, FrozenSet] = {}  # per occurrence, never per unit id (H-H3)
@@ -278,8 +288,9 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
         real = lambda t: {(w, v) for w, v, _ in occ_cov[t]}  # noqa: E731
         if not targets:
             errors.append(f"applicability row names no baseline section or id: {c[0]}")
-        elif not any(quote_in_excerpt(c[3], base[t[0]]["excerpt"]) for t in targets):
-            errors.append(f"applicability row quotes words that are not in the named rule: {c[3]}")
+        elif not all(quote_in_text(c[3], _text(base[t[0]])) for t in targets):
+            errors.append("applicability row quote must be at least two whole words that appear in every named rule "
+                          f"(use one row per rule otherwise): {c[3]}")
         elif any(t in narrowed for t in targets):
             errors.append(f"duplicate applicability row for an occurrence of {c[0]}")
         elif any(real(t) != pairs_of(c[1], errors) for t in targets):  # the cell must state the real baseline coverage
@@ -318,7 +329,7 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
                 break
         else:
             path = [ren(o, h) for h in path]
-        return tuple(path), label_renames.get(o["label_ctx"], o["label_ctx"])
+        return tuple(path), label_renames.get(o["label_ctx"], o["label_ctx"]), tuple(ctx_renames.get(p, p) for p in o["parent_ctx"])
 
     groups: Dict[tuple, List[FrozenSet]] = {}
     by_id: Dict[str, List[FrozenSet]] = {}
@@ -333,8 +344,9 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
     wanted: Dict[tuple, List[FrozenSet]] = {}
     for e in baseline["entries"]:
         for o in e["occurrences"]:
-            key = (e["id"], o["heading_ctx"], o["file"], tuple(o["heading_path"]), o["label_ctx"])
-            wanted.setdefault((e["id"], tuple(o["heading_path"]), o["label_ctx"]), []).append(narrowed.get(key, occ_cov[key]))
+            key = (e["id"], o["heading_ctx"], o["file"], tuple(o["heading_path"]), o["label_ctx"], tuple(o["parent_ctx"]))
+            wanted.setdefault((e["id"], tuple(o["heading_path"]), o["label_ctx"], tuple(o["parent_ctx"])), []).append(
+                narrowed.get(key, occ_cov[key]))
     for (gid, *place), reqs in sorted(wanted.items()):
         supply = groups.get((gid, *place), [])
         hit, missed, leftover = _match(reqs, supply)
