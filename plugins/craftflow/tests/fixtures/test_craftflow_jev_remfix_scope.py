@@ -17,6 +17,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+from craftflow_router_corpus import corpus_text, read_corpus  # noqa: E402
 from craftflow_jev_remfix_scope import (  # noqa: E402
     build_state,
     build_questions,
@@ -423,7 +424,8 @@ def test_build_workflow_escalated_path_delegates_instead_of_duplicating() -> Non
 
 
 def test_skill_md_interrupted_jev_resume_checks_existence_before_create() -> None:
-    skill_doc = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text()
+    # Content presence anywhere in the runtime router corpus, so moving the rule between router files keeps it true.
+    skill_doc = corpus_text(read_corpus(PLUGIN_ROOT))
     # HIGH finding (silent-failure-hunter, final Phase 5 re-hunt): the interrupted-jev-auto-decide
     # resume branch is itself a non-atomic "create REM-FIX, then tag consumed:true" sequence -- a
     # session interrupted between those two steps would otherwise cause this branch to create a

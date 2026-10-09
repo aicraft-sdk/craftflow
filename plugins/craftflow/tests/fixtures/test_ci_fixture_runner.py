@@ -106,11 +106,14 @@ def test_l3_duplicate_stale_and_empty() -> None:
     check("L3d an empty fixture directory says so and fails", res.returncode != 0 and "no test_*.py fixtures" in res.stdout, res.stdout)
 
 
-def test_workflow_uses_the_wrapper_with_a_pinned_count() -> None:
+def test_workflow_uses_the_wrapper_with_an_empty_known_failure_list() -> None:
+    # P1 fixed the 11 stale test_agent_structure.py assertions, so the temporary "| 11 |" pin was removed from the
+    # workflow (requirement changed, not loosened): every fixture must now pass with no excused failure.
     text = WORKFLOW.read_text(encoding="utf-8")
-    check("workflow runs the wrapper and pins the failure count", "run_fixture_suite.sh" in text
-          and "test_agent_structure.py | 11 |" in text and "continue-on-error:" not in text,
-          "workflow not wired to run_fixture_suite.sh")
+    check("workflow runs the wrapper with an empty known-failure list", "run_fixture_suite.sh" in text
+          and 'CRAFTFLOW_CI_KNOWN_ENV_FAILURES: ""' in text and "test_agent_structure.py | 11 |" not in text
+          and "continue-on-error:" not in text,
+          "workflow not wired to run_fixture_suite.sh with an empty known-failure list")
 
 
 def main() -> int:

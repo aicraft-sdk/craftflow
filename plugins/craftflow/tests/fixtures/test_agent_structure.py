@@ -7,7 +7,11 @@ without needing a live dispatch. Run from the plugin root:
 
     python3 tests/fixtures/test_agent_structure.py
 """
+import json
 import os
+import subprocess
+import sys
+import tempfile
 
 _FIXTURES_DIR = os.path.dirname(__file__)
 PLANNER_MD_PATH = os.path.join(_FIXTURES_DIR, "../../agents/planner.md")
@@ -85,37 +89,79 @@ print("\n[test_skill_md_write_literal_declares_bakeoff_fields]")
 with open(SKILL_MD_PATH, "r", encoding="utf-8") as f:
     skill_text = f.read()
 
-_write_literal_line = None
-for _line in skill_text.splitlines():
-    if "workflow_started" in _line and '\\"task_ids\\"' in _line:
-        _write_literal_line = _line
-        break
+# Since the one-call mint, SKILL.md no longer carries an inline Write() literal for the parent artifact: the
+# artifact is written by `craftflow_workflow_id.py --init-artifact`. Assert the defaults on what that
+# command actually writes (a real run in a throwaway project dir), not on router prose.
+WORKFLOW_ID_SCRIPT = os.path.join(_FIXTURES_DIR, "../../scripts/craftflow_workflow_id.py")
+
+
+def _init_artifact_defaults():
+    """Run `--init-artifact` in a scratch project and return the parsed artifact (None when it was not written)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        project = os.path.join(tmp, "project")
+        os.makedirs(os.path.join(project, ".craftflow"))
+        request_file = os.path.join(tmp, "request.txt")
+        with open(request_file, "w", encoding="utf-8") as handle:
+            handle.write("agent structure artifact defaults")
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
+        proc = subprocess.run(
+            [sys.executable, WORKFLOW_ID_SCRIPT, "--request-file", request_file, "--branch", "main",
+             "--project", project, "--init-artifact", "--workflow-type", "PLAN",
+             "--task-tools-available", "true", "--phase", "plan"],
+            capture_output=True, text=True, env=env,
+        )
+        if proc.returncode != 0:
+            print(f"    --init-artifact exited {proc.returncode}: {proc.stderr.strip()}")
+            return None
+        artifact_path = os.path.join(project, ".craftflow", "state", "workflows", proc.stdout.strip() + ".json")
+        if not os.path.isfile(artifact_path):
+            return None
+        with open(artifact_path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+
+
+_artifact = _init_artifact_defaults()
 
 check(
-    "found the § 6 Parent Workflow Creation Write() literal line "
-    "(contains both workflow_started and task_ids)",
-    _write_literal_line is not None,
+    "found the parent workflow artifact written by --init-artifact "
+    "(first status_history event is workflow_started and task_ids is present)",
+    _artifact is not None
+    and _artifact["status_history"][0]["event"] == "workflow_started"
+    and "task_ids" in _artifact,
     True,
 )
 
-_WRITE_LITERAL_FIELDS = [
-    '\\"plan_file_stem\\":null',
-    '\\"bakeoff_n\\":null',
-    '\\"bakeoff_n_requested\\":null',
-    '\\"bakeoff_models\\":[]',
-    '\\"bakeoff_triggered\\":false',
-    '\\"bakeoff_all_failed\\":false',
-    '\\"bakeoff_candidate_failures\\":[]',
-    '\\"plan_bakeoff_candidates\\":{}',
-    '\\"plan_bakeoff_judge\\":null',
-    '\\"bakeoff\\":[]',
+_missing = object()
+
+
+def _artifact_value(*path):
+    node = _artifact
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            return _missing
+        node = node[key]
+    return node
+
+
+# (display name, key path(s) that must all hold the default, default value)
+_ARTIFACT_DEFAULT_FIELDS = [
+    ("plan_file_stem", [("plan_file_stem",)], None),
+    ("bakeoff_n", [("bakeoff_n",)], None),
+    ("bakeoff_n_requested", [("bakeoff_n_requested",)], None),
+    ("bakeoff_models", [("bakeoff_models",)], []),
+    ("bakeoff_triggered", [("bakeoff_triggered",)], False),
+    ("bakeoff_all_failed", [("bakeoff_all_failed",)], False),
+    ("bakeoff_candidate_failures", [("bakeoff_candidate_failures",)], []),
+    ("plan_bakeoff_candidates", [("task_ids", "plan_bakeoff_candidates")], {}),
+    ("plan_bakeoff_judge", [("task_ids", "plan_bakeoff_judge"), ("results", "plan_bakeoff_judge")], None),
+    ("bakeoff", [("results", "bakeoff")], []),
 ]
 
-for _field in _WRITE_LITERAL_FIELDS:
-    check_contains(
-        f"Write() literal declares {_field}",
-        _write_literal_line or "",
-        _field,
+for _field, _paths, _default in _ARTIFACT_DEFAULT_FIELDS:
+    check(
+        f"--init-artifact artifact declares {_field} = {_default!r}",
+        [_artifact_value(*_path) if _artifact is not None else _missing for _path in _paths],
+        [_default] * len(_paths),
     )
 
 # ---------------------------------------------------------------------------

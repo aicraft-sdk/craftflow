@@ -39,6 +39,7 @@ import craftflow_precompact_state as precompact_state  # noqa: E402
 import craftflow_postcompact_context as postcompact_context  # noqa: E402
 import craftflow_sessionstart_context as sessionstart_context  # noqa: E402
 import craftflow_memory_merge as memory_merge  # noqa: E402
+import craftflow_router_corpus as router_corpus  # noqa: E402
 
 _errors: list[str] = []
 _passes: int = 0
@@ -46,6 +47,18 @@ _passes: int = 0
 
 def fail(name: str, reason: str) -> None:
     _errors.append(f"FAIL [{name}]: {reason}")
+
+
+def _router_corpus_text() -> str:
+    """All runtime router text (SKILL.md, references/, _shared/) as one string, so a content-presence
+    assertion keeps passing when a later phase moves the text between router files."""
+    return router_corpus.corpus_text(router_corpus.read_corpus(PLUGIN_ROOT))
+
+
+def _router_section_any(heading: str, file_hint: str | None = None) -> str:
+    """Text of one router section wherever it lives. A heading present in several files needs `file_hint`
+    (AmbiguousHeading otherwise); a missing heading raises SectionNotFound."""
+    return router_corpus.section_any(heading, file_hint, plugin_root=PLUGIN_ROOT)[1]
 
 
 def ok(name: str) -> None:
@@ -1013,13 +1026,23 @@ def test_intent_interview_skill_present() -> None:
     ok(name)
 
 
+def test_corpus_helper_covers_skill_and_refs() -> None:
+    name = "router/corpus-helper-covers-skill-and-refs"
+    text = _router_corpus_text()
+    for needle in ("## 14. Hard Rules", "### BUILD preparation"):
+        if needle not in text:
+            fail(name, f"router corpus text missing {needle!r}")
+            return
+    ok(name)
+
+
 def test_router_dispatches_doubt_verify() -> None:
     name = "router/doubt-verify-dispatch-registered"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     if "doubt-verify" not in content:
         fail(name, "craftflow-router SKILL.md missing 'doubt-verify' dispatch reference")
         return
@@ -1035,14 +1058,15 @@ def test_router_records_reliability_gates_evidence_in_fix_verify_and_doubt_verif
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     doubt_idx = content.find("### Doubt-Verify Dispatch Rule")
     fix_idx = content.find("### Fix-Verify Dispatch Rule")
     if doubt_idx == -1 or fix_idx == -1 or fix_idx <= doubt_idx:
         fail(name, "expected Doubt-Verify section before Fix-Verify section")
         return
     doubt_section = content[doubt_idx:fix_idx]
-    fix_section = content[fix_idx:]
+    # Bound by the heading (not to the end of the joined corpus) so later router files cannot satisfy it.
+    fix_section = _router_section_any("### Fix-Verify Dispatch Rule")
     if "craftflow_reliability_gates.py" not in doubt_section or "--record-evidence" not in doubt_section:
         fail(name, "Doubt-Verify Dispatch Rule missing --record-evidence wiring")
         return
@@ -1058,7 +1082,7 @@ def test_router_documents_task_tool_capability_detection() -> None:
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     section_idx = content.find("## 0a. Task Tool Capability Detection")
     if section_idx == -1:
         fail(name, "missing '## 0a. Task Tool Capability Detection' section")
@@ -1074,13 +1098,26 @@ def test_router_documents_task_tool_capability_detection() -> None:
     ok(name)
 
 
+def test_router_task_tool_probe_call_documented() -> None:
+    # test_router_documents_task_tool_capability_detection only checks the bare token "ToolSearch" inside
+    # ## 0a, and a second line of that section also names it, so deleting the probe call itself goes unnoticed.
+    # This test pins the call literal (found wherever ## 0a lives).
+    name = "router/task-tool-probe-call-documented"
+    section = _router_section_any("## 0a. Task Tool Capability Detection")
+    probe = 'ToolSearch(select: "TaskCreate,TaskList,TaskGet,TaskUpdate")'
+    if probe not in section:
+        fail(name, f"## 0a does not document the capability probe call {probe!r}")
+        return
+    ok(name)
+
+
 def test_router_task_tool_fallback_wired_through_resume_and_chain_loop() -> None:
     name = "router/task-tool-fallback-wired-resume-and-chain-loop"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     # NOTE: "## 4. Resume And Hydration" and "## 12. Chain Execution Loop" also
     # appear earlier in this file as backtick-quoted prose cross-references
     # (e.g. inside the "## 0a." section). A bare content.find() on either
@@ -1125,7 +1162,7 @@ def test_workflow_artifact_schema_documents_task_tools_available() -> None:
     if not path.exists():
         fail(name, f"workflow-artifact-and-hook-policy.md not found at {path}")
         return
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     cap_idx = content.find("`capabilities` records the session-level research backend")
     if cap_idx == -1:
         fail(name, "missing '`capabilities`' detail block")
@@ -1198,7 +1235,7 @@ def test_router_dispatches_intent_interview() -> None:
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     if "intent-interview" not in content:
         fail(name, "craftflow-router SKILL.md missing 'intent-interview' dispatch reference")
         return
@@ -1303,7 +1340,7 @@ def test_section_0_precedes_memory_load() -> None:
 def test_memory_load_anchored_to_project_root() -> None:
     name = "router/memory-load-anchored-to-project-root"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = skill_path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     start = content.find("## 2. Memory Load And Template Validation")
     end = content.find("\n## 2a.", start)
     if start == -1 or end == -1:
@@ -1322,7 +1359,7 @@ def test_memory_load_anchored_to_project_root() -> None:
 def test_parent_workflow_creation_anchored_to_project_root() -> None:
     name = "router/parent-workflow-creation-anchored"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = skill_path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     start = content.find("### Parent workflow creation")
     end = content.find("\n### BUILD task graph", start)
     if start == -1 or end == -1:
@@ -1341,7 +1378,7 @@ def test_parent_workflow_creation_anchored_to_project_root() -> None:
 def test_parent_workflow_creation_fallback_reason_wired() -> None:
     name = "router/parent-workflow-creation-fallback-reason-wired"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = skill_path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     start = content.find("### Parent workflow creation")
     end = content.find("\n### BUILD task graph", start)
     if start == -1 or end == -1:
@@ -1368,7 +1405,7 @@ def test_parent_workflow_creation_fallback_reason_wired() -> None:
 def test_shared_preparation_anchored_to_project_root() -> None:
     name = "router/shared-preparation-anchored"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = skill_path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     start = content.find("### Shared preparation")
     end = content.find("\n**Intent Readiness Gate", start)
     if start == -1 or end == -1:
@@ -1457,7 +1494,7 @@ def test_worktree_isolation_reuses_project_root_no_duplicate_resolution() -> Non
 def test_memory_finalization_for_plan_anchored_to_project_tier() -> None:
     name = "router/memory-finalization-for-plan-anchored-to-project-tier"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = skill_path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     start = content.find("For PLAN:")
     end = content.find("For DEBUG:", start)
     if start == -1 or end == -1:
@@ -1476,7 +1513,7 @@ def test_memory_finalization_for_plan_anchored_to_project_tier() -> None:
 def test_memory_finalization_for_debug_anchored_and_uses_workflow_uuid() -> None:
     name = "router/memory-finalization-for-debug-anchored-uses-workflow-uuid"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = skill_path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     start = content.find("For DEBUG:")
     end = content.find("## 14. Hard Rules", start)
     if start == -1 or end == -1:
@@ -1498,7 +1535,7 @@ def test_memory_finalization_for_debug_anchored_and_uses_workflow_uuid() -> None
 def test_memory_finalization_prelude_anchored_to_project_root() -> None:
     name = "router/memory-finalization-prelude-anchored"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = skill_path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     start = content.find("## 13. Memory Finalization")
     end = content.find("For PLAN:", start)
     if start == -1 or end == -1:
@@ -1623,7 +1660,7 @@ def test_memory_finalization_prelude_anchored_to_project_root() -> None:
 def test_just_go_and_scope_decision_resume_anchored_to_project_root() -> None:
     name = "router/just-go-and-scope-decision-resume-anchored"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = skill_path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
 
     jg_start = content.find("JUST_GO:")
     jg_end = content.find("\n## 2a.", jg_start)
@@ -2028,7 +2065,7 @@ def test_memory_merge_finalize_rejects_bad_batches() -> None:
 
 def test_memory_finalize_permit_standalone_documented() -> None:
     name = "router/memory-finalize-permit-standalone-documented"
-    content = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    content = _router_corpus_text()
     for marker in ("standalone Bash", "--finalize"):
         if marker not in content:
             fail(name, f"SKILL.md missing {marker!r} guidance for the .memory-finalize permit")
@@ -2038,7 +2075,7 @@ def test_memory_finalize_permit_standalone_documented() -> None:
 
 def test_router_one_call_minting_documented() -> None:
     name = "router/one-call-workflow-minting-documented"
-    content = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    content = _router_corpus_text()
     start = content.find("### Parent workflow creation")
     end = content.find("\n### BUILD task graph", start)
     section = content[start:end]
@@ -2240,7 +2277,7 @@ def test_router_snippets_avoid_llm_quoted_requests_and_eval() -> None:
 
 def test_router_mint_command_passes_safe_shell_guard() -> None:
     name = "router/mint-command-passes-safe-shell-guard"
-    skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    skill = _router_corpus_text()
     start = skill.find("### Parent workflow creation")
     section = skill[start: skill.find("\n### BUILD task graph", start)]
     blocks = [chunk.split("```", 1)[0] for chunk in section.split("```bash")[1:]]
@@ -2419,7 +2456,7 @@ def test_state_query_digest_validates_project_root_and_workflow_uuid() -> None:
 
 def test_state_digest_required_sections_match_router_protocol_table() -> None:
     name = "state-digest/required-sections-match-router-protocol"
-    shared = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md").read_text(encoding="utf-8")
+    shared = _router_corpus_text()
     parsed: dict[str, tuple[str, ...]] = {}
     for line in shared.splitlines():
         m = re.match(r"\|\s*`(activeContext\.md|progress\.md|patterns\.md)`\s*\|(.*)\|\s*$", line)
@@ -2433,7 +2470,7 @@ def test_state_digest_required_sections_match_router_protocol_table() -> None:
 
 def test_router_memory_load_documents_digest_reread_rule() -> None:
     name = "router/memory-load-digest-reread-rule"
-    skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    skill = _router_corpus_text()
     start = skill.find("## 2. Memory Load And Template Validation")
     section = skill[start: skill.find("\n## 3.", start)]
     for marker in ("--mode full", "(omitted for size", "(+N more)", "Decisions"):
@@ -2579,7 +2616,7 @@ def test_router_request_paths_are_write_guard_safe() -> None:
         if scratch is not None and decision(nonrepo, scratch / "cf-request.txt") != "allow":
             fail(name, f"session scratchpad request path {scratch} is denied by the Write guard")
             return
-    skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    skill = _router_corpus_text()
     shared = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md").read_text(encoding="utf-8")
     if "TMPDIR" in shared or "/tmp/cf-request" in shared or "scratchpad" not in shared:
         fail(name, "router-protocol 1a must use the session scratchpad dir, not TMPDIR or /tmp")
@@ -2738,7 +2775,7 @@ def test_worktree_isolation_resolver_gated_on_toplevel_failure() -> None:
 def test_worktree_isolation_step_4a_derives_from_worktree_path() -> None:
     name = "router/worktree-isolation-step-4a-no-reredirive"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = skill_path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     # NOTE: current code nests `dirname` three levels deep (worktree_path ->
     # {project_root}/.claude/worktrees/{worktree_dir}, so its great-grandparent is
     # PROJECT_ROOT) -- deeper than this plan's original two-level literal, confirmed by
@@ -2772,7 +2809,7 @@ def test_router_uses_workflow_id_helper() -> None:
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     if "craftflow_workflow_id.py" not in content:
         fail(name, "SKILL.md does not reference craftflow_workflow_id.py helper")
         return
@@ -16533,7 +16570,7 @@ def test_craftflow_router_documents_state_read_compaction_self_heal() -> None:
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     for marker in ("craftflow_state_query.py", "state-read-compaction"):
         if marker not in content:
             fail(name, f"craftflow-router SKILL.md missing expected marker: {marker!r}")
@@ -16722,7 +16759,7 @@ def test_cursor_router_memory_finalize_parity_mentions_apply() -> None:
 def test_skill_md_wires_project_tier_last_updated_and_completed_caps() -> None:
     name = "craftflow-router/skill-md/wires-project-tier-last-updated-and-completed-caps"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     for marker in (
         "section_slug\": \"completed\"",
         "activecontext-last-updated",
@@ -16787,7 +16824,7 @@ def test_router_phase_enum_registers_skill_distill_learn_distill_doubt_verify() 
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     match = re.search(r"^phase:\{[^}]*\}$", content, re.MULTILINE)
     if not match:
         fail(name, "SKILL.md missing the 'phase:{...}' Task Metadata Contract enum line")
@@ -16846,7 +16883,7 @@ def test_router_effort_dispatch_includes_skill_distill_low() -> None:
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     match = re.search(r"^-\s.*`learn-distill`.*(?:->|→)\s*`low`\s*$", content, re.MULTILINE)
     if not match or "skill-distill" not in match.group(0):
         fail(name, "Effort Dispatch Rule list missing 'skill-distill' on the same low-effort line as learn-distill")
@@ -16860,7 +16897,7 @@ def test_router_contract_overrides_includes_skill_author() -> None:
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     match = re.search(r"^\|\s*skill-author\s*\|.*\|$", content, re.MULTILINE)
     if not match:
         fail(name, "Contract overrides table missing a 'skill-author' row")
@@ -16879,7 +16916,7 @@ def test_router_memory_finalization_calls_ledger_observe() -> None:
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     if "craftflow_skill_ledger.py --observe {workflow_uuid}" not in content:
         fail(name, "## 13. Memory Finalization missing the deterministic 'craftflow_skill_ledger.py --observe {workflow_uuid}' call")
         return
@@ -16898,7 +16935,7 @@ def test_router_memory_finalization_calls_ledger_prune() -> None:
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     if "craftflow_skill_ledger.py --prune" not in content:
         fail(name, "## 13. Memory Finalization missing the deterministic 'craftflow_skill_ledger.py --prune' call")
         return
@@ -16921,7 +16958,7 @@ def test_router_hard_rules_includes_skill_distill_skip() -> None:
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     if "SKILL_DISTILL: skip" not in content:
         fail(name, "## 14. Hard Rules missing 'SKILL_DISTILL: skip' rule")
         return
@@ -17832,8 +17869,8 @@ def test_stop_gate_committed_config_off(tmp_dir: Path) -> None:
 
 def test_router_template_stamps_session_id(tmp_dir: Path) -> None:
     name = "stop-gate/router-template-stamps-session-id"
-    skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
-    policy = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "workflow-artifact-and-hook-policy.md").read_text(encoding="utf-8")
+    skill = _router_corpus_text()
+    policy = _router_corpus_text()
     # The artifact is now written by `craftflow_workflow_id.py --init-artifact`; the helper stamps session_id.
     helper = (SCRIPTS / "craftflow_workflow_id.py").read_text(encoding="utf-8")
     if '"session_id": session_id,' not in helper:
@@ -20054,7 +20091,7 @@ def test_workspace_root_config_read_gated_inside_step_1a() -> None:
 def test_workflow_artifact_template_includes_workspace_writable_paths_field() -> None:
     name = "router/workflow-artifact-template-includes-workspace-writable-paths-field"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = skill_path.read_text(encoding="utf-8")
+    content = _router_corpus_text()
     parent_wf_start = content.find("### Parent workflow creation")
     if parent_wf_start == -1:
         fail(name, "'### Parent workflow creation' section not found")
@@ -27814,7 +27851,9 @@ def main() -> int:
     test_anti_rationalization_tables_present()
     test_doubt_verifier_agent_present()
     test_intent_interview_skill_present()
+    test_corpus_helper_covers_skill_and_refs()
     test_router_dispatches_doubt_verify()
+    test_router_task_tool_probe_call_documented()
     test_router_records_reliability_gates_evidence_in_fix_verify_and_doubt_verify()
     test_router_dispatches_intent_interview()
     test_circuit_breaker_uses_persisted_non_telemetry_field_not_live_tasklist_count()

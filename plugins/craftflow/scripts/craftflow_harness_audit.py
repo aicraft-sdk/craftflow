@@ -3,6 +3,8 @@ import json
 import sys
 from pathlib import Path
 
+import craftflow_router_corpus
+
 
 ROOT = Path(__file__).resolve().parents[3]
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
@@ -234,16 +236,10 @@ def main() -> int:
     router_review_reference = read(ROUTER_REVIEW_REFERENCE)
     router_plan_reference = read(ROUTER_PLAN_REFERENCE)
     router_remediation_reference = read(ROUTER_REMEDIATION_REFERENCE)
+    # Every runtime router file (SKILL.md, references/, _shared/), so a later split cannot hide a required heading.
     router_surface = "\n\n".join(
-        [
-            router,
-            router_artifact_policy_reference,
-            router_build_reference,
-            router_debug_reference,
-            router_review_reference,
-            router_plan_reference,
-            router_remediation_reference,
-        ]
+        (PLUGIN_ROOT / rel).read_text(encoding="utf-8")
+        for rel in craftflow_router_corpus.runtime_files(PLUGIN_ROOT)
     )
     task_completed_guard = read(TASK_COMPLETED_GUARD)
     readme = read(README)
