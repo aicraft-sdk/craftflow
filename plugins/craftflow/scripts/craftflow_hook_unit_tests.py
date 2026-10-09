@@ -1087,14 +1087,12 @@ def test_router_records_reliability_gates_evidence_in_fix_verify_and_doubt_verif
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = _router_corpus_text()
-    doubt_idx = content.find("### Doubt-Verify Dispatch Rule")
-    fix_idx = content.find("### Fix-Verify Dispatch Rule")
-    if doubt_idx == -1 or fix_idx == -1 or fix_idx <= doubt_idx:
+    # Both halves are read through their own heading (no file hint, so each section travels with its text); a raw
+    # `find` of the heading text would hit a prose pointer to it first.
+    doubt_section = _router_section_or_none("### Doubt-Verify Dispatch Rule")
+    if doubt_section is None:
         fail(name, "expected Doubt-Verify section before Fix-Verify section")
         return
-    doubt_section = content[doubt_idx:fix_idx]
-    # Bound by the heading (not to the end of the joined corpus) so later router files cannot satisfy it.
     fix_section = _router_section_or_none("### Fix-Verify Dispatch Rule")
     if fix_section is None:
         fail(name, "could not bound the ### Fix-Verify Dispatch Rule section")
@@ -1434,13 +1432,12 @@ def test_parent_workflow_creation_fallback_reason_wired() -> None:
 def test_shared_preparation_anchored_to_project_root() -> None:
     name = "router/shared-preparation-anchored"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = _router_corpus_text()
-    start = content.find("### Shared preparation")
-    end = content.find("\n**Intent Readiness Gate", start)
-    if start == -1 or end == -1:
+    shared_prep = _router_section_or_none("### Shared preparation")
+    end = shared_prep.find("\n**Intent Readiness Gate") if shared_prep is not None else -1
+    if shared_prep is None or end == -1:
         fail(name, "could not bound ### Shared preparation section")
         return
-    section = content[start:end]
+    section = shared_prep[:end]
     positive_checks = [
         (
             "$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References",
@@ -1523,10 +1520,11 @@ def test_worktree_isolation_reuses_project_root_no_duplicate_resolution() -> Non
 def test_memory_finalization_for_plan_anchored_to_project_tier() -> None:
     name = "router/memory-finalization-for-plan-anchored-to-project-tier"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = _router_corpus_text()
-    start = content.find("For PLAN:")
-    end = content.find("For DEBUG:", start)
-    if start == -1 or end == -1:
+    # Bound inside the section's own text (no file hint) so the block follows `## 13.` when it moves to another file.
+    content = _router_section_or_none("## 13. Memory Finalization")
+    start = content.find("For PLAN:") if content is not None else -1
+    end = content.find("For DEBUG:", start) if content is not None else -1
+    if content is None or start == -1 or end == -1:
         fail(name, "could not bound the For PLAN: block in ## 13. Memory Finalization")
         return
     section = content[start:end]
@@ -1565,13 +1563,12 @@ def test_memory_finalization_for_debug_anchored_and_uses_workflow_uuid() -> None
 def test_memory_finalization_prelude_anchored_to_project_root() -> None:
     name = "router/memory-finalization-prelude-anchored"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = _router_corpus_text()
-    start = content.find("## 13. Memory Finalization")
-    end = content.find("For PLAN:", start)
-    if start == -1 or end == -1:
+    memfin = _router_section_or_none("## 13. Memory Finalization")
+    end = memfin.find("For PLAN:") if memfin is not None else -1
+    if memfin is None or end == -1:
         fail(name, "could not bound ## 13. Memory Finalization heading through For PLAN:")
         return
-    section = content[start:end]
+    section = memfin[:end]
     positive_checks = [
         (
             "| `learnings` | `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## Learnings` |",
@@ -20137,13 +20134,10 @@ def test_workspace_root_config_read_gated_inside_step_1a() -> None:
 def test_workflow_artifact_template_includes_workspace_writable_paths_field() -> None:
     name = "router/workflow-artifact-template-includes-workspace-writable-paths-field"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = _router_corpus_text()
-    parent_wf_start = content.find("### Parent workflow creation")
-    if parent_wf_start == -1:
+    section = _router_section_first("### Parent workflow creation")
+    if section is None:
         fail(name, "'### Parent workflow creation' section not found")
         return
-    next_heading = content.find("\n### ", parent_wf_start + 1)
-    section = content[parent_wf_start: next_heading if next_heading != -1 else None]
     for flag in ("--workspace-writable-paths-json", "--writable-paths-dropped-json",
                  "WORKSPACE_WRITABLE_PATHS_JSON", "WORKSPACE_WRITABLE_PATHS_DROPPED_JSON"):
         if flag not in section:

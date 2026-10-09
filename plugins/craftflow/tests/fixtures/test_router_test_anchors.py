@@ -39,7 +39,7 @@ def check(name: str, cond: bool, reason: str = "") -> None:
         print(f"  FAIL: {name}: {reason or 'assertion false'}")
 
 
-ROW = re.compile(r"^\| (?P<test>(?:hook|fx)::[^|]+?) \| (?P<kind>[CKF]) \|", re.M)
+ROW = re.compile(r"^\| (?P<test>(?:hook|fx|scripts)::[^|]+?) \| (?P<kind>[CKF]) \|", re.M)
 
 
 def table_rows(doc: str) -> List[Tuple[str, str]]:
@@ -92,11 +92,19 @@ def unclassified(enumerated: Dict[str, List[str]], doc: str) -> List[str]:
 def _defined(key: str) -> bool:
     """True when the file named by `label::test` defines `test` (any `def`, any depth) or carries the `[test]` section label."""
     label, _, name = key.rpartition("::")
-    path = enum.HOOK_SUITE if label == "hook" else HERE / label.partition("::")[2]
+    if label == "hook":
+        path = enum.HOOK_SUITE
+    elif label.startswith("scripts::"):  # hand row for a router check inside a plugin script (not a `test_` function)
+        path = HERE.parents[1] / "scripts" / label.partition("::")[2]
+    else:
+        path = HERE / label.partition("::")[2]
     if not path.is_file():
         return False
     source = path.read_text(encoding="utf-8")
-    defs = {n.name for n in ast.walk(ast.parse(source)) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    tree = ast.parse(source)
+    defs = {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    if label.startswith("scripts::"):  # a name the script binds anywhere (def, assignment, annotated assignment)
+        defs |= {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
     return name in defs or f"[{name}]" in source
 
 
@@ -258,6 +266,16 @@ def test_ghost_row_is_stale() -> None:
     check("a ghost row is reported as stale", found == ["hook::test_ghost"], f"stale_rows: {found}")
 
 
+def test_scripts_label_rows_are_parsed_and_checked_for_staleness() -> None:
+    """O4 (REM-FIX 5): a hand row for a router check inside a plugin script uses the `scripts::<file>::<name>` label."""
+    real = "| scripts::craftflow_harness_audit.py::required_router_inline | F | x | P8, P9 and P11 |\n"
+    ghost = "| scripts::craftflow_harness_audit.py::no_such_binding | F | x | P8 |\n"
+    check("a scripts:: row is a table row", [k for _, k in table_rows(real)] == ["F"], str(table_rows(real)))
+    check("a scripts:: row naming a binding the script holds is not stale", stale_rows(real, {}) == [], str(stale_rows(real, {})))
+    check("a scripts:: row naming a binding the script lacks is stale",
+          stale_rows(ghost, {}) == ["scripts::craftflow_harness_audit.py::no_such_binding"], str(stale_rows(ghost, {})))
+
+
 def test_real_exclusions_and_rows_are_well_formed() -> None:
     doc = ANCHORS.read_text(encoding="utf-8")
     check("every exclusion line is qualified and reasoned", exclusion_problems(doc) == [], str(exclusion_problems(doc)))
@@ -299,6 +317,7 @@ def main() -> int:
     test_exclusion_without_reason_fails()
     test_qualified_exclusion_classifies_only_its_label()
     test_ghost_row_is_stale()
+    test_scripts_label_rows_are_parsed_and_checked_for_staleness()
     test_real_exclusions_and_rows_are_well_formed()
     test_heading_text_is_unique_across_the_router_corpus()
     test_heading_allowlist_is_exact_so_it_can_only_shrink()
