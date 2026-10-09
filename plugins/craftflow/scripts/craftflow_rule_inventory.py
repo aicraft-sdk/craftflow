@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 """Occurrence-aware router rule inventory (DD-4, DD-5, BC-8, BC-9).
 
-Splits the runtime router corpus into whole units (list items with continuation lines, table body rows,
-paragraphs, fenced blocks and [EASY TO MISS ...] brackets; deliberately no sentence unit), gives each unit a
-stable id, records every occurrence with its heading context and the workflow x variant pairs that read its
-file, and accounts for every removed occurrence against the policy map.
+Splits the runtime router corpus into whole units (list items with continuation lines, table headers and body rows,
+paragraphs, fenced blocks, [EASY TO MISS ...] brackets and skill frontmatter descriptions; deliberately no sentence
+unit), gives each unit a stable id, records every occurrence with its heading path, list label and the workflow x
+variant x reach triples that read its file, and accounts for every removed occurrence against the policy map.
 
   --emit --readmap-baseline RB [--ref SHA] [--allowlist A] --out PATH [--force]   write the baseline inventory
-  --diff --baseline F --policy-map M [--rationale R] [--readmap RM]               BC-9 accounting, exit 1 on any gap
+  --diff --baseline F --policy-map M [--rationale R] [--readmap RM] [--readmap-baseline RB] [--lock L]
+                                                                                  BC-9 accounting, exit 1 on any gap
   --report-nonnormative --files F... [--list] [--format json|md]                  whole non-normative unit bytes (L3)
 
 Flags that a mode does not use are an argparse error (exit 2). Python 3.9 compatible. Output is one JSON line (or the
-written inventory); deterministic bytes (BC-8). Errors are one JSON line on stderr, exit 1. Policy-map table parsing
-and row checks live in craftflow_rule_inventory_rows.py.
+written inventory); deterministic bytes (BC-8). Errors are one JSON line on stderr, exit 1. Unit extraction is in
+craftflow_rule_inventory_units.py, policy-map table parsing in _rows.py, read-map coverage in _readmap.py and the
+reach, read-map pinning, baseline lock and rewrite-relation checks in _reach.py.
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import subprocess
@@ -26,179 +27,23 @@ from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 import craftflow_router_corpus as cor
-from craftflow_rule_inventory_readmap import (CLASSES, check_readmap_files, coverage,  # noqa: F401
+from craftflow_rule_inventory_reach import (covers, narrowed_cover, near_rule_count, related, verify_lock,  # noqa: F401
+                                            widening)
+from craftflow_rule_inventory_readmap import (CLASSES, RANK, check_readmap_files, coverage,  # noqa: F401
                                                load_readmap)
 from craftflow_rule_inventory_rows import (EXCERPT_LEN, HEADERS, KINDS, REVIEWER, SECTIONS, STATUSES,  # noqa: F401
-                                           VARIANTS, pairs_of, parse_tables, quote_in_excerpt, symbol_ok)
+                                           VARIANTS, pairs_of, parse_tables, quote_in_excerpt, symbol_ok, tokens_of)
+from craftflow_rule_inventory_units import (classify_normative, extract_units, load_allowlist, make_id,  # noqa: F401
+                                            normalize, normalize_fence)
 
 PLUGIN_ROOT = cor.PLUGIN_ROOT
 FIXTURES = PLUGIN_ROOT / "tests" / "fixtures"
 DEFAULT_ALLOWLIST = FIXTURES / "router-normative-allowlist.json"
-KEYWORDS = re.compile(r"(?i)\b(never|must|do not|always|only|required|requires|shall|fail closed)\b|MUST|MANDATORY|\[EASY TO MISS")
-VERBS3 = re.compile(r"(?i)\b(skips?|stops?|blocks?|denies|fails?|advances?|halts?|aborts?|should|anything (?:other than|else)"
-                    r"|authoritative)\b|\+=|→|->")
-IMPERATIVES = frozenset(
-    "read run set record append persist create skip stop treat use ask write dispatch mark include track apply "
-    "before after if when do call parse release re-read delete keep verify check load resolve extract "
-    "increment update count otherwise prefer".split())
-LIST_MARK = re.compile(r"^([-*+]|\d+[.)])\s+")
+DEFAULT_READMAP_BASELINE = FIXTURES / "router-readmap.baseline.json"
+DEFAULT_LOCK = FIXTURES / "router-baseline.lock.json"
+BASELINE_VERSION = 3
 HEX_ID = re.compile(r"\b[0-9a-f]{12}\b")
 RANGE = re.compile(r"([\w./-]+\.md):(\d+)-(\d+)@([0-9a-f]{7,40})")
-
-
-# --------------------------------------------------------------------------------------- units
-
-
-def normalize(text: str) -> str:
-    t = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    t = LIST_MARK.sub("", t, count=1).replace("**", "").replace("__", "")
-    return " ".join(t.split()).lower()
-
-
-def make_id(norm: str) -> str:
-    return hashlib.sha1(norm.encode("utf-8")).hexdigest()[:12]
-
-
-def _bracket_spans(raw: str) -> List[str]:
-    spans, pos = [], 0
-    while True:
-        start = raw.find("[EASY TO MISS", pos)
-        if start < 0:
-            return spans
-        depth, end = 0, len(raw)
-        for k in range(start, len(raw)):
-            depth += (raw[k] == "[") - (raw[k] == "]")
-            if depth == 0:
-                end = k + 1
-                break
-        spans.append(raw[start:end])
-        pos = end
-
-
-def _bracket_close(lines: List[str], mask: List[bool], i: int, cur_lines: List[str], window: int = 12) -> Optional[int]:
-    """Index of the line closing an [EASY TO MISS ...] bracket that blank line `i` leaves open, else None."""
-    text = "\n".join(cur_lines)
-    start, depth = text.rfind("[EASY TO MISS"), 0
-    if start < 0:
-        return None
-    for ch in text[start:]:
-        depth += (ch == "[") - (ch == "]")
-        if depth == 0:
-            return None
-    for k in range(i + 1, min(i + 1 + window, len(lines))):
-        s = lines[k].strip()
-        if mask[k] or re.match(r"^#{1,6}\s", s) or s.startswith("|") or LIST_MARK.match(s):
-            return None
-        depth += s.count("[") - s.count("]")
-        if depth <= 0:
-            return k
-    return None
-
-
-def extract_units(text: str, file: str = "") -> List[dict]:
-    """Whole units in file order: {kind, raw, norm, id, line, numbered, heading_ctx, heading_path}."""
-    lines = text.replace("\r\n", "\n").split("\n")
-    i = 0
-    if lines and lines[0].strip() == "---":
-        close = next((k for k in range(1, len(lines)) if lines[k].strip() == "---"), None)
-        i = 0 if close is None else close + 1
-    mask, unclosed = cor.fence_scan(lines)
-    if unclosed:  # an unclosed fence would silently swallow the rest of the file as one block
-        raise ValueError(f"unclosed fence opened at line {unclosed} of {file or 'text'}")
-    units: List[dict] = []
-    stack: List[Tuple[int, str]] = []
-    cur: Optional[dict] = None
-    in_table = False
-
-    def emit(kind: str, raw_lines: List[str], line: int, numbered: bool = False) -> None:
-        raw = "\n".join(x.rstrip() for x in raw_lines).strip("\n")
-        norm = normalize(raw)
-        path = [h for _, h in stack]
-        units.append({"kind": kind, "raw": raw, "norm": norm, "id": make_id(norm), "line": line, "numbered": numbered,
-                      "heading_ctx": path[-1] if path else "", "heading_path": path})
-        if kind in ("list_item", "paragraph"):
-            for span in _bracket_spans(raw):
-                if normalize(span) != norm:
-                    emit("easy_to_miss", [span], line)
-
-    def flush() -> None:
-        nonlocal cur
-        if cur:
-            emit(cur["kind"], cur["lines"], cur["line"], cur["numbered"])
-        cur = None
-
-    while i < len(lines):
-        line, s = lines[i], lines[i].strip()
-        if mask[i]:
-            flush()
-            in_table = False
-            opener = re.match(r"^(`{3,}|~{3,})", s).group(1)
-            j = i + 1
-            while j < len(lines) and not (lines[j].strip().startswith(opener[0] * len(opener))
-                                           and not lines[j].strip().strip(opener[0])):
-                j += 1
-            emit("fence", lines[i:j + 1], i + 1)
-            i = j + 1
-            continue
-        h = re.match(r"^(#{1,6})\s+(.*?)\s*#*\s*$", line)
-        if h:
-            flush()
-            in_table = False
-            while stack and stack[-1][0] >= len(h.group(1)):
-                stack.pop()
-            stack.append((len(h.group(1)), cor.norm_text(h.group(2))))
-        elif cur and cur["kind"] == "paragraph" and re.match(r"^(={2,}|-{2,})$", s):
-            raise ValueError(f"setext heading at line {i + 1} of {file or 'text'} is unsupported; use an ATX '#' heading")
-        elif not s and cur and (k := _bracket_close(lines, mask, i, cur["lines"])) is not None:
-            cur["lines"].extend(lines[i:k + 1])  # [EASY TO MISS ...] spanning a blank line stays one unit
-            i = k
-        elif not s or re.match(r"^(-{3,}|\*{3,}|_{3,})$", s):
-            flush()
-            in_table = False
-        elif s.startswith("|"):
-            flush()
-            if not in_table:
-                in_table = True  # header row: not a unit
-            elif not re.match(r"^\|[\s:|-]+\|?$", s):
-                emit("table_row", [line], i + 1)
-        elif LIST_MARK.match(s):
-            flush()
-            in_table = False
-            cur = {"kind": "list_item", "lines": [line], "line": i + 1, "numbered": s[0].isdigit()}
-        elif cur:
-            cur["lines"].append(line)
-        else:
-            in_table = False
-            cur = {"kind": "paragraph", "lines": [line], "line": i + 1, "numbered": False}
-        i += 1
-    flush()
-    return units
-
-
-def classify_normative(unit: dict, allowlist: FrozenSet[str] = frozenset(), keywords: bool = True) -> bool:
-    """Keyword classifier OR membership in the hand-maintained allowlist. `keywords=False` disables the classifier."""
-    if unit["norm"] in allowlist:
-        return True
-    if not keywords:
-        return False
-    if unit["kind"] in ("table_row", "fence", "easy_to_miss") or unit["numbered"]:
-        return True
-    first = unit["norm"].split(" ")[0].strip(":,.;`*_(") if unit["norm"] else ""
-    return bool(KEYWORDS.search(unit["norm"]) or VERBS3.search(unit["norm"]) or first in IMPERATIVES)
-
-
-def load_allowlist(path) -> Set[str]:
-    data = cor.load_json(path)
-    if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("entries"), list):
-        raise ValueError(f"malformed normative allowlist: {path}")
-    texts = set()
-    for e in data["entries"]:
-        if not isinstance(e, dict) or not isinstance(e.get("text"), str):
-            raise ValueError(f"allowlist entry needs a string 'text': {e!r}")
-        if normalize(e["text"]) != e["text"]:
-            raise ValueError(f"allowlist text is not in normal form (normalize() would change it): {e['text']!r}")
-        texts.add(e["text"])
-    return texts
 
 
 # --------------------------------------------------------------------------------------- inventory
@@ -218,12 +63,14 @@ def build_inventory(corpus: Dict[str, str], readmap: dict, allowlist, ref: Optio
             e = ents.setdefault(u["id"], {"id": u["id"], "kind": u["kind"], "normative": False,
                                           "excerpt": u["norm"][:EXCERPT_LEN], "occurrences": []})
             e["normative"] = e["normative"] or classify_normative(u, allow)
+            if len(u["norm"]) > EXCERPT_LEN:  # the full text is only kept when the excerpt is not already all of it
+                e["text"] = u["norm"]
             e["occurrences"].append({"file": rel, "heading_ctx": u["heading_ctx"], "heading_path": u["heading_path"],
-                                     "applicability": applic})
+                                     "label_ctx": u["label_ctx"], "applicability": applic})
     entries = [ents[k] for k in sorted(ents)]
     for e in entries:
         e["occurrences"].sort(key=lambda o: json.dumps(o, sort_keys=True))
-    return {"version": 2, "ref": ref, "entries": entries, "allowlist_unmatched": sorted(allow - norms)}
+    return {"version": BASELINE_VERSION, "ref": ref, "entries": entries, "allowlist_unmatched": sorted(allow - norms)}
 
 
 def dump_inventory(inv: dict) -> bytes:
@@ -233,18 +80,20 @@ def dump_inventory(inv: dict) -> bytes:
 
 def _check_baseline(base) -> None:
     try:
-        ok = base["version"] == 2 and isinstance(base["entries"], list) and bool(base["entries"])
+        ok = base["version"] == BASELINE_VERSION and isinstance(base["entries"], list) and bool(base["entries"])
         if len({e["id"] for e in base["entries"]}) != len(base["entries"]):
             raise ValueError("malformed baseline inventory: duplicate unit ids")
         for e in base["entries"]:
             ok = ok and bool(e["id"]) and isinstance(e["normative"], bool) and bool(e["occurrences"])
             for o in e["occurrences"]:
                 ok = ok and isinstance(o["file"], str) and isinstance(o["heading_ctx"], str) \
-                    and isinstance(o["applicability"], list)
+                    and isinstance(o["label_ctx"], str) and isinstance(o["heading_path"], list) \
+                    and isinstance(o["applicability"], list) and all(len(t) == 3 for t in o["applicability"])
     except (KeyError, TypeError):
         ok = False
     if not ok:
-        raise ValueError("malformed baseline inventory (expected version 2 with non-empty entries/occurrences)")
+        raise ValueError(f"malformed baseline inventory (expected version {BASELINE_VERSION} with non-empty "
+                         "entries/occurrences, heading paths, label_ctx and (workflow, variant, reach) applicability)")
 
 
 # --------------------------------------------------------------------------------------- policy map
@@ -269,7 +118,7 @@ def _match(reqs: List[FrozenSet], covs: List[FrozenSet]) -> Tuple[int, List[Froz
     """Greedy: widest requirement first, smallest covering supply. Returns (matched, unmatched reqs, leftover supply)."""
     avail, missed, hit = sorted(covs, key=len), [], 0
     for req in sorted(reqs, key=len, reverse=True):
-        k = next((n for n, c in enumerate(avail) if req <= c), None)
+        k = next((n for n, c in enumerate(avail) if covers(c, req)), None)
         if k is None:
             missed.append(req)
         else:
@@ -278,14 +127,21 @@ def _match(reqs: List[FrozenSet], covs: List[FrozenSet]) -> Tuple[int, List[Froz
     return hit, missed, len(avail)
 
 
+def _text(entry: dict) -> str:
+    return entry.get("text", entry["excerpt"])
+
+
 def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, policy_text: str,
-                   rationale_text: str = "", plugin_root=None, allowlist=frozenset()) -> dict:
+                   rationale_text: str = "", plugin_root=None, allowlist=frozenset(), baseline_readmap=None) -> dict:
+    """`baseline_readmap` is the read map frozen at the baseline (the CLI always passes the lock-pinned file); when a
+    caller omits it the live map is compared with itself, which only the unit tests do."""
     _check_baseline(baseline)
     if not after_corpus:
         raise ValueError("empty after corpus: refusing to report '0 lost' against nothing")
     after = build_inventory(after_corpus, readmap, allowlist)
     start_files = {e["file"] for e in readmap["files"] if e["class"] in ("kernel", "start")}
     after_ids = {e["id"] for e in after["entries"]}
+    after_text = {e["id"]: _text(e) for e in after["entries"]}
     base = {e["id"]: e for e in baseline["entries"]}
     rows, errors = parse_tables(policy_text)
     rat_ids = {u["id"] for u in extract_units(rationale_text, "rationale")}
@@ -299,6 +155,7 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
 
     policy: Set[str] = set()
     for c in rows["policy"]:
+        missing_review += 0 if REVIEWER.match(c[6]) else 1
         ids = known(c[0])
         script_ok, test_ok = symbol_ok(root, c[2], ("", "scripts")), symbol_ok(root, c[3], ("", "tests/fixtures", "scripts"))
         live = c[5].strip().lower() == "true"
@@ -313,6 +170,7 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
 
     rewrites: Dict[str, str] = {}
     renames: Dict[str, str] = {}
+    label_renames: Dict[str, str] = {}  # a reworded label paragraph: its new text -> the baseline text
     for c in rows["rewrites"]:
         kind = c[2].strip().lower()
         if kind not in KINDS:
@@ -329,20 +187,30 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
             errors.append(f"rewrite row names replacement ids that do not exist: {c[1]}")
             continue
         ids = known(c[0])
+        news = [after_text[n] for n in new_ids]
+        unrelated = [i for i in ids if not related(_text(base[i]), news, kind,
+                                                   sorted({o["heading_ctx"] for o in base[i]["occurrences"]}))]
+        if unrelated:  # the new ids exist, but a row may not point a rule at text that does not carry it (A8r)
+            errors.append(f"rewrite row relates ids with under 60% token overlap: {c[0]} -> {c[1]}")
+            continue
         errors.extend(f"duplicate rewrite row for id {i}" for i in ids if i in rewrites)
         rewrites.update({i: kind for i in ids})
+        if len(ids) == len(new_ids) == 1 and _text(base[ids[0]]).endswith(":"):
+            label_renames[news[0]] = _text(base[ids[0]])
 
-    occs = [(e["id"], o["heading_ctx"], o["file"]) for e in baseline["entries"] for o in e["occurrences"]]
-    occ_cov = {(e["id"], o["heading_ctx"], o["file"]): frozenset(map(tuple, o["applicability"]))
-               for e in baseline["entries"] for o in e["occurrences"]}
-    narrowed: Dict[Tuple[str, str, str], Set[Tuple[str, str]]] = {}  # per occurrence, never per unit id (H-H3)
+    # an occurrence is identified by its unit id, last heading, file, full heading path and list label (D4, A4, A10)
+    occ_cov = {(e["id"], o["heading_ctx"], o["file"], tuple(o["heading_path"]), o["label_ctx"]):
+               frozenset(map(tuple, o["applicability"])) for e in baseline["entries"] for o in e["occurrences"]}
+    occs = list(occ_cov)
+    narrowed: Dict[tuple, FrozenSet] = {}  # per occurrence, never per unit id (H-H3)
     for c in rows["applicability"]:
         if not c[3].strip(' "`'):
             errors.append(f"applicability row has no quoted scope words: {c[0]}")
             continue
         if not REVIEWER.match(c[4]):
             missing_review += 1
-        pairs = pairs_of(c[2], errors)
+        toks = tokens_of(c[2], errors)
+        pairs = set(toks)
         if not pairs:
             continue
         sect = re.match(r"^([\w./-]+)#([^@]+)(?:@\S+)?$", c[0].strip())
@@ -352,22 +220,26 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
         else:
             named = set(known(c[0]))
             targets = [t for t in occs if t[0] in named]
+        real = lambda t: {(w, v) for w, v, _ in occ_cov[t]}  # noqa: E731
         if not targets:
             errors.append(f"applicability row names no baseline section or id: {c[0]}")
         elif not any(quote_in_excerpt(c[3], base[t[0]]["excerpt"]) for t in targets):
             errors.append(f"applicability row quotes words that are not in the named rule: {c[3]}")
         elif any(t in narrowed for t in targets):
             errors.append(f"duplicate applicability row for an occurrence of {c[0]}")
-        elif any(occ_cov[t] != pairs_of(c[1], errors) for t in targets):  # the cell must state the real baseline coverage
+        elif any(real(t) != pairs_of(c[1], errors) for t in targets):  # the cell must state the real baseline coverage
             errors.append(f"applicability row's baseline coverage '{c[1]}' differs from the occurrence's real coverage: {c[0]}")
-        elif any(not pairs <= occ_cov[t] for t in targets):
+        elif any(not pairs <= real(t) for t in targets):
             errors.append(f"applicability row narrowed coverage is outside the baseline coverage:{c[2]}")
+        elif any(toks[(w, v)] and RANK[toks[(w, v)]] > RANK[r] for t in targets for w, v, r in occ_cov[t] if (w, v) in toks):
+            errors.append(f"applicability row narrows to a reach earlier than the baseline reach:{c[2]}")
         else:
-            narrowed.update({t: pairs for t in targets})
+            narrowed.update({t: narrowed_cover(occ_cov[t], toks) for t in targets})
 
     rationale: Set[str] = set()
     off_start: Set[str] = set()
     for c in rows["rationale"]:
+        missing_review += 0 if REVIEWER.match(c[3]) else 1
         for i in known(c[0]):
             if i not in rat_ids:
                 errors.append(f"rationale row {i} is not verbatim in the rationale file")
@@ -377,26 +249,27 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
                 off_start.add(i)  # the L3 budget counts start files only, so only they may shed prose to the rationale file
                 errors.append(f"rationale row {i} has an occurrence outside the start-class files")
 
-    groups: Dict[Tuple[str, str], List[FrozenSet]] = {}
+    widened, unsigned = widening(coverage(readmap), coverage(readmap if baseline_readmap is None else baseline_readmap),
+                                 rows["widening"], errors)
+    missing_review += unsigned
+    where = lambda o: (tuple(renames.get(h, h) for h in o["heading_path"]), label_renames.get(o["label_ctx"], o["label_ctx"]))  # noqa: E731
+    groups: Dict[tuple, List[FrozenSet]] = {}
     by_id: Dict[str, List[FrozenSet]] = {}
     for e in after["entries"]:
         for o in e["occurrences"]:
             cover = frozenset(map(tuple, o["applicability"]))
-            groups.setdefault((e["id"], renames.get(o["heading_ctx"], o["heading_ctx"])), []).append(cover)
+            groups.setdefault((e["id"], *where(o)), []).append(cover)
             by_id.setdefault(e["id"], []).append(cover)
     res = {"baseline_units": len(base), "baseline_occurrences": 0, "present": 0, "policy_mapped": 0, "reworded": 0,
            "rationale": 0, "unreachable": 0, "occurrence_deficit": 0, "unmapped_removed": 0}
     unmapped, bad_rationale = set(), set()
-    wanted: Dict[Tuple[str, str], List[FrozenSet]] = {}
+    wanted: Dict[tuple, List[FrozenSet]] = {}
     for e in baseline["entries"]:
         for o in e["occurrences"]:
-            req = frozenset(map(tuple, o["applicability"]))
-            key = (e["id"], o["heading_ctx"], o["file"])
-            if key in narrowed:
-                req = req & frozenset(narrowed[key])
-            wanted.setdefault((e["id"], o["heading_ctx"]), []).append(req)
-    for (gid, ctx), reqs in sorted(wanted.items()):
-        supply = groups.get((gid, ctx), [])
+            key = (e["id"], o["heading_ctx"], o["file"], tuple(o["heading_path"]), o["label_ctx"])
+            wanted.setdefault((e["id"], tuple(o["heading_path"]), o["label_ctx"]), []).append(narrowed.get(key, occ_cov[key]))
+    for (gid, *place), reqs in sorted(wanted.items()):
+        supply = groups.get((gid, *place), [])
         hit, missed, leftover = _match(reqs, supply)
         res["baseline_occurrences"] += len(reqs)
         res["present"] += hit
@@ -409,7 +282,7 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
             # a dedupe only covers an occurrence whose workflows x variants the kept copy also reaches (E63d)
             # the kept copy may sit under any heading in any file (R-H1), so the cover is every after-copy of the id
             kept = by_id.get(gid, [])
-            done = sum(1 for m in missed if any(m <= s for s in kept)) if rewrites[gid] == "dedupe" else remaining
+            done = sum(1 for m in missed if any(covers(s, m) for s in kept)) if rewrites[gid] == "dedupe" else remaining
             res["reworded"] += done
             remaining -= done
         elif gid in rationale:
@@ -422,13 +295,14 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
             res["unreachable"] += min(remaining, leftover)
             res["unmapped_removed"] += remaining
             unmapped.add(gid)
-    res.update({"unmapped_ids": sorted(unmapped), "normative_in_rationale": len(bad_rationale),
+    res.update({"unmapped_ids": sorted(unmapped), "normative_in_rationale": len(bad_rationale), "readmap_widened": widened,
+                "added_normative_near_rule": near_rule_count(baseline["entries"], after["entries"], renames),
                 "rows_missing_review": missing_review, "row_errors": sorted(set(errors))})
     return res
 
 
 def exit_code(res: dict) -> int:
-    bad = ("unmapped_removed", "unreachable", "normative_in_rationale", "rows_missing_review")
+    bad = ("unmapped_removed", "unreachable", "normative_in_rationale", "rows_missing_review", "readmap_widened")
     return 1 if any(res[k] for k in bad) or res["row_errors"] else 0
 
 
@@ -477,7 +351,7 @@ def _fail(msg: str) -> int:
 
 # flags each mode accepts besides --ref/--plugin-root; anything else given explicitly is a usage error (H-M7)
 MODE_FLAGS = {"emit": {"readmap_baseline", "allowlist", "out", "force"},
-              "diff": {"baseline", "policy_map", "rationale", "readmap"},
+              "diff": {"baseline", "policy_map", "rationale", "readmap", "readmap_baseline", "lock"},
               "report_nonnormative": {"allowlist", "out", "files", "list", "format"}}
 
 
@@ -523,6 +397,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--ref", default=None)
     ap.add_argument("--readmap-baseline", default=None)
     ap.add_argument("--readmap", default=None)
+    ap.add_argument("--lock", default=None, help="--diff: baseline lock file (default tests/fixtures/router-baseline.lock.json)")
     ap.add_argument("--allowlist", default=None)
     ap.add_argument("--out", default=None)
     ap.add_argument("--baseline", default=None)
@@ -549,6 +424,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if a.emit:
             if not a.readmap_baseline or not a.out:
                 return _fail("--emit requires --readmap-baseline and --out")
+            if a.force and not sha:  # a forced overwrite with no commit would write a baseline that vouches for itself (D3)
+                return _fail("--emit --force requires an explicit --ref: a baseline with ref null cannot be locked")
             rm = load_readmap(a.readmap_baseline)
             corpus = cor.read_corpus(root, sha, rm)
             check_readmap_files(rm, corpus)
@@ -567,12 +444,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         if a.diff:
             if not a.baseline or not a.policy_map:
                 return _fail("--diff requires --baseline and --policy-map")
+            rmb = a.readmap_baseline or DEFAULT_READMAP_BASELINE
+            base = verify_lock(a.baseline, rmb, a.lock or DEFAULT_LOCK)  # the baseline and its read map are pinned (D3)
             rm = load_readmap(a.readmap or root / "config" / "router-readmap.json")
             corpus = cor.read_corpus(root, sha, rm)
             check_readmap_files(rm, corpus)
             rat = Path(a.rationale) if a.rationale else Path(a.policy_map).with_name("router-rationale.md")
-            res = diff_inventory(cor.load_json(a.baseline), corpus, rm, Path(a.policy_map).read_text(encoding="utf-8"),
-                                 rat.read_text(encoding="utf-8") if rat.is_file() else "", root)
+            res = diff_inventory(base, corpus, rm, Path(a.policy_map).read_text(encoding="utf-8"),
+                                 rat.read_text(encoding="utf-8") if rat.is_file() else "", root,
+                                 baseline_readmap=load_readmap(rmb))
             print(json.dumps(res, sort_keys=True))
             return exit_code(res)
         if not a.files:

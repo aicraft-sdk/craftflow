@@ -22,6 +22,8 @@ SCRIPT = PLUGIN_ROOT / "scripts" / "craftflow_rule_inventory.py"
 FIXTURES = PLUGIN_ROOT / "tests" / "fixtures"
 POLICY_MAP = PLUGIN_ROOT.parents[1] / "docs" / "router-policy-map.md"
 BASELINE_JSON = FIXTURES / "router-rule-inventory.baseline.json"
+LOCK = FIXTURES / "router-baseline.lock.json"
+BASELINE_SHA = "0439c33932463d257b881ce50f136ab7661c0a39"  # hard-pinned; changes only by a deliberate rebaseline
 
 _passes = 0
 _skips = 0
@@ -66,7 +68,7 @@ RM = {
         {"file": FP, "class": "start", "workflows": ["BUILD"]},
         {"file": STD, "class": "start", "workflows": ["BUILD"], "variant": "standard"},
         {"file": DBG, "class": "start", "workflows": ["DEBUG"]},
-        {"file": RR, "class": "stage", "workflows": ["ALL"]},
+        {"file": RR, "class": "stage", "workflows": ["ALL"], "happy_path": False},
     ],
 }
 GATE = "- Run the Learn-Distill Gate after the verifier returns PASS."
@@ -83,13 +85,14 @@ def table(header: str, rows: list) -> str:
     return "\n".join([header, sep] + rows) + "\n"
 
 
-def policy_doc(policy=(), rewrites=(), applic=(), rationale=()) -> str:
+def policy_doc(policy=(), rewrites=(), applic=(), rationale=(), widening=()) -> str:
     return (
         "# Router policy map\n\n"
         "## Policy-mapped deletions\n\n" + table(inv.HEADERS["policy"], list(policy)) +
         "\n## Rewrites\n\n" + table(inv.HEADERS["rewrites"], list(rewrites)) +
         "\n## Applicability\n\n" + table(inv.HEADERS["applicability"], list(applic)) +
         "\n## Rationale\n\n" + table(inv.HEADERS["rationale"], list(rationale)) +
+        "\n## Read-map widening\n\n" + table(inv.HEADERS["widening"], list(widening)) +
         "\n## Worktree finalize equivalence\n\n"
     )
 
@@ -111,15 +114,15 @@ def id_of(text: str) -> str:
     return sha(inv.normalize(text))
 
 
-def test_normalize_strips_list_numbering() -> None:
-    check("normalize_strips_list_numbering",
-          inv.normalize("3. Run x") == "run x" and inv.normalize("- **Run**  __x__") == "run x",
+def test_normalize_strips_bullets_and_keeps_ordinals() -> None:
+    check("normalize_strips_bullets_and_keeps_ordinals",
+          inv.normalize("3. Run x") == "3. run x" and inv.normalize("- **Run**  __x__") == "run x",
           repr(inv.normalize("3. Run x")))
 
 
 def test_normalize_collapses_whitespace_and_crlf() -> None:
     got = inv.normalize("Run\r\n  the   `X`\r\n")
-    check("normalize_collapses_whitespace_and_crlf", got == "run the `x`", repr(got))
+    check("normalize_collapses_whitespace_and_crlf", got == "run the `X`", repr(got))
 
 
 def test_fence_is_one_block_entry() -> None:
@@ -132,8 +135,11 @@ def test_fence_is_one_block_entry() -> None:
 
 def test_table_row_is_entry() -> None:
     text = "| a | b |\n|---|---|\n| x | y |\n| z | w |\n"
-    rows = [u["norm"] for u in inv.extract_units(text, K) if u["kind"] == "table_row"]
-    check("table_row_is_entry", rows == ["| x | y |", "| z | w |"], repr(rows))
+    units = inv.extract_units(text, K)
+    rows = [u["norm"] for u in units if u["kind"] == "table_row"]
+    heads = [u["norm"] for u in units if u["kind"] == "table_header"]
+    check("table_row_is_entry", heads == ["| a | b |"] and rows == ["| a | b | // | x | y |", "| a | b | // | z | w |"],
+          repr((heads, rows)))
 
 
 def test_easy_to_miss_bracket_is_entry() -> None:
@@ -170,9 +176,10 @@ def test_allowlist_forces_normative() -> None:
 
 
 def test_ids_stable() -> None:
-    a = inv.extract_units("1. Run   x\n", K)[0]["id"]
-    b = inv.extract_units("- run x\n", K)[0]["id"]
-    check("ids_stable", a == b == sha("run x"), f"{a} {b} {sha('run x')}")
+    a = inv.extract_units("- Run   x\n", K)[0]["id"]
+    b = inv.extract_units("* run x\n", K)[0]["id"]
+    c = inv.extract_units("1. Run   x\n", K)[0]["id"]
+    check("ids_stable", a == b == sha("run x") and c == sha("1. run x") != a, f"{a} {b} {c} {sha('run x')}")
 
 
 def test_duplicate_sentence_one_id_many_occurrences() -> None:
@@ -199,7 +206,7 @@ def test_unreachable_detected() -> None:
 
 def test_dedupe_into_non_covering_file_fails() -> None:
     before = {K: "## Gate\n\n" + GATE + "\n", FP: "## Gate\n\n" + GATE + "\n"}
-    row_ok = f"| {id_of(GATE)} | {id_of(GATE)} | dedupe | same gate | kept copy in the kernel covers all | David |"
+    row_ok = f"| {id_of(GATE)} | {id_of(GATE)} | dedupe | same gate | kept copy in the kernel covers all | David Gracia (2026-10-08) |"
     good = run_diff(before, {K: before[K]}, policy_doc(rewrites=[row_ok]))
     bad_before = {STD: "## Gate\n\n" + GATE + "\n", FP: "## Gate\n\n" + GATE + "\n"}
     bad = run_diff(bad_before, {STD: bad_before[STD]}, policy_doc(rewrites=[row_ok]))
@@ -211,8 +218,8 @@ def test_rewrite_row_requires_equivalence_and_reviewer() -> None:
     old, new = "- Run the old gate.", "- Run the new gate."
     before, after = {K: "## G\n\n" + old + "\n"}, {K: "## G\n\n" + new + "\n"}
     row = lambda note, who: f"| {id_of(old)} | {id_of(new)} | pointer | reworded | {note} | {who} |"
-    full = run_diff(before, after, policy_doc(rewrites=[row("same rule", "David")]))
-    no_note = run_diff(before, after, policy_doc(rewrites=[row("", "David")]))
+    full = run_diff(before, after, policy_doc(rewrites=[row("same rule", "David Gracia (2026-10-08)")]))
+    no_note = run_diff(before, after, policy_doc(rewrites=[row("", "David Gracia (2026-10-08)")]))
     no_who = run_diff(before, after, policy_doc(rewrites=[row("same rule", "")]))
     check("rewrite_row_requires_equivalence_and_reviewer",
           passes(full) and full["reworded"] == 1 and no_note["rows_missing_review"] == 1
@@ -225,7 +232,7 @@ def test_allowlisted_rule_to_rationale_fails() -> None:
     allow = {inv.normalize(text)}
     before = {K: "## Handoff\n\n" + text + "\n"}
     base = inv.build_inventory(before, RM, allow, ref="fixture")
-    row = f"| {id_of(text)} | router-rationale.md | moved for size |"
+    row = f"| {id_of(text)} | router-rationale.md | moved for size | David Gracia (2026-10-08) |"
     res = inv.diff_inventory(base, {K: "## Handoff\n\nOther.\n"}, RM, policy_doc(rationale=[row]),
                              rationale_text=text + "\n")
     check("allowlisted_rule_to_rationale_fails",
@@ -236,7 +243,7 @@ def test_applicability_row_requires_quote() -> None:
     text = "- After `integration-verifier` returns PASS, run the Learn-Distill Gate."
     before = {FP: "## G\n\n" + text + "\n"}
     after = {STD: "## G\n\n" + text + "\n"}
-    row = lambda q: f"| {id_of(text)} | BUILD | BUILD:standard | {q} | David |"
+    row = lambda q: f"| {id_of(text)} | BUILD | BUILD:standard | {q} | David Gracia (2026-10-08) |"
     good = run_diff(before, after, policy_doc(applic=[row('"After `integration-verifier` returns PASS"')]))
     bad = run_diff(before, after, policy_doc(applic=[row("")]))
     check("applicability_row_requires_quote",
@@ -246,7 +253,7 @@ def test_applicability_row_requires_quote() -> None:
 def test_heading_rename_requires_row() -> None:
     before = {K: "## Old Name\n\n" + GATE + "\n"}
     after = {K: "## New Name\n\n" + GATE + "\n"}
-    row = "| old name | new name | heading | rename | same section | David |"
+    row = "| old name | new name | heading | rename | same section | David Gracia (2026-10-08) |"
     bad = run_diff(before, after)
     good = run_diff(before, after, policy_doc(rewrites=[row]))
     check("heading_rename_requires_row", not passes(bad) and bad["unmapped_removed"] == 1 and passes(good),
@@ -259,7 +266,8 @@ def test_applicability_from_baseline_readmap() -> None:
     kern = ents[id_of("Run kernel rule.")]["occurrences"][0]["applicability"]
     bld = ents[id_of("Run build rule.")]["occurrences"][0]["applicability"]
     check("applicability_from_baseline_readmap",
-          len(kern) == 5 and bld == [["BUILD", "fast_path"], ["BUILD", "standard"]], f"{kern} {bld}")
+          len(kern) == 5 and {t[2] for t in kern} == {"kernel"}
+          and bld == [["BUILD", "fast_path", "start"], ["BUILD", "standard", "start"]], f"{kern} {bld}")
 
 
 def test_extract_is_deterministic() -> None:
@@ -291,7 +299,7 @@ def test_split_rule_requires_rewrites_row() -> None:
     p1, p2 = "- Run the gate.", "- Then the sweep."
     before = {K: "## A\n\n" + whole + "\n"}
     after = {K: "## A\n\n" + p1 + "\n", FP: "## A\n\n" + p2 + "\n"}
-    row = f"| {id_of(whole)} | {id_of(p1)}, {id_of(p2)} | split | halves | union equals the whole | David |"
+    row = f"| {id_of(whole)} | {id_of(p1)}, {id_of(p2)} | split | halves | union equals the whole | David Gracia (2026-10-08) |"
     bad = run_diff(before, after)
     good = run_diff(before, after, policy_doc(rewrites=[row]))
     check("split_rule_requires_rewrites_row", not passes(bad) and passes(good), f"bad={bad} good={good}")
@@ -300,7 +308,7 @@ def test_split_rule_requires_rewrites_row() -> None:
 def test_normative_in_rationale_fails() -> None:
     text = "- You must never skip the gate."
     before = {K: "## A\n\n" + text + "\n"}
-    row = f"| {id_of(text)} | router-rationale.md | too long |"
+    row = f"| {id_of(text)} | router-rationale.md | too long | David Gracia (2026-10-08) |"
     res = run_diff(before, {K: "## A\n\nOther text here.\n"}, policy_doc(rationale=[row]), rationale=text + "\n")
     check("normative_in_rationale_fails", res["normative_in_rationale"] == 1 and not passes(res), repr(res))
 
@@ -308,7 +316,7 @@ def test_normative_in_rationale_fails() -> None:
 def test_rationale_row_covers_non_normative_unit() -> None:
     text = "This paragraph explains why the design looks like this."
     before = {K: "## A\n\n" + text + "\n"}
-    row = f"| {id_of(text)} | router-rationale.md | explanatory |"
+    row = f"| {id_of(text)} | router-rationale.md | explanatory | David Gracia (2026-10-08) |"
     res = run_diff(before, {K: "## A\n\nOther text here.\n"}, policy_doc(rationale=[row]), rationale=text + "\n")
     check("rationale_row_covers_non_normative_unit",
           passes(res) and res["rationale"] == 1, repr(res))
@@ -324,7 +332,7 @@ def test_policy_row_requires_existing_script_and_test() -> None:
         (root / "tests" / "fixtures").mkdir(parents=True)
         (root / "scripts" / "guard.py").write_text("def decide():\n    return 1\n")
         (root / "tests" / "fixtures" / "test_guard.py").write_text("def test_decide():\n    pass\n")
-        row = lambda test: (f"| {id_of(text)} | enter_plan_mode | scripts/guard.py::decide | {test} | deleted | true |")
+        row = lambda test: (f"| {id_of(text)} | enter_plan_mode | scripts/guard.py::decide | {test} | deleted | true | David Gracia (2026-10-08) |")
         good = run_diff(before, after, policy_doc(policy=[row("tests/fixtures/test_guard.py::test_decide")]), root=root)
         missing = run_diff(before, after, policy_doc(policy=[row("tests/fixtures/test_gone.py::test_decide")]), root=root)
     check("policy_row_requires_existing_script_and_test",
@@ -341,16 +349,25 @@ def test_report_nonnormative_counts_whole_units_only() -> None:
           rep["total"] == expected and rep["files"][K]["units"] == 1, repr(rep))
 
 
+def test_baseline_lock_pins_the_baseline() -> None:
+    """D3: the baseline, its frozen read map and the commit are pinned; a mismatch fails and is never skipped."""
+    try:
+        inv.verify_lock(BASELINE_JSON, FIXTURES / "router-readmap.baseline.json", LOCK)
+        problem = ""
+    except ValueError as exc:
+        problem = str(exc)
+    lock = json.loads(LOCK.read_text(encoding="utf-8"))
+    check("baseline_lock_pins_the_baseline", not problem and lock["baseline_sha"] == BASELINE_SHA, problem or repr(lock))
+
+
 def test_baseline_matches_ref() -> None:
-    base = json.loads(BASELINE_JSON.read_text(encoding="utf-8"))
-    ref = base["ref"]
-    have = subprocess.run(["git", "-C", str(PLUGIN_ROOT), "cat-file", "-e", f"{ref}^{{commit}}"], capture_output=True)
-    if have.returncode != 0:
-        skip("baseline_matches_ref", "baseline commit not in this clone")
+    have = subprocess.run(["git", "-C", str(PLUGIN_ROOT), "cat-file", "-e", f"{BASELINE_SHA}^{{commit}}"], capture_output=True)
+    if have.returncode != 0:  # a clone without the baseline commit proves nothing about the baseline: fail, never skip (D3)
+        fail("baseline_matches_ref", f"pinned baseline commit {BASELINE_SHA} is not in this clone: fetch-depth 0 required")
         return
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "regen.json"
-        r = subprocess.run([sys.executable, str(SCRIPT), "--emit", "--ref", ref, "--readmap-baseline",
+        r = subprocess.run([sys.executable, str(SCRIPT), "--emit", "--ref", BASELINE_SHA, "--readmap-baseline",
                             str(FIXTURES / "router-readmap.baseline.json"), "--allowlist",
                             str(FIXTURES / "router-normative-allowlist.json"), "--out", str(out)],
                            capture_output=True, text=True)

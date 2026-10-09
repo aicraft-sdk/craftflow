@@ -62,7 +62,7 @@ def mini_root(tmp: str, skill: str = "## A\n\n- Run it.\n\nNever stop.\n") -> Pa
 
 def test_r_h1_cross_heading_dedupe_passes() -> None:
     before = {K: "## Gate A\n\n" + GATE + "\n", FP: "## Gate B\n\n" + GATE + "\n"}
-    row = f"| {id_of(GATE)} | {id_of(GATE)} | dedupe | same gate | kept copy in the kernel covers all | David |"
+    row = f"| {id_of(GATE)} | {id_of(GATE)} | dedupe | same gate | kept copy in the kernel covers all | David Gracia (2026-10-08) |"
     res = run_diff(before, {K: before[K]}, policy_doc(rewrites=[row]))
     no_row = run_diff(before, {K: before[K]})
     check("R-H1 cross-heading dedupe passes", passes(res) and res["reworded"] == 1 and res["unmapped_removed"] == 0,
@@ -72,7 +72,7 @@ def test_r_h1_cross_heading_dedupe_passes() -> None:
 
 def test_r_h2_rationale_only_for_start_files() -> None:
     text = "This paragraph explains why the design looks like this."
-    row = f"| {id_of(text)} | router-rationale.md | explanatory |"
+    row = f"| {id_of(text)} | router-rationale.md | explanatory | David Gracia (2026-10-08) |"
     # the L3 basis is the eight files read at workflow start: the kernel files plus the start-class files
     for label, f, want in (("start file", FP, True), ("kernel file", K, True), ("stage file", RR, False)):
         res = run_diff({f: "## A\n\n" + text + "\n"}, {f: "## A\n\nOther text here.\n"},
@@ -132,11 +132,11 @@ def test_h_h3_narrowing_scoped_to_occurrence() -> None:
     before = {FP: "## A\n\n" + GATE + "\n\n## B\n\n" + GATE + "\n"}
     after = {STD: before[FP]}
     q = '"Run the Learn-Distill Gate"'
-    row_a = f"| {FP.split('/')[-1]}#A | BUILD | BUILD:standard | {q} | David |"
+    row_a = f"| {FP.split('/')[-1]}#A | BUILD | BUILD:standard | {q} | David Gracia (2026-10-08) |"
     res = run_diff(before, after, policy_doc(applic=[row_a]))
     check("H-H3 narrowing one section does not excuse a loss elsewhere",
           res["unmapped_removed"] == 1 and not passes(res), repr(res))
-    row_both = f"| {FP.split('/')[-1]}#B | BUILD | BUILD:standard | {q} | David |"
+    row_both = f"| {FP.split('/')[-1]}#B | BUILD | BUILD:standard | {q} | David Gracia (2026-10-08) |"
     both = run_diff(before, after, policy_doc(applic=[row_a, row_both]))
     check("H-H3 narrowing both sections passes", passes(both), repr(both))
     dup = run_diff(before, after, policy_doc(applic=[row_a, row_a]))
@@ -164,7 +164,7 @@ def test_h_h4_missing_allowlist_fails() -> None:
 def test_r_m2_quote_must_appear_in_the_rule() -> None:
     text = "- After `integration-verifier` returns PASS, run the Learn-Distill Gate."
     before, after = {FP: "## G\n\n" + text + "\n"}, {STD: "## G\n\n" + text + "\n"}
-    row = lambda q: f"| {id_of(text)} | BUILD | BUILD:standard | {q} | David |"
+    row = lambda q: f"| {id_of(text)} | BUILD | BUILD:standard | {q} | David Gracia (2026-10-08) |"
     bogus = run_diff(before, after, policy_doc(applic=[row('"completely unrelated words"')]))
     check("R-M2 a quote that is not in the rule is rejected", not passes(bogus) and bool(bogus["row_errors"]), repr(bogus))
 
@@ -179,7 +179,7 @@ def test_r_m3_policy_symbol_and_live_verified() -> None:
         (root / "scripts" / "guard.py").write_text("# decide is mentioned only here\ndef other():\n    return 1\n")
         (root / "scripts" / "real.py").write_text("def decide():\n    return 1\n")
         (root / "tests" / "fixtures" / "test_guard.py").write_text("def test_decide():\n    pass\n")
-        row = lambda script, live="true": (f"| {id_of(text)} | k | scripts/{script} | tests/fixtures/test_guard.py::test_decide | deleted | {live} |")
+        row = lambda script, live="true": (f"| {id_of(text)} | k | scripts/{script} | tests/fixtures/test_guard.py::test_decide | deleted | {live} | David Gracia (2026-10-08) |")
         comment = run_diff(before, after, policy_doc(policy=[row("guard.py::decide")]), root=root)
         real = run_diff(before, after, policy_doc(policy=[row("real.py::decide")]), root=root)
         notlive = run_diff(before, after, policy_doc(policy=[row("real.py::decide", "false")]), root=root)
@@ -209,10 +209,14 @@ def test_h_m4_classifier_gaps() -> None:
 def test_h_m5_out_does_not_clobber_other_ref() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = mini_root(tmp)
+        git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+        subprocess.run(git + ["init", "-q"], check=True, capture_output=True)
+        subprocess.run(git + ["add", "skills"], check=True, capture_output=True)
+        subprocess.run(git + ["commit", "-q", "-m", "x"], check=True, capture_output=True)
         out = Path(tmp) / "baseline.json"
         out.write_text('{"entries":[],"ref":"deadbeef","version":2}\n')
-        args = ["--emit", "--plugin-root", root, "--readmap-baseline", root / "rm.json", "--allowlist", root / "al.json",
-                "--out", out]
+        args = ["--emit", "--ref", "HEAD", "--plugin-root", root, "--readmap-baseline", root / "rm.json", "--allowlist",
+                root / "al.json", "--out", out]
         refused = cli(*args)
         kept = out.read_text() == '{"entries":[],"ref":"deadbeef","version":2}\n'
         forced = cli(*args, "--force")
@@ -284,16 +288,16 @@ def diff2(row: str, after_file: str = PL, extra: str = "") -> dict:
 
 def test_m1_narrowing_validated_against_baseline_coverage() -> None:
     q, name = '"beta thing"', STD.split("/")[-1]
-    disjoint = diff2(f"| {name}#r | BUILD:standard | PLAN:standard | {q} | David |")
+    disjoint = diff2(f"| {name}#r | BUILD:standard | PLAN:standard | {q} | David Gracia (2026-10-08) |")
     check("M1 narrowed coverage outside the baseline coverage is a row error and the loss is not forgiven",
           any("narrowed" in e for e in disjoint["row_errors"]) and disjoint["unmapped_removed"] == 1 and not passes(disjoint),
           repr(disjoint))
-    garbage = diff2(f"| {name}#r | ZZZ | BUILD:standard | {q} | David |", STD)
+    garbage = diff2(f"| {name}#r | ZZZ | BUILD:standard | {q} | David Gracia (2026-10-08) |", STD)
     check("M1 garbage baseline coverage is a row error", bool(garbage["row_errors"]) and not passes(garbage), repr(garbage))
-    wrong = diff2(f"| {name}#r | BUILD | BUILD:standard | {q} | David |", STD)
+    wrong = diff2(f"| {name}#r | BUILD | BUILD:standard | {q} | David Gracia (2026-10-08) |", STD)
     check("M1 a baseline coverage cell that differs from the occurrence's real coverage is a row error",
           any("baseline coverage" in e for e in wrong["row_errors"]), repr(wrong))
-    good = diff2(f"| {name}#r | BUILD:standard | BUILD:standard | {q} | David |", STD)
+    good = diff2(f"| {name}#r | BUILD:standard | BUILD:standard | {q} | David Gracia (2026-10-08) |", STD)
     check("M1 a truthful narrowing that matches the baseline still passes", passes(good), repr(good))
 
 
@@ -307,7 +311,7 @@ def test_m3_readmap_rejects_widening_unknown_keys_and_duplicates() -> None:
     check("M3 duplicate entries for one file and class are rejected",
           bool(raises(lambda: inv.coverage({"version": 1, "files": [ent, dict(ent, variant="standard")]}))))
     check("M3 a variant list of strings still works",
-          inv.coverage(with_v(variant=["standard"]))[STD] == {("BUILD", "standard")})
+          inv.coverage(with_v(variant=["standard"]))[STD] == {("BUILD", "standard", "start")})
     check("M3 the committed read map still validates", not raises(lambda: inv.load_readmap(PLUGIN_ROOT / "config" / "router-readmap.json")))
 
 
@@ -343,8 +347,8 @@ def test_l2_report_mode_does_not_clobber_a_baseline() -> None:
 
 def test_l4_duplicate_rewrite_rows_for_one_id_are_an_error() -> None:
     before = {K: "## A\n\n" + GATE + "\n", FP: "## B\n\n" + GATE + "\n"}
-    r1 = f"| {id_of(GATE)} | {id_of(GATE)} | dedupe | same | kept copy covers all | David |"
-    r2 = f"| {id_of(GATE)} | {id_of(GATE)} | pointer | same | pointer | David |"
+    r1 = f"| {id_of(GATE)} | {id_of(GATE)} | dedupe | same | kept copy covers all | David Gracia (2026-10-08) |"
+    r2 = f"| {id_of(GATE)} | {id_of(GATE)} | pointer | same | pointer | David Gracia (2026-10-08) |"
     res = run_diff(before, {K: before[K]}, policy_doc(rewrites=[r1, r2]))
     check("L4 two rewrite rows for one id are a row error", any("duplicate rewrite" in e for e in res["row_errors"]), repr(res))
     check("L4 a single rewrite row is fine", passes(run_diff(before, {K: before[K]}, policy_doc(rewrites=[r1]))))

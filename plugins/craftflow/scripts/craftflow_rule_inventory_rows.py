@@ -9,22 +9,25 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import craftflow_router_corpus as cor
 
 VARIANTS = {"BUILD": ["fast_path", "standard"], "PLAN": ["standard"], "DEBUG": ["standard"], "REVIEW": ["standard"]}
 HEADERS = {
-    "policy": "| Baseline ID or group (file:start-end@sha) | Policy key | Enforcing script::function | Test | Status | live_verified |",
+    "policy": "| Baseline ID or group (file:start-end@sha) | Policy key | Enforcing script::function | Test | Status | live_verified | Reviewed by |",
     "rewrites": "| Baseline ID(s) or group | New IDs | Kind (pointer/dedupe/trigger/literal-to-key/xref/split/heading) | Justification | Equivalence note | Reviewed by |",
     "applicability": "| Baseline ID or section (file#heading@sha) | Baseline coverage | Narrowed coverage | Quoted scope words | Reviewed by |",
-    "rationale": "| Baseline ID | Destination | Justification |",
+    "rationale": "| Baseline ID | Destination | Justification | Reviewed by |",
+    "widening": "| File | Baseline coverage | Widened coverage | Justification | Reviewed by |",
 }
 SECTIONS = {"policy": "policy-mapped deletions", "rewrites": "rewrites", "applicability": "applicability",
-            "rationale": "rationale"}
+            "rationale": "rationale", "widening": "read-map widening"}
 STATUSES = ("deleted", "pending-prose-deletion", "prose_retained", "document-only")
 KINDS = ("pointer", "dedupe", "trigger", "literal-to-key", "xref", "split", "heading")
-REVIEWER = re.compile(r"^(David|(doubt-verifier|plan-gap-reviewer)@wf:\S+)$")
+# a signature is a person's name plus the date they reviewed: a bare first name is not one (A1)
+REVIEWER = re.compile(r"^[A-Z][a-z]+( [A-Z][a-z]+)* \(\d{4}-\d{2}-\d{2}\)$")
+REACH_NAMES = ("kernel", "start", "happy_path_stage", "conditional_stage")
 SEPARATOR = re.compile(r"^\|?[\s:|-]+\|?$")
 EXCERPT_LEN = 100  # inventory entries keep this many normalized characters of each unit
 
@@ -90,15 +93,21 @@ def symbol_ok(root, cell: str, prefixes: Tuple[str, ...]) -> bool:
     return False
 
 
-def pairs_of(cell: str, errors: List[str]) -> Set[Tuple[str, str]]:
-    out: Set[Tuple[str, str]] = set()
+def tokens_of(cell: str, errors: List[str]) -> Dict[Tuple[str, str], Optional[str]]:
+    """`WF[:variant][@reach]` tokens -> {(workflow, variant): reach or None}; None keeps the baseline reach."""
+    out: Dict[Tuple[str, str], Optional[str]] = {}
     for tok in re.split(r"[,;]", cell):
-        wf, _, var = tok.strip().partition(":")
-        if wf not in VARIANTS or (var and var not in VARIANTS[wf]):
+        body, _, reach = tok.strip().partition("@")
+        wf, _, var = body.partition(":")
+        if wf not in VARIANTS or (var and var not in VARIANTS[wf]) or (reach and reach not in REACH_NAMES):
             errors.append(f"bad narrowed coverage token '{tok.strip()}'")
         else:
-            out.update((wf, v) for v in ([var] if var else VARIANTS[wf]))
+            out.update(((wf, v), reach or None) for v in ([var] if var else VARIANTS[wf]))
     return out
+
+
+def pairs_of(cell: str, errors: List[str]) -> Set[Tuple[str, str]]:
+    return set(tokens_of(cell, errors))
 
 
 def _squash(text: str) -> str:

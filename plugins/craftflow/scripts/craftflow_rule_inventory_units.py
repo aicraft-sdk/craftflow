@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Unit extraction, normalization and the normative classifier for craftflow_rule_inventory.py (split out for its cap).
+
+A unit is the smallest span a reviewer would call one rule: a list item with its continuation lines, a table header or
+body row, a paragraph, a fenced block, an [EASY TO MISS ...] bracket or a skill's frontmatter description. A unit's id
+hashes its normalized text; its place is the heading path plus, for list items, the label paragraph that introduces
+the list (`label_ctx`). Python 3.9 compatible.
+"""
+from __future__ import annotations
+
+import hashlib
+import re
+from typing import FrozenSet, List, Optional, Set, Tuple
+
+import craftflow_router_corpus as cor
+
+KEYWORDS = re.compile(r"(?i)\b(never|must|do not|always|only|required|requires|shall|fail closed)\b|MUST|MANDATORY|\[EASY TO MISS")
+VERBS3 = re.compile(r"(?i)\b(skips?|stops?|blocks?|denies|fails?|advances?|halts?|aborts?|should|anything (?:other than|else)"
+                    r"|authoritative)\b|\+=|→|->")
+IMPERATIVES = frozenset(
+    "read run set record append persist create skip stop treat use ask write dispatch mark include track apply "
+    "before after if when do call parse release re-read delete keep verify check load resolve extract "
+    "increment update count otherwise prefer".split())
+LIST_MARK = re.compile(r"^([-*+]|\d+[.)])\s+")
+BULLET_MARK = re.compile(r"^[-*+]\s+")
+CODE_SPAN = re.compile(r"(`[^`\n]*`)")
+FENCE_OPEN = re.compile(r"^(`{3,}|~{3,})")
+ROW_SEP = " // "  # joins a table's header text to each body row so a header edit changes every row id
+
+
+def normalize(text: str) -> str:
+    """Whitespace-collapsed, lower-cased text. Unordered markers and `**`/`__` are dropped; an ordinal marker (`3.`)
+    is part of the rule and stays; the text of a backticked code span keeps its case (A11)."""
+    t = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    t = BULLET_MARK.sub("", t, count=1).replace("**", "").replace("__", "")
+    parts = CODE_SPAN.split(" ".join(t.split()))
+    return "".join(p if k % 2 else p.lower() for k, p in enumerate(parts))
+
+
+def normalize_fence(text: str) -> str:
+    """A fenced block keeps its line structure: only trailing whitespace per line and surrounding blank lines go."""
+    return "\n".join(x.rstrip() for x in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")).strip("\n")
+
+
+def make_id(norm: str) -> str:
+    return hashlib.sha1(norm.encode("utf-8")).hexdigest()[:12]
+
+
+def _bracket_spans(raw: str) -> List[str]:
+    spans, pos = [], 0
+    while True:
+        start = raw.find("[EASY TO MISS", pos)
+        if start < 0:
+            return spans
+        depth, end = 0, len(raw)
+        for k in range(start, len(raw)):
+            depth += (raw[k] == "[") - (raw[k] == "]")
+            if depth == 0:
+                end = k + 1
+                break
+        spans.append(raw[start:end])
+        pos = end
+
+
+def _bracket_close(lines: List[str], mask: List[bool], i: int, cur_lines: List[str], window: int = 12) -> Optional[int]:
+    """Index of the line closing an [EASY TO MISS ...] bracket that blank line `i` leaves open, else None."""
+    text = "\n".join(cur_lines)
+    start, depth = text.rfind("[EASY TO MISS"), 0
+    if start < 0:
+        return None
+    for ch in text[start:]:
+        depth += (ch == "[") - (ch == "]")
+        if depth == 0:
+            return None
+    for k in range(i + 1, min(i + 1 + window, len(lines))):
+        s = lines[k].strip()
+        if mask[k] or re.match(r"^#{1,6}\s", s) or s.startswith("|") or LIST_MARK.match(s):
+            return None
+        depth += s.count("[") - s.count("]")
+        if depth <= 0:
+            return k
+    return None
+
+
+def extract_units(text: str, file: str = "") -> List[dict]:
+    """Units in file order: {kind, raw, norm, id, line, numbered, heading_ctx, heading_path, label_ctx}."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    i, front = 0, None
+    if lines and lines[0].strip() == "---":
+        close = next((k for k in range(1, len(lines)) if lines[k].strip() == "---"), None)
+        if close is not None:
+            i, front = close + 1, cor.parse_frontmatter("\n".join(lines[:close + 1]) + "\n").get("description")
+    mask, unclosed = cor.fence_scan(lines)
+    if unclosed:  # an unclosed fence would silently swallow the rest of the file as one block
+        raise ValueError(f"unclosed fence opened at line {unclosed} of {file or 'text'}")
+    units: List[dict] = []
+    stack: List[Tuple[int, str]] = []
+    labels: List[Tuple[int, str]] = []  # (indent, norm) of the open label units; a paragraph is indent -1
+    cur: Optional[dict] = None
+    table: Optional[str] = None  # normalized header row of the table being read
+
+    def emit(kind: str, raw_lines: List[str], line: int, numbered: bool = False, label: str = "",
+             norm: Optional[str] = None) -> str:
+        raw = "\n".join(x.rstrip() for x in raw_lines).strip("\n")
+        norm = norm if norm is not None else (normalize_fence(raw) if kind == "fence" else normalize(raw))
+        path = [h for _, h in stack]
+        units.append({"kind": kind, "raw": raw, "norm": norm, "id": make_id(norm), "line": line, "numbered": numbered,
+                      "heading_ctx": path[-1] if path else "", "heading_path": path, "label_ctx": label})
+        if kind in ("list_item", "paragraph"):
+            for span in _bracket_spans(raw):
+                if normalize(span) != norm:
+                    emit("easy_to_miss", [span], line)
+        return norm
+
+    def flush() -> None:
+        nonlocal cur
+        if cur:
+            norm = emit(cur["kind"], cur["lines"], cur["line"], cur["numbered"], cur["label"])
+            if norm.endswith(":"):
+                labels.append((cur["indent"], norm))
+        cur = None
+
+    def begin(kind: str, line: str, no: int, numbered: bool) -> dict:
+        indent = -1 if kind == "paragraph" else len(line) - len(line.lstrip())
+        while labels and labels[-1][0] >= indent:
+            labels.pop()
+        return {"kind": kind, "lines": [line], "line": no, "numbered": numbered, "indent": indent,
+                "label": labels[-1][1] if kind == "list_item" and labels else ""}
+
+    if isinstance(front, str) and front.strip():  # the description is loaded into context on every turn (A6)
+        emit("frontmatter", [front], 1)
+    while i < len(lines):
+        line, s = lines[i], lines[i].strip()
+        if mask[i]:
+            flush()
+            table, labels[:] = None, []
+            opener = FENCE_OPEN.match(s).group(1)
+            j = i + 1
+            while j < len(lines) and not (lines[j].strip().startswith(opener[0] * len(opener))
+                                           and not lines[j].strip().strip(opener[0])):
+                j += 1
+            emit("fence", lines[i:j + 1], i + 1)
+            i = j + 1
+            continue
+        h = re.match(r"^(#{1,6})\s+(.*?)\s*#*\s*$", line)
+        if h:
+            flush()
+            table, labels[:] = None, []
+            while stack and stack[-1][0] >= len(h.group(1)):
+                stack.pop()
+            stack.append((len(h.group(1)), cor.norm_text(h.group(2))))
+        elif cur and cur["kind"] == "paragraph" and re.match(r"^(={2,}|-{2,})$", s):
+            raise ValueError(f"setext heading at line {i + 1} of {file or 'text'} is unsupported; use an ATX '#' heading")
+        elif not s and cur and (k := _bracket_close(lines, mask, i, cur["lines"])) is not None:
+            cur["lines"].extend(lines[i:k + 1])  # [EASY TO MISS ...] spanning a blank line stays one unit
+            i = k
+        elif not s or re.match(r"^(-{3,}|\*{3,}|_{3,})$", s):
+            flush()
+            table = None
+            if s:
+                labels[:] = []
+        elif s.startswith("|"):
+            flush()
+            labels[:] = []
+            if table is None:
+                table = normalize(line)
+                emit("table_header", [line], i + 1)
+            elif not re.match(r"^\|[\s:|-]+\|?$", s):
+                emit("table_row", [line], i + 1, norm=table + ROW_SEP + normalize(line))
+        elif LIST_MARK.match(s):
+            flush()
+            table = None
+            cur = begin("list_item", line, i + 1, s[0].isdigit())
+        elif cur:
+            cur["lines"].append(line)
+        else:
+            table = None
+            cur = begin("paragraph", line, i + 1, False)
+        i += 1
+    flush()
+    return units
+
+
+def classify_normative(unit: dict, allowlist: FrozenSet[str] = frozenset(), keywords: bool = True) -> bool:
+    """Keyword classifier OR membership in the hand-maintained allowlist. `keywords=False` disables the classifier."""
+    if unit["norm"] in allowlist:
+        return True
+    if not keywords:
+        return False
+    if unit["kind"] in ("table_row", "table_header", "fence", "easy_to_miss", "frontmatter") or unit["numbered"]:
+        return True
+    first = unit["norm"].split(" ")[0].strip(":,.;`*_(").lower() if unit["norm"] else ""
+    return bool(KEYWORDS.search(unit["norm"]) or VERBS3.search(unit["norm"]) or first in IMPERATIVES)
+
+
+def load_allowlist(path) -> Set[str]:
+    data = cor.load_json(path)
+    if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("entries"), list):
+        raise ValueError(f"malformed normative allowlist: {path}")
+    texts = set()
+    for e in data["entries"]:
+        if not isinstance(e, dict) or not isinstance(e.get("text"), str):
+            raise ValueError(f"allowlist entry needs a string 'text': {e!r}")
+        t = e["text"]
+        if not (normalize(t) == t or (FENCE_OPEN.match(t) and normalize_fence(t) == t)):
+            raise ValueError(f"allowlist text is not in normal form (normalize() would change it): {t!r}")
+        texts.add(t)
+    return texts

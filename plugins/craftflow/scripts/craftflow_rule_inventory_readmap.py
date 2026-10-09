@@ -15,17 +15,30 @@ CLASSES = ("kernel", "start", "stage", "maintainer")
 ENTRY_KEYS = frozenset({"file", "class", "workflows", "variant", "trigger", "happy_path"})
 
 
-def coverage(readmap: dict) -> Dict[str, Set[Tuple[str, str]]]:
-    """file -> set of (workflow, variant) pairs that read it. kernel covers all; maintainer covers nothing.
+# how early a rule is read: kernel and start files at workflow start, a happy-path stage file when its trigger fires
+# on every run, a conditional stage file only when its trigger fires (remediation, research). Higher reads earlier.
+RANK = {"kernel": 2, "start": 2, "happy_path_stage": 1, "conditional_stage": 0}
 
-    Fails closed on a read map with no entries, an unknown workflow or an unknown variant (H-H2): a silent `[]`
-    applicability would make every reachability check vacuous."""
+
+def entry_reach(e: dict) -> str:
+    if e["class"] in ("kernel", "start"):
+        return e["class"]
+    if not isinstance(e.get("happy_path"), bool):  # a missing flag must not silently read as a happy-path stage
+        raise ValueError(f"read map stage entry needs a boolean happy_path: {e}")
+    return "happy_path_stage" if e["happy_path"] else "conditional_stage"
+
+
+def coverage(readmap: dict) -> Dict[str, Set[Tuple[str, str, str]]]:
+    """file -> set of (workflow, variant, reach) triples that read it. kernel covers all; maintainer covers nothing.
+
+    A file listed twice keeps the earliest reach per pair. Fails closed on a read map with no entries, an unknown
+    workflow or an unknown variant (H-H2): a silent `[]` applicability would make every reachability check vacuous."""
     variants = readmap.get("variants", VARIANTS)
     if not isinstance(variants, dict) or not all(isinstance(v, list) and v for v in variants.values()):
         raise ValueError("read map 'variants' must map each workflow to a non-empty list")
     if not isinstance(readmap.get("files"), list) or not readmap["files"]:
         raise ValueError("read map has no 'files' entries")
-    out: Dict[str, Set[Tuple[str, str]]] = {}
+    out: Dict[str, Dict[Tuple[str, str], str]] = {}
     seen: Set[Tuple[str, str]] = set()
     for e in readmap["files"]:
         if not isinstance(e, dict):
@@ -38,9 +51,10 @@ def coverage(readmap: dict) -> Dict[str, Set[Tuple[str, str]]]:
         if (e["file"], cls) in seen:
             raise ValueError(f"duplicate read map entry for {e['file']} (class {cls})")
         seen.add((e["file"], cls))
-        pairs = out.setdefault(e["file"], set())
+        pairs = out.setdefault(e["file"], {})
         if cls == "maintainer":
             continue
+        reach = entry_reach(e)
         if cls != "kernel" and not wfs:
             raise ValueError(f"read map entry has no workflows: {e}")
         v = e.get("variant")
@@ -53,8 +67,10 @@ def coverage(readmap: dict) -> Dict[str, Set[Tuple[str, str]]]:
             bad = [x for x in chosen if x not in variants[wf]]
             if bad:
                 raise ValueError(f"unknown variant {bad[0]!r} for {wf} in read map entry {e['file']}")
-            pairs.update((wf, var) for var in chosen)
-    return out
+            for var in chosen:
+                if (wf, var) not in pairs or RANK[reach] > RANK[pairs[(wf, var)]]:
+                    pairs[(wf, var)] = reach
+    return {f: {(w, v, r) for (w, v), r in d.items()} for f, d in out.items()}
 
 
 def load_readmap(path) -> dict:
