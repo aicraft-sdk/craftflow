@@ -9,7 +9,9 @@ outside this subset (P0 REM-FIX 6, F1-F6):
 - top-level `key: value` lines only, keys limited to ALLOWED_KEYS, no duplicate keys, no tabs in indentation;
 - a value is an inline scalar (a quoted string must close on its line), a `key:` followed by `- item` lines, or a block
   scalar (`|`, `>` with an optional `-`/`+`): the first non-blank content line sets the indent, every later non-blank
-  line must be indented at least as far, and the block ends at the first non-blank line indented less;
+  line must be indented at least as far, and the block ends at the first non-blank line indented less; a
+  whitespace-only line holding a tab is an error, and so is one before the first content line with more spaces than the
+  content indent (every YAML loader rejects both; CRLF line ends stay benign) (P0 REM-FIX 7, B3);
 - a plain inline scalar holds no `: ` and does not start with a YAML indicator character.
 
 Python 3.9 compatible.
@@ -39,10 +41,14 @@ def _scalar(rest: str, key: str, n: int) -> str:
 
 def _block(lines: List[str], i: int, key: str) -> "tuple[str, int]":
     """The block scalar whose content starts at lines[i]; returns (text, index of the first line after it)."""
-    indent, body, j = None, [], i
+    indent, body, j, leading = None, [], i, []
     while j < len(lines):
         raw = lines[j]
         if not raw.strip():
+            if "\t" in raw:  # YAML loaders read a tab-only line as content less indented than the block (B3)
+                raise ValueError(f"line {j + 1}: tab in a whitespace-only line of the block scalar '{key}'")
+            if indent is None:
+                leading.append((j, len(raw)))
             body.append("")
             j += 1
             continue
@@ -51,6 +57,10 @@ def _block(lines: List[str], i: int, key: str) -> "tuple[str, int]":
             if lead == 0:
                 break  # an empty block scalar: the next key follows immediately
             indent = lead
+            for k, width in leading:  # a blank line before the first content line may not be wider than the content (B3)
+                if width > indent:
+                    raise ValueError(f"line {k + 1}: whitespace-only line before the first content line of '{key}' is more "
+                                     f"indented than the content")
         if lead < indent:
             break
         body.append(raw[indent:])

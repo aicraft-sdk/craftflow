@@ -124,7 +124,15 @@ Also not covered: an override sentence ("the following rules are obsolete") near
 checks it against what SKILL.md tells the router to `Read()`; P2's read-set measurer should derive it from the kernel's
 Read Map table). `[rebaseline]` is free text and a direct push to main skips the PR-only gate, so branch protection with
 required code-owner review is the real gate (a repository setting). `.github/CODEOWNERS` also names the inventory
-scripts, their tests, the CI workflow, the fixture runner and the read map.
+scripts, the corpus loader and util modules they import, their tests, the CI workflow, the fixture runner and the read
+map.
+
+Documented limits (P0 REM-FIX 7, advisory A-1..A-5; none is mechanically closed): the applicability quote rule accepts
+weak quotes (`e.g` is two words, `"in the"` passes per rule); a 1:1 rewrite row X to X lets X sit under any heading and a
+section-move row maps a whole subtree, so the signer owns both; only a multi-line HTML comment counts as a removal; a `---`
+thematic break between an intro and its list drops the intro, reordering un-numbered siblings with the same anchor is
+invisible, and case or `**` changes are normalized away; and frontmatter edge cases (a ` ---` closing line, whitespace
+collapse in quoted values, `name: |`) cannot be checked against Claude Code's own parser.
 
 ## Rebaseline
 

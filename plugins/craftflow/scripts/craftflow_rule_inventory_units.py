@@ -98,8 +98,18 @@ def _frontmatter(lines: List[str], close: int, file: str) -> Tuple[str, str]:
     return desc, keys_unit_text(fields)
 
 
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
 def extract_units(text: str, file: str = "") -> List[dict]:
-    """Units in file order: {kind, raw, norm, id, line, numbered, heading_ctx, heading_path, label_ctx, parent_ctx}."""
+    """Units in file order: {kind, raw, norm, id, line, numbered, heading_ctx, heading_path, label_ctx, parent_ctx}.
+
+    Every unit kind carries its branch context (P0 REM-FIX 7): `label_ctx` is the nearest preceding label (a unit ending
+    in a colon) at a lower indent, and `parent_ctx` is the ids of the enclosing list items (a list item also gets the
+    preceding paragraph). A fence or paragraph additionally records `@<id>` of its nearest preceding sibling of another
+    kind. Only a dedent pops a parent: a fence, table or continuation paragraph nested under a list item keeps its chain.
+    """
     lines = text.replace("\r\n", "\n").split("\n")
     i, front, keys = 0, None, ""
     if lines and lines[0].strip() == "---":
@@ -112,20 +122,30 @@ def extract_units(text: str, file: str = "") -> List[dict]:
         raise ValueError(f"unclosed fence opened at line {unclosed} of {file or 'text'}")
     units: List[dict] = []
     stack: List[Tuple[int, str]] = []
-    labels: List[Tuple[int, str]] = []  # (indent, norm) of the open label units; a paragraph is indent -1
+    labels: List[Tuple[int, str]] = []  # (indent, norm) of the open label units; a paragraph label sits one below its indent
     parents: List[Tuple[int, str]] = []  # (indent, id) of the open list items, whatever their trailing punctuation (R1)
-    para: List[str] = []  # [id] of the paragraph that directly precedes the current list, else []
+    para: List[str] = []  # [id] of the top-level paragraph that directly precedes the current list, else []
+    hist: List[Tuple[str, str, Tuple[str, ...]]] = []  # (kind, id, sibling chain) of the units since the last heading
     cur: Optional[dict] = None
     table: Optional[str] = None  # normalized header row of the table being read
+    table_ctx: Tuple[str, Tuple[str, ...]] = ("", ())  # (label, parent chain) of that table, shared by its rows
+
+    def anchor(kind: str, sib: Tuple[str, ...]) -> List[str]:
+        found = next((uid for k, uid, s in reversed(hist) if s == sib and k != kind), "")
+        return ["@" + found] if found else []
 
     def emit(kind: str, raw_lines: List[str], line: int, numbered: bool = False, label: str = "",
-             norm: Optional[str] = None, parent: Optional[List[str]] = None) -> str:
+             norm: Optional[str] = None, parent: Optional[List[str]] = None, sib: Tuple[str, ...] = ()) -> str:
         raw = "\n".join(x.rstrip() for x in raw_lines).strip("\n")
         norm = norm if norm is not None else (normalize_fence(raw) if kind == "fence" else normalize(raw))
         path = [h for _, h in stack]
+        if kind in ("fence", "paragraph"):
+            parent = (parent or []) + anchor(kind, sib)
         units.append({"kind": kind, "raw": raw, "norm": norm, "id": make_id(norm), "line": line, "numbered": numbered,
                       "heading_ctx": path[-1] if path else "", "heading_path": path, "label_ctx": label,
                       "parent_ctx": parent or []})
+        if kind != "easy_to_miss":
+            hist.append((kind, make_id(norm), sib))
         if kind in ("list_item", "paragraph"):
             for span in _bracket_spans(raw):
                 if normalize(span) != norm:
@@ -135,31 +155,43 @@ def extract_units(text: str, file: str = "") -> List[dict]:
     def flush() -> None:
         nonlocal cur
         if cur:
-            norm = emit(cur["kind"], cur["lines"], cur["line"], cur["numbered"], cur["label"], parent=cur["parent"])
+            norm = emit(cur["kind"], cur["lines"], cur["line"], cur["numbered"], cur["label"], parent=cur["parent"],
+                        sib=cur["sib"])
             if norm.endswith(":"):
-                labels.append((cur["indent"], norm))
+                low = cur["indent"] - (1 if cur["kind"] == "paragraph" else 0)
+                while labels and labels[-1][0] >= low:
+                    labels.pop()
+                labels.append((low, norm))
             if cur["kind"] == "list_item":
                 parents.append((cur["indent"], make_id(norm)))
-            else:
+            elif cur["indent"] == 0:
                 para[:] = [make_id(norm)]
         cur = None
 
-    def begin(kind: str, line: str, no: int, numbered: bool) -> dict:
-        indent = -1 if kind == "paragraph" else len(line) - len(line.lstrip())
+    def context(indent: int) -> Tuple[str, Tuple[str, ...]]:
+        """(label, enclosing list-item ids) for a unit at `indent`: a dedent pops, a nested unit inherits."""
         while labels and labels[-1][0] >= indent:
             labels.pop()
         while parents and parents[-1][0] >= indent:
             parents.pop()
-        return {"kind": kind, "lines": [line], "line": no, "numbered": numbered, "indent": indent,
-                "label": labels[-1][1] if kind == "list_item" and labels else "",
-                "parent": para + [pid for _, pid in parents] if kind == "list_item" else []}
+        return (labels[-1][1] if labels else ""), tuple(pid for _, pid in parents)
 
-    def reset(keep_table: bool = False) -> None:
-        nonlocal table
-        table = table if keep_table else None
+    def begin(kind: str, line: str, no: int, numbered: bool) -> dict:
+        indent = _indent(line)
+        label, sib = context(indent)
+        return {"kind": kind, "lines": [line], "line": no, "numbered": numbered, "indent": indent, "label": label,
+                "sib": sib, "parent": (para + list(sib)) if kind == "list_item" else list(sib)}
+
+    def reset() -> None:
         labels[:] = []
         parents[:] = []
         para[:] = []
+
+    def leave_top_level() -> None:
+        """After a fence or table outside any list item the old label and intro paragraph no longer introduce what follows."""
+        if not parents:
+            labels[:] = []
+            para[:] = []
 
     if isinstance(front, str) and front.strip():  # the description is loaded into context on every turn (A6)
         emit("frontmatter", [front], 1)
@@ -169,19 +201,31 @@ def extract_units(text: str, file: str = "") -> List[dict]:
         line, s = lines[i], lines[i].strip()
         if mask[i]:
             flush()
-            reset()
+            table = None
+            label, sib = context(_indent(line))
             opener = FENCE_OPEN.match(s).group(1)
             j = i + 1
             while j < len(lines) and not (lines[j].strip().startswith(opener[0] * len(opener))
                                            and not lines[j].strip().strip(opener[0])):
                 j += 1
-            emit("fence", lines[i:j + 1], i + 1)
+            emit("fence", lines[i:j + 1], i + 1, label=label, parent=list(sib), sib=sib)
+            leave_top_level()
             i = j + 1
+            continue
+        if "<!--" in line and "-->" not in line.split("<!--", 1)[1]:  # a comment spanning lines hides its units (A-3)
+            end = next((k for k in range(i + 1, len(lines)) if "-->" in lines[k]), None)
+            if end is None:
+                raise ValueError(f"unclosed HTML comment opened at line {i + 1} of {file or 'text'}")
+            flush()
+            table = None
+            i = end + 1
             continue
         h = re.match(r"^(#{1,6})\s+(.*?)\s*#*\s*$", line)
         if h:
             flush()
             reset()
+            table = None
+            hist.clear()
             while stack and stack[-1][0] >= len(h.group(1)):
                 stack.pop()
             stack.append((len(h.group(1)), cor.norm_text(h.group(2))))
@@ -197,12 +241,14 @@ def extract_units(text: str, file: str = "") -> List[dict]:
                 reset()
         elif s.startswith("|"):
             flush()
-            reset(keep_table=True)
             if table is None:
+                table_ctx = context(_indent(line))
                 table = normalize(line)
-                emit("table_header", [line], i + 1)
+                emit("table_header", [line], i + 1, label=table_ctx[0], parent=list(table_ctx[1]), sib=table_ctx[1])
+                leave_top_level()
             elif not re.match(r"^\|[\s:|-]+\|?$", s):
-                emit("table_row", [line], i + 1, norm=table + ROW_SEP + normalize(line))
+                emit("table_row", [line], i + 1, norm=table + ROW_SEP + normalize(line), label=table_ctx[0],
+                     parent=list(table_ctx[1]), sib=table_ctx[1])
         elif LIST_MARK.match(s):
             flush()
             table = None

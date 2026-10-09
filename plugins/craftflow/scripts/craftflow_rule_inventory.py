@@ -329,7 +329,8 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
                 break
         else:
             path = [ren(o, h) for h in path]
-        return tuple(path), label_renames.get(o["label_ctx"], o["label_ctx"]), tuple(ctx_renames.get(p, p) for p in o["parent_ctx"])
+        ctx = tuple(("@" + ctx_renames.get(p[1:], p[1:])) if p.startswith("@") else ctx_renames.get(p, p) for p in o["parent_ctx"])
+        return tuple(path), label_renames.get(o["label_ctx"], o["label_ctx"]), ctx
 
     groups: Dict[tuple, List[FrozenSet]] = {}
     by_id: Dict[str, List[FrozenSet]] = {}
