@@ -517,6 +517,9 @@ def test_tiers_monotonic() -> None:
     st0 = real_state0()
     out = prj.project(real_cutplan(), st0)
     good = prj.check_monotonic(out)
+    alt = {"tiers": out["tiers_if_reach_amended"], "per_file": out["per_file_if_reach_amended"],
+           "descriptions_by_tier": out["descriptions_by_tier_if_reach_amended"]}
+    good += prj.check_monotonic(alt)  # the reading that includes the rows needing a reach-model amendment is ordered too
     # normative text (keyword "must"), so the L3 tier cannot subtract it again and hide the added bytes
     bad_plan = {"rows": [row("c9", "P12", "contingency", contingency="C9", file=BW, position="end_of_file",
                              text="The router must keep this rule. " * 40 + "\n")]}
@@ -572,6 +575,8 @@ def row_problems(r: dict, projected_files: set) -> list:
         probs.append(f"op {r.get('op')!r}")
     if r.get("condition") not in CONDITIONS:
         probs.append(f"condition {r.get('condition')!r}")
+    if "feasibility" in r and not (isinstance(r["feasibility"], str) and r["feasibility"].strip()):
+        probs.append("feasibility must be a non-empty string")
     if r.get("status") == "needs_anchor":
         if not (isinstance(r.get("note"), str) and r["note"].strip()):
             probs.append("needs_anchor without a note")
@@ -734,7 +739,7 @@ def test_unanchored_rows_and_bias_are_disclosed() -> None:
     out = prj.project(real_cutplan(), real_state0())
     un = {u["id"]: u for u in out["unanchored"]}
     keys_ok = all(isinstance(u, dict) and {"id", "phase", "direction", "est_bytes", "note"} <= set(u) and u["direction"] in ("add", "cut")
-                  and isinstance(u["est_bytes"], int) and u["est_bytes"] > 0 for u in out["unanchored"])
+                  and isinstance(u["est_bytes"], int) and u["est_bytes"] >= 0 for u in out["unanchored"])
     b = out["bias"]
     wf_ok = all(isinstance(b.get(w), int) for w in ("BUILD", "PLAN", "DEBUG", "REVIEW")) and b["kernel"] == 290
     undisclosed = row("n1", "P4", "insert", file=BW, position="end_of_file", text="x\n", status="needs_anchor", note="n")
@@ -811,6 +816,169 @@ def test_reads_are_byte_exact() -> None:
     shutil.rmtree(tmp, ignore_errors=True)
     check("reads_are_byte_exact", good == wt == "café → x\n" and len(good.encode()) == 12 and all(cr) and all(inval) and gone,
           f"good={good!r} cr={cr} invalid={inval} gone={gone}")
+
+
+# ---------------------------------------------------------------------------------------------- P2 REM-FIX 2
+
+D17_TAG = "requires reach-model amendment (P2C D17-B)"
+_FULL: dict = {}
+
+
+def full_projection() -> dict:
+    """The CLI's full projection of the committed cut plan (cached: it is a few seconds of work)."""
+    if not _FULL:
+        _FULL.update(cli_json_args_project([]))
+    return _FULL
+
+
+def test_infeasible_rows_are_tagged_and_excluded_by_default() -> None:
+    """F1: rows that need a reach-model amendment leave conditional/l3/with_contingencies unless --assume-reach-amendment."""
+    base_b = start_total(syn_state(), "BUILD")
+    ta, tt, tc = ("The router must keep rule %s.\n" % n for n in ("a", "t", "c"))
+    always = row("a1", "P4", "insert", file=BW, position="end_of_file", text=ta)
+    tagged = row("t1", "P11", "insert", file=BW, position="end_of_file", text=tt, condition="difference_17", feasibility=D17_TAG)
+    cont = row("c1", "P12", "contingency", contingency="C1", file=BW, position="end_of_file", text=tc)
+    plan = {"rows": [always, tagged, cont]}
+    flags = {"difference_17": True, "live_verified_enterplanmode": False}
+    out = prj.project(plan, syn_state(), None, flags)
+    amended = prj.project(plan, syn_state(), None, flags, assume_reach_amendment=True)
+    t, a = out["tiers"], out["tiers_if_reach_amended"]
+    la, lt, lc = len(ta.encode()), len(tt.encode()), len(tc.encode())
+    bmax = lambda tier, name: tier[name]["BUILD"]["max"]  # noqa: E731
+    default_ok = (bmax(t, "guaranteed") == base_b + la and bmax(t, "conditional") == base_b + la
+                  and bmax(t, "with_contingencies") - bmax(t, "l3_upper_bound") == lc and out["assume_reach_amendment"] is False)
+    both_ok = (bmax(a, "conditional") == base_b + la + lt and bmax(a, "l3_upper_bound") - bmax(t, "l3_upper_bound") == lt
+               and bmax(a, "with_contingencies") - bmax(a, "l3_upper_bound") == lc and bmax(a, "guaranteed") == base_b + la)
+    flag_ok = (amended["tiers"] == a and amended["assume_reach_amendment"] is True and amended["tiers_if_reach_amended"] == a)
+    eff_ok = bmax({"e": out["effective"]["tier"]}, "e") == base_b + la + lt and out["effective"]["infeasible_rows_included"] == ["t1"]
+    bad_tag = raises(lambda: prj.project({"rows": [dict(tagged, feasibility="")]}, syn_state()), prj.ProjectionError)
+    real = [r["id"] for r in real_cutplan()["rows"] if r.get("feasibility")]
+    real_tag = all(r.get("feasibility") == D17_TAG for r in real_cutplan()["rows"] if r["id"] in
+                   ("p11-artifact-hook-policy", "p11-d17-kernel-2a-trigger", "p11-d17-readmap-artifact-policy"))
+    check("infeasible_rows_are_tagged_and_excluded_by_default", default_ok and both_ok and flag_ok and eff_ok and bad_tag and real_tag
+          and sorted(real) == ["p11-artifact-hook-policy", "p11-d17-kernel-2a-trigger", "p11-d17-readmap-artifact-policy"],
+          f"default={default_ok} both={both_ok} flag={flag_ok} eff={eff_ok} bad_tag={bad_tag} real={real}")
+
+
+def test_projection_file_carries_both_variants_and_happy_path() -> None:
+    """F1 + deliverable 7: router-projection.json has the default and the if-amended tiers, and a happy-path total per workflow."""
+    on_disk = json.loads((FIXTURES / "router-projection.json").read_text(encoding="utf-8"))
+    tiers, amended = on_disk["tiers"], on_disk["tiers_if_reach_amended"]
+    hp, hp_a = on_disk["happy_path_total"], on_disk["happy_path_total_if_reach_amended"]
+    shape = all(set(hp[t]) == {"BUILD", "PLAN", "DEBUG", "REVIEW"} and set(hp[t]["BUILD"]) == {"fast_path", "standard", "max"} for t in hp)
+    bigger = all(hp[t][w] >= tiers[t][w] for t in tiers for w in ("PLAN", "DEBUG", "REVIEW")) \
+        and all(hp[t]["BUILD"]["max"] >= tiers[t]["BUILD"]["max"] for t in tiers)
+    d17_cost = all(amended[t]["BUILD"]["max"] <= tiers[t]["BUILD"]["max"] for t in ("conditional", "l3_upper_bound", "with_contingencies")) \
+        and amended["conditional"]["BUILD"]["max"] < tiers["conditional"]["BUILD"]["max"] and hp_a["conditional"]["BUILD"]["max"] < hp["conditional"]["BUILD"]["max"]
+    eff = on_disk["effective"]["happy_path_total"]
+    # synthetic: a stage file that is on the happy path is counted in happy_path_total, a conditional one is not
+    syn = prj.project({"rows": []}, syn_state(), None, {})
+    hsc = len(syn_state()["files"][HSC].encode())
+    syn_ok = syn["happy_path_total"]["guaranteed"]["BUILD"]["max"] == syn["tiers"]["guaranteed"]["BUILD"]["max"] + hsc
+    check("projection_file_carries_both_variants_and_happy_path", shape and bigger and d17_cost and syn_ok and eff["BUILD"]["max"] > 0
+          and on_disk == full_projection(), f"shape={shape} bigger={bigger} d17={d17_cost} syn={syn_ok}")
+
+
+def test_assume_reach_amendment_flag_changes_the_default_tiers() -> None:
+    amended = cli_json_args_project(["--assume-reach-amendment"])
+    default = full_projection()
+    check("assume_reach_amendment_flag_changes_the_default_tiers",
+          amended["assume_reach_amendment"] is True and default["assume_reach_amendment"] is False
+          and amended["tiers"] == default["tiers_if_reach_amended"] and amended["tiers"] != default["tiers"],
+          f"flag={amended.get('assume_reach_amendment')} default={default.get('assume_reach_amendment')}")
+
+
+def test_reach_feasibility_counts_reach_lost_moves() -> None:
+    """F1(b): a kernel/start section moved to a stage file loses reach; the report names the move and whether the destination is happy-path."""
+    import craftflow_router_readset_feasibility as feas
+    ctx = feas.load_context(PLUGIN_ROOT)
+    st0 = real_state0()
+    ctl = feas.reach_report(st0, ctx)
+    text = st0["files"][BW]
+    lines = text.split("\n")
+    i = lines.index("### doc-syncer SKIPPED state")
+
+    def moved(dst: str) -> dict:
+        r = row("m1", "P11", "move", src=BW, start_anchor=lines[i], end_anchor=lines[i + 2], dst=dst, pointer_text="")
+        return feas.reach_report(apply([r], st0), ctx)
+
+    to_happy, to_cond = moved(HSC), moved(REF + "remediation-and-research.md")
+    pick = lambda rep, dst: [m for m in rep["reach_loss_by_move"] if m["to"].endswith(dst)]  # noqa: E731
+    h, c = pick(to_happy, "harness-self-checks.md"), pick(to_cond, "remediation-and-research.md")
+    check("reach_feasibility_counts_reach_lost_moves",
+          ctl["reach_lost_occurrences"] == 0 and ctl["unreachable"] == 0 and ctl["unmapped_removed"] == 0 and ctl["reach_loss_by_move"] == []
+          and len(h) == 1 and h[0]["happy_path_dst"] is True and h[0]["units"] >= 1 and h[0]["from"].endswith("build-workflow.md")
+          and len(c) == 1 and c[0]["happy_path_dst"] is False and c[0]["units"] == h[0]["units"] and c[0]["bytes"] == h[0]["bytes"]
+          and to_happy["reach_lost_occurrences"] == h[0]["units"] and isinstance(to_happy["single_token_units"], int),
+          f"control={ctl['reach_lost_occurrences']}/{ctl['unmapped_removed']} happy={h} cond={c}")
+
+
+def test_reach_feasibility_block_is_in_the_projection() -> None:
+    """F1(b): the committed projection carries the block for every tier, with the P0 diff counters, and it matches a fresh run."""
+    block = json.loads((FIXTURES / "router-projection.json").read_text(encoding="utf-8"))["reach_feasibility"]
+    want = {"guaranteed", "conditional", "with_contingencies", "conditional_if_reach_amended", "with_contingencies_if_reach_amended",
+            "effective", "effective_without_infeasible_rows"}
+    tiers = block["tiers"]
+    counters = {"unreachable", "unmapped_removed", "readmap_widened", "row_errors", "reach_lost_occurrences", "reach_lost_bytes",
+                "single_token_units", "reach_loss_by_move"}
+    shape = set(tiers) == want and all(counters <= set(v) for v in tiers.values()) and "l3_upper_bound" in block["note"]
+    g, e = tiers["guaranteed"], tiers["effective"]
+    moves = all(set(m) == {"from", "to", "units", "bytes", "happy_path_dst"} for v in tiers.values() for m in v["reach_loss_by_move"])
+    sums = all(sum(m["units"] for m in v["reach_loss_by_move"]) == v["reach_lost_occurrences"] for v in tiers.values())
+    d17 = tiers["conditional_if_reach_amended"]["reach_lost_occurrences"] > tiers["conditional"]["reach_lost_occurrences"] \
+        and tiers["effective"]["unreachable"] >= tiers["effective_without_infeasible_rows"]["unreachable"]
+    check("reach_feasibility_block_is_in_the_projection",
+          shape and moves and sums and d17 and g["reach_lost_occurrences"] > 0 and g["single_token_units"] > 0 and e["readmap_widened"] > 0
+          and block == full_projection()["reach_feasibility"], f"shape={shape} moves={moves} sums={sums} d17={d17}")
+
+
+def test_bakeoff_move_keeps_the_every_run_plan_path() -> None:
+    """F2: the qualify decision and the non-qualify path (rename, Block B) stay in plan-workflow.md; only the bake-off body moves."""
+    cp = real_cutplan()
+    st = copy.deepcopy(real_state0())
+    rows = [r for r in prj.select_rows(cp) if r["condition"] == "always" and r["op"] != "contingency"]
+    prj.apply_rows(st, rows)
+    plan, bake = st["files"][PW], st["files"][REF + "plan-bakeoff.md"]
+    pointer = [ln for ln in plan.split("\n") if "plan-bakeoff.md" in ln]
+    predicate = "PLAN_MODE == 'decision_rfc' OR VERIFICATION_RIGOR == 'critical_path'"
+    keep = ["### PLAN qualify branch", "mv 'docs/plans/{plan_file_stem}-candidate-inherit.md' 'docs/plans/{plan_file_stem}-plan.md'",
+            "<invoke Block B, upstream_task_id = planner_task_id>", "bakeoff_n = min(bakeoff_n_requested, 4)"]
+    moved = ["### PLAN bake-off fan-out", "### PLAN judge dispatch", "### PLAN post-judge validation", "<invoke Block B, upstream_task_id = judge_task_id>"]
+    entry = [e for e in st["readmap"]["files"] if e["file"] == REF + "plan-bakeoff.md"]
+    plan_lines, bake_lines = set(plan.split("\n")), set(bake.split("\n"))
+    check("bakeoff_move_keeps_the_every_run_plan_path",
+          all(k in plan for k in keep) and not any(k in plan_lines for k in moved) and all(k in bake_lines for k in moved) and "mv 'docs/plans/" not in bake
+          and len(pointer) == 1 and predicate in pointer[0] and len(entry) == 1 and "decision_rfc" in entry[0]["trigger"],
+          f"keep={[k in plan for k in keep]} moved_out={[k not in plan_lines for k in moved]} pointer={pointer}")
+
+
+def test_c4_second_rationale_pass_is_void() -> None:
+    """F6: P0's non-normative report finds 0 units in plan-workflow.md, so C4 has no bytes to cut; the row says so and the bias is 0."""
+    c4 = [r for r in real_cutplan()["rows"] if r["id"] == "p12-c4-second-rationale-pass"][0]
+    out = prj.project(real_cutplan(), real_state0())
+    zero = prj.project({"rows": [dict(c4, est_bytes=0)]}, real_state0())
+    neg = raises(lambda: prj.project({"rows": [dict(c4, est_bytes=-1)]}, real_state0()), prj.ProjectionError)
+    flag = raises(lambda: prj.project({"rows": [dict(c4, est_bytes=True)]}, real_state0()), prj.ProjectionError)
+    check("c4_second_rationale_pass_is_void",
+          c4["est_bytes"] == 0 and "0 units" in c4["note"] and "non-normative" in c4["note"] and out["bias"]["with_contingencies_extra"]["PLAN"] == 0
+          and zero["bias"]["with_contingencies_extra"]["PLAN"] == 0 and neg and flag, f"est={c4['est_bytes']} bias={out['bias']}")
+
+
+def test_cap_call_lines_name_every_action() -> None:
+    """F7: the doubt and fix-verify call lines also name `human_checkpoint` with `cap-reached` (P6 call_lines_define_every_action)."""
+    texts = {r["id"]: r["text"] for r in real_cutplan()["rows"] if r["id"] in ("p6-call-line-doubt", "p6-call-line-fixverify")}
+    need = ("`proceed`", "`advance`", "`human_checkpoint`", "cap-reached", "loop_cap_check_failed")
+    missing = {k: [n for n in need if n not in t] for k, t in texts.items()}
+    check("cap_call_lines_name_every_action", len(texts) == 2 and not any(missing.values()), f"missing={missing}")
+
+
+def test_p11_manual_review_sites_have_rows() -> None:
+    """F9: every P11-owned manual-review claim site is the anchor of a P11 replace row, so the claim is rewritten with the move."""
+    sites = json.loads((FIXTURES / "router-xref-manual-review.json").read_text(encoding="utf-8"))["entries"]
+    rows = [r for r in real_cutplan()["rows"] if r["phase"] == "P11" and r["op"] == "replace"]
+    uncovered = [s["anchor_text"][:60] for s in sites if s["owning_phase"] == "P11"
+                 and not any(s["anchor_text"] in (r.get("start_anchor") or "") for r in rows)]
+    check("p11_manual_review_sites_have_rows", not uncovered, f"claim sites without a P11 replace row: {uncovered}")
 
 
 def main() -> int:

@@ -194,6 +194,10 @@ Excluded tests. `tests/fixtures/router_test_enumerate.py` flags a test when its 
 - Not listed: fx::test_router_readset.py::test_monotonic_compares_per_file — checks the per-file byte ordering of the committed projection tiers; it measures bytes and asserts no router prose.
 - Not listed: fx::test_router_readset.py::test_unanchored_rows_and_bias_are_disclosed — checks the unanchored-row report and bias summary of the committed cut plan (and a synthetic one); it asserts no router prose.
 - Not listed: fx::test_router_readset.py::test_projector_refuses_rows_that_lose_bytes_silently — builds a synthetic world in memory (files keyed by router-looking paths such as `skills/craftflow-router/SKILL.md`); the live router is not read.
+- Not listed: fx::test_router_readset.py::test_infeasible_rows_are_tagged_and_excluded_by_default — builds a synthetic world in memory (files keyed by router-looking paths such as `skills/craftflow-router/SKILL.md`); the live router is not read.
+- Not listed: fx::test_router_readset.py::test_projection_file_carries_both_variants_and_happy_path — checks the shape and byte totals of the committed projection and a synthetic world; it asserts no router prose.
+- Not listed: fx::test_router_readset.py::test_reach_feasibility_counts_reach_lost_moves — moves one section of the baseline commit (read through git, not the working tree) and checks the reach counters; no live router prose is asserted.
+- Not listed: fx::test_router_readset.py::test_bakeoff_move_keeps_the_every_run_plan_path — projects the baseline commit with the committed cut plan and asserts text of the projected plan-workflow.md and plan-bakeoff.md; the live router is not read, so no phase move can break it.
 
 
 Failure messages of the corpus-wide tests still say "SKILL.md missing ..." because rewording `fail(name, ...)` lines would break the P1 assertion-count proof; the Kind column, not the message, says what a test reads.

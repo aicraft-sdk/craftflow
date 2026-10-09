@@ -56,6 +56,20 @@ def check_row_conditions(rows: Iterable[dict]) -> None:
         if r.get("condition") not in CONDITION_NAMES:
             raise ProjectionError(f"{r.get('id')}: unknown condition {r.get('condition')!r} "
                                   f"(a row's condition is one of {list(CONDITION_NAMES)}); an unknown name used to read as false")
+        if "feasibility" in r and not (isinstance(r["feasibility"], str) and r["feasibility"].strip()):
+            raise ProjectionError(f"{r.get('id')}: feasibility must be a non-empty string (the reason the row cannot pass the P0 reach rule)")
+
+
+def tier_row_sets(plain: List[dict], cont: List[dict], flags: Dict[str, bool]) -> Dict[str, List[dict]]:
+    """The row sets behind every tier, in application order. A row tagged `feasibility` (it needs a reach-model amendment, so the
+    P0 tooling would refuse it) is left out of the default sets and appears only in the `_if_reach_amended` ones and in `effective`
+    when its condition flag is recorded true (`effective_without_infeasible_rows` drops them again)."""
+    feasible = [r for r in plain if not r.get("feasibility")]
+    on = lambda r: r["condition"] == "always" or bool(flags.get(r["condition"]))  # noqa: E731
+    return {"guaranteed": [r for r in feasible if r["condition"] == "always"], "conditional": feasible,
+            "with_contingencies": feasible + cont, "guaranteed_if_reach_amended": [r for r in plain if r["condition"] == "always"],
+            "conditional_if_reach_amended": plain, "with_contingencies_if_reach_amended": plain + cont,
+            "effective": [r for r in plain if on(r)], "effective_without_infeasible_rows": [r for r in feasible if on(r)]}
 
 
 def parse_conditions(text: Optional[str]) -> Dict[str, bool]:
@@ -127,9 +141,10 @@ def unanchored_report(rows: Iterable[dict], descriptions: Dict[str, str]) -> Lis
             affects = []
         else:
             direction, est, affects = r.get("direction"), r.get("est_bytes"), r.get("affects", list(WORKFLOWS))
-            if direction not in ("add", "cut") or not isinstance(est, int) or isinstance(est, bool) or est <= 0:
-                raise ProjectionError(f"{r['id']}: a needs_anchor row must state direction add|cut and a positive integer est_bytes "
-                                      "(its bytes are missing from every tier, so the size of the miss has to be disclosed)")
+            if direction not in ("add", "cut") or not isinstance(est, int) or isinstance(est, bool) or est < 0:
+                raise ProjectionError(f"{r['id']}: a needs_anchor row must state direction add|cut and a non-negative integer est_bytes "
+                                      "(its bytes are missing from every tier, so the size of the miss has to be disclosed; 0 means "
+                                      "the row was evaluated and has no bytes to give, with the reason in its note)")
             if not isinstance(affects, list) or set(affects) - set(WORKFLOWS):
                 raise ProjectionError(f"{r['id']}: affects must list workflows from {list(WORKFLOWS)}")
         out.append({"id": r["id"], "phase": r["phase"], "direction": direction, "est_bytes": est, "unit": _unit(r),

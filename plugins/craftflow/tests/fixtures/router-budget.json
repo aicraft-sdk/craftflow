@@ -36,7 +36,7 @@
   },
   "enforced_caps": null,
   "enforced_caps_decision": null,
-  "projection_sha256": "c3a0c575a4fd5853030e543fe95a565ef8d722235ecb447e4867881d9767db6e",
+  "projection_sha256": "c690662d3f830c8d8db7f08e58334429806b953af476543862893370dc530c16",
   "projection_revisions": [],
   "enforce": false,
   "p2_sha": "f7adb7b790020ef1f1245ea9fe0311b28a685c9c",

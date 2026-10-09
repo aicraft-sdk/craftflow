@@ -8,7 +8,10 @@ consecutive lines) and must match exactly one place in the projected file at the
 ProjectionError (exit 2). A row with status `needs_anchor` is not applied; it must state a direction and a size estimate, and
 is listed under `unanchored` with the net `bias` of all such rows. Unknown phase ids, condition names and flag values, a move or
 insert that creates a file the projected read map does not name, a whole-file replace of an unknown file and a read-map edit with
-no table markers to re-render are errors, not silent no-ops (see craftflow_router_readset_guard.py). Python 3.9 compatible.
+no table markers to re-render are errors, not silent no-ops (see craftflow_router_readset_guard.py). A row tagged `feasibility` needs a
+reach-model amendment (the P0 reach rule would refuse it): it is left out of `tiers` unless `assume_reach_amendment`, and
+`tiers_if_reach_amended` carries the other reading. Every tier also reports `happy_path_total` (start set plus the stage files read on
+every run). The reach report of each projected tree is craftflow_router_readset_feasibility.py. Python 3.9 compatible.
 """
 from __future__ import annotations
 
@@ -278,14 +281,16 @@ def measure_state(state: dict, l3_allowlist: Optional[frozenset] = None) -> dict
             if f in sizes and f in state["files"]:
                 sizes[f] -= _nonnormative(state["files"][f], f, l3_allowlist)
     extra = {POLICY: sizes[POLICY]} if POLICY in sizes else None
-    per_wf, variants = {}, {}
+    per_wf, variants, happy = {}, {}, {}
     for wf in core.variants_of(rm):
         res = core.compute_from_sizes(rm, sizes, wf, extra=extra)
         variants[wf] = {v: d["start_total"] for v, d in res["variants"].items()}
         per_wf[wf] = ({**variants[wf], "max": res["start_total"]} if wf == "BUILD" else res["start_total"])
+        hp = {v: d["happy_path_total"] for v, d in res["variants"].items()}  # start set plus the stage files read on every run
+        happy[wf] = {**hp, "max": max(hp.values())} if wf == "BUILD" else max(hp.values())
     gated = {k: v for k, v in sizes.items() if is_gated(k)}
     refs = [v for k, v in gated.items() if GATED.match(k) and k != PROTOCOL]
-    return {"tier": per_wf, "variants": variants, "per_file": {**dict(sorted(gated.items())), "kernel_bytes": sizes.get(SKILL, 0),
+    return {"tier": per_wf, "variants": variants, "happy": happy, "per_file": {**dict(sorted(gated.items())), "kernel_bytes": sizes.get(SKILL, 0),
             "protocol_bytes": sizes.get(PROTOCOL, 0), "reference_max_bytes": max(refs, default=0)},
             "descriptions": _desc_sum(state)}
 
@@ -302,39 +307,56 @@ def _capped_descriptions(state: dict, rows: List[dict]) -> int:
 
 
 def project(cutplan: dict, state0: dict, phases: Optional[Iterable[str]] = None, conditions: Optional[dict] = None,
-            l3_allowlist: Optional[frozenset] = None) -> dict:
-    """BC-11 output. `effective` honours the recorded conditions (the per-PR check); the four tiers use the plan's own."""
+            l3_allowlist: Optional[frozenset] = None, assume_reach_amendment: bool = False, with_states: bool = False) -> dict:
+    """BC-11 output. `effective` honours the recorded conditions (the per-PR check); the four tiers use the plan's own.
+    Rows tagged `feasibility` (they need a reach-model amendment) are left out of `tiers` unless `assume_reach_amendment`;
+    `tiers_if_reach_amended` always carries the other reading. `with_states` returns (output, every projected tree) for the reach report."""
     flags = grd.check_flags({} if conditions is None else conditions)
     grd.check_row_conditions(cutplan["rows"])
     rows = select_rows(cutplan, phases)
     markers_optional = "P2" not in (ALL_PHASES if phases is None else set(phases))
     plain = [r for r in rows if r["op"] != "contingency"]
-    cont = [r for r in rows if r["op"] == "contingency"]
+    sets = grd.tier_row_sets(plain, [r for r in rows if r["op"] == "contingency"], flags)
     allow = l3_allowlist if l3_allowlist is not None else frozenset()
+    cache: Dict[str, dict] = {}
 
-    def run(use: List[dict]) -> dict:
-        st = copy.deepcopy(state0)
-        st["markers_optional"] = markers_optional
-        apply_rows(st, use)
-        _check_new_files_mapped(st, state0, "projection")
-        return st
+    def state(name: str) -> dict:
+        if name not in cache:
+            st = copy.deepcopy(state0)
+            st["markers_optional"] = markers_optional
+            apply_rows(st, sets[name])
+            _check_new_files_mapped(st, state0, "projection")
+            cache[name] = st
+        return cache[name]
 
-    s_g = run([r for r in plain if r["condition"] == "always"])
-    s_e = run([r for r in plain if r["condition"] == "always" or flags.get(r["condition"])])
-    s_c = run(plain)
-    s_k = run(plain + cont)
-    tiers = {"guaranteed": measure_state(s_g), "conditional": measure_state(s_c),
-             "l3_upper_bound": measure_state(s_c, allow), "with_contingencies": measure_state(s_k, allow)}
-    eff = measure_state(s_e)
+    def tiers_of(sfx: str) -> dict:
+        return {"guaranteed": measure_state(state("guaranteed" + sfx)), "conditional": measure_state(state("conditional" + sfx)),
+                "l3_upper_bound": measure_state(state("conditional" + sfx), allow),
+                "with_contingencies": measure_state(state("with_contingencies" + sfx), allow)}
+
+    amend = "_if_reach_amended"
+    main = tiers_of(amend if assume_reach_amendment else "")
+    alt = main if assume_reach_amendment else tiers_of(amend)  # the reading that includes the rows needing the amendment
+    eff = measure_state(state("effective"))
     unanchored = grd.unanchored_report(rows, state0["descriptions"])
-    return {"phases": sorted(set(ALL_PHASES) if phases is None else set(phases), key=lambda p: (int(p[1:].rstrip("C")), p.endswith("C"))),
-            "tiers": {t: v["tier"] for t, v in tiers.items()}, "variant_totals": {t: v["variants"] for t, v in tiers.items()},
-            "per_file": {t: v["per_file"] for t, v in tiers.items()},
-            "descriptions_by_tier": {t: v["descriptions"] for t, v in tiers.items()},
-            "descriptions_sum": tiers["guaranteed"]["descriptions"], "descriptions_bound": _capped_descriptions(s_g, plain),
-            "effective": {"tier": eff["tier"], "variants": eff["variants"], "per_file": eff["per_file"], "descriptions": eff["descriptions"]},
-            "effective_conditions": dict(sorted(flags.items())), "notes": s_c["notes"],
-            "unanchored": unanchored, "bias": grd.bias_summary(unanchored), "rows_applied": len(rows) - len(unanchored)}
+    out = {"phases": sorted(set(ALL_PHASES) if phases is None else set(phases), key=lambda p: (int(p[1:].rstrip("C")), p.endswith("C"))),
+           "assume_reach_amendment": bool(assume_reach_amendment),
+           "tiers": {t: v["tier"] for t, v in main.items()}, "tiers_if_reach_amended": {t: v["tier"] for t, v in alt.items()},
+           "happy_path_total": {t: v["happy"] for t, v in main.items()},
+           "happy_path_total_if_reach_amended": {t: v["happy"] for t, v in alt.items()},
+           "variant_totals": {t: v["variants"] for t, v in main.items()},
+           "per_file": {t: v["per_file"] for t, v in main.items()},
+           "per_file_if_reach_amended": {t: v["per_file"] for t, v in alt.items()},
+           "descriptions_by_tier": {t: v["descriptions"] for t, v in main.items()},
+           "descriptions_by_tier_if_reach_amended": {t: v["descriptions"] for t, v in alt.items()},
+           "descriptions_sum": main["guaranteed"]["descriptions"], "descriptions_bound": _capped_descriptions(state("guaranteed"), plain),
+           "effective": {"tier": eff["tier"], "variants": eff["variants"], "per_file": eff["per_file"], "descriptions": eff["descriptions"],
+                         "happy_path_total": eff["happy"], "infeasible_rows_included": sorted(r["id"] for r in sets["effective"] if r.get("feasibility"))},
+           "effective_conditions": dict(sorted(flags.items())), "notes": state("conditional_if_reach_amended")["notes"],
+           "unanchored": unanchored, "bias": grd.bias_summary(unanchored), "rows_applied": len(rows) - len(unanchored)}
+    if not with_states:
+        return out
+    return out, {name: state(name) for name in sets}
 
 
 def _flatten(tier: dict, per_file: dict, desc: int) -> Dict[str, int]:

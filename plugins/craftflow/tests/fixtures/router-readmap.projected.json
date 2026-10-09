@@ -268,7 +268,7 @@
    "workflows": [
     "PLAN"
    ],
-   "trigger": "bake-off qualify",
+   "trigger": "PLAN_MODE decision_rfc or VERIFICATION_RIGOR critical_path (bake-off qualifies)",
    "happy_path": false
   },
   {

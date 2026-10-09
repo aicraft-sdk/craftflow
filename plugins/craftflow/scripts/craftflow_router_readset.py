@@ -7,8 +7,11 @@
         renames cannot move it; the live map is never paired with baseline bytes by default)
   --descriptions [--ref SHA]       skill description sum (effective YAML text; js_parser_sum is gen-craftflow-graph.mjs's)
   --print-table [--readmap PATH]   the kernel's marker-wrapped Reference Read Map section
-  --project CUTPLAN [--phases P2,P3] [--conditions k=true|false,...]   BC-11 projection over the baseline bytes; `effective`
-        uses --conditions, else the `conditions` recorded in router-budget.json (stated in `effective_conditions[_source]`)
+  --project CUTPLAN [--phases P2,P3] [--conditions k=true|false,...] [--assume-reach-amendment]   BC-11 projection over the baseline
+        bytes; `effective` uses --conditions, else the `conditions` recorded in router-budget.json (stated in
+        `effective_conditions[_source]`). Rows tagged `feasibility` (they need a reach-model amendment) are in `tiers_if_reach_amended`
+        only, unless --assume-reach-amendment puts them into `tiers`. A full projection (no --phases) adds `reach_feasibility`: the P0
+        accounting run on every projected tree (craftflow_router_readset_feasibility.py); every projection carries `happy_path_total`.
 
 Prints exactly one JSON line and exits 0; exits 2 on a malformed map or budget, a missing or unreadable file, an unknown phase,
 condition or flag value, or an ambiguous anchor (fail closed). Bytes are counted raw: files are read as UTF-8 bytes and a CR byte
@@ -156,7 +159,12 @@ def run_projection(root: Path, args) -> dict:
         flags, source = recorded_conditions(root)
     from craftflow_rule_inventory_units import load_allowlist
     allow = root / FIX / "router-normative-allowlist.json"
-    out = prj.project(plan, state0, phases, flags, frozenset(load_allowlist(allow)) if allow.is_file() else frozenset())
+    allowed = frozenset(load_allowlist(allow)) if allow.is_file() else frozenset()
+    res = prj.project(plan, state0, phases, flags, allowed, args.assume_reach_amendment, with_states=phases is None)
+    out, states = res if phases is None else (res, None)
+    if states is not None:  # a full-plan projection also says whether the P0 accounting would accept each projected tree
+        import craftflow_router_readset_feasibility as feas
+        out["reach_feasibility"] = feas.reach_feasibility(states, feas.load_context(root))
     out["effective_conditions_source"] = source
     out["cutplan_sha256"] = hashlib.sha256(plan_bytes).hexdigest()
     out["baseline_ref"] = ref
@@ -177,6 +185,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--phases", default=None, help="comma-separated phase ids; empty selects none")
     ap.add_argument("--conditions", default="", help="difference_17=true,live_verified_enterplanmode=false (true|false only)")
     ap.add_argument("--plugin-root")
+    ap.add_argument("--assume-reach-amendment", action="store_true",
+                    help="--project: put the rows tagged `feasibility` (they need a reach-model amendment) into the default tiers")
     ap.add_argument("--json", action="store_true", help="accepted for clarity: output is always one JSON line")
     args = ap.parse_args(argv)
     root = Path(args.plugin_root or PLUGIN_ROOT)

@@ -32,6 +32,10 @@ PROJECTION = FIXTURES / "router-projection.json"
 CUTPLAN = FIXTURES / "router-cut-plan.json"
 REL_BUDGET = "tools/craftflow-plugin/plugins/craftflow/tests/fixtures/router-budget.json"
 REL_PROJECTION = "tools/craftflow-plugin/plugins/craftflow/tests/fixtures/router-projection.json"
+REL_CUTPLAN = "tools/craftflow-plugin/plugins/craftflow/tests/fixtures/router-cut-plan.json"
+ADR = PLUGIN_ROOT.parents[3] / "docs" / "ai" / "decisions" / "0073-craftflow-policy-first-router-kernel.md"
+AMENDMENT_FIELDS = {"key", "from", "to", "cause", "decided_by", "at_sha", "adr"}
+_UNSET = object()
 
 TARGETS = {"kernel_bytes": 25000, "protocol_bytes": 15000, "reference_max_bytes": 20000, "description_chars": 4000,
            "readset": {"BUILD": 60000, "PLAN": 55000, "DEBUG": 55000, "REVIEW": 55000}}
@@ -189,7 +193,9 @@ def check_decision_record(budget: dict, show: Callable[[str, str], Optional[byte
     return problems
 
 
-def check_revision_chain(budget: dict, file_sha: str) -> List[str]:
+def check_revision_chain(budget: dict, file_sha: str, computed=_UNSET) -> List[str]:
+    """Chain continuity plus the fits flag. `computed` is computed_fits(): the newest entry must carry exactly that value (the flag
+    is never trusted); older entries carry True once caps exist (they were true when recorded) and None before."""
     revs = budget.get("projection_revisions", [])
     decision = budget.get("enforced_caps_decision")
     pinned = decision.get("projection_sha256") if decision else None
@@ -208,8 +214,104 @@ def check_revision_chain(budget: dict, file_sha: str) -> List[str]:
             problems.append(f"revision chain broken between {a.get('phase')} and {b.get('phase')}")
     if revs[-1].get("to_projection_sha256") != top:
         problems.append("last revision's to_projection_sha256 differs from the top-level projection_sha256")
-    problems += [f"revision {r.get('phase')} has fits_enforced_caps != true" for r in revs if r.get("fits_enforced_caps") is not True]
+    capped = budget.get("enforced_caps") is not None
+    for i, r in enumerate(revs):
+        want = computed if (i == len(revs) - 1 and computed is not _UNSET) else (True if capped else None)
+        if capped and want is not True:
+            problems.append(f"revision {r.get('phase')}: the projected cut plan does not fit enforced_caps (computed {want})")
+        elif r.get("fits_enforced_caps") is not want:
+            problems.append(f"revision {r.get('phase')} records fits_enforced_caps={r.get('fits_enforced_caps')!r}, computed {want!r}")
     return problems
+
+
+def check_cutplan_revision(budget: dict, origin: Optional[dict], origin_projection_sha: Optional[str], origin_plan: Optional[bytes],
+                           head_plan: bytes) -> List[str]:
+    """F5b/c: a router-cut-plan.json that differs from origin/main's needs a NEW projection_revisions entry (cause, decided_by)
+    chaining origin's projection sha256 to HEAD's. Before P2C too, so the sha the P2C decision pins cannot drift silently."""
+    if origin is None or origin_plan is None or origin_plan == head_plan:
+        return []
+    new = budget.get("projection_revisions", [])[len(origin.get("projection_revisions", [])):]
+    if not new:
+        return ["router-cut-plan.json differs from origin/main but projection_revisions has no new entry"]
+    problems = []
+    if new[0].get("from_projection_sha256") != origin_projection_sha:
+        problems.append("the first new revision's from_projection_sha256 is not the sha256 of origin/main's router-projection.json")
+    if new[-1].get("to_projection_sha256") != budget.get("projection_sha256"):
+        problems.append("the last new revision's to_projection_sha256 is not HEAD's projection_sha256")
+    for r in new:
+        for k in ("cause", "decided_by"):
+            if not isinstance(r.get(k), str) or not r[k].strip():
+                problems.append(f"revision {r.get('phase')}: {k} missing")
+    return problems
+
+
+def sha_exists_in_repo(sha: str) -> bool:
+    return isinstance(sha, str) and bool(sha) and subprocess.run(["git", "-C", str(REPO_ROOT), "cat-file", "-e", f"{sha}^{{commit}}"],
+                                                                  capture_output=True).returncode == 0
+
+
+def adr_text() -> str:
+    return ADR.read_text(encoding="utf-8")
+
+
+def set_key(d: dict, key: str, value) -> None:
+    parts = key.split(".")
+    for p in parts[:-1]:
+        d = d[p]
+    d[parts[-1]] = value
+
+
+def effective_caps(budget: dict) -> dict:
+    """enforced_caps with the recorded amendments applied in order (their validity is check_amendments's job)."""
+    caps = copy.deepcopy(budget["enforced_caps"])
+    for a in (budget.get("enforced_caps_decision") or {}).get("amendments", []):
+        set_key(caps, a["key"], a["to"])
+    return caps
+
+
+def check_amendments(budget: dict, sha_exists: Callable[[str], bool], adr: str) -> List[str]:
+    """F4: an amendment is {key, from, to, cause, decided_by: David, at_sha, adr: ADR-0073}; key is a cap, `from` is the cap in force
+    at that point of the chain, at_sha is a commit and ADR-0073 has a line citing it. Append-only vs origin: append_only_problems."""
+    ams = (budget.get("enforced_caps_decision") or {}).get("amendments") or []
+    if not ams:
+        return []
+    if budget.get("enforced_caps") is None:
+        return ["amendments recorded while enforced_caps is null"]
+    caps, problems = copy.deepcopy(budget["enforced_caps"]), []
+    for i, a in enumerate(ams):
+        w = f"amendment {i}"
+        if not isinstance(a, dict) or set(a) != AMENDMENT_FIELDS:
+            problems.append(f"{w}: fields must be exactly {sorted(AMENDMENT_FIELDS)}")
+            continue
+        if a["key"] not in KEYS:
+            problems.append(f"{w}: key {a['key']!r} is not a capped value")
+            continue
+        if a["from"] != get_key(caps, a["key"]):
+            problems.append(f"{w}: from {a['from']!r} is not the cap in force ({get_key(caps, a['key'])})")
+        if not isinstance(a["to"], int) or isinstance(a["to"], bool) or a["to"] <= 0:
+            problems.append(f"{w}: to must be a positive integer")
+        if not isinstance(a["cause"], str) or not a["cause"].strip():
+            problems.append(f"{w}: cause missing")
+        if a["decided_by"] != "David":
+            problems.append(f"{w}: decided_by must be David")
+        if a["adr"] != "ADR-0073":
+            problems.append(f"{w}: adr must be ADR-0073")
+        sha = a["at_sha"]
+        if not isinstance(sha, str) or not sha.strip() or not sha_exists(sha):
+            problems.append(f"{w}: at_sha {sha!r} is not a commit of this repository")
+        elif not any(sha in line for line in adr.splitlines()):
+            problems.append(f"{w}: ADR-0073 has no line citing at_sha {sha}")
+        if isinstance(a["to"], int) and not isinstance(a["to"], bool):
+            set_key(caps, a["key"], a["to"])
+    return problems
+
+
+def computed_fits(budget: dict, projector: Callable[[List[str]], Dict[str, int]]) -> Optional[bool]:
+    """F5a: does the projection of the committed cut plan (recorded conditions, merged phases) fit the effective caps? None: no caps yet."""
+    if budget.get("enforced_caps") is None:
+        return None
+    caps, now = effective_caps(budget), projector(budget["merged_phases"])
+    return all(now[k] <= get_key(caps, k) for k in KEYS)
 
 
 def check_within_projection(values: Dict[str, int], projected: Dict[str, int]) -> List[str]:
@@ -395,7 +497,7 @@ def test_decision_record_immutable() -> None:
 def test_projection_revision_chain() -> None:
     b = load_budget()
     h = "f" * 64
-    chain_ok = {"projection_sha256": "c", "enforced_caps_decision": {"projection_sha256": "a"},
+    chain_ok = {"projection_sha256": "c", "enforced_caps": {"kernel_bytes": 1}, "enforced_caps_decision": {"projection_sha256": "a"},
                 "projection_revisions": [{"phase": "P4", "from_projection_sha256": "a", "to_projection_sha256": "b", "fits_enforced_caps": True},
                                          {"phase": "P6", "from_projection_sha256": "b", "to_projection_sha256": "c", "fits_enforced_caps": True}]}
     broken = copy.deepcopy(chain_ok)
@@ -409,7 +511,7 @@ def test_projection_revision_chain() -> None:
     fixtures = (not check_revision_chain(chain_ok, "c") and check_revision_chain(broken, "c") and check_revision_chain(nofit, "c")
                 and check_revision_chain(tail, "c") and not check_revision_chain(plain_ok, h) and check_revision_chain(plain_bad, h)
                 and check_revision_chain(plain_ok, "0" * 64))
-    live = check_revision_chain(b, sha256_file(PROJECTION))
+    live = check_revision_chain(b, sha256_file(PROJECTION), computed_fits(b, effective_values(b)))
     check("projection_revision_chain", fixtures and not live, f"fixtures={fixtures} live={live}")
 
 
@@ -443,15 +545,129 @@ def test_ceilings_le_enforced_caps_when_enforced() -> None:
     if not b["enforce"]:
         check("ceilings_le_enforced_caps_when_enforced", True)
         return
-    caps = copy.deepcopy(b["enforced_caps"])
-    for a in (b.get("enforced_caps_decision") or {}).get("amendments", []):
-        cur = caps
-        parts = a["key"].split(".")
-        for p in parts[:-1]:
-            cur = cur[p]
-        cur[parts[-1]] = a["to"]
+    caps = effective_caps(b)
     over = [k for k in KEYS if ceiling(b, k) > get_key(caps, k)]
     check("ceilings_le_enforced_caps_when_enforced", not over, f"ceilings above enforced caps: {over}")
+
+
+# ---------------------------------------------------------------------------------------------- P2 REM-FIX 2 tests (F4, F5)
+
+
+def amendment(**kw) -> dict:
+    good = {"key": "kernel_bytes", "from": 35000, "to": 36000, "cause": "reach rows add 1,000 B", "decided_by": "David",
+            "at_sha": "abc1234", "adr": "ADR-0073"}
+    good.update(kw)
+    return good
+
+
+def amended_budget(*ams: dict) -> dict:
+    b = load_budget()
+    caps = copy.deepcopy(b["ceilings"])
+    caps["kernel_bytes"] = 35000
+    b.update(enforce=True, enforced_caps=caps, enforced_caps_decision={"option": "B", "decided_by": "David", "adr": "ADR-0073",
+                                                                      "decided_at_sha": "abc1234", "amendments": list(ams)})
+    return b
+
+
+def test_amendments_are_validated() -> None:
+    """F4: each amendment names an existing cap, the current effective value, a cause, David, an existing sha that ADR-0073 cites."""
+    sha_exists = lambda s: s == "abc1234"  # noqa: E731
+    adr = "# ADR\n- kernel_bytes cap 35000 -> 36000 at abc1234\n"
+    run = lambda *ams, text=adr: check_amendments(amended_budget(*ams), sha_exists, text)  # noqa: E731
+    bare = {"key": "kernel_bytes", "to": 10 ** 9}
+    controls = {
+        "good": run(amendment()) == [],
+        "chain": run(amendment(), amendment(**{"from": 36000, "to": 37000, "at_sha": "abc1234"})) == [],
+        "bare": bool(run(bare)),
+        "wrong_from": bool(run(amendment(**{"from": 34000}))),
+        "missing_cause": bool(run({k: v for k, v in amendment().items() if k != "cause"})),
+        "empty_cause": bool(run(amendment(cause=" "))),
+        "decided_by": bool(run(amendment(decided_by="agent"))),
+        "unknown_sha": bool(run(amendment(at_sha="deadbee"), text=adr.replace("abc1234", "deadbee"))),
+        "not_in_adr": bool(run(amendment(), text="# ADR\nnothing about the sha\n")),
+        "unknown_key": bool(run(amendment(key="nope"))),
+        "wrong_adr": bool(run(amendment(adr="ADR-0001"))),
+        "bool_to": bool(run(amendment(to=True))),
+        "stale_from_after_chain": bool(run(amendment(), amendment(**{"from": 35000, "to": 40000}))),
+    }
+    live = check_amendments(load_budget(), lambda s: sha_exists_in_repo(s), adr_text())
+    check("amendments_are_validated", all(controls.values()) and not live, f"controls={controls} live={live}")
+
+
+def test_amendments_append_only_vs_origin() -> None:
+    origin = {"merged_phases": ["P2"], "ceiling_raises": [], "projection_revisions": [],
+              "enforced_caps_decision": {"amendments": [amendment()]}}
+    grown = copy.deepcopy(origin)
+    grown["enforced_caps_decision"]["amendments"].append(amendment(**{"from": 36000, "to": 37000}))
+    edited = copy.deepcopy(origin)
+    edited["enforced_caps_decision"]["amendments"][0]["to"] = 10 ** 9
+    dropped = copy.deepcopy(origin)
+    dropped["enforced_caps_decision"]["amendments"] = []
+    check("amendments_append_only_vs_origin",
+          append_only_problems(origin, grown, True) == [] and append_only_problems(origin, edited, True) != []
+          and append_only_problems(origin, dropped, True) != [], "amendment list is not append-only")
+
+
+def test_fits_enforced_caps_is_computed() -> None:
+    """F5a: the recorded flag must equal the projection of the committed cut plan against the effective caps."""
+    over = amended_budget()
+    over["projection_sha256"] = "c"
+    over["projection_revisions"] = [{"phase": "P4", "from_projection_sha256": "a", "to_projection_sha256": "c", "fits_enforced_caps": True,
+                                     "cause": "x", "decided_by": "David"}]
+    over["enforced_caps_decision"]["projection_sha256"] = "a"
+    fits = lambda value: {k: value for k in KEYS}  # noqa: E731
+    proj_fit, proj_over = (lambda phases: fits(1)), (lambda phases: fits(10 ** 9))
+    ok_fit = computed_fits(over, proj_fit) is True and computed_fits(over, proj_over) is False
+    liar = check_revision_chain(over, "c", computed_fits(over, proj_over))
+    honest = check_revision_chain(over, "c", computed_fits(over, proj_fit))
+    pre = dict(load_budget(), enforce=False, enforced_caps=None, enforced_caps_decision=None)  # a budget before the P2C decision
+    pre_rev = dict(pre, projection_revisions=[{"phase": "P4", "from_projection_sha256": "a", "to_projection_sha256": pre["projection_sha256"],
+                                               "fits_enforced_caps": True, "cause": "x", "decided_by": "David"}])
+    pre_true = check_revision_chain(pre_rev, pre["projection_sha256"], computed_fits(pre_rev, proj_fit))
+    pre_null = check_revision_chain(dict(pre_rev, projection_revisions=[dict(pre_rev["projection_revisions"][0], fits_enforced_caps=None)]),
+                                    pre["projection_sha256"], computed_fits(pre_rev, proj_fit))
+    live = check_revision_chain(load_budget(), sha256_file(PROJECTION), computed_fits(load_budget(), effective_values(load_budget())))
+    check("fits_enforced_caps_is_computed", ok_fit and liar and not honest and pre_true and not pre_null and not live,
+          f"ok_fit={ok_fit} liar={liar} honest={honest} pre_true={pre_true} pre_null={pre_null} live={live}")
+
+
+def revision(frm: str, to: str, **kw) -> dict:
+    return dict({"phase": "P3", "from_projection_sha256": frm, "to_projection_sha256": to, "fits_enforced_caps": None,
+                 "cause": "new rows", "decided_by": "David"}, **kw)
+
+
+def test_cutplan_change_needs_revision_entry() -> None:
+    """F5b/c: a cut-plan change against origin/main needs a new projection_revisions entry that chains origin's sha to HEAD's."""
+    origin = {"projection_revisions": [], "projection_sha256": "o" * 64}
+    mk = lambda *revs: {"projection_revisions": list(revs), "projection_sha256": "h" * 64}  # noqa: E731
+    run = lambda b, o_plan=b"A", h_plan=b"B": check_cutplan_revision(b, origin, "o" * 64, o_plan, h_plan)  # noqa: E731
+    controls = {
+        "unchanged": run(mk(), b"A", b"A") == [],
+        "changed_no_entry": bool(run(mk())),
+        "good": run(mk(revision("o" * 64, "h" * 64))) == [],
+        "wrong_from": bool(run(mk(revision("x" * 64, "h" * 64)))),
+        "wrong_to": bool(run(mk(revision("o" * 64, "x" * 64)))),
+        "no_cause": bool(run(mk(revision("o" * 64, "h" * 64, cause="")))),
+        "no_decider": bool(run(mk(revision("o" * 64, "h" * 64, decided_by=None)))),
+        "first_introduction": check_cutplan_revision(mk(), None, None, None, b"B") == [],
+    }
+    status, live_origin = origin_budget()
+    if status == "ok":
+        raw = git_show("origin/main", REL_PROJECTION)
+        o_plan = git_show("origin/main", REL_CUTPLAN)
+        live = check_cutplan_revision(load_budget(), live_origin, hashlib.sha256(raw).hexdigest() if raw else None, o_plan, CUTPLAN.read_bytes())
+    elif status == "new":
+        live = []
+    else:
+        skip("cutplan_change_needs_revision_entry:live", "no origin/main ref (CI must not skip)")
+        live = []
+    check("cutplan_change_needs_revision_entry", all(controls.values()) and not live, f"controls={controls} live={live}")
+
+
+def test_adr_records_codeowner_identity() -> None:
+    text = adr_text()
+    check("adr_records_codeowner_identity", "## P2 REM-FIX 2 notes" in text and "@volkz" in text and "second reviewer" in text,
+          "ADR-0073 must note that CODEOWNERS @volkz is also the agent identity")
 
 
 # ---------------------------------------------------------------------------------------------- negative tests (fixtures)
