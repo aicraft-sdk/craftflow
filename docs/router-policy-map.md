@@ -37,14 +37,19 @@ Kind is one of `pointer`, `dedupe`, `trigger`, `literal-to-key`, `xref`, `split`
   preserved as for every kind: a section moved into a file read later (a conditional stage file) is `unmapped_removed`
   unless an Applicability row narrows it with `@reach`.
 - `group` is many-to-many: several old ids, several new ids (comma separated). Each new id must relate to at least one
-  old id and each old id to at least one new id, by shared tokens of at least 60% of either unit and without losing a
-  negation token. `[EASY TO MISS]` units contained in a listed unit are added to their side automatically.
+  old id and each old id to at least one new id, by shared tokens of at least 60% of either unit. Retention is then
+  checked per id: the union of an old id's related new units keeps at least 60% of its tokens and each new unit is at
+  least 60% drawn from its related old units, so a fragment of a long rule is not a relation. Negation tokens must match
+  both ways (below). `[EASY TO MISS]` units contained in a listed unit are added to their side automatically.
 - Every other kind names replacement ids that exist in the current inventory and must relate them to the old rule: the
   new units together keep at least 60% of the old unit's tokens, each new unit is at least 60% old tokens (a verbatim move,
-  a dedupe and a split of one rule pass) and no negation token (`never`, `not`, `no`, `only`, `must`, `always`) of the old
-  unit is missing from the new text. A table row is compared on its body only, never on the header text that is folded into
+  a dedupe and a split of one rule pass) and the negation tokens match both ways: any of `never`, `not`, `no`, `only`,
+  `must`, `always`, `cannot`, `unless`, `without`, `nor`, `neither` or an `n't` form (`don't`, `isn't`, ...) present on
+  only one side, or with fewer occurrences kept than the old text had, is no relation (a negation inside a code span
+  counts like any other token). A table row is compared on its body only, never on the header text that is folded into
   its id. A `pointer` row may instead have a new unit that names the old unit's heading, the file the rule now lives in and
-  an existing heading of that file.
+  a heading of that file whose section holds at least 60% of the old unit's tokens (and its negation tokens) or a unit
+  that relates by the rules above; an unrelated heading of the named file does not qualify.
 
 Reach is checked on every kind except `heading`: each replacement id (for `group`, each id related to the old one) must be
 read by every workflow and variant that read the removed occurrence, at least as early. A `dedupe` kept copy, a `pointer`

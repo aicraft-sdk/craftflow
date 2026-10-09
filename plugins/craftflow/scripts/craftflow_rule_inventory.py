@@ -137,6 +137,17 @@ def _body(entry: dict) -> str:
     return _text(entry).partition(ROW_SEP)[2] if entry["kind"] == "table_row" else _text(entry)
 
 
+def _sections(text: str) -> Dict[str, str]:
+    """Normalized heading -> its section text (up to the next heading of the same or a higher level) for a pointer check."""
+    lines, out = text.split("\n"), {}
+    heads = cor.headings(text)
+    for k, (start, level, title) in enumerate(heads):
+        end = next((h[0] for h in heads[k + 1:] if h[1] <= level), len(lines))
+        key = cor.norm_text(title)
+        out[key] = out.get(key, "") + "\n".join(lines[start + 1:end]) + "\n"
+    return out
+
+
 def _with_derived(ids: List[str], pool: Dict[str, dict]) -> List[str]:
     """`[EASY TO MISS ...]` spans are units of their own: they move with the unit that contains them (R-H3c)."""
     parents = [_text(pool[i]) for i in ids if pool[i]["kind"] != "easy_to_miss"]
@@ -156,7 +167,7 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
     after_ids = {e["id"] for e in after["entries"]}
     after_by_id = {e["id"]: e for e in after["entries"]}
     file_heads = {f: {cor.norm_text(h[2]) for h in cor.headings(t)} for f, t in after_corpus.items()}
-    dests = {Path(f).name.lower(): hs for f, hs in file_heads.items()}
+    dests = {Path(f).name.lower(): _sections(t) for f, t in after_corpus.items()}  # file -> heading -> section text
     base = {e["id"]: e for e in baseline["entries"]}
     rows, errors = parse_tables(policy_text)
     rat_ids = {u["id"] for u in extract_units(rationale_text, "rationale")}
@@ -221,9 +232,12 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
         ids = known(c[0])
         if kind == "group":
             ids, new_ids = _with_derived(ids, base), _with_derived(new_ids, after_by_id)
-            rel, lone = group_relations({i: _body(base[i]) for i in ids}, {n: _body(after_by_id[n]) for n in new_ids})
+            rel, lone, weak = group_relations({i: _body(base[i]) for i in ids}, {n: _body(after_by_id[n]) for n in new_ids})
             if lone:
                 errors.append(f"group row has ids that relate to nothing on the other side ({', '.join(lone)}): {c[0]} -> {c[1]}")
+                continue
+            if weak:
+                errors.append(f"group row ids keep under 60% retention or change a negation token ({', '.join(weak)}): {c[0]} -> {c[1]}")
                 continue
             errors.extend(f"duplicate rewrite row for id {i}" for i in ids if i in rewrites)
             rewrites.update({i: ("group", rel[i]) for i in ids})

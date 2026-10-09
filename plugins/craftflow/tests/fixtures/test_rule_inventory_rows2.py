@@ -412,6 +412,75 @@ def test_rl1_adr_count_text() -> None:
           "count text")
 
 
+# ------------------------------------------------------------------------------------------------ REM-FIX 5
+
+
+LONG_RULE = ("- Never spawn Memory Update as a sub-agent because the router runs it inline at the end of every workflow "
+             "before the final reply is emitted to the user.")
+FRAGMENT = "- Never spawn Memory Update."
+
+
+def test_rf5_group_row_fragment_does_not_retain_the_old_rule() -> None:
+    res = run({K: "## Gate\n\n" + LONG_RULE + "\n"}, {K: "## Gate\n\n" + FRAGMENT + "\n"},
+              rewrites=[rw(uid(LONG_RULE), uid(FRAGMENT), "group")])
+    check("RF5 a group row that reduces a 36-token rule to a 4-token fragment fails (under 60% retention)",
+          failed(res) and res["reworded"] == 0 and errs(res, "under 60% retention"), repr(res))
+
+
+def test_rf5_group_row_legitimate_reflow_passes() -> None:
+    a, b = "- Never alpha beta gamma delta epsilon zeta eta.", "- Always iota kappa lambda mu nu xi."
+    n1, n2, n3 = "- Never alpha beta gamma delta epsilon.", "- Zeta eta alpha.", "- Always iota kappa lambda mu nu."
+    res = run({K: "## A\n\n" + a + "\n" + b + "\n"}, {K: "## B\n\n" + n1 + "\n" + n2 + "\n" + n3 + "\n"},
+              rewrites=[rw(f"{uid(a)}, {uid(b)}", f"{uid(n1)}, {uid(n2)}, {uid(n3)}", "group")])
+    check("RF5 a 2-old -> 3-new group reflow where every old unit is >= 60% retained still passes",
+          not failed(res) and res["reworded"] == 2, repr(res))
+
+
+def test_rf5_group_row_new_unit_mostly_new_words_fails() -> None:
+    a = "- Never alpha beta gamma delta epsilon zeta eta."
+    n1, n2 = "- Never alpha beta gamma delta epsilon zeta eta.", "- Alpha one two three four five six."
+    res = run({K: "## A\n\n" + a + "\n"}, {K: "## B\n\n" + n1 + "\n" + n2 + "\n"},
+              rewrites=[rw(uid(a), f"{uid(n1)}, {uid(n2)}", "group")])
+    check("RF5 a group row with a new unit under 60% drawn from old units fails", failed(res), repr(res))
+
+
+def test_rf5_pointer_to_unrelated_section_fails() -> None:
+    old = "- Never spawn Memory Update as a sub-agent."
+    ptr = "- Gate: see remediation-and-research.md Overview."
+    before = {K: "## Gate\n\n" + old + "\n"}
+    bad = run(before, {K: "## Gate\n\n" + ptr + "\n", RR: "## Overview\n\nUnrelated words about something else entirely.\n"},
+              rewrites=[rw(uid(old), uid(ptr), "pointer")])
+    check("RF5 a pointer to an existing but unrelated heading of the named file fails", failed(bad) and bad["reworded"] == 0
+          and errs(bad, "overlap"), repr(bad))
+    good = run(before, {K: "## Gate\n\n" + ptr + "\n", RR: "## Overview\n\n" + old + "\n"},
+               rewrites=[rw(uid(old), uid(ptr), "pointer")])
+    check("RF5 a pointer to a section that holds the rule passes", not failed(good) and good["reworded"] == 1, repr(good))
+
+
+def _dedupe(old: str, new: str) -> dict:
+    return run({K: "## Gate\n\n" + old + "\n"}, {K: "## Gate\n\n" + new + "\n"}, rewrites=[rw(uid(old), uid(new), "dedupe")])
+
+
+def test_rf5_negation_guard_is_two_way() -> None:
+    cases = {
+        "must -> must not": ("- Memory Update must run inline.", "- Memory Update must not run inline."),
+        "cannot -> can": ("- You cannot skip the review step now.", "- You can skip the review step now."),
+        "runs -> never runs": ("- The router runs memory update inline.", "- The router never runs memory update inline."),
+        "don't -> do": ("- You don't skip the review step now.", "- You do skip the review step now."),
+        "dropped without": ("- Run it without the cache layer now.", "- Run it with the cache layer now."),
+        "gained unless": ("- Run it with the cache layer now.", "- Run it unless the cache layer now."),
+        "count lost": ("- Never skip and never retry the review step.", "- Never skip and retry the review step."),
+    }
+    for name, (old, new) in cases.items():
+        res = _dedupe(old, new)
+        check(f"RF5 negation {name} is not a relation", failed(res) and res["reworded"] == 0 and errs(res, "overlap"), repr(res))
+    same = "- The router never runs memory update inline."
+    ok = _dedupe(same, same.replace("inline.", "inline now."))
+    check("RF5 control: the same negation on both sides still relates", not failed(ok) and ok["reworded"] == 1, repr(ok))
+    ok2 = _dedupe("- You don't skip the review step now.", "- You don't skip the review step today.")
+    check("RF5 control: the same n't form on both sides still relates", not failed(ok2) and ok2["reworded"] == 1, repr(ok2))
+
+
 def main() -> int:
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
