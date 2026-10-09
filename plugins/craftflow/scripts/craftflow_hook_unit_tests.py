@@ -61,6 +61,15 @@ def _router_section_any(heading: str, file_hint: str | None = None) -> str:
     return router_corpus.section_any(heading, file_hint, plugin_root=PLUGIN_ROOT)[1]
 
 
+def _router_section_or_none(heading: str, file_hint: str) -> str | None:
+    """Like `_router_section_any`, but a missing or ambiguous heading yields None so the caller can `fail()` with
+    its own message instead of crashing the suite."""
+    try:
+        return _router_section_any(heading, file_hint)
+    except (router_corpus.SectionNotFound, router_corpus.AmbiguousHeading):
+        return None
+
+
 def ok(name: str) -> None:
     global _passes
     _passes += 1
@@ -1162,7 +1171,8 @@ def test_workflow_artifact_schema_documents_task_tools_available() -> None:
     if not path.exists():
         fail(name, f"workflow-artifact-and-hook-policy.md not found at {path}")
         return
-    content = _router_corpus_text()
+    # File-scoped: the `capabilities` bullet lives in the policy file, so an unbounded slice cannot run into other files.
+    content = router_corpus.read_corpus(PLUGIN_ROOT)["skills/craftflow-router/references/workflow-artifact-and-hook-policy.md"]
     cap_idx = content.find("`capabilities` records the session-level research backend")
     if cap_idx == -1:
         fail(name, "missing '`capabilities`' detail block")
@@ -1340,13 +1350,11 @@ def test_section_0_precedes_memory_load() -> None:
 def test_memory_load_anchored_to_project_root() -> None:
     name = "router/memory-load-anchored-to-project-root"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = _router_corpus_text()
-    start = content.find("## 2. Memory Load And Template Validation")
-    end = content.find("\n## 2a.", start)
-    if start == -1 or end == -1:
+    # Bound by the SKILL.md heading: the protocol file also mentions the title in prose and sorts first in the corpus.
+    section = _router_section_or_none("## 2. Memory Load And Template Validation", "SKILL.md")
+    if section is None:
         fail(name, "could not bound ## 2. section")
         return
-    section = content[start:end]
     if '$PROJECT_ROOT/.craftflow/state/project/activeContext.md' not in section:
         fail(name, "anchored activeContext.md reference not found in ## 2.")
         return
@@ -1359,13 +1367,11 @@ def test_memory_load_anchored_to_project_root() -> None:
 def test_parent_workflow_creation_anchored_to_project_root() -> None:
     name = "router/parent-workflow-creation-anchored"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = _router_corpus_text()
-    start = content.find("### Parent workflow creation")
-    end = content.find("\n### BUILD task graph", start)
-    if start == -1 or end == -1:
+    # The heading and `### BUILD task graph` also exist in references/build-workflow.md; bound within SKILL.md only.
+    section = _router_section_or_none("### Parent workflow creation", "SKILL.md")
+    if section is None:
         fail(name, "could not bound ### Parent workflow creation section")
         return
-    section = content[start:end]
     if '--project "$PROJECT_ROOT"' not in section or "--init-artifact" not in section:
         fail(name, "anchored --init-artifact call (--project \"$PROJECT_ROOT\") not found")
         return
@@ -1378,13 +1384,11 @@ def test_parent_workflow_creation_anchored_to_project_root() -> None:
 def test_parent_workflow_creation_fallback_reason_wired() -> None:
     name = "router/parent-workflow-creation-fallback-reason-wired"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = _router_corpus_text()
-    start = content.find("### Parent workflow creation")
-    end = content.find("\n### BUILD task graph", start)
-    if start == -1 or end == -1:
+    # The heading and `### BUILD task graph` also exist in references/build-workflow.md; bound within SKILL.md only.
+    section = _router_section_or_none("### Parent workflow creation", "SKILL.md")
+    if section is None:
         fail(name, "could not bound ### Parent workflow creation section")
         return
-    section = content[start:end]
     fallback_idx = section.find("project_root_resolution_fallback")
     if fallback_idx == -1:
         fail(name, "project_root_resolution_fallback conditional block not found in ### Parent workflow creation")
@@ -2075,10 +2079,10 @@ def test_memory_finalize_permit_standalone_documented() -> None:
 
 def test_router_one_call_minting_documented() -> None:
     name = "router/one-call-workflow-minting-documented"
-    content = _router_corpus_text()
-    start = content.find("### Parent workflow creation")
-    end = content.find("\n### BUILD task graph", start)
-    section = content[start:end]
+    section = _router_section_or_none("### Parent workflow creation", "SKILL.md")
+    if section is None:
+        fail(name, "### Parent workflow creation not found in SKILL.md")
+        return
     for marker in ("--emit-env", "--init-artifact"):
         if marker not in section:
             fail(name, f"### Parent workflow creation missing {marker!r}")
@@ -2277,9 +2281,10 @@ def test_router_snippets_avoid_llm_quoted_requests_and_eval() -> None:
 
 def test_router_mint_command_passes_safe_shell_guard() -> None:
     name = "router/mint-command-passes-safe-shell-guard"
-    skill = _router_corpus_text()
-    start = skill.find("### Parent workflow creation")
-    section = skill[start: skill.find("\n### BUILD task graph", start)]
+    section = _router_section_or_none("### Parent workflow creation", "SKILL.md")
+    if section is None:
+        fail(name, "### Parent workflow creation not found in SKILL.md")
+        return
     blocks = [chunk.split("```", 1)[0] for chunk in section.split("```bash")[1:]]
     if len(blocks) < 2:
         fail(name, "expected the session-id and mint bash blocks")
@@ -2470,9 +2475,10 @@ def test_state_digest_required_sections_match_router_protocol_table() -> None:
 
 def test_router_memory_load_documents_digest_reread_rule() -> None:
     name = "router/memory-load-digest-reread-rule"
-    skill = _router_corpus_text()
-    start = skill.find("## 2. Memory Load And Template Validation")
-    section = skill[start: skill.find("\n## 3.", start)]
+    section = _router_section_or_none("## 2. Memory Load And Template Validation", "SKILL.md")
+    if section is None:
+        fail(name, "## 2. Memory Load And Template Validation not found in SKILL.md")
+        return
     for marker in ("--mode full", "(omitted for size", "(+N more)", "Decisions"):
         if marker not in section:
             fail(name, f"## 2 re-read rule missing {marker!r}")
@@ -17870,7 +17876,7 @@ def test_stop_gate_committed_config_off(tmp_dir: Path) -> None:
 def test_router_template_stamps_session_id(tmp_dir: Path) -> None:
     name = "stop-gate/router-template-stamps-session-id"
     skill = _router_corpus_text()
-    policy = _router_corpus_text()
+    policy = router_corpus.read_corpus(PLUGIN_ROOT)["skills/craftflow-router/references/workflow-artifact-and-hook-policy.md"]
     # The artifact is now written by `craftflow_workflow_id.py --init-artifact`; the helper stamps session_id.
     helper = (SCRIPTS / "craftflow_workflow_id.py").read_text(encoding="utf-8")
     if '"session_id": session_id,' not in helper:

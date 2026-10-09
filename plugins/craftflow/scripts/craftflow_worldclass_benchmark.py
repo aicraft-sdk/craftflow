@@ -9,6 +9,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import craftflow_router_corpus
+
 
 ROOT = Path(__file__).resolve().parents[3]
 REF_ROOT = ROOT / "ref-(dont-read-unless-specificly-mentioned)"
@@ -95,6 +97,9 @@ class DeltaRule:
     path: str
     category: str
     feature_needles: tuple[tuple[str, str], ...]
+    # True: the needles are searched in the joined runtime router corpus (SKILL.md, references/, _shared/) instead of
+    # the single file at `path`; `path` still selects the v7 baseline file and the changed-since-v7 flag.
+    corpus: bool = False
 
 
 REF_REPOS: tuple[RefRepo, ...] = (
@@ -296,6 +301,7 @@ DELTA_RULES: tuple[DeltaRule, ...] = (
             ("skill_precedence_gate", "explicit instruction precedence enforcement"),
             (".craftflow/state", "state root is the shared memory namespace"),
         ),
+        corpus=True,
     ),
     DeltaRule(
         "plugins/craftflow/agents/planner.md",
@@ -891,7 +897,12 @@ def build_delta_register() -> tuple[Path, Path, list[dict[str, Any]]]:
 
     for rule in DELTA_RULES:
         current_path = ROOT / rule.path
-        current_text = load_text(current_path) if current_path.exists() else ""
+        if rule.corpus:
+            current_text = craftflow_router_corpus.corpus_text(
+                craftflow_router_corpus.read_corpus(ROOT / "plugins" / "craftflow")
+            )
+        else:
+            current_text = load_text(current_path) if current_path.exists() else ""
         baseline_text = v7_file_text(rule.path)
         deltas = []
         current_hits = []
