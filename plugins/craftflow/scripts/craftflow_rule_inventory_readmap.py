@@ -51,6 +51,8 @@ def coverage(readmap: dict) -> Dict[str, Set[Tuple[str, str, str]]]:
         if (e["file"], cls) in seen:
             raise ValueError(f"duplicate read map entry for {e['file']} (class {cls})")
         seen.add((e["file"], cls))
+        if "happy_path" in e and not isinstance(e["happy_path"], bool):  # validated on every class, used only by stages (H-L3)
+            raise ValueError(f"read map happy_path must be a boolean: {e}")
         pairs = out.setdefault(e["file"], {})
         if cls == "maintainer":
             continue

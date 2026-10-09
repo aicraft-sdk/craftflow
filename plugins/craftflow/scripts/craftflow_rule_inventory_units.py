@@ -82,6 +82,21 @@ def _bracket_close(lines: List[str], mask: List[bool], i: int, cur_lines: List[s
     return None
 
 
+FM_ACCOUNTED = re.compile(r"^([a-zA-Z_-]+:|\s+\S|\s*-\s)")  # a key line, an indented continuation or a list item
+
+
+def _frontmatter_description(lines: List[str], close: int, file: str) -> str:
+    """The description of a `---` frontmatter block; a block that does not parse to one, or that holds lines the
+    parser does not account for, raises instead of being skipped (H-M2)."""
+    desc = cor.parse_frontmatter("\n".join(lines[:close + 1]) + "\n").get("description")
+    if not isinstance(desc, str) or not desc.strip():
+        raise ValueError(f"frontmatter of {file or 'text'} does not parse to a non-empty string description")
+    stray = [n + 1 for n in range(1, close) if lines[n].strip() and not FM_ACCOUNTED.match(lines[n])]
+    if stray:
+        raise ValueError(f"frontmatter of {file or 'text'} has unaccounted line(s) {stray}")
+    return desc
+
+
 def extract_units(text: str, file: str = "") -> List[dict]:
     """Units in file order: {kind, raw, norm, id, line, numbered, heading_ctx, heading_path, label_ctx}."""
     lines = text.replace("\r\n", "\n").split("\n")
@@ -89,7 +104,7 @@ def extract_units(text: str, file: str = "") -> List[dict]:
     if lines and lines[0].strip() == "---":
         close = next((k for k in range(1, len(lines)) if lines[k].strip() == "---"), None)
         if close is not None:
-            i, front = close + 1, cor.parse_frontmatter("\n".join(lines[:close + 1]) + "\n").get("description")
+            i, front = close + 1, _frontmatter_description(lines, close, file)
     mask, unclosed = cor.fence_scan(lines)
     if unclosed:  # an unclosed fence would silently swallow the rest of the file as one block
         raise ValueError(f"unclosed fence opened at line {unclosed} of {file or 'text'}")

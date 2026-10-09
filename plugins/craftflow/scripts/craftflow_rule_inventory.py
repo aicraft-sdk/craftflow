@@ -27,14 +27,15 @@ from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 import craftflow_router_corpus as cor
-from craftflow_rule_inventory_reach import (covers, narrowed_cover, near_rule_count, related, verify_lock,  # noqa: F401
-                                            widening)
+from craftflow_rule_inventory_reach import (covers, group_relations, narrowed_cover, near_rule_count, related,  # noqa: F401
+                                            verify_lock, widening)
 from craftflow_rule_inventory_readmap import (CLASSES, RANK, check_readmap_files, coverage,  # noqa: F401
                                                load_readmap)
 from craftflow_rule_inventory_rows import (EXCERPT_LEN, HEADERS, KINDS, REVIEWER, SECTIONS, STATUSES,  # noqa: F401
-                                           VARIANTS, pairs_of, parse_tables, quote_in_excerpt, symbol_ok, tokens_of)
-from craftflow_rule_inventory_units import (classify_normative, extract_units, load_allowlist, make_id,  # noqa: F401
-                                            normalize, normalize_fence)
+                                           VARIANTS, file_is, pairs_of, parse_tables, quote_in_excerpt, split_loc,
+                                           symbol_ok, tokens_of)
+from craftflow_rule_inventory_units import (ROW_SEP, classify_normative, extract_units, load_allowlist,  # noqa: F401
+                                            make_id, normalize, normalize_fence)
 
 PLUGIN_ROOT = cor.PLUGIN_ROOT
 FIXTURES = PLUGIN_ROOT / "tests" / "fixtures"
@@ -131,17 +132,31 @@ def _text(entry: dict) -> str:
     return entry.get("text", entry["excerpt"])
 
 
+def _body(entry: dict) -> str:
+    """The text a rewrite row is compared on: a table row's body without the header folded into its id (H-H1)."""
+    return _text(entry).partition(ROW_SEP)[2] if entry["kind"] == "table_row" else _text(entry)
+
+
+def _with_derived(ids: List[str], pool: Dict[str, dict]) -> List[str]:
+    """`[EASY TO MISS ...]` spans are units of their own: they move with the unit that contains them (R-H3c)."""
+    parents = [_text(pool[i]) for i in ids if pool[i]["kind"] != "easy_to_miss"]
+    extra = [k for k, e in pool.items() if e["kind"] == "easy_to_miss" and k not in ids and any(_text(e) in p for p in parents)]
+    return ids + sorted(extra)
+
+
 def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, policy_text: str,
-                   rationale_text: str = "", plugin_root=None, allowlist=frozenset(), baseline_readmap=None) -> dict:
-    """`baseline_readmap` is the read map frozen at the baseline (the CLI always passes the lock-pinned file); when a
-    caller omits it the live map is compared with itself, which only the unit tests do."""
+                   rationale_text: str = "", plugin_root=None, allowlist=frozenset(), *, baseline_readmap) -> dict:
+    """`baseline_readmap` is the read map frozen at the baseline (the CLI passes the lock-pinned file); it is required
+    so a caller can never compare the live map with itself (H-L1)."""
     _check_baseline(baseline)
     if not after_corpus:
         raise ValueError("empty after corpus: refusing to report '0 lost' against nothing")
     after = build_inventory(after_corpus, readmap, allowlist)
     start_files = {e["file"] for e in readmap["files"] if e["class"] in ("kernel", "start")}
     after_ids = {e["id"] for e in after["entries"]}
-    after_text = {e["id"]: _text(e) for e in after["entries"]}
+    after_by_id = {e["id"]: e for e in after["entries"]}
+    file_heads = {f: {cor.norm_text(h[2]) for h in cor.headings(t)} for f, t in after_corpus.items()}
+    dests = {Path(f).name.lower(): hs for f, hs in file_heads.items()}
     base = {e["id"]: e for e in baseline["entries"]}
     rows, errors = parse_tables(policy_text)
     rat_ids = {u["id"] for u in extract_units(rationale_text, "rationale")}
@@ -168,9 +183,12 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
         if c[4] == "deleted" and script_ok and test_ok and live:
             policy.update(ids)
 
-    rewrites: Dict[str, str] = {}
-    renames: Dict[str, str] = {}
+    rewrites: Dict[str, Tuple[str, List[str]]] = {}  # old id -> (kind, the new ids that must carry its reach)
+    renames: Dict[Tuple[str, str], str] = {}  # (file, new heading) -> old heading, per file (H-L4)
+    moves: List[Tuple[List[str], List[str], str]] = []  # section-move: (source path, destination path, destination file)
     label_renames: Dict[str, str] = {}  # a reworded label paragraph: its new text -> the baseline text
+    base_occ = [(e["id"], o) for e in baseline["entries"] for o in e["occurrences"]]
+    after_occ = [(e["id"], o) for e in after["entries"] for o in e["occurrences"]]
     for c in rows["rewrites"]:
         kind = c[2].strip().lower()
         if kind not in KINDS:
@@ -178,25 +196,48 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
             continue
         if not c[4] or not REVIEWER.match(c[5]):
             missing_review += 1
-        if kind == "heading":
-            old, new = (cor.norm_text(re.sub(r"^.*#|@.*$", "", x)) for x in (c[0], c[1]))
-            renames[new] = old
+        if kind in ("heading", "section-move"):
+            (f0, p0), (f1, p1) = split_loc(c[0]), split_loc(c[1])
+            one = kind == "heading"
+            if not f0 or not f1 or not p0 or not p1 or (one and (f0 != f1 or len(p0) != 1 or len(p1) != 1)):
+                errors.append(f"{kind} row needs file#heading cells" + (" naming the same file" if one else "") + f": {c[0]} -> {c[1]}")
+                continue
+            has = (lambda o, p: p[0] in o["heading_path"]) if one else (lambda o, p: o["heading_path"][:len(p)] == p)
+            if not any(file_is(f0, o["file"]) and has(o, p0) for _, o in base_occ):
+                errors.append(f"{kind} row: source '{c[0]}' names no baseline section")
+            elif one and not any(file_is(f1, f) and p1[0] in hs for f, hs in file_heads.items()):
+                errors.append(f"heading row: '{p1[0]}' is not a heading of {f1}")
+            elif not one and not any(file_is(f1, o["file"]) and has(o, p1) for _, o in after_occ):
+                errors.append(f"section-move row: destination '{c[1]}' holds no unit in the current corpus")
+            elif one:
+                renames[(f1, p1[0])] = p0[0]
+            else:
+                moves.append((p0, p1, f1))
             continue
         new_ids = HEX_ID.findall(c[1])
         if not new_ids or any(n not in after_ids for n in new_ids):
             errors.append(f"rewrite row names replacement ids that do not exist: {c[1]}")
             continue
         ids = known(c[0])
-        news = [after_text[n] for n in new_ids]
-        unrelated = [i for i in ids if not related(_text(base[i]), news, kind,
-                                                   sorted({o["heading_ctx"] for o in base[i]["occurrences"]}))]
+        if kind == "group":
+            ids, new_ids = _with_derived(ids, base), _with_derived(new_ids, after_by_id)
+            rel, lone = group_relations({i: _body(base[i]) for i in ids}, {n: _body(after_by_id[n]) for n in new_ids})
+            if lone:
+                errors.append(f"group row has ids that relate to nothing on the other side ({', '.join(lone)}): {c[0]} -> {c[1]}")
+                continue
+            errors.extend(f"duplicate rewrite row for id {i}" for i in ids if i in rewrites)
+            rewrites.update({i: ("group", rel[i]) for i in ids})
+            continue
+        news = [_body(after_by_id[n]) for n in new_ids]
+        unrelated = [i for i in ids if not related(_body(base[i]), news, kind,
+                                                   sorted({o["heading_ctx"] for o in base[i]["occurrences"]}), dests)]
         if unrelated:  # the new ids exist, but a row may not point a rule at text that does not carry it (A8r)
             errors.append(f"rewrite row relates ids with under 60% token overlap: {c[0]} -> {c[1]}")
             continue
         errors.extend(f"duplicate rewrite row for id {i}" for i in ids if i in rewrites)
-        rewrites.update({i: kind for i in ids})
+        rewrites.update({i: (kind, new_ids) for i in ids})
         if len(ids) == len(new_ids) == 1 and _text(base[ids[0]]).endswith(":"):
-            label_renames[news[0]] = _text(base[ids[0]])
+            label_renames[_text(after_by_id[new_ids[0]])] = _text(base[ids[0]])
 
     # an occurrence is identified by its unit id, last heading, file, full heading path and list label (D4, A4, A10)
     occ_cov = {(e["id"], o["heading_ctx"], o["file"], tuple(o["heading_path"]), o["label_ctx"]):
@@ -249,10 +290,22 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
                 off_start.add(i)  # the L3 budget counts start files only, so only they may shed prose to the rationale file
                 errors.append(f"rationale row {i} has an occurrence outside the start-class files")
 
-    widened, unsigned = widening(coverage(readmap), coverage(readmap if baseline_readmap is None else baseline_readmap),
-                                 rows["widening"], errors)
+    widened, unsigned = widening(coverage(readmap), coverage(baseline_readmap), rows["widening"], errors)
     missing_review += unsigned
-    where = lambda o: (tuple(renames.get(h, h) for h in o["heading_path"]), label_renames.get(o["label_ctx"], o["label_ctx"]))  # noqa: E731
+    ren = lambda o, h: next((old for (rf, new), old in renames.items() if new == h and file_is(rf, o["file"])), h)  # noqa: E731
+
+    def where(o: dict) -> tuple:
+        """An after occurrence mapped back to the baseline name of its place: a renamed heading takes its old name and
+        a unit under a section-move destination takes the source path (the unit's own file is checked by the row)."""
+        path = list(o["heading_path"])
+        for src, dst, f in moves:
+            if file_is(f, o["file"]) and path[:len(dst)] == dst:
+                path = src + [ren(o, h) for h in path[len(dst):]]
+                break
+        else:
+            path = [ren(o, h) for h in path]
+        return tuple(path), label_renames.get(o["label_ctx"], o["label_ctx"])
+
     groups: Dict[tuple, List[FrozenSet]] = {}
     by_id: Dict[str, List[FrozenSet]] = {}
     for e in after["entries"]:
@@ -279,10 +332,11 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
             res["policy_mapped"] += remaining
             remaining = 0
         elif gid in rewrites:
-            # a dedupe only covers an occurrence whose workflows x variants the kept copy also reaches (E63d)
-            # the kept copy may sit under any heading in any file (R-H1), so the cover is every after-copy of the id
-            kept = by_id.get(gid, [])
-            done = sum(1 for m in missed if any(covers(s, m) for s in kept)) if rewrites[gid] == "dedupe" else remaining
+            # every non-heading kind needs each replacement id to be read wherever the removed occurrence was, at least
+            # as early (E63d, R-H1); a replacement may sit under any heading in any file. Losing reach takes an
+            # Applicability row with @reach, never a Rewrites row.
+            _, targets = rewrites[gid]
+            done = sum(1 for m in missed if all(any(covers(s, m) for s in by_id.get(n, [])) for n in targets))
             res["reworded"] += done
             remaining -= done
         elif gid in rationale:
@@ -296,7 +350,7 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
             res["unmapped_removed"] += remaining
             unmapped.add(gid)
     res.update({"unmapped_ids": sorted(unmapped), "normative_in_rationale": len(bad_rationale), "readmap_widened": widened,
-                "added_normative_near_rule": near_rule_count(baseline["entries"], after["entries"], renames),
+                "added_normative_near_rule": near_rule_count(baseline["entries"], after["entries"], {new: old for (_, new), old in renames.items()}),
                 "rows_missing_review": missing_review, "row_errors": sorted(set(errors))})
     return res
 
@@ -452,7 +506,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             rat = Path(a.rationale) if a.rationale else Path(a.policy_map).with_name("router-rationale.md")
             res = diff_inventory(base, corpus, rm, Path(a.policy_map).read_text(encoding="utf-8"),
                                  rat.read_text(encoding="utf-8") if rat.is_file() else "", root,
-                                 baseline_readmap=load_readmap(rmb))
+                                 allowlist=_allowlist(None), baseline_readmap=load_readmap(rmb))
             print(json.dumps(res, sort_keys=True))
             return exit_code(res)
         if not a.files:

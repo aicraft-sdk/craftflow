@@ -103,7 +103,7 @@ def baseline_of(corpus: dict) -> dict:
 
 def run_diff(before: dict, after: dict, doc: str = None, rationale: str = "", root=None) -> dict:
     return inv.diff_inventory(baseline_of(before), after, RM, doc if doc is not None else policy_doc(),
-                              rationale_text=rationale, plugin_root=root)
+                              rationale_text=rationale, plugin_root=root, baseline_readmap=RM)
 
 
 def passes(res: dict) -> bool:
@@ -234,7 +234,7 @@ def test_allowlisted_rule_to_rationale_fails() -> None:
     base = inv.build_inventory(before, RM, allow, ref="fixture")
     row = f"| {id_of(text)} | router-rationale.md | moved for size | David Gracia (2026-10-08) |"
     res = inv.diff_inventory(base, {K: "## Handoff\n\nOther.\n"}, RM, policy_doc(rationale=[row]),
-                             rationale_text=text + "\n")
+                             rationale_text=text + "\n", baseline_readmap=RM)
     check("allowlisted_rule_to_rationale_fails",
           res["normative_in_rationale"] == 1 and inv.exit_code(res) == 1, repr(res))
 
@@ -253,7 +253,7 @@ def test_applicability_row_requires_quote() -> None:
 def test_heading_rename_requires_row() -> None:
     before = {K: "## Old Name\n\n" + GATE + "\n"}
     after = {K: "## New Name\n\n" + GATE + "\n"}
-    row = "| old name | new name | heading | rename | same section | David Gracia (2026-10-08) |"
+    row = f"| {K}#old name | {K}#new name | heading | rename | same section | David Gracia (2026-10-08) |"  # file-scoped (H-L4)
     bad = run_diff(before, after)
     good = run_diff(before, after, policy_doc(rewrites=[row]))
     check("heading_rename_requires_row", not passes(bad) and bad["unmapped_removed"] == 1 and passes(good),
@@ -298,7 +298,7 @@ def test_split_rule_requires_rewrites_row() -> None:
     whole = "- Run the gate and then the sweep."
     p1, p2 = "- Run the gate.", "- Then the sweep."
     before = {K: "## A\n\n" + whole + "\n"}
-    after = {K: "## A\n\n" + p1 + "\n", FP: "## A\n\n" + p2 + "\n"}
+    after = {K: "## A\n\n" + p1 + "\n\n## B\n\n" + p2 + "\n"}  # both halves stay kernel-read: a split may not lose reach (R-H1)
     row = f"| {id_of(whole)} | {id_of(p1)}, {id_of(p2)} | split | halves | union equals the whole | David Gracia (2026-10-08) |"
     bad = run_diff(before, after)
     good = run_diff(before, after, policy_doc(rewrites=[row]))

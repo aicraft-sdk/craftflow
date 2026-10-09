@@ -7,30 +7,53 @@ and list label, in a runtime file that every workflow and variant that read it a
 as early (kernel and start files at workflow start, then happy-path stage files, then conditional stage files such as
 remediation and research).
 
-Reviewer values: every row in every table is signed by a person as `Firstname Lastname (YYYY-MM-DD)`, for example
-`David Gracia (2026-10-09)`. A bare first name, an empty cell or an agent id is not a signature and counts toward
-`rows_missing_review`, which fails the diff.
+Reviewer values (policy-map v2): every row in every table is signed by a person as `Name (YYYY-MM-DD)`, for example
+`David Gracia (2026-10-09)`; accented, hyphenated and multi-token names are fine. A bare first name, an empty cell or an
+agent id is not a signature and counts toward `rows_missing_review`, which fails the diff. Humans sign. Agent reviews
+(doubt-verifier, plan-gap-reviewer, code-reviewer) are attached as **Evidence**: every table ends with an optional
+`Evidence` column holding the path of the review output, which is never the signature. The signature pattern is a shape
+check and not the control: the control is human PR review of this file, `router-baseline.lock.json` and the baseline
+fixtures (see Rebaseline: CODEOWNERS and the `[rebaseline]` CI gate).
 
 ## Policy-mapped deletions
 
 Status is one of `deleted`, `pending-prose-deletion`, `prose_retained`, `document-only`. Only `deleted` rows
 account for a removed occurrence. The script and the test named in a row must exist.
 
-| Baseline ID or group (file:start-end@sha) | Policy key | Enforcing script::function | Test | Status | live_verified | Reviewed by |
-|---|---|---|---|---|---|---|
+| Baseline ID or group (file:start-end@sha) | Policy key | Enforcing script::function | Test | Status | live_verified | Reviewed by | Evidence |
+|---|---|---|---|---|---|---|---|
 
 ## Rewrites
 
-Kind is one of `pointer`, `dedupe`, `trigger`, `literal-to-key`, `xref`, `split`, `heading`. A `heading` row maps
-an old heading text (first cell) to the new one (second cell). Every other row names replacement ids that exist in
-the current inventory and must relate them to the old rule: the new units together keep at least 60% of the old
-unit's tokens and each new unit is at least 60% old tokens (a verbatim move, a dedupe and a split of one rule pass), or
-the row kind is `pointer` and a new unit names the old unit's heading (the rule now lives behind that reference).
-A `dedupe` row is only valid when a kept copy (under any heading, in any file) is read by every workflow and
-variant that read the removed copy, at least as early.
+Kind is one of `pointer`, `dedupe`, `trigger`, `literal-to-key`, `xref`, `split`, `heading`, `group`, `section-move`.
 
-| Baseline ID(s) or group | New IDs | Kind (pointer/dedupe/trigger/literal-to-key/xref/split/heading) | Justification | Equivalence note | Reviewed by |
-|---|---|---|---|---|---|
+- `heading` maps `file.md#old heading` (first cell) to `file.md#new heading` (second cell). The rename is scoped to that
+  file, the old heading must exist in the baseline file and the new heading must exist in the current file. It renames one
+  heading element; it cannot drop a path element (use `section-move`).
+- `section-move` maps `file.md#a > b > c` to `file.md#x > y` (headings joined with ` > `, lower-cased, backticks and
+  quotes removed). Every baseline occurrence in the source file whose heading path starts with the source path is
+  accounted for by the unit with the same id, label and remaining path under the destination path in the destination
+  file; the depth may change. One signed row moves a whole section, including its `[EASY TO MISS]` units. Reach is
+  preserved as for every kind: a section moved into a file read later (a conditional stage file) is `unmapped_removed`
+  unless an Applicability row narrows it with `@reach`.
+- `group` is many-to-many: several old ids, several new ids (comma separated). Each new id must relate to at least one
+  old id and each old id to at least one new id, by shared tokens of at least 60% of either unit and without losing a
+  negation token. `[EASY TO MISS]` units contained in a listed unit are added to their side automatically.
+- Every other kind names replacement ids that exist in the current inventory and must relate them to the old rule: the
+  new units together keep at least 60% of the old unit's tokens, each new unit is at least 60% old tokens (a verbatim move,
+  a dedupe and a split of one rule pass) and no negation token (`never`, `not`, `no`, `only`, `must`, `always`) of the old
+  unit is missing from the new text. A table row is compared on its body only, never on the header text that is folded into
+  its id. A `pointer` row may instead have a new unit that names the old unit's heading, the file the rule now lives in and
+  an existing heading of that file.
+
+Reach is checked on every kind except `heading`: each replacement id (for `group`, each id related to the old one) must be
+read by every workflow and variant that read the removed occurrence, at least as early. A `dedupe` kept copy, a `pointer`
+unit and a split half are all held to it. Losing reach is expressible only with an Applicability row that carries `@reach`.
+A `pointer` row may therefore sit at a lower reach than the rule it points to only if the pointer unit itself is read at
+the original reach.
+
+| Baseline ID(s) or group | New IDs | Kind (pointer/dedupe/trigger/literal-to-key/xref/split/heading/group/section-move) | Justification | Equivalence note | Reviewed by | Evidence |
+|---|---|---|---|---|---|---|
 
 ## Applicability
 
@@ -42,8 +65,8 @@ rejected. Coverage cells are `WORKFLOW` or `WORKFLOW:variant` tokens separated b
 `@happy_path_stage` or `@conditional_stage` to also accept a later reach for that pair (`@kernel` and `@start` are the
 default, the baseline reach).
 
-| Baseline ID or section (file#heading@sha) | Baseline coverage | Narrowed coverage | Quoted scope words | Reviewed by |
-|---|---|---|---|---|
+| Baseline ID or section (file#heading@sha) | Baseline coverage | Narrowed coverage | Quoted scope words | Reviewed by | Evidence |
+|---|---|---|---|---|---|
 
 ## Rationale
 
@@ -51,8 +74,8 @@ Non-normative units moved verbatim to `router-rationale.md`. A normative unit ca
 Only a unit whose every occurrence is in one of the eight files read at workflow start (the kernel and
 start-class files, the L3 basis) may be listed: a stage-class rule is never moved out of the runtime corpus this way.
 
-| Baseline ID | Destination | Justification | Reviewed by |
-|---|---|---|---|
+| Baseline ID | Destination | Justification | Reviewed by | Evidence |
+|---|---|---|---|---|
 
 ## Read-map widening
 
@@ -63,8 +86,8 @@ the baseline map does not list) and the widened coverage that is being allowed (
 reach with `@happy_path_stage` or `@conditional_stage`). Without this check a rule moved into a file that the live map
 then marks as read everywhere would look reachable.
 
-| File | Baseline coverage | Widened coverage | Justification | Reviewed by |
-|---|---|---|---|---|
+| File | Baseline coverage | Widened coverage | Justification | Reviewed by | Evidence |
+|---|---|---|---|---|---|
 
 ## Rebaseline
 
@@ -72,9 +95,23 @@ The baseline inventory (`tests/fixtures/router-rule-inventory.baseline.json`), i
 (`tests/fixtures/router-readmap.baseline.json`) and the commit they describe are pinned by
 `tests/fixtures/router-baseline.lock.json`:
 `{"baseline_sha": <full 40-hex commit>, "baseline_sha256": <sha256 of the baseline file>, "readmap_baseline_sha256": <sha256 of the frozen read map>}`.
-`--diff` and `test_rule_inventory.py::baseline_matches_ref` both fail, never skip, when the baseline's `ref`, either
-file's sha256 or the commit's presence in the clone (CI needs `fetch-depth: 0`) differs from the lock. A baseline
-re-emitted from an edited tree, or with `ref` null, therefore cannot be diffed against itself.
+`--diff` and `test_rule_inventory.py::baseline_matches_ref` both fail, never skip, when the baseline's `ref` or either
+file's sha256 differs from the lock, or when `git cat-file -e <baseline_sha>^{commit}` fails in the clone (message
+"fetch-depth 0 required"; CI checks out with `fetch-depth: 0`). A baseline re-emitted from an edited tree, or with `ref`
+null, therefore cannot be diffed against itself.
+
+Human gate (R-M2, H-M3): the lock can be edited in the same PR that edits the rules, so it is protected by review and by
+CI, not by the script. `.github/CODEOWNERS` names the owner for the lock, the baseline and the frozen read map. The
+`craftflow-ci` job runs the `--diff` exit-criterion command and then fails when
+`tests/fixtures/router-baseline.lock.json` differs from `origin/main`, unless the pull request title or body contains
+`[rebaseline]` (push events skip the title check but still run `--diff`). Tag a PR `[rebaseline]` only for the deliberate
+procedure below.
+
+policy-map v2 migration: the tables gained a trailing `Evidence` column and the Rewrites kinds `group` and
+`section-move`. The parser fails closed on the old headers (`header differs from the required header`). To migrate a map
+written against v1, append ` Evidence |` to each header line and one `---|` to each separator row, and add
+`group/section-move` to the Kind header text; rows need no new cell (a row may omit the trailing Evidence cell). Unit ids
+and norms are unchanged, so this is not a rebaseline.
 
 Change the lock only by a deliberate rebaseline, after a change to unit extraction, normalization or the classifier,
 and only against the original commit, never against a tree that has lost rules:

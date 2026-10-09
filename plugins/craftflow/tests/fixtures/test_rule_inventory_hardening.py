@@ -101,9 +101,9 @@ def test_h_h1_empty_corpus_fails() -> None:
         check("H-H1 empty plugin root --emit fails", r.returncode != 0 and not out.exists() and "error" in r.stderr,
               f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
     zero = {"version": 2, "ref": None, "entries": []}
-    check("H-H1 zero-entry baseline is rejected", bool(raises(lambda: inv.diff_inventory(zero, {K: "## A\n\nx\n"}, RM, policy_doc()))))
+    check("H-H1 zero-entry baseline is rejected", bool(raises(lambda: inv.diff_inventory(zero, {K: "## A\n\nx\n"}, RM, policy_doc(), baseline_readmap=RM))))
     good = base.baseline_of({K: "## A\n\n" + GATE + "\n"})
-    check("H-H1 empty after corpus is rejected", bool(raises(lambda: inv.diff_inventory(good, {}, RM, policy_doc()))))
+    check("H-H1 empty after corpus is rejected", bool(raises(lambda: inv.diff_inventory(good, {}, RM, policy_doc(), baseline_readmap=RM))))
 
 
 def test_h_h2_readmap_validation() -> None:
@@ -283,7 +283,8 @@ BETA = "- Never do the beta thing."
 def diff2(row: str, after_file: str = PL, extra: str = "") -> dict:
     base2 = inv.build_inventory({K: "## K\n\nStay.\n", STD: "## r\n\n" + BETA + "\n"}, RM2, set(), ref="f")
     return inv.diff_inventory(base2, {K: "## K\n\nStay.\n", after_file: "## r\n\n" + BETA + "\n"}, RM2,
-                              policy_doc(applic=[row] if row else []), plugin_root=PLUGIN_ROOT)
+                              policy_doc(applic=[row] if row else []), plugin_root=PLUGIN_ROOT,
+                              baseline_readmap=RM2)
 
 
 def test_m1_narrowing_validated_against_baseline_coverage() -> None:
@@ -358,7 +359,7 @@ def test_l5_duplicate_baseline_ids_are_rejected() -> None:
     b = base.baseline_of({K: "## A\n\n" + GATE + "\n"})
     b["entries"].append(json.loads(json.dumps(b["entries"][0])))
     check("L5 a baseline with a repeated unit id is rejected",
-          "duplicate" in raises(lambda: inv.diff_inventory(b, {K: "## A\n\nx\n"}, RM, policy_doc())))
+          "duplicate" in raises(lambda: inv.diff_inventory(b, {K: "## A\n\nx\n"}, RM, policy_doc(), baseline_readmap=RM)))
 
 
 def test_policy_map_unclosed_fence_is_surfaced_first() -> None:

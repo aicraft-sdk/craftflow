@@ -65,7 +65,7 @@ def doc(**rows) -> str:
 
 def diff(before: dict, after: dict, readmap=RMX, **rows) -> dict:
     base = inv.build_inventory(before, RMX, set(), ref="fixture")
-    return inv.diff_inventory(base, after, readmap, doc(**rows), plugin_root=PLUGIN_ROOT)
+    return inv.diff_inventory(base, after, readmap, doc(**rows), plugin_root=PLUGIN_ROOT, baseline_readmap=RMX)
 
 
 def failed(res: dict) -> bool:
@@ -274,7 +274,7 @@ def test_d5_a6_frontmatter_description_rule_removed() -> None:
     check("A6 removing a rule from the SKILL.md frontmatter description is a lost rule", failed(res), repr(res))
     with tempfile.TemporaryDirectory() as tmp:
         root = scratch(tmp)
-        edit(root, K, "CRITICAL: Route and execute immediately. Do not stop at describing capabilities.\n", "")
+        edit(root, K, "  CRITICAL: Route and execute immediately. Do not stop at describing capabilities.\n", "")  # whole line: keep `---` at column 0
         r, res = real_diff(root)
     check("A6 e2e: the real SKILL.md frontmatter CRITICAL line is covered", r.returncode == 1 and res.get("unmapped_removed", 0) >= 1,
           f"rc={r.returncode} {res}")
@@ -295,8 +295,10 @@ def test_d6_a9_policy_and_rationale_rows_need_a_reviewer() -> None:
                            f"tests/fixtures/test_guard.py::test_decide | deleted | true | {who} |")
         base = inv.build_inventory({K: "## A\n\n" + text + "\n"}, RMX, set(), ref="f")
         after = {K: "## A\n\nOther text here.\n"}
-        unsigned = inv.diff_inventory(base, after, RMX, doc(policy=[row("")]), plugin_root=root)
-        signed = inv.diff_inventory(base, after, RMX, doc(policy=[row(WHO)]), plugin_root=root)
+        unsigned = inv.diff_inventory(base, after, RMX, doc(policy=[row("")]), plugin_root=root,
+                                    baseline_readmap=RMX)
+        signed = inv.diff_inventory(base, after, RMX, doc(policy=[row(WHO)]), plugin_root=root,
+                                  baseline_readmap=RMX)
     check("A9 an unsigned policy-mapped deletion row is counted and fails", unsigned["rows_missing_review"] == 1 and failed(unsigned),
           repr(unsigned))
     check("A9 a signed policy-mapped deletion row passes", not failed(signed) and signed["policy_mapped"] == 1, repr(signed))
@@ -305,7 +307,8 @@ def test_d6_a9_policy_and_rationale_rows_need_a_reviewer() -> None:
     rbase = inv.build_inventory({K: "## A\n\n" + para + "\n"}, RMX, set(), ref="f")
     rrow = lambda who: f"| {pid} | router-rationale.md | explanatory | {who} |"
     run = lambda who: inv.diff_inventory(rbase, {K: "## A\n\nOther text here.\n"}, RMX, doc(rationale=[rrow(who)]),
-                                         rationale_text=para + "\n", plugin_root=PLUGIN_ROOT)
+                                         rationale_text=para + "\n", plugin_root=PLUGIN_ROOT,
+                                         baseline_readmap=RMX)
     check("A9 an unsigned rationale row is counted and fails", run("")["rows_missing_review"] == 1 and failed(run("")), repr(run("")))
     check("A9 a signed rationale row passes", not failed(run(WHO)), repr(run(WHO)))
 
