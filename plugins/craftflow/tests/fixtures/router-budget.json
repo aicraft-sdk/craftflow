@@ -1,6 +1,6 @@
 {
   "baseline_ref": "0439c33932463d257b881ce50f136ab7661c0a39",
-  "measured_at_sha": "3417db204f64df5447c3498cfa32d4d0da8113a3",
+  "measured_at_sha": "f7adb7b790020ef1f1245ea9fe0311b28a685c9c",
   "last_phase": "P2",
   "merged_phases": [
     "P2"
@@ -39,7 +39,7 @@
   "projection_sha256": "c3a0c575a4fd5853030e543fe95a565ef8d722235ecb447e4867881d9767db6e",
   "projection_revisions": [],
   "enforce": false,
-  "p2_sha": "3417db204f64df5447c3498cfa32d4d0da8113a3",
+  "p2_sha": "f7adb7b790020ef1f1245ea9fe0311b28a685c9c",
   "p2_measured": {
     "files": {
       "skills/_shared/router-protocol.md": 29315,
