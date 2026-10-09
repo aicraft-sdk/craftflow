@@ -1,0 +1,1916 @@
+{
+ "baseline_ref": "0439c33932463d257b881ce50f136ab7661c0a39",
+ "describes": "router context cut r2: every byte change P2-P13 makes to a gated file",
+ "rows": [
+  {
+   "anchor": "proceed with routing/dispatch decisions from stale in-context memory of its content.",
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p2-readmap-table-insert",
+   "op": "insert",
+   "phase": "P2",
+   "position": "after_anchor",
+   "source": "plan P2 task 2/3: generated Reference Read Map table, markers, after the 'Mandatory reference read' paragraph (SKILL.md:17-22)",
+   "text": "\n## Reference Read Map\n\n<!-- readmap:begin -->\nGenerated from `config/router-readmap.json` by `scripts/craftflow_router_readset.py --print-table`; edit the map, not this table. It lists when each runtime file is read today. The sections below carry the rules.\n\n| Class | Read when | File | Workflows | Variant | Happy path |\n|---|---|---|---|---|---|\n| kernel | skill load | `SKILL.md` | ALL | - | yes |\n| kernel | read before routing (SKILL.md section 1 pointer) | `_shared/router-protocol.md` | ALL | - | yes |\n| start | workflow start | `references/workflow-artifact-and-hook-policy.md` | ALL | - | yes |\n| start | BUILD preparation | `references/build-workflow.md` | BUILD | - | yes |\n| start | fast-path routing during BUILD preparation | `references/fast-path.md` | BUILD | - | yes |\n| start | PLAN preparation | `references/plan-workflow.md` | PLAN | - | yes |\n| start | DEBUG preparation | `references/debug-workflow.md` | DEBUG | - | yes |\n| start | REVIEW preparation | `references/review-workflow.md` | REVIEW | - | yes |\n| stage | before code-reviewer dispatch / clean-state check | `references/harness-self-checks.md` | BUILD, REVIEW, DEBUG | - | yes |\n| stage | remediation or research is triggered | `references/remediation-and-research.md` | ALL | - | no |\n| stage | phase exit | `references/context-boundary.md` | BUILD, PLAN | - | yes |\n| stage | first agent dispatch effort lookup (SKILL.md:907) | `references/fast-path.md` | PLAN, DEBUG, REVIEW | - | yes |\n<!-- readmap:end -->\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p3-desc-craftflow-router",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3 draft (verbatim)",
+   "text": "THE ONLY ENTRY POINT FOR CRAFTFLOW. Use for any build, fix, debug, review, plan, test, refactor or continue request; route and execute immediately."
+  },
+  {
+   "condition": "always",
+   "file": "skills/status/SKILL.md",
+   "id": "p3-desc-status",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3 draft (verbatim)",
+   "text": "Read-only status of the current Craftflow workflow: phases done/pending, blockers, last event; does NOT go through craftflow-router. Use for status/progress."
+  },
+  {
+   "condition": "always",
+   "file": "skills/failure-digest/SKILL.md",
+   "id": "p3-desc-failure-digest",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3 draft (verbatim)",
+   "text": "Read-only digest ranking recurring failure signatures across Craftflow workflows; does NOT go through craftflow-router. Use to ask what keeps failing."
+  },
+  {
+   "condition": "always",
+   "file": "skills/retro/SKILL.md",
+   "id": "p3-desc-retro",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3 draft (verbatim)",
+   "text": "Read-only retrospective of one finished Craftflow workflow; does NOT go through craftflow-router. Use after a workflow completes to see what went wrong."
+  },
+  {
+   "condition": "always",
+   "file": "skills/update/SKILL.md",
+   "id": "p3-desc-update",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3 draft (verbatim)",
+   "text": "Safe craftflow plugin upgrade preserving local modifications. Use to update, upgrade or sync craftflow."
+  },
+  {
+   "condition": "always",
+   "file": "skills/cursor-router/SKILL.md",
+   "id": "p3-desc-cursor-router",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3 draft (verbatim)",
+   "text": "Craftflow router for Cursor agent mode; loaded by the Cursor rule, not by Claude Code."
+  },
+  {
+   "condition": "always",
+   "file": "skills/research/SKILL.md",
+   "id": "p3-desc-research",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3 draft (verbatim)",
+   "text": "Internal skill. Research-synthesis guidance for planner/investigator when research files exist."
+  },
+  {
+   "condition": "always",
+   "file": "skills/ai-first-setup/SKILL.md",
+   "id": "p3-desc-ai-first-setup",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'ai-first-setup' (effective description 205 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/codebase-deepening/SKILL.md",
+   "id": "p3-desc-codebase-deepening",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'codebase-deepening' (effective description 189 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/component-registry/SKILL.md",
+   "id": "p3-desc-component-registry",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'component-registry' (effective description 233 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/diagram-design/SKILL.md",
+   "id": "p3-desc-diagram-design",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'diagram-design' (effective description 284 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/diff-driven-docs/SKILL.md",
+   "id": "p3-desc-diff-driven-docs",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'diff-driven-docs' (effective description 261 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/finishing-a-development-branch/SKILL.md",
+   "id": "p3-desc-finishing-a-development-branch",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'finishing-a-development-branch' (effective description 200 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/frontend-design-critique/SKILL.md",
+   "id": "p3-desc-frontend-design-critique",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'frontend-design-critique' (effective description 181 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/frontend-patterns/SKILL.md",
+   "id": "p3-desc-frontend-patterns",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'frontend-patterns' (effective description 248 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/handoff-package/SKILL.md",
+   "id": "p3-desc-handoff-package",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'handoff-package' (effective description 193 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/jev-setup/SKILL.md",
+   "id": "p3-desc-jev-setup",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'jev-setup' (effective description 153 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/plan-review-gate/SKILL.md",
+   "id": "p3-desc-plan-review-gate",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'plan-review-gate' (effective description 140 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/receiving-code-review/SKILL.md",
+   "id": "p3-desc-receiving-code-review",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'receiving-code-review' (effective description 178 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/registry-promote/SKILL.md",
+   "id": "p3-desc-registry-promote",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'registry-promote' (effective description 252 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/skill-distillation/SKILL.md",
+   "id": "p3-desc-skill-distillation",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'skill-distillation' (effective description 283 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/verification-before-completion/SKILL.md",
+   "id": "p3-desc-verification-before-completion",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'verification-before-completion' (effective description 152 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/workspace-setup/SKILL.md",
+   "id": "p3-desc-workspace-setup",
+   "max_chars": 130,
+   "note": "P3 task 3 gives no draft for 'workspace-setup' (effective description 208 chars): 'The other skills are <= 130 chars each.' The projection keeps today's length and reports the 130-char cap under descriptions_bound.",
+   "op": "descriptions",
+   "phase": "P3",
+   "source": "plan P3 task 3",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p3-kernel-when-to-use",
+   "note": "P3 task 3: 'Trigger lists move verbatim into body ## When To Use' for skills whose description exceeds 160 chars; the craftflow-router description (499 chars) has a keyword list, and the plan does not say whether it gets a '## When To Use' section in the kernel (about +290 B to every start set). Not applied; kernel tiers exclude it.",
+   "op": "insert",
+   "phase": "P3",
+   "position": "end_of_file",
+   "source": "plan P3 Files list (body When To Use sections)",
+   "status": "needs_anchor"
+  },
+  {
+   "condition": "always",
+   "file": "config/policy.json",
+   "id": "p4-policy-json-new",
+   "op": "insert",
+   "phase": "P4",
+   "position": "new_file",
+   "source": "plan P4 Files: config/policy.json with memory_write only. DRAFT: one key per line (plan shows one line) so P5/P6/P7 can add non-overlapping per-key insert rows (Review Pass 3 Finding 7); +10 B vs the one-line form.",
+   "status": "drafted",
+   "text": "{\n  \"memory_write\": \"finalize-only\",\n  \"$comment\": \"craftflow gate policy; values mirror router prose (ADR-0073)\"\n}\n"
+  },
+  {
+   "anchor": "  - `skill_distill_failed`",
+   "condition": "always",
+   "file": "skills/craftflow-router/references/workflow-artifact-and-hook-policy.md",
+   "id": "p4-artifact-event-types",
+   "op": "insert",
+   "phase": "P4",
+   "position": "after_anchor",
+   "source": "plan P4 Files: workflow-artifact-and-hook-policy.md event types add policy_loaded, gate_check, worktree_finalize",
+   "status": "drafted",
+   "text": "  - `policy_loaded`\n  - `gate_check`\n  - `worktree_finalize`\n"
+  },
+  {
+   "anchor": "- `updated_at`",
+   "condition": "always",
+   "file": "skills/craftflow-router/references/workflow-artifact-and-hook-policy.md",
+   "id": "p4-artifact-policy-field",
+   "op": "insert",
+   "phase": "P4",
+   "position": "after_anchor",
+   "source": "plan P4 Files: the artifact schema adds `policy`",
+   "status": "drafted",
+   "text": "- `policy` — `{sha256, status}` of `config/policy.json`, stamped at workflow creation by `craftflow_workflow_id.py --init-artifact`; informational only.\n"
+  },
+  {
+   "anchor": "{",
+   "condition": "always",
+   "file": "config/policy.json",
+   "id": "p5-policy-json-guards",
+   "op": "insert",
+   "phase": "P5",
+   "position": "after_anchor",
+   "source": "plan P5 Files: policy.json adds only native_plan_mode and plan_commit (non-overlapping per-key insert, Review Pass 3 Finding 7)",
+   "text": "  \"native_plan_mode\": \"never\",\n  \"plan_commit\": \"never\",\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p5-plan-commit-shorten",
+   "op": "replace",
+   "phase": "P5",
+   "source": "plan P5 Prose: SKILL.md:1613 shortened to one sentence plus 'Enforced by policy plan_commit ... (see Policy table)'; keeps the Plan: pointer and git restore --staged sentences. DRAFT text.",
+   "start_anchor": "- Never `git add` or `git commit` a plan artifact (`docs/plans/**`, any `PLAN_FILE`/`design_file` the planner produces, or a workflow's own `.craftflow/state/workflows/*.json`). Plans are working documents, not deliverables — `docs/plans/` is gitignored in full (see `.gitignore`). Their durable content belongs in the memory system (`## 13. Memory Finalization`: `learnings`/`patterns`/`verification` notes), not in git history. Recording `- Plan: {plan_file}` or `Plan saved: {plan_file}` in `activeContext.md` (a memory pointer to a local path) is unaffected by this rule and still required. If any dispatched agent stages or commits a plan file anyway, the router must `git restore --staged`/`git reset` that path before continuing — never let it ride along in the next commit.",
+   "status": "drafted",
+   "text": "- Never `git add` or `git commit` a plan artifact (`docs/plans/**`, any `PLAN_FILE`/`design_file` the planner produces, or a workflow's own `.craftflow/state/workflows/*.json`); enforced by policy `plan_commit` in craftflow projects (see Policy table). Recording `- Plan: {plan_file}` or `Plan saved: {plan_file}` in `activeContext.md` (a memory pointer to a local path) is unaffected by this rule and still required. If any dispatched agent stages or commits a plan file anyway, the router must `git restore --staged`/`git reset` that path before continuing — never let it ride along in the next commit.\n"
+  },
+  {
+   "anchor": "  \"memory_write\": \"finalize-only\",",
+   "condition": "always",
+   "file": "config/policy.json",
+   "id": "p6-policy-json-caps",
+   "op": "insert",
+   "phase": "P6",
+   "position": "after_anchor",
+   "source": "plan P6 Files: policy.json adds the 4 cap keys (non-overlapping per-key insert)",
+   "text": "  \"remediation_cycles_max\": 3,\n  \"doubt_cycles_max\": 3,\n  \"fix_verify_cycles_max\": 3,\n  \"plan_review_passes_max\": 2,\n"
+  },
+  {
+   "anchor": "- Read the latest `$PROJECT_ROOT/.craftflow/state/workflows/*.json` artifact if one exists for the current conversation.",
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p6-dd9-scripts-sentence",
+   "op": "insert",
+   "phase": "P6",
+   "position": "after_anchor",
+   "source": "plan P6 task 4: DD-9 CRAFTFLOW_SCRIPTS sentence once in kernel section 5 shared preparation",
+   "status": "drafted",
+   "text": "\n**Script directory (DD-9):** `CRAFTFLOW_SCRIPTS` = the router skill's Base directory + `/../../scripts`; fall back to `$CRAFTFLOW_INSTALL/scripts` only when that directory lacks the script you need. The Skill tool can serve a different cached version than `installed_plugins.json` names.\n"
+  },
+  {
+   "anchor": "**After doubt-verifier returns:**",
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p6-call-line-doubt",
+   "op": "insert",
+   "phase": "P6",
+   "position": "after_anchor",
+   "source": "plan P6 Prose: SKILL.md:977 call line (doubt_cycles_max)",
+   "status": "drafted",
+   "text": "- First run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate doubt_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"` (N = the `Cycle:` of this cycle's task; in Task*-tool fallback mode, the `## Cycle` value of this dispatch's prompt, else the agent's echoed `Cycle number:`, never `telemetry.loop_counts`). `advance` → apply the bullet for the returned verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance per the `CYCLE_COMPLETE` hard-stop bullet. `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).\n"
+  },
+  {
+   "anchor": "**After doubt-verifier returns** (see `agents/doubt-verifier.md → ## Fix-Verify Contract`):",
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p6-call-line-fixverify",
+   "op": "insert",
+   "phase": "P6",
+   "position": "after_anchor",
+   "source": "plan P6 Prose: SKILL.md:1045 call line (fix_verify_cycles_max)",
+   "status": "drafted",
+   "text": "- First run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate fix_verify_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"` (after the contract-override check below has been applied; N = the `Cycle:` of the fix-verify task; in Task*-tool fallback mode, the `## Cycle` value of this dispatch's prompt). `advance` → apply the bullet for the returned (post-override) verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict (the 3-cycle hard stop that the cycle-counter paragraph inherits from `doubt_verify`). If `doubt_verify_gate` also fired on this phase, a capped verdict does not block phase exit under the stricter-verdict rule; the other gate's verdict still applies. `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).\n"
+  },
+  {
+   "anchor": "Before creating a new remediation task:",
+   "condition": "always",
+   "file": "skills/craftflow-router/references/remediation-and-research.md",
+   "id": "p6-rr-call-line-precreate",
+   "op": "insert",
+   "phase": "P6",
+   "position": "after_anchor",
+   "source": "plan P6 Prose: remediation-and-research.md:27 call line above the two bullets",
+   "status": "drafted",
+   "text": "- First run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate remediation_cycles_max --point pre_create --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"`: `human_checkpoint` with `reason: cap-reached` → apply the first bullet below (ask the user); `proceed` → apply the second bullet; any other result → `loop_cap_check_failed` (`SKILL.md` § 14).\n"
+  },
+  {
+   "anchor": "When `plan-gap-reviewer` pass 1 returns `PASS`:",
+   "condition": "always",
+   "file": "skills/craftflow-router/references/remediation-and-research.md",
+   "id": "p6-rr-call-line-planreview",
+   "op": "insert",
+   "phase": "P6",
+   "position": "before_anchor",
+   "source": "plan P6 Prose: one sentence before the 'When plan-gap-reviewer pass 1 returns PASS' line (remediation-and-research.md:145)",
+   "status": "drafted",
+   "text": "After applying a block's `Increment planning_review_runs += 1` line, run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate plan_review_passes_max --point post_verdict --pass {N} --verdict {PASS|FINDINGS}`, where N is the pass of the returning `plan-review-gap-N` task; `proceed` → continue with that block; `human_checkpoint` with `reason: cap-reached` → the pass-2 `FINDINGS` block applies (`pending_gate=clarification`); any other result → `loop_cap_check_failed` (`SKILL.md` § 14).\n\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p6-sub-doubt-cycle-complete",
+   "op": "replace",
+   "phase": "P6",
+   "source": "plan P6 Prose: SKILL.md:981 substitutions",
+   "start_anchor": "- `CYCLE_COMPLETE: true` on cycle 3 → advance regardless of verdict (3-cycle hard stop)",
+   "text": "- `CYCLE_COMPLETE: true` on cycle `policy.doubt_cycles_max` (= 3) → advance regardless of verdict (`policy.doubt_cycles_max`-cycle hard stop)\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p6-sub-doubt-counter",
+   "op": "replace",
+   "phase": "P6",
+   "source": "plan P6 Prose: SKILL.md:983 Max 3 cycles",
+   "start_anchor": "**Doubt cycle counter:** Track in workflow artifact under `telemetry.loop_counts.doubt_verify`. Max 3 cycles; router enforces the hard stop.",
+   "text": "**Doubt cycle counter:** Track in workflow artifact under `telemetry.loop_counts.doubt_verify`. Max `policy.doubt_cycles_max` (= 3) cycles; router enforces the hard stop.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p6-sub-fixverify-counter",
+   "op": "replace",
+   "phase": "P6",
+   "source": "plan P6 Prose: SKILL.md:1065-1067 Max 3 cycles",
+   "start_anchor": "`telemetry.loop_counts.fix_verify`. Max 3 cycles; router enforces the hard stop (same rule as",
+   "text": "`telemetry.loop_counts.fix_verify`. Max `policy.fix_verify_cycles_max` (= 3) cycles; router enforces the hard stop (same rule as\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p6-sub-hardrule-remediation",
+   "op": "replace",
+   "phase": "P6",
+   "source": "plan P6 Prose: SKILL.md:1615",
+   "start_anchor": "- Never let a remediation loop run more than 3 cycles without a human checkpoint. Drift accumulates silently in long chains.",
+   "text": "- Never let a remediation loop run more than `policy.remediation_cycles_max` (= 3) cycles without a human checkpoint. Drift accumulates silently in long chains.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p6-sub-plan-review-passes",
+   "op": "replace",
+   "phase": "P6",
+   "source": "plan P6 Prose: plan-workflow.md:66",
+   "start_anchor": "   - Maximum fresh-review passes: 2.",
+   "text": "   - Maximum fresh-review passes: `policy.plan_review_passes_max` (= 2).\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/remediation-and-research.md",
+   "id": "p6-sub-rr-remfix",
+   "op": "replace",
+   "phase": "P6",
+   "source": "plan P6 Prose: remediation-and-research.md:33",
+   "start_anchor": "  `circuit_breaker.remfix_count >= 3`.",
+   "text": "  `circuit_breaker.remfix_count >= policy.remediation_cycles_max` (= 3).\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/workflow-artifact-and-hook-policy.md",
+   "id": "p6-sub-artifact-remfix",
+   "op": "replace",
+   "phase": "P6",
+   "source": "plan P6 Prose: workflow-artifact-and-hook-policy.md remfix_count reaches 3",
+   "start_anchor": "    `remfix_count` reaches 3; never resets within that workflow. When `true`, the router asks the",
+   "text": "    `remfix_count` reaches `policy.remediation_cycles_max` (= 3); never resets within that workflow. When `true`, the router asks the\n"
+  },
+  {
+   "anchor": "- `pending_gate` is required whenever BUILD/PLAN/DEBUG is waiting on user clarification, scope selection, or persistence repair.",
+   "condition": "always",
+   "file": "skills/craftflow-router/references/workflow-artifact-and-hook-policy.md",
+   "id": "p6-artifact-pending-gate-entry",
+   "op": "insert",
+   "phase": "P6",
+   "position": "after_anchor",
+   "source": "plan P6 Prose: pending_gate rules gain one entry after :173 (Difference 32)",
+   "text": "- `loop_cap_check_failed` — `gate_check` gave no usable decision; ask the line in `SKILL.md` § 14 and apply no verdict until the user answers; on resume, re-ask it.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p6-kernel-policy-table",
+   "op": "insert",
+   "phase": "P6",
+   "position": "end_of_file",
+   "source": "plan P6 Kernel: generated ### Policy table under section 14 (8 rows)",
+   "status": "drafted",
+   "text": "\n### Policy table\n\nEffective policy (`config/policy.json` merged over the defaults), printed by `craftflow_policy.py --print-table`. Each value is enforced by the named script; the prose location keeps the rule text.\n\n| key | value | enforced by | prose location |\n|---|---|---|---|\n| `native_plan_mode` | `never` | `craftflow_pretooluse_guard.py` | § 14 EnterPlanMode rule |\n| `plan_commit` | `never` | `craftflow_pretooluse_bash_guard.py` | § 14 plan-artifact rule |\n| `memory_write` | `finalize-only` | `craftflow_pretooluse_guard.py` | § 13 |\n| `worktree_merge` | `require_clean_tree=true, lock_max_attempts=9, lock_sleep_seconds=5, copy_fallback_on_up_to_date=true` | `craftflow_worktree_finalize.py` | `references/worktree.md` |\n| `remediation_cycles_max` | `3` | `craftflow_gate_check.py` | § 14 remediation loop rule |\n| `doubt_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Doubt-Verify Dispatch Rule |\n| `fix_verify_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Fix-Verify Dispatch Rule |\n| `plan_review_passes_max` | `2` | `craftflow_gate_check.py` | `references/plan-workflow.md` |\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p6-kernel-loop-caps-table",
+   "op": "insert",
+   "phase": "P6",
+   "position": "end_of_file",
+   "source": "plan P6 Kernel: documentation-only Loop caps table",
+   "status": "drafted",
+   "text": "\n### Loop caps\n\nDocumentation of the hard stops. The operative text stays in the lines named in the last column.\n\n| gate | max | evaluation point | input | at-cap action | operative prose |\n|---|---|---|---|---|---|\n| `remediation_cycles_max` | 3 | before creating a REM-FIX task | `circuit_breaker` | ask the user | `references/remediation-and-research.md` \"Before creating a new remediation task\" |\n| `doubt_cycles_max` | 3 | after doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Doubt-Verify \"After doubt-verifier returns\" |\n| `fix_verify_cycles_max` | 3 | after the fix-verify doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Fix-Verify \"After doubt-verifier returns\" |\n| `plan_review_passes_max` | 2 | after a plan-gap-reviewer pass | pass N, verdict | pass 2 FINDINGS: clarification | `references/remediation-and-research.md` plan-gap-reviewer blocks |\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p6-kernel-loop-cap-ask-line",
+   "op": "insert",
+   "phase": "P6",
+   "position": "end_of_file",
+   "source": "plan P6 Kernel / BC-6 Difference 32: operative loop_cap_check_failed paragraph with the verbatim ask line",
+   "status": "drafted",
+   "text": "\n**`loop_cap_check_failed`.** When `craftflow_gate_check.py` exits non-zero, prints anything but one JSON line with a valid `action`, or returns `human_checkpoint` with a `reason` other than `cap-reached`: persist `pending_gate: \"loop_cap_check_failed\"`, apply no verdict, create no task, increment no counter, and ask: \"Loop-cap check for `{gate}` gave no usable decision (`{reason or \"exit \" + code}`), so I have not acted on the `{verdict}` verdict for cycle/pass {N}. Reply `retry` to run the check again, `advance` to apply the hard-stop handling, or `proceed` to apply the verdict as written.\" For remediation, `advance` is not offered and `proceed` reads \"create the REM-FIX as written\". On the reply, clear `pending_gate` and apply the chosen block. On resume with this `pending_gate`, re-ask the same line and take no other action.\n"
+  },
+  {
+   "anchor": "  \"$comment\": \"craftflow gate policy; values mirror router prose (ADR-0073)\"",
+   "condition": "always",
+   "file": "config/policy.json",
+   "id": "p7-policy-json-worktree-merge",
+   "op": "insert",
+   "phase": "P7",
+   "position": "before_anchor",
+   "source": "plan P7 Files: policy.json adds worktree_merge with all four nested keys",
+   "text": "  \"worktree_merge\": {\n    \"require_clean_tree\": true,\n    \"lock_max_attempts\": 9,\n    \"lock_sleep_seconds\": 5,\n    \"copy_fallback_on_up_to_date\": true\n  },\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/worktree.md",
+   "id": "p8-worktree-md-new",
+   "op": "insert",
+   "phase": "P8",
+   "position": "new_file",
+   "source": "plan P8 Files: references/worktree.md (When, The call, 12-row outcome table, Difference 6 row, :397 sentence, :727 Safety paragraph). DRAFT text.",
+   "status": "drafted",
+   "text": "# Worktree finalize (BUILD)\n\nRead this after `integration-verifier` returns PASS on the final phase and before memory-finalize, and on resume when `pending_gate` holds a worktree gate.\n\nImmediately before this step (and immediately before memory-finalize when no worktree exists), run the clean-state check per `references/harness-self-checks.md § Clean-State Check` and fold any findings AND any skipped (unscannable) entries into the deferred memory notes.\n\n## The finalize call\n\n`python3 \"$CRAFTFLOW_SCRIPTS/craftflow_worktree_finalize.py\" --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"` prints one JSON line `{\"outcome\",\"pending_gate\",\"message\",\"worktree_mode\",\"details\"}`.\n\n## Outcomes\n\n| outcome | pending_gate | router action | message source |\n|---|---|---|---|\n| `merged_and_removed` | `null` | continue to memory-finalize | message |\n| `skipped_not_auto_created` | `null` | continue to memory-finalize | message |\n| `worktree_path_missing` | `null` | log the event; continue on the main tree | event |\n| `worktree_branch_missing` | `null` | log the event; continue on the main tree | event |\n| `worktree_merge_locked` | `worktree_merge_locked` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `worktree_dirty_main_tree` | `worktree_dirty_main_tree` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `worktree_merge_conflict` | `worktree_merge_conflict` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `worktree_merge_unrecognized_failure` | `worktree_merge_unrecognized_failure` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `worktree_copy_fallback_failed` | `worktree_copy_fallback_failed` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `worktree_cleanup_failed` | `worktree_cleanup_failed` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `policy_invalid` | `policy_invalid` | stop; fix `config/policy.json`; resume re-runs the call | message |\n| `artifact_unreadable` | `null (exit 3)` | stop; repair the workflow artifact; resume | details |\n\nNon-zero exit or unparseable output: persist `pending_gate: worktree_merge_unrecognized_failure`, say finalize returned no outcome, ask the user to inspect `git status` in `$PROJECT_ROOT` and the events log, stop.\n\nGate rows stop before memory-finalize and show `message` verbatim; resuming re-runs the call.\n\n## Safety\n\nSafety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: \"auto_created\"` already set, re-use `worktree_path` from the artifact rather than creating a new worktree. If `worktree_path` is null despite `worktree_mode: \"auto_created\"`, treat as fallback and proceed with main tree. If a resume finds `pending_gate` set to `worktree_merge_locked`, `worktree_dirty_main_tree`, `worktree_merge_conflict`, `worktree_merge_unrecognized_failure`, `worktree_copy_fallback_failed`, or `worktree_cleanup_failed`, re-run the finalize call — none of these gates require any bespoke resume branch beyond the generic resume algorithm in `## 4. Resume And Hydration`.\n\n"
+  },
+  {
+   "condition": "always",
+   "end_anchor": "Safety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: \"auto_created\"` already set, re-use `worktree_path` from the artifact rather than creating a new worktree. If `worktree_path` is null despite `worktree_mode: \"auto_created\"`, treat as fallback and proceed with main tree. If a resume finds `pending_gate` set to `worktree_merge_locked`, `worktree_dirty_main_tree`, `worktree_merge_conflict`, `worktree_merge_unrecognized_failure`, `worktree_copy_fallback_failed`, or `worktree_cleanup_failed`, re-enter this step from 4a — none of these gates require any bespoke resume branch beyond the generic resume algorithm in `## 4. Resume And Hydration`.",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p8-step4-pointer",
+   "op": "replace",
+   "phase": "P8",
+   "source": "plan P8 Modify SKILL.md: replace :392-727 with a 3-line pointer",
+   "start_anchor": "4. After `integration-verifier` returns PASS on the final phase and BEFORE memory-finalize, run",
+   "text": "4. After `integration-verifier` PASS on the final phase and before memory-finalize: when\n   `worktree_mode == \"auto_created\"`, read `references/worktree.md` and run its finalize call.\n   (Steps 1-3 above create the worktree.)\n"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/worktree.md",
+   "dst_header": "## Worktree gate summary\n\n",
+   "end_anchor": "    underlying issue, then resume to retry cleanup.",
+   "id": "p8-artifact-gate-summary-move",
+   "op": "move",
+   "phase": "P8",
+   "pointer_text": "- Worktree merge gates (`worktree_merge_*`, `worktree_dirty_main_tree`, `worktree_copy_fallback_failed`, `worktree_cleanup_failed`) are summarized in `references/worktree.md`.\n- `policy_invalid` — `config/policy.json` failed validation; the finalize call touched nothing. Fix the file, then resume.\n",
+   "source": "plan P8: :182-207 become a 1-line pointer plus the policy_invalid gate; summary moves to worktree.md",
+   "src": "skills/craftflow-router/references/workflow-artifact-and-hook-policy.md",
+   "start_anchor": "- BUILD's worktree merge-safety guard uses 6 `pending_gate` values (canonical logic lives in",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "end_anchor": "  summary, not a duplicate of the logic):",
+   "file": "skills/craftflow-router/references/worktree.md",
+   "id": "p8-xref-fix4-gate-summary-clause",
+   "op": "replace",
+   "phase": "P8",
+   "source": "plan P8 cross-reference fix 4 (B3): opening clause retargeted to the finalize script",
+   "start_anchor": "- BUILD's worktree merge-safety guard uses 6 `pending_gate` values (canonical logic lives in",
+   "text": "- BUILD's worktree merge-safety guard uses 6 `pending_gate` values (canonical logic lives in\n  `scripts/craftflow_worktree_finalize.py`; the outcome table above is the router contract; this is a\n  summary, not a duplicate of the logic):\n"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p8-readmap-worktree",
+   "op": "readmap",
+   "phase": "P8",
+   "row": {
+    "class": "stage",
+    "file": "skills/craftflow-router/references/worktree.md",
+    "happy_path": true,
+    "trigger": "after final-phase verifier PASS (BUILD, worktree_mode == auto_created) or resume with a worktree pending_gate",
+    "workflows": [
+     "BUILD"
+    ]
+   },
+   "source": "plan P8 Read map: worktree.md stage BUILD happy_path true"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/memory-finalize.md",
+   "dst_header": "# Memory finalization\n\n",
+   "end_anchor": "- Preserve the latest `[DEBUG-RESET: wf:{workflow_uuid}]` section in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## Recent Changes` and summarize the final result beneath it.\n",
+   "id": "p9-memory-finalize-sec13",
+   "op": "move",
+   "phase": "P9",
+   "pointer_text": "Memory finalization runs when the memory task is runnable: read `references/memory-finalize.md` and follow it (it also holds the single copy of the Memory Update task instructions).\n\n",
+   "source": "plan P9 Files: memory-finalize.md holds section 13 verbatim (body; kernel keeps the heading + a pointer)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "The memory task executes inline only. Never spawn it as a sub-agent.",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/memory-finalize.md",
+   "dst_header": "\n## Memory-phase timing computation\n\n",
+   "end_anchor": "- ISO timestamps are always UTC. Use `new Date().toISOString()` or equivalent. If the runtime does not expose a clock, omit the field rather than writing 0.",
+   "id": "p9-memory-phase-timing",
+   "op": "move",
+   "phase": "P9",
+   "pointer_text": "",
+   "source": "plan P9 Files: memory-phase timing computation from SKILL.md:1083-1106, the non-dispatch bullets (taken as :1090-1092)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "- At memory-finalize, for each agent that ran in this workflow, compute `completed_ts - started_ts` in seconds and write to `telemetry.agent_wall_clock_seconds.{agent}`.",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/build-workflow.md",
+   "id": "p9-memory-update-dedupe-build-std",
+   "op": "dedupe",
+   "phase": "P9",
+   "replacement_text": "  description: \"wf:{workflow_uuid}\\nkind:memory\\norigin:router\\nphase:memory-finalize\\nplan:{plan_file or 'N/A'}\\nscope:N/A\\nreason:Persist captured Memory Notes. ROUTER ONLY: execute inline. Follow references/memory-finalize.md § Memory Update task instructions (read it now if not in context). Never spawn Agent() for this task.\",\n  activeForm: \"Persisting workflow learnings\"\n}) -> memory_task_id\nTaskUpdate({ taskId: memory_task_id, addBlockedBy: [chain_tail_task_id] })\n```\n\n`chain_tail_task_id` at this point is `skill_distill_task_id` if the Skill-Distill Gate fired, else `learn_distill_task_id` if the Learn-Distill Gate fired, else `doc_sync_task_id` (or `verifier_task_id` if doc-sync itself was skipped) — i.e. `addBlockedBy: [skill_distill_task_id]` in the common case where both gates fire.\n",
+   "source": "plan P9 Files: Memory Update TaskCreate description becomes the pointer description (memory-finalize.md is a stage file for ALL workflows)",
+   "start_anchor": "  description: \"wf:{workflow_uuid}\\nkind:memory\\norigin:router\\nphase:memory-finalize\\nplan:{plan_file or 'N/A'}\\nscope:N/A\\nreason:Persist captured Memory Notes\\n\\nROUTER ONLY: execute inline. Read the workflow artifact and THIS task description payload, persist to .craftflow/state/*.md.\\nBefore persisting each MEMORY_NOTES field, resolve its destination file and section from SKILL.md Section 13's routing table, then write it with the apply mode (PREFERRED; REQUIRED whenever the payload carries \\\"archive\\\"):\\n  python3 {plugin_root}/scripts/craftflow_memory_merge.py --apply <destination_file_path> < <payload_file>\\nwith the JSON payload below minus \\\"file_text\\\" as <payload_file>, a temp file inside the repo/worktree that is gitignored (e.g. under docs/plans/) and that you delete afterwards -- the primary route, fed via < file; do NOT use a heredoc for this call, because the safe-shell guard only allows a strict python heredoc shape and a heredoc feeding --apply is refused (a file under the session scratchpad is an optional alternative only when the session scratchpad is available; the grant may fail closed in worktree/subdirectory sessions, so never rely on it); --apply reads the destination itself, writes any archived entries to the archive file first (fsync), then atomically replaces the destination, requires the .memory-finalize permit, exits 0 on success, and exits 1 leaving the destination untouched if the permit is missing or the merged text starts with { or has no ## heading. Do not write --apply's stdout anywhere.\\nLegacy stdin/stdout mode (only when the payload has NO \\\"archive\\\" field, e.g. the no-workflow_uuid fallback where no permit exists): obtain the FULL destination file content via:\\n  python3 {plugin_root}/scripts/craftflow_state_query.py <destination_file_path> --mode full\\n(never a raw Read -- the destination files are exactly the .craftflow/state/**\\nfiles the state-read-compaction guard may deny once oversized; --mode full is\\nthis script's byte-identical full-content path) and pipe that output into:\\n  python3 {plugin_root}/scripts/craftflow_memory_merge.py\\nwith a JSON payload of {\"file_text\": \"<full destination file content>\", \"section\": \"<target section, e.g. Common Gotchas>\", \"notes\": [...], \"retractions\": [], \"max_bullets\": <cap per routing table, e.g. 60 for patterns -> project/patterns.md ## Common Gotchas; omit for learnings -> workflows/{workflow_uuid}/activeContext.md ## Learnings and verification -> workflows/{workflow_uuid}/progress.md ## Verification, which are workflow-scoped and need no cap>, \"unit\": <omit for \"bullets\" (default, existing behavior, unchanged) | \"entries\" for paragraph-shaped project-tier sections whose entries are NOT \"- \" bullet lines -- project/activeContext.md ## Last Updated, project/progress.md ## Last Updated, project/patterns.md ## Last Updated (each entry is a dated free-text paragraph, prepended newest-first, blank-line-separated); entries[0] is the newest, so max_bullets caps the N most-recent entries and oldest-first eviction trims from the END of the list, opposite of bullets-mode ordering>}\\non stdin; use the FULL stdout as the replacement file content ONLY in this no-archive legacy mode -- section-anchored mode returns the whole file with only the target section's body replaced, not just a section body.\\nOmit max_bullets entirely (do not pass it) if the destination file's memory contract sections are known to still be structurally corrupted; do not silently evict existing content when a section's heading structure is broken (see craftflow_memory_repair.py for the corrupted-file repair).\\nWhen max_bullets is set (patterns.md -> project/patterns.md ## Common Gotchas), also pass \\\"archive\\\": {\\\"dir_rel\\\": \\\".craftflow/state/project/archive\\\", \\\"section_slug\\\": \\\"<kebab-case section name>\\\", \\\"month\\\": \\\"<current UTC YYYY-MM>\\\"}, and use --apply, which performs the ordering itself. Without --apply, its stdout is a JSON envelope -- never write it raw to any memory file (shape: {\\\"file_text\\\": ..., \\\"archived_bullets\\\": [...], \\\"archive_path\\\": ...}); --apply's contract is: when archived_bullets is non-empty, write archive_path FIRST (create .craftflow/state/project/archive/ if missing, append if the monthly archive file already exists), verify the write succeeded, and only THEN write file_text back to the destination file (mirrors craftflow_memory_repair.py's backup-before-any-destructive-write ordering -- never write the live (trimmed) file before the archive file exists).\\nConfidence <0.7 notes are dropped. Retractions remove matching bullets. New bullets get a (conf: x) suffix. In \"entries\" unit mode, notes are prepended as new raw-text entries (no bullet/confidence formatting, no dedupe/supersede against existing entries) and retractions are not supported (ignored with a warning if present).\\nthen remove the matching [craftflow-internal] memory_task_id line from activeContext.md ## References. Never spawn Agent() for this task.\",\n  activeForm: \"Persisting workflow learnings\"\n}) -> memory_task_id\nTaskUpdate({ taskId: memory_task_id, addBlockedBy: [chain_tail_task_id] })\n```\n\n`chain_tail_task_id` at this point is `skill_distill_task_id` if the Skill-Distill Gate fired, else `learn_distill_task_id` if the Learn-Distill Gate fired, else `doc_sync_task_id` (or `verifier_task_id` if doc-sync itself was skipped) — i.e. `addBlockedBy: [skill_distill_task_id]` in the common case where both gates fire."
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/build-workflow.md",
+   "id": "p9-memory-update-dedupe-build-fast",
+   "op": "dedupe",
+   "phase": "P9",
+   "replacement_text": "  description: \"wf:{workflow_uuid}\\nkind:memory\\norigin:router\\nphase:memory-finalize\\nplan:{plan_file or 'N/A'}\\nscope:N/A\\nreason:Persist captured Memory Notes. ROUTER ONLY: execute inline. Follow references/memory-finalize.md § Memory Update task instructions (read it now if not in context). Never spawn Agent() for this task.\",\n",
+   "source": "plan P9 Files: Memory Update TaskCreate description becomes the pointer description (memory-finalize.md is a stage file for ALL workflows)",
+   "start_anchor": "  description: \"wf:{workflow_uuid}\\nkind:memory\\norigin:router\\nphase:memory-finalize\\nplan:{plan_file or 'N/A'}\\nscope:N/A\\nreason:Persist captured Memory Notes\\n\\nROUTER ONLY: execute inline. Read the workflow artifact and THIS task description payload, persist to .craftflow/state/*.md.\\nBefore persisting each MEMORY_NOTES field, resolve its destination file and section from SKILL.md Section 13's routing table, then write it with the apply mode (PREFERRED; REQUIRED whenever the payload carries \\\"archive\\\"):\\n  python3 {plugin_root}/scripts/craftflow_memory_merge.py --apply <destination_file_path> < <payload_file>\\nwith the JSON payload below minus \\\"file_text\\\" as <payload_file>, a temp file inside the repo/worktree that is gitignored (e.g. under docs/plans/) and that you delete afterwards -- the primary route, fed via < file; do NOT use a heredoc for this call, because the safe-shell guard only allows a strict python heredoc shape and a heredoc feeding --apply is refused (a file under the session scratchpad is an optional alternative only when the session scratchpad is available; the grant may fail closed in worktree/subdirectory sessions, so never rely on it); --apply reads the destination itself, writes any archived entries to the archive file first (fsync), then atomically replaces the destination, requires the .memory-finalize permit, exits 0 on success, and exits 1 leaving the destination untouched if the permit is missing or the merged text starts with { or has no ## heading. Do not write --apply's stdout anywhere.\\nLegacy stdin/stdout mode (only when the payload has NO \\\"archive\\\" field, e.g. the no-workflow_uuid fallback where no permit exists): obtain the FULL destination file content via:\\n  python3 {plugin_root}/scripts/craftflow_state_query.py <destination_file_path> --mode full\\n(never a raw Read -- the destination files are exactly the .craftflow/state/**\\nfiles the state-read-compaction guard may deny once oversized; --mode full is\\nthis script's byte-identical full-content path) and pipe that output into:\\n  python3 {plugin_root}/scripts/craftflow_memory_merge.py\\nwith a JSON payload of {\"file_text\": \"<full destination file content>\", \"section\": \"<target section, e.g. Common Gotchas>\", \"notes\": [...], \"retractions\": [], \"max_bullets\": <cap per routing table, e.g. 60 for patterns -> project/patterns.md ## Common Gotchas; omit for learnings -> workflows/{workflow_uuid}/activeContext.md ## Learnings and verification -> workflows/{workflow_uuid}/progress.md ## Verification, which are workflow-scoped and need no cap>, \"unit\": <omit for \"bullets\" (default, existing behavior, unchanged) | \"entries\" for paragraph-shaped project-tier sections whose entries are NOT \"- \" bullet lines -- project/activeContext.md ## Last Updated, project/progress.md ## Last Updated, project/patterns.md ## Last Updated (each entry is a dated free-text paragraph, prepended newest-first, blank-line-separated); entries[0] is the newest, so max_bullets caps the N most-recent entries and oldest-first eviction trims from the END of the list, opposite of bullets-mode ordering>}\\non stdin; use the FULL stdout as the replacement file content ONLY in this no-archive legacy mode -- section-anchored mode returns the whole file with only the target section's body replaced, not just a section body.\\nOmit max_bullets entirely (do not pass it) if the destination file's memory contract sections are known to still be structurally corrupted; do not silently evict existing content when a section's heading structure is broken (see craftflow_memory_repair.py for the corrupted-file repair).\\nWhen max_bullets is set (patterns.md -> project/patterns.md ## Common Gotchas), also pass \\\"archive\\\": {\\\"dir_rel\\\": \\\".craftflow/state/project/archive\\\", \\\"section_slug\\\": \\\"<kebab-case section name>\\\", \\\"month\\\": \\\"<current UTC YYYY-MM>\\\"}, and use --apply, which performs the ordering itself. Without --apply, its stdout is a JSON envelope -- never write it raw to any memory file (shape: {\\\"file_text\\\": ..., \\\"archived_bullets\\\": [...], \\\"archive_path\\\": ...}); --apply's contract is: when archived_bullets is non-empty, write archive_path FIRST (create .craftflow/state/project/archive/ if missing, append if the monthly archive file already exists), verify the write succeeded, and only THEN write file_text back to the destination file (mirrors craftflow_memory_repair.py's backup-before-any-destructive-write ordering -- never write the live (trimmed) file before the archive file exists).\\nConfidence <0.7 notes are dropped. Retractions remove matching bullets. New bullets get a (conf: x) suffix. In \"entries\" unit mode, notes are prepended as new raw-text entries (no bullet/confidence formatting, no dedupe/supersede against existing entries) and retractions are not supported (ignored with a warning if present).\\nthen remove the matching [craftflow-internal] memory_task_id line from activeContext.md ## References. Never spawn Agent() for this task.\","
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p9-memory-update-dedupe-plan",
+   "op": "dedupe",
+   "phase": "P9",
+   "replacement_text": "  description: \"wf:{workflow_uuid}\\nkind:memory\\norigin:router\\nphase:memory-finalize\\nplan:N/A\\nscope:N/A\\nreason:Persist captured Memory Notes. ROUTER ONLY: execute inline. Follow references/memory-finalize.md § Memory Update task instructions (read it now if not in context). Never spawn Agent() for this task.\",\n",
+   "source": "plan P9 Files: Memory Update TaskCreate description becomes the pointer description (memory-finalize.md is a stage file for ALL workflows)",
+   "start_anchor": "  description: \"wf:{workflow_uuid}\\nkind:memory\\norigin:router\\nphase:memory-finalize\\nplan:N/A\\nscope:N/A\\nreason:Persist captured Memory Notes\\n\\nROUTER ONLY: execute inline. Read the workflow artifact and THIS task description payload, persist to .craftflow/state/*.md.\\nBefore persisting each MEMORY_NOTES field, resolve its destination file and section from SKILL.md Section 13's routing table, then write it with the apply mode (PREFERRED; REQUIRED whenever the payload carries \\\"archive\\\"):\\n  python3 {plugin_root}/scripts/craftflow_memory_merge.py --apply <destination_file_path> < <payload_file>\\nwith the JSON payload below minus \\\"file_text\\\" as <payload_file>, a temp file inside the repo/worktree that is gitignored (e.g. under docs/plans/) and that you delete afterwards -- the primary route, fed via < file; do NOT use a heredoc for this call, because the safe-shell guard only allows a strict python heredoc shape and a heredoc feeding --apply is refused (a file under the session scratchpad is an optional alternative only when the session scratchpad is available; the grant may fail closed in worktree/subdirectory sessions, so never rely on it); --apply reads the destination itself, writes any archived entries to the archive file first (fsync), then atomically replaces the destination, requires the .memory-finalize permit, exits 0 on success, and exits 1 leaving the destination untouched if the permit is missing or the merged text starts with { or has no ## heading. Do not write --apply's stdout anywhere.\\nLegacy stdin/stdout mode (only when the payload has NO \\\"archive\\\" field, e.g. the no-workflow_uuid fallback where no permit exists): obtain the FULL destination file content via:\\n  python3 {plugin_root}/scripts/craftflow_state_query.py <destination_file_path> --mode full\\n(never a raw Read -- the destination files are exactly the .craftflow/state/**\\nfiles the state-read-compaction guard may deny once oversized; --mode full is\\nthis script's byte-identical full-content path) and pipe that output into:\\n  python3 {plugin_root}/scripts/craftflow_memory_merge.py\\nwith a JSON payload of {\\\"file_text\\\": \\\"<full destination file content>\\\", \\\"section\\\": \\\"<target section, e.g. Common Gotchas>\\\", \\\"notes\\\": [...], \\\"retractions\\\": [], \\\"max_bullets\\\": <cap per routing table, e.g. 60 for patterns -> project/patterns.md ## Common Gotchas; omit for learnings -> workflows/{workflow_uuid}/activeContext.md ## Learnings and verification -> workflows/{workflow_uuid}/progress.md ## Verification, which are workflow-scoped and need no cap>, \\\"unit\\\": <omit for \\\"bullets\\\" (default, existing behavior, unchanged) | \\\"entries\\\" for paragraph-shaped project-tier sections whose entries are NOT \\\"- \\\" bullet lines -- project/activeContext.md ## Last Updated, project/progress.md ## Last Updated, project/patterns.md ## Last Updated (each entry is a dated free-text paragraph, prepended newest-first, blank-line-separated); entries[0] is the newest, so max_bullets caps the N most-recent entries and oldest-first eviction trims from the END of the list, opposite of bullets-mode ordering>}\\non stdin; use the FULL stdout as the replacement file content ONLY in this no-archive legacy mode -- section-anchored mode returns the whole file with only the target section's body replaced, not just a section body.\\nOmit max_bullets entirely (do not pass it) if the destination file's memory contract sections are known to still be structurally corrupted; do not silently evict existing content when a section's heading structure is broken (see craftflow_memory_repair.py for the corrupted-file repair).\\nWhen max_bullets is set (patterns.md -> project/patterns.md ## Common Gotchas), also pass \\\"archive\\\": {\\\"dir_rel\\\": \\\".craftflow/state/project/archive\\\", \\\"section_slug\\\": \\\"<kebab-case section name>\\\", \\\"month\\\": \\\"<current UTC YYYY-MM>\\\"}, and use --apply, which performs the ordering itself. Without --apply, its stdout is a JSON envelope -- never write it raw to any memory file (shape: {\\\"file_text\\\": ..., \\\"archived_bullets\\\": [...], \\\"archive_path\\\": ...}); --apply's contract is: when archived_bullets is non-empty, write archive_path FIRST (create .craftflow/state/project/archive/ if missing, append if the monthly archive file already exists), verify the write succeeded, and only THEN write file_text back to the destination file (mirrors craftflow_memory_repair.py's backup-before-any-destructive-write ordering -- never write the live (trimmed) file before the archive file exists).\\nConfidence <0.7 notes are dropped. Retractions remove matching bullets. New bullets get a (conf: x) suffix. In \\\"entries\\\" unit mode, notes are prepended as new raw-text entries (no bullet/confidence formatting, no dedupe/supersede against existing entries) and retractions are not supported (ignored with a warning if present).\\nthen remove the matching [craftflow-internal] memory_task_id line from activeContext.md ## References. Never spawn Agent() for this task.\","
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/debug-workflow.md",
+   "id": "p9-memory-update-dedupe-debug",
+   "op": "dedupe",
+   "phase": "P9",
+   "replacement_text": "  description: \"wf:{workflow_uuid}\\nkind:memory\\norigin:router\\nphase:memory-finalize\\nplan:N/A\\nscope:N/A\\nreason:Persist captured Memory Notes. ROUTER ONLY: execute inline. Follow references/memory-finalize.md § Memory Update task instructions (read it now if not in context). Never spawn Agent() for this task.\",\n",
+   "source": "plan P9 Files: Memory Update TaskCreate description becomes the pointer description (memory-finalize.md is a stage file for ALL workflows)",
+   "start_anchor": "  description: \"wf:{workflow_uuid}\\nkind:memory\\norigin:router\\nphase:memory-finalize\\nplan:N/A\\nscope:N/A\\nreason:Persist captured Memory Notes\\n\\nROUTER ONLY: execute inline. Read the workflow artifact and THIS task description payload, persist to .craftflow/state/*.md.\\nBefore persisting each MEMORY_NOTES field, resolve its destination file and section from SKILL.md Section 13's routing table, then write it with the apply mode (PREFERRED; REQUIRED whenever the payload carries \\\"archive\\\"):\\n  python3 {plugin_root}/scripts/craftflow_memory_merge.py --apply <destination_file_path> < <payload_file>\\nwith the JSON payload below minus \\\"file_text\\\" as <payload_file>, a temp file inside the repo/worktree that is gitignored (e.g. under docs/plans/) and that you delete afterwards -- the primary route, fed via < file; do NOT use a heredoc for this call, because the safe-shell guard only allows a strict python heredoc shape and a heredoc feeding --apply is refused (a file under the session scratchpad is an optional alternative only when the session scratchpad is available; the grant may fail closed in worktree/subdirectory sessions, so never rely on it); --apply reads the destination itself, writes any archived entries to the archive file first (fsync), then atomically replaces the destination, requires the .memory-finalize permit, exits 0 on success, and exits 1 leaving the destination untouched if the permit is missing or the merged text starts with { or has no ## heading. Do not write --apply's stdout anywhere.\\nLegacy stdin/stdout mode (only when the payload has NO \\\"archive\\\" field, e.g. the no-workflow_uuid fallback where no permit exists): obtain the FULL destination file content via:\\n  python3 {plugin_root}/scripts/craftflow_state_query.py <destination_file_path> --mode full\\n(never a raw Read -- the destination files are exactly the .craftflow/state/**\\nfiles the state-read-compaction guard may deny once oversized; --mode full is\\nthis script's byte-identical full-content path) and pipe that output into:\\n  python3 {plugin_root}/scripts/craftflow_memory_merge.py\\nwith a JSON payload of {\"file_text\": \"<full destination file content>\", \"section\": \"<target section, e.g. Common Gotchas>\", \"notes\": [...], \"retractions\": [], \"max_bullets\": <cap per routing table, e.g. 60 for patterns -> project/patterns.md ## Common Gotchas; omit for learnings -> workflows/{workflow_uuid}/activeContext.md ## Learnings and verification -> workflows/{workflow_uuid}/progress.md ## Verification, which are workflow-scoped and need no cap>, \"unit\": <omit for \"bullets\" (default, existing behavior, unchanged) | \"entries\" for paragraph-shaped project-tier sections whose entries are NOT \"- \" bullet lines -- project/activeContext.md ## Last Updated, project/progress.md ## Last Updated, project/patterns.md ## Last Updated (each entry is a dated free-text paragraph, prepended newest-first, blank-line-separated); entries[0] is the newest, so max_bullets caps the N most-recent entries and oldest-first eviction trims from the END of the list, opposite of bullets-mode ordering>}\\non stdin; use the FULL stdout as the replacement file content ONLY in this no-archive legacy mode -- section-anchored mode returns the whole file with only the target section's body replaced, not just a section body.\\nOmit max_bullets entirely (do not pass it) if the destination file's memory contract sections are known to still be structurally corrupted; do not silently evict existing content when a section's heading structure is broken (see craftflow_memory_repair.py for the corrupted-file repair).\\nWhen max_bullets is set (patterns.md -> project/patterns.md ## Common Gotchas), also pass \\\"archive\\\": {\\\"dir_rel\\\": \\\".craftflow/state/project/archive\\\", \\\"section_slug\\\": \\\"<kebab-case section name>\\\", \\\"month\\\": \\\"<current UTC YYYY-MM>\\\"}, and use --apply, which performs the ordering itself. Without --apply, its stdout is a JSON envelope -- never write it raw to any memory file (shape: {\\\"file_text\\\": ..., \\\"archived_bullets\\\": [...], \\\"archive_path\\\": ...}); --apply's contract is: when archived_bullets is non-empty, write archive_path FIRST (create .craftflow/state/project/archive/ if missing, append if the monthly archive file already exists), verify the write succeeded, and only THEN write file_text back to the destination file (mirrors craftflow_memory_repair.py's backup-before-any-destructive-write ordering -- never write the live (trimmed) file before the archive file exists).\\nConfidence <0.7 notes are dropped. Retractions remove matching bullets. New bullets get a (conf: x) suffix. In \"entries\" unit mode, notes are prepended as new raw-text entries (no bullet/confidence formatting, no dedupe/supersede against existing entries) and retractions are not supported (ignored with a warning if present).\\nthen remove the matching [craftflow-internal] memory_task_id line from activeContext.md ## References. Never spawn Agent() for this task.\","
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/review-workflow.md",
+   "id": "p9-memory-update-dedupe-review",
+   "op": "dedupe",
+   "phase": "P9",
+   "replacement_text": "  description: \"wf:{workflow_uuid}\\nkind:memory\\norigin:router\\nphase:memory-finalize\\nplan:N/A\\nscope:N/A\\nreason:Persist captured Memory Notes. ROUTER ONLY: execute inline. Follow references/memory-finalize.md § Memory Update task instructions (read it now if not in context). Never spawn Agent() for this task.\",\n",
+   "source": "plan P9 Files: Memory Update TaskCreate description becomes the pointer description (memory-finalize.md is a stage file for ALL workflows)",
+   "start_anchor": "  description: \"wf:{workflow_uuid}\\nkind:memory\\norigin:router\\nphase:memory-finalize\\nplan:N/A\\nscope:N/A\\nreason:Persist captured Memory Notes\\n\\nROUTER ONLY: execute inline. Read the workflow artifact and THIS task description payload, persist to .craftflow/state/*.md.\\nBefore persisting each MEMORY_NOTES field, resolve its destination file and section from SKILL.md Section 13's routing table, then write it with the apply mode (PREFERRED; REQUIRED whenever the payload carries \\\"archive\\\"):\\n  python3 {plugin_root}/scripts/craftflow_memory_merge.py --apply <destination_file_path> < <payload_file>\\nwith the JSON payload below minus \\\"file_text\\\" as <payload_file>, a temp file inside the repo/worktree that is gitignored (e.g. under docs/plans/) and that you delete afterwards -- the primary route, fed via < file; do NOT use a heredoc for this call, because the safe-shell guard only allows a strict python heredoc shape and a heredoc feeding --apply is refused (a file under the session scratchpad is an optional alternative only when the session scratchpad is available; the grant may fail closed in worktree/subdirectory sessions, so never rely on it); --apply reads the destination itself, writes any archived entries to the archive file first (fsync), then atomically replaces the destination, requires the .memory-finalize permit, exits 0 on success, and exits 1 leaving the destination untouched if the permit is missing or the merged text starts with { or has no ## heading. Do not write --apply's stdout anywhere.\\nLegacy stdin/stdout mode (only when the payload has NO \\\"archive\\\" field, e.g. the no-workflow_uuid fallback where no permit exists): obtain the FULL destination file content via:\\n  python3 {plugin_root}/scripts/craftflow_state_query.py <destination_file_path> --mode full\\n(never a raw Read -- the destination files are exactly the .craftflow/state/**\\nfiles the state-read-compaction guard may deny once oversized; --mode full is\\nthis script's byte-identical full-content path) and pipe that output into:\\n  python3 {plugin_root}/scripts/craftflow_memory_merge.py\\nwith a JSON payload of {\"file_text\": \"<full destination file content>\", \"section\": \"<target section, e.g. Common Gotchas>\", \"notes\": [...], \"retractions\": [], \"max_bullets\": <cap per routing table, e.g. 60 for patterns -> project/patterns.md ## Common Gotchas; omit for learnings -> workflows/{workflow_uuid}/activeContext.md ## Learnings and verification -> workflows/{workflow_uuid}/progress.md ## Verification, which are workflow-scoped and need no cap>, \"unit\": <omit for \"bullets\" (default, existing behavior, unchanged) | \"entries\" for paragraph-shaped project-tier sections whose entries are NOT \"- \" bullet lines -- project/activeContext.md ## Last Updated, project/progress.md ## Last Updated, project/patterns.md ## Last Updated (each entry is a dated free-text paragraph, prepended newest-first, blank-line-separated); entries[0] is the newest, so max_bullets caps the N most-recent entries and oldest-first eviction trims from the END of the list, opposite of bullets-mode ordering>}\\non stdin; use the FULL stdout as the replacement file content ONLY in this no-archive legacy mode -- section-anchored mode returns the whole file with only the target section's body replaced, not just a section body.\\nOmit max_bullets entirely (do not pass it) if the destination file's memory contract sections are known to still be structurally corrupted; do not silently evict existing content when a section's heading structure is broken (see craftflow_memory_repair.py for the corrupted-file repair).\\nWhen max_bullets is set (patterns.md -> project/patterns.md ## Common Gotchas), also pass \\\"archive\\\": {\\\"dir_rel\\\": \\\".craftflow/state/project/archive\\\", \\\"section_slug\\\": \\\"<kebab-case section name>\\\", \\\"month\\\": \\\"<current UTC YYYY-MM>\\\"}, and use --apply, which performs the ordering itself. Without --apply, its stdout is a JSON envelope -- never write it raw to any memory file (shape: {\\\"file_text\\\": ..., \\\"archived_bullets\\\": [...], \\\"archive_path\\\": ...}); --apply's contract is: when archived_bullets is non-empty, write archive_path FIRST (create .craftflow/state/project/archive/ if missing, append if the monthly archive file already exists), verify the write succeeded, and only THEN write file_text back to the destination file (mirrors craftflow_memory_repair.py's backup-before-any-destructive-write ordering -- never write the live (trimmed) file before the archive file exists).\\nConfidence <0.7 notes are dropped. Retractions remove matching bullets. New bullets get a (conf: x) suffix. In \"entries\" unit mode, notes are prepended as new raw-text entries (no bullet/confidence formatting, no dedupe/supersede against existing entries) and retractions are not supported (ignored with a warning if present).\\nthen remove the matching [craftflow-internal] memory_task_id line from activeContext.md ## References. Never spawn Agent() for this task.\","
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/memory-finalize.md",
+   "id": "p9-memory-finalize-instructions",
+   "op": "insert",
+   "phase": "P9",
+   "position": "end_of_file",
+   "source": "plan P9 Files: ### Memory Update task instructions, the single copy of the description body",
+   "status": "drafted",
+   "text": "\n### Memory Update task instructions\n\nSingle copy of the Memory Update `TaskCreate` description body (taken from build-workflow.md:154; a clause that differs per site, such as `plan:`, stays at its site as a parameter):\n\n  description: \"wf:{workflow_uuid}\\nkind:memory\\norigin:router\\nphase:memory-finalize\\nplan:{plan_file or 'N/A'}\\nscope:N/A\\nreason:Persist captured Memory Notes\\n\\nROUTER ONLY: execute inline. Read the workflow artifact and THIS task description payload, persist to .craftflow/state/*.md.\\nBefore persisting each MEMORY_NOTES field, resolve its destination file and section from SKILL.md Section 13's routing table, then write it with the apply mode (PREFERRED; REQUIRED whenever the payload carries \\\"archive\\\"):\\n  python3 {plugin_root}/scripts/craftflow_memory_merge.py --apply <destination_file_path> < <payload_file>\\nwith the JSON payload below minus \\\"file_text\\\" as <payload_file>, a temp file inside the repo/worktree that is gitignored (e.g. under docs/plans/) and that you delete afterwards -- the primary route, fed via < file; do NOT use a heredoc for this call, because the safe-shell guard only allows a strict python heredoc shape and a heredoc feeding --apply is refused (a file under the session scratchpad is an optional alternative only when the session scratchpad is available; the grant may fail closed in worktree/subdirectory sessions, so never rely on it); --apply reads the destination itself, writes any archived entries to the archive file first (fsync), then atomically replaces the destination, requires the .memory-finalize permit, exits 0 on success, and exits 1 leaving the destination untouched if the permit is missing or the merged text starts with { or has no ## heading. Do not write --apply's stdout anywhere.\\nLegacy stdin/stdout mode (only when the payload has NO \\\"archive\\\" field, e.g. the no-workflow_uuid fallback where no permit exists): obtain the FULL destination file content via:\\n  python3 {plugin_root}/scripts/craftflow_state_query.py <destination_file_path> --mode full\\n(never a raw Read -- the destination files are exactly the .craftflow/state/**\\nfiles the state-read-compaction guard may deny once oversized; --mode full is\\nthis script's byte-identical full-content path) and pipe that output into:\\n  python3 {plugin_root}/scripts/craftflow_memory_merge.py\\nwith a JSON payload of {\"file_text\": \"<full destination file content>\", \"section\": \"<target section, e.g. Common Gotchas>\", \"notes\": [...], \"retractions\": [], \"max_bullets\": <cap per routing table, e.g. 60 for patterns -> project/patterns.md ## Common Gotchas; omit for learnings -> workflows/{workflow_uuid}/activeContext.md ## Learnings and verification -> workflows/{workflow_uuid}/progress.md ## Verification, which are workflow-scoped and need no cap>, \"unit\": <omit for \"bullets\" (default, existing behavior, unchanged) | \"entries\" for paragraph-shaped project-tier sections whose entries are NOT \"- \" bullet lines -- project/activeContext.md ## Last Updated, project/progress.md ## Last Updated, project/patterns.md ## Last Updated (each entry is a dated free-text paragraph, prepended newest-first, blank-line-separated); entries[0] is the newest, so max_bullets caps the N most-recent entries and oldest-first eviction trims from the END of the list, opposite of bullets-mode ordering>}\\non stdin; use the FULL stdout as the replacement file content ONLY in this no-archive legacy mode -- section-anchored mode returns the whole file with only the target section's body replaced, not just a section body.\\nOmit max_bullets entirely (do not pass it) if the destination file's memory contract sections are known to still be structurally corrupted; do not silently evict existing content when a section's heading structure is broken (see craftflow_memory_repair.py for the corrupted-file repair).\\nWhen max_bullets is set (patterns.md -> project/patterns.md ## Common Gotchas), also pass \\\"archive\\\": {\\\"dir_rel\\\": \\\".craftflow/state/project/archive\\\", \\\"section_slug\\\": \\\"<kebab-case section name>\\\", \\\"month\\\": \\\"<current UTC YYYY-MM>\\\"}, and use --apply, which performs the ordering itself. Without --apply, its stdout is a JSON envelope -- never write it raw to any memory file (shape: {\\\"file_text\\\": ..., \\\"archived_bullets\\\": [...], \\\"archive_path\\\": ...}); --apply's contract is: when archived_bullets is non-empty, write archive_path FIRST (create .craftflow/state/project/archive/ if missing, append if the monthly archive file already exists), verify the write succeeded, and only THEN write file_text back to the destination file (mirrors craftflow_memory_repair.py's backup-before-any-destructive-write ordering -- never write the live (trimmed) file before the archive file exists).\\nConfidence <0.7 notes are dropped. Retractions remove matching bullets. New bullets get a (conf: x) suffix. In \"entries\" unit mode, notes are prepended as new raw-text entries (no bullet/confidence formatting, no dedupe/supersede against existing entries) and retractions are not supported (ignored with a warning if present).\\nthen remove the matching [craftflow-internal] memory_task_id line from activeContext.md ## References. Never spawn Agent() for this task.\",\n"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/task-tool-fallback.md",
+   "dst_header": "# Task*-tool fallback\n\nApply the matching section when `capabilities.task_tools_available == false` or a router-owned native Task* call fails mid-session.\n\n## Resume fallback\n\n",
+   "end_anchor": "this section runs exactly as documented today — no behavior change on that path.\n",
+   "id": "p9-fb-resume",
+   "op": "move",
+   "phase": "P9",
+   "pointer_text": "",
+   "source": "plan P9 Files: task-tool-fallback.md section moved verbatim (file-naming rewrites follow)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "**Task*-tool fallback:** when `capabilities.task_tools_available == false` (or still"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/task-tool-fallback.md",
+   "dst_header": "## Parent creation fallback\n\n",
+   "end_anchor": "(`TaskCreate()`) entirely — there is no parent orchestration task to create; the artifact is already written by step 1.\n",
+   "id": "p9-fb-parent",
+   "op": "move",
+   "phase": "P9",
+   "pointer_text": "",
+   "source": "plan P9 Files: task-tool-fallback.md section moved verbatim (file-naming rewrites follow)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "**Task*-tool fallback:** when `capabilities.task_tools_available == false`, skip step 2"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/task-tool-fallback.md",
+   "end_anchor": "as written today — no behavior change on that path.\n",
+   "id": "p9-fb-pertype",
+   "op": "move",
+   "phase": "P9",
+   "pointer_text": "",
+   "source": "plan P9 Files: task-tool-fallback.md section moved verbatim (file-naming rewrites follow)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "### Task*-tool fallback for per-type task graphs and remediation/research task sites"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/task-tool-fallback.md",
+   "dst_header": "## Dispatcher fallback\n\n",
+   "end_anchor": "`Task()`/`TaskCreate()` exactly as documented today — no behavior change on that path.\n",
+   "id": "p9-fb-dispatcher",
+   "op": "move",
+   "phase": "P9",
+   "pointer_text": "",
+   "source": "plan P9 Files: task-tool-fallback.md section moved verbatim (file-naming rewrites follow)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "**Task*-tool fallback (Design Success Criterion 3):** when `capabilities.task_tools_available =="
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/task-tool-fallback.md",
+   "dst_header": "## Task ID substitution\n\n",
+   "end_anchor": "populated with the real task id exactly as documented today — no behavior change on that path.\n",
+   "id": "p9-fb-taskid",
+   "op": "move",
+   "phase": "P9",
+   "pointer_text": "",
+   "source": "plan P9 Files: task-tool-fallback.md section moved verbatim (file-naming rewrites follow)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "**`Task ID:` runtime substitution rule:** in the `## Task Context` section of every dispatched"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/task-tool-fallback.md",
+   "dst_header": "## Doubt-Verify fallback\n\n",
+   "end_anchor": "today — no behavior change on that path.\n",
+   "id": "p9-fb-doubt",
+   "op": "move",
+   "phase": "P9",
+   "pointer_text": "",
+   "source": "plan P9 Files: task-tool-fallback.md section moved verbatim (file-naming rewrites follow)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "**Task*-tool fallback:** when `capabilities.task_tools_available == false`, skip the\n`TaskCreate()` call above entirely — there is no cycle-tracking task to create. Dispatch\n`craftflow:doubt-verifier` directly (same `## Task Context` prompt scaffold as any other agent"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/task-tool-fallback.md",
+   "dst_header": "## Fix-Verify fallback\n\n",
+   "end_anchor": "`capabilities.task_tools_available == true`, this rule runs exactly as documented today — no\nbehavior change on that path.\n",
+   "id": "p9-fb-fixverify",
+   "op": "move",
+   "phase": "P9",
+   "pointer_text": "",
+   "source": "plan P9 Files: task-tool-fallback.md section moved verbatim (file-naming rewrites follow)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "**Task*-tool fallback:** when `capabilities.task_tools_available == false`, skip the"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/task-tool-fallback.md",
+   "dst_header": "## Chain loop step 1 fallback\n\n",
+   "end_anchor": "behavior change on that path.\n",
+   "id": "p9-fb-chain1",
+   "op": "move",
+   "phase": "P9",
+   "pointer_text": "",
+   "source": "plan P9 Files: task-tool-fallback.md section moved verbatim (file-naming rewrites follow)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "**Task*-tool fallback for step 1:** when `capabilities.task_tools_available == false`, step 1"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/task-tool-fallback.md",
+   "dst_header": "## After agent completion fallback\n\n",
+   "end_anchor": "documented today for every agent type — no behavior change on that path.\n",
+   "id": "p9-fb-aftercomp",
+   "op": "move",
+   "phase": "P9",
+   "pointer_text": "",
+   "source": "plan P9 Files: task-tool-fallback.md section moved verbatim (file-naming rewrites follow)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "**Task*-tool fallback for steps 1-3:** when `capabilities.task_tools_available == false`: step 1"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/task-tool-fallback.md",
+   "dst_header": "## Stale true capability\n\n",
+   "end_anchor": "exists only for the narrower \"was `true`, then broke\" transition.\n",
+   "id": "p9-fb-stale",
+   "op": "move",
+   "phase": "P9",
+   "pointer_text": "",
+   "source": "plan P9 Files: task-tool-fallback.md section moved verbatim (file-naming rewrites follow)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "**Stale `true` capability — router's own native Task* call fails mid-session:** the fallback"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/task-tool-fallback.md",
+   "dst_header": "## Hard rule\n\n",
+   "end_anchor": "  \"integration-verifier PASS\" into durable state.",
+   "id": "p9-fb-hardrule",
+   "op": "move",
+   "phase": "P9",
+   "pointer_text": "",
+   "source": "plan P9 Files: task-tool-fallback.md section moved verbatim (file-naming rewrites follow)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "- When `capabilities.task_tools_available == false`, no agent's `TaskUpdate` call can succeed —"
+  },
+  {
+   "anchor": "## 0a. Task Tool Capability Detection",
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p9-sec0a-trigger",
+   "op": "insert",
+   "phase": "P9",
+   "position": "after_anchor",
+   "source": "plan P9 Files: section 0a gains the trigger sentence",
+   "text": "\nWhen `capabilities.task_tools_available == false`, or any router-owned native Task* call fails mid-session, read `references/task-tool-fallback.md` now and apply its per-site rule wherever this document or a reference calls `TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/task-tool-fallback.md",
+   "id": "p9-xref-0a",
+   "op": "replace",
+   "phase": "P9",
+   "source": "plan P9 cross-reference rewrite (Advisory H)",
+   "start_anchor": "`\"unknown\"` — run `## 0a` first in that case, then re-evaluate), skip the `TaskList()` call",
+   "text": "`\"unknown\"` — run `SKILL.md` → `## 0a` first in that case, then re-evaluate), skip the `TaskList()` call\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/task-tool-fallback.md",
+   "id": "p9-xref-12",
+   "op": "replace",
+   "phase": "P9",
+   "source": "plan P9 cross-reference rewrite (Advisory H)",
+   "start_anchor": "in `## 12. Chain Execution Loop`'s fallback rather than by task-graph blocker fields. Skip every",
+   "text": "in `SKILL.md` → `## 12. Chain Execution Loop`'s fallback rather than by task-graph blocker fields. Skip every\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/task-tool-fallback.md",
+   "id": "p9-xref-7scaffold",
+   "op": "replace",
+   "phase": "P9",
+   "source": "plan P9 cross-reference rewrite (Advisory H)",
+   "start_anchor": "dispatch, per `## 7 -> Prompt scaffold for every agent`), substituting `Task ID:` with the same",
+   "text": "dispatch, per `SKILL.md` → `## 7 -> Prompt scaffold for every agent`), substituting `Task ID:` with the same\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/task-tool-fallback.md",
+   "id": "p9-xref-6",
+   "op": "replace",
+   "phase": "P9",
+   "source": "plan P9 cross-reference rewrite (Advisory H)",
+   "start_anchor": "`phase_status` map and `phase_cursor` (populated per `## 6. Workflow Task Graphs`'s fallback",
+   "text": "`phase_status` map and `phase_cursor` (populated per `SKILL.md` → `## 6. Workflow Task Graphs`'s fallback\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/task-tool-fallback.md",
+   "id": "p9-xref-6b",
+   "op": "replace",
+   "phase": "P9",
+   "source": "plan P9 cross-reference rewrite (Advisory H)",
+   "start_anchor": "in `## 6.`'s fallback) has `phase_status == \"completed\"`. Steps 2-7 below apply unchanged in",
+   "text": "in `SKILL.md` → `## 6.`'s fallback) has `phase_status == \"completed\"`. Steps 2-7 below apply unchanged in\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/task-tool-fallback.md",
+   "id": "p9-xref-14",
+   "op": "replace",
+   "phase": "P9",
+   "source": "plan P9 cross-reference rewrite (Advisory H)",
+   "start_anchor": "new bullet in `## 14. Hard Rules`, which states this generalization explicitly as",
+   "text": "new bullet in `SKILL.md` → `## 14. Hard Rules`, which states this generalization explicitly as\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/task-tool-fallback.md",
+   "id": "p9-xref-scaffold-0",
+   "op": "replace",
+   "phase": "P9",
+   "source": "plan P9: bare backticked scaffold mentions get the file named",
+   "start_anchor": "The `## Task Context` scaffold (per `### Prompt scaffold for every agent` below) already embeds",
+   "text": "The `## Task Context` scaffold (per `### Prompt scaffold for every agent` in `SKILL.md` below) already embeds\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/task-tool-fallback.md",
+   "id": "p9-xref-scaffold-1",
+   "op": "replace",
+   "phase": "P9",
+   "source": "plan P9: bare backticked scaffold mentions get the file named",
+   "start_anchor": "placeholder defined in `### Prompt scaffold for every agent` below",
+   "text": "placeholder defined in `### Prompt scaffold for every agent` in `SKILL.md` below\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/task-tool-fallback.md",
+   "id": "p9-xref-scaffold-2",
+   "op": "replace",
+   "phase": "P9",
+   "source": "plan P9: bare backticked scaffold mentions get the file named",
+   "start_anchor": "no-real-task-id placeholder defined in `### Prompt scaffold for every agent`",
+   "text": "no-real-task-id placeholder defined in `### Prompt scaffold for every agent` in `SKILL.md`\n"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p9-readmap-memory-finalize",
+   "op": "readmap",
+   "phase": "P9",
+   "row": {
+    "class": "stage",
+    "file": "skills/craftflow-router/references/memory-finalize.md",
+    "happy_path": true,
+    "trigger": "memory task runnable",
+    "workflows": [
+     "ALL"
+    ]
+   },
+   "source": "plan P9 Read map"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p9-readmap-task-tool-fallback",
+   "op": "readmap",
+   "phase": "P9",
+   "row": {
+    "class": "stage",
+    "file": "skills/craftflow-router/references/task-tool-fallback.md",
+    "happy_path": false,
+    "trigger": "task_tools_available == false or native Task* failure",
+    "workflows": [
+     "ALL"
+    ]
+   },
+   "source": "plan P9 Read map"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/workflow-start.md",
+   "dst_header": "# Workflow start\n\n## Task tool capability detection (body of kernel section 0a)\n\n",
+   "end_anchor": "algorithm is shared or host-specific.\n",
+   "id": "p10-ws-0a-body",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "",
+   "source": "plan P10: workflow-start.md takes the 0a body (the trigger lines stay in the kernel)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "Runs once per session, immediately after `## 0.` resolves `PROJECT_ROOT` and before the first"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/workflow-start.md",
+   "dst_header": "\n",
+   "end_anchor": "- The router must never depend on loose prose when metadata can answer the question.\n",
+   "id": "p10-ws-sec3",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "**3. Task Metadata Contract:** before creating the workflow, read `references/workflow-start.md` (Read Map).\n\n",
+   "source": "plan P10: section 3 moves to workflow-start.md",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "## 3. Task Metadata Contract",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/workflow-start.md",
+   "dst_header": "\n",
+   "end_anchor": "Only create child tasks after the v10 artifact and state directory exist (step 1 guarantees both). The `workflows/{workflow_uuid}/` directory is where the memory-finalize task writes workflow-scoped memory (activeContext.md, patterns.md, progress.md for this workflow only).\n",
+   "id": "p10-ws-parent-creation",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "**Parent workflow creation:** read `references/workflow-start.md` before creating the parent task and artifact.\n\n",
+   "source": "plan P10: section 6 parent creation (:747-797) moves to workflow-start.md",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "### Parent workflow creation",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/resume.md",
+   "dst_header": "# Resume and hydration\n\n",
+   "end_anchor": "- If legacy tasks exist with subjects starting `BUILD:`, `DEBUG:`, `REVIEW:`, or `PLAN:` without the `CRAFTFLOW` prefix, ask whether to resume the legacy workflow or start a fresh CRAFTFLOW workflow.\n",
+   "id": "p10-resume-sec4",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "On resume, or when the digest `## Decisions` holds `[SCOPE-DECISION-PENDING:` or an unconsumed `[jev-auto-decided:` for a live workflow, read `references/resume.md` and follow it.\n\n",
+   "source": "plan P10: section 4 without the fallback text moves to resume.md; kernel keeps the heading + trigger",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "After memory load:",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/resume.md",
+   "dst_header": "\n## Artifact session_id rules\n\n",
+   "end_anchor": "  - The plan-then-build ambiguity (A4): a plan workflow and the build workflow that follows it can run in the same session, so the chosen artifact's `session_id` equalling the payload `session_id` does not by itself identify which of the two is meant.",
+   "id": "p10-resume-artifact-session-id",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "  - Context-nudge binding, PreToolUse fallback and the plan-then-build ambiguity for `session_id`: see `references/resume.md`.\n",
+   "source": "plan P10: workflow-artifact-and-hook-policy.md:14-16 session_id sub-bullets move to resume.md",
+   "src": "skills/craftflow-router/references/workflow-artifact-and-hook-policy.md",
+   "start_anchor": "  - Context-nudge binding: the nudge binds a payload `session_id` to the artifact whose `session_id` matches exactly. After `/clear` or a new session the nudge sees `no_live_candidate` for stamped artifacts until the router restamps.",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/memory-load-workspace.md",
+   "dst_header": "# Memory load: workspace tier\n\n",
+   "end_anchor": "    ADR-recorded -- do not \"re-sync\" the two without reading that ADR first.",
+   "id": "p10-mlw-step5a",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "5a. Workspace-tier discovery (capped upward walk, max 3 levels above PROJECT_ROOT): when an ancestor holds\n    `.craftflow-workspace.json` or `.craftflow/state/workspace/`, read `references/memory-load-workspace.md` and follow it.\n",
+   "source": "plan P10: section 2 step 5a details beyond a 3-line trigger move to memory-load-workspace.md",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "5a. Workspace-tier discovery (capped upward walk, max 3 levels above PROJECT_ROOT, to",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/memory-load-workspace.md",
+   "dst_header": "\n## State-read compaction self-heal\n\n",
+   "end_anchor": "loaded memory content for that file.\n",
+   "id": "p10-mlw-selfheal",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "State-read compaction self-heal: see `references/memory-load-workspace.md`.\n\n",
+   "source": "plan P10: the self-heal paragraph moves to memory-load-workspace.md (applies to every session; the file is read only for workspace markers - flagged)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "State-read compaction self-heal: if any `Read(...)` in this section is denied with a",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/post-agent-validation.md",
+   "dst_header": "# Post-agent validation\n\n",
+   "end_anchor": "yet.\n",
+   "id": "p10-pav-sec8-body",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "After any agent returns, read `references/post-agent-validation.md` (once per workflow; re-read after compaction) and apply it.\n\n",
+   "source": "plan P10: section 8 read-only contracts, YAML contracts, schema validation, convergence move to post-agent-validation.md",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "### Read-only contracts",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/post-agent-validation.md",
+   "dst_header": "\n",
+   "end_anchor": "`pending_skill_approval` bookkeeping is needed.\n",
+   "id": "p10-pav-contract-overrides-skilldistill",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "",
+   "source": "plan P10: contract overrides and the Skill-Distill Approval Flow move to post-agent-validation.md",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "### Contract overrides"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/post-agent-validation.md",
+   "dst_header": "\n",
+   "end_anchor": "Use telemetry to explain latency. Do not use it to auto-reduce verification scope.\n",
+   "id": "p10-pav-verifier-telemetry",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "",
+   "source": "plan P10: verifier workload telemetry (:1099-1105) moves to post-agent-validation.md",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "**Verifier workload telemetry (unchanged):**"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/post-agent-validation.md",
+   "dst_header": "\n",
+   "end_anchor": "6. Persist `[craftflow-internal] memory_task_id: {memory_task_id} wf:{workflow_uuid}` only if it matches the active workflow; first remove any existing matching `[craftflow-internal]` or legacy `[cc10x-internal]` `memory_task_id` line to avoid duplicate orphans.\n",
+   "id": "p10-pav-after-every-agent",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "",
+   "source": "plan P10: 'After every agent completion' (:1394-1453) without the fallback moves to post-agent-validation.md",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "### After every agent completion"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/post-agent-validation.md",
+   "dst_header": "\n",
+   "end_anchor": "\"Verifier Findings Handoff\".\n",
+   "id": "p10-pav-verifier-handoff",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "",
+   "source": "plan P10: verifier findings handoff (:1454-1498 minus what P9 moved) moves to post-agent-validation.md",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "### Verifier findings handoff"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/verify-dispatch.md",
+   "dst_header": "# Verify dispatch\n\n",
+   "end_anchor": "matches. A non-zero exit from either call is non-blocking — log and continue.\n",
+   "id": "p10-vd-doubt-fixverify",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "**Doubt-Verify and Fix-Verify dispatch rules (BUILD, DEBUG):** after `integration-verifier` returns PASS, read `references/verify-dispatch.md` and apply it.\n\n",
+   "source": "plan P10: Doubt-Verify (:943-998) and Fix-Verify (:999-1082) without the fallback move to verify-dispatch.md",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "### Doubt-Verify Dispatch Rule",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/verify-dispatch.md",
+   "dst_header": "\n",
+   "end_anchor": "BUILD work.\n",
+   "id": "p10-vd-fixverify-keyword-scan",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "",
+   "source": "plan P10: fix_verify_keyword_scan (fast-path.md:18-35) moves to verify-dispatch.md under the same #### heading",
+   "src": "skills/craftflow-router/references/fast-path.md",
+   "start_anchor": "#### fix_verify_keyword_scan — Keyword Table"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/build-workflow.md",
+   "dst_header": "\n",
+   "end_anchor": "   - Omit the `## Worktree` section from task descriptions when in fallback mode\n",
+   "id": "p10-bw-fastpath-detection-worktree-1-3",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "Fast Path Detection and Worktree Isolation steps 1-3 (BUILD default; they set `build_mode` and `worktree_mode`) are in `references/build-workflow.md` (`### Fast Path Detection`, `### Worktree Isolation (BUILD Default)`).\n\n",
+   "source": "plan P10 Also modify: build-workflow.md receives Fast Path Detection (:325-339) and Worktree steps 1-3 (:340-391)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "### Fast Path Detection",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/plan-workflow.md",
+   "dst_header": "\n",
+   "end_anchor": "- Planner prompt under `## Intent Contract (Pre-Interview)` (planner treats it as user-approved input)\n",
+   "id": "p10-pw-intent-interview",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "**Intent Interview Gate and inline brainstorming handoff (PLAN only):** see `references/plan-workflow.md`.\n\n",
+   "source": "plan P10 Also modify: plan-workflow.md receives the Intent Interview Gate (:1235-1255)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "### Intent Interview Gate (PLAN only)",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/plan-workflow.md",
+   "dst_header": "\n",
+   "end_anchor": "- do not require `activeContext.md` to be updated first\n",
+   "id": "p10-pw-brainstorming-handoff",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "",
+   "source": "plan P10 Also modify: Inline brainstorming handoff (:1256-1268)",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "### Inline brainstorming handoff"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/plan-workflow.md",
+   "dst_header": "\n## Chain loop steps 5a and 5b (PLAN)\n\n```text\n",
+   "end_anchor": "     to `phase:plan-bakeoff-candidate-*`).",
+   "id": "p10-pw-chain-5a-5b",
+   "op": "move",
+   "phase": "P10",
+   "pointer_text": "5a/5b. (PLAN workflow) parallel research and bake-off candidate dispatch: see `references/plan-workflow.md`.\n",
+   "source": "plan P10 Also modify: section 12 step 5a (:1360); step 5b (:1366-1378) moves with it (kernel list says 'section 12 without step 5a / 5b')",
+   "src": "skills/craftflow-router/SKILL.md",
+   "start_anchor": "5a. If both `research-web` and `research-github` tasks are runnable in the same round (PLAN workflow):",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p10-pw-chain-5a-5b-fence-close",
+   "op": "insert",
+   "phase": "P10",
+   "position": "end_of_file",
+   "source": "closes the fenced block opened by the moved steps 5a/5b",
+   "status": "drafted",
+   "text": "```\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/verify-dispatch.md",
+   "id": "p10-xref-fix3",
+   "op": "replace",
+   "phase": "P10",
+   "source": "plan P10 cross-reference fix 3",
+   "start_anchor": "(`references/fast-path.md → fix_verify_keyword_scan — Keyword Table`):",
+   "text": "(`references/verify-dispatch.md → fix_verify_keyword_scan — Keyword Table`, below):\n"
+  },
+  {
+   "condition": "always",
+   "id": "p10-xref-unqualified-moved",
+   "note": "P10 cross-reference fix 3: 'Every unqualified `## 8. Post-Agent Validation → …` and `## 12. Chain Execution Loop` reference inside moved text gets its file named (`SKILL.md` or `references/post-agent-validation.md`)'. The plan does not list the sites (they depend on the P9/P10 move order), so no exact anchors exist yet; expected cost is small (about +20 B per site).",
+   "op": "replace",
+   "phase": "P10",
+   "source": "plan P10 Cross-reference fix 3",
+   "status": "needs_anchor"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p10-readmap-workflow-start",
+   "op": "readmap",
+   "phase": "P10",
+   "row": {
+    "class": "start",
+    "file": "skills/craftflow-router/references/workflow-start.md",
+    "happy_path": true,
+    "trigger": "before workflow creation",
+    "workflows": [
+     "ALL"
+    ]
+   },
+   "source": "plan P10 task 4"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p10-readmap-resume",
+   "op": "readmap",
+   "phase": "P10",
+   "row": {
+    "class": "stage",
+    "file": "skills/craftflow-router/references/resume.md",
+    "happy_path": false,
+    "trigger": "resume or a live scope marker",
+    "workflows": [
+     "ALL"
+    ]
+   },
+   "source": "plan P10 task 4"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p10-readmap-post-agent",
+   "op": "readmap",
+   "phase": "P10",
+   "row": {
+    "class": "stage",
+    "file": "skills/craftflow-router/references/post-agent-validation.md",
+    "happy_path": true,
+    "trigger": "after any agent returns",
+    "workflows": [
+     "ALL"
+    ]
+   },
+   "source": "plan P10 task 4"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p10-readmap-verify-dispatch",
+   "op": "readmap",
+   "phase": "P10",
+   "row": {
+    "class": "stage",
+    "file": "skills/craftflow-router/references/verify-dispatch.md",
+    "happy_path": true,
+    "trigger": "after integration-verifier PASS",
+    "workflows": [
+     "BUILD",
+     "DEBUG"
+    ]
+   },
+   "source": "plan P10 task 4"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p10-readmap-memory-load-workspace",
+   "op": "readmap",
+   "phase": "P10",
+   "row": {
+    "class": "stage",
+    "file": "skills/craftflow-router/references/memory-load-workspace.md",
+    "happy_path": false,
+    "trigger": "workspace marker found",
+    "workflows": [
+     "ALL"
+    ]
+   },
+   "source": "plan P10 task 4"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/_shared/router-protocol-multirepo.md",
+   "dst_header": "# Router protocol: multi-repo workspace root resolution\n\n",
+   "end_anchor": "       The router continues immediately with this fallback `PROJECT_ROOT` value.",
+   "id": "p11-proto-step1a-multirepo",
+   "op": "move",
+   "phase": "P11",
+   "pointer_text": "   **1a. Multi-repo workspace root resolution** (only reached when `TOPLEVEL_EXIT != 0`): read\n   `skills/_shared/router-protocol-multirepo.md` and follow it.\n",
+   "source": "plan P11 Files: step 1a (:82-178) moves to router-protocol-multirepo.md",
+   "src": "skills/_shared/router-protocol.md",
+   "start_anchor": "   **1a. Multi-repo workspace root resolution** (only reached when `TOPLEVEL_EXIT != 0`):",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/_shared/verifier-handoff.md",
+   "dst_header": "# Findings handoff (shared)\n\n",
+   "end_anchor": "attached to a `Task` call.)\n",
+   "id": "p11-proto-verifier-handoff",
+   "op": "move",
+   "phase": "P11",
+   "pointer_text": "## Findings handoff\n\nThe previous-agent and verifier findings handoff blocks live in `skills/_shared/verifier-handoff.md`.\n\n",
+   "source": "plan P11 Files: verifier-handoff.md (:272-307)",
+   "src": "skills/_shared/router-protocol.md",
+   "start_anchor": "## Previous Agent Findings Handoff",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/_shared/skill-distill-approval.md",
+   "dst_header": "# Skill-Distill approval flow (shared)\n\n",
+   "end_anchor": "tool. See that file's own section for its host-specific mechanics.)\n",
+   "id": "p11-proto-skill-distill-approval",
+   "op": "move",
+   "phase": "P11",
+   "pointer_text": "## Skill-Distill approval\n\nThe approval flow lives in `skills/_shared/skill-distill-approval.md`.\n\n",
+   "source": "plan P11 Files: skill-distill-approval.md (:309-372)",
+   "src": "skills/_shared/router-protocol.md",
+   "start_anchor": "## Skill-Distill Approval Flow",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "tools/craftflow-plugin/docs/router-protocol-history.md",
+   "dst_header": "\n",
+   "end_anchor": "the router split itself, when that day comes.\n",
+   "id": "p11-proto-future-third-router",
+   "op": "move",
+   "phase": "P11",
+   "pointer_text": "",
+   "source": "plan P11 Files: 'Future Third Router' (:374-386) appended to router-protocol-history.md (non-normative)",
+   "src": "skills/_shared/router-protocol.md",
+   "start_anchor": "## Future Third Router (Note, Not a Current Abstraction)"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/build-graph-standard.md",
+   "dst_header": "# BUILD task graph: standard\n\n",
+   "end_anchor": "If doc-syncer returns `STATUS: SKIPPED` (i.e., `IMPACT_LEVEL: none`), the router treats it as a passing state — equivalent to `COMPLETE` for workflow-advance purposes. The router must not block Memory Update when the SKIPPED contract is present and `SKIP_REASON` is non-empty. Advance to Memory Update immediately.\n",
+   "id": "p11-bw-graph-standard",
+   "op": "move",
+   "phase": "P11",
+   "pointer_text": "**BUILD task graph, doc-syncer state, fast path and escalation:** read the graph file the Read Map names for `build_mode` (`build-graph-standard.md` or `build-graph-fast.md`); after a fast-path verifier FAIL read `build-fast-path-escalation.md`.\n\n",
+   "source": "plan P11 Files: build-graph-standard.md (build-workflow 45-165)",
+   "src": "skills/craftflow-router/references/build-workflow.md",
+   "start_anchor": "### BUILD task graph",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/build-graph-fast.md",
+   "dst_header": "# BUILD task graph: fast path\n\n",
+   "end_anchor": "**Verifier FAIL on fast path:** Do NOT advance phase cursor. Trigger Fast Path Escalation (see `### Fast Path Escalation` below).\n",
+   "id": "p11-bw-graph-fast",
+   "op": "move",
+   "phase": "P11",
+   "pointer_text": "",
+   "source": "plan P11 Files: build-graph-fast.md (166-209 only)",
+   "src": "skills/craftflow-router/references/build-workflow.md",
+   "start_anchor": "### BUILD task graph — fast path"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/build-fast-path-escalation.md",
+   "dst_header": "# BUILD fast-path escalation\n\n",
+   "end_anchor": "**Doc-syncer on escalated path:** SKIP. Fast-path work is unlikely to have doc impact significant enough to warrant it. Do not create a `build-doc-sync` task even after escalation.",
+   "id": "p11-bw-escalation",
+   "op": "move",
+   "phase": "P11",
+   "pointer_text": "",
+   "source": "plan P11 Files: build-fast-path-escalation.md (210-257)",
+   "src": "skills/craftflow-router/references/build-workflow.md",
+   "start_anchor": "### Fast Path Escalation"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/plan-bakeoff.md",
+   "dst_header": "# PLAN bake-off\n\n",
+   "end_anchor": "agent already uses.",
+   "id": "p11-pw-bakeoff",
+   "op": "move",
+   "phase": "P11",
+   "pointer_text": "**PLAN qualify branch, bake-off fan-out, judge dispatch and post-judge validation:** when the scout qualifies a bake-off, read `references/plan-bakeoff.md`.\n\n",
+   "source": "plan P11 Files: plan-bakeoff.md (plan-workflow.md qualify, fan-out, judge, post-judge). Plan says 162-330; the section runs to 333 (sentence ends there), so 333 is used.",
+   "src": "skills/craftflow-router/references/plan-workflow.md",
+   "start_anchor": "### PLAN qualify branch",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "dst": "skills/craftflow-router/references/plan-bakeoff.md",
+   "dst_header": "\n## Chain loop step 5b\n\n",
+   "end_anchor": "     to `phase:plan-bakeoff-candidate-*`).",
+   "id": "p11-pw-bakeoff-step5b",
+   "op": "move",
+   "phase": "P11",
+   "pointer_text": "",
+   "source": "plan P11 Files: plus section 12 step 5b",
+   "src": "skills/craftflow-router/references/plan-workflow.md",
+   "start_anchor": "5b. If N-1 `plan-bakeoff-candidate-*` tasks are all runnable in the same round (PLAN workflow,"
+  },
+  {
+   "condition": "difference_17",
+   "dst": "hooks/README.md",
+   "dst_header": "\n## Hook policy (moved from the router artifact policy)\n\n",
+   "end_anchor": "- Optional accelerator MCPs are user-configured in Claude Code. CRAFTFLOW assumes the names `brightdata` and `octocode` if they are available, but must degrade to built-in research paths when they are absent.",
+   "id": "p11-artifact-hook-policy",
+   "op": "move",
+   "phase": "P11",
+   "pointer_text": "Hook policy: see `hooks/README.md`.\n",
+   "source": "plan P11 Files: hook policy (:261-277) moves to hooks/README.md with a pointer (Difference 17 only)",
+   "src": "skills/craftflow-router/references/workflow-artifact-and-hook-policy.md",
+   "start_anchor": "Hook policy:",
+   "status": "drafted"
+  },
+  {
+   "condition": "difference_17",
+   "end_anchor": "- That reference contains the verbatim artifact schema, event log contract, hook policy, and gate wording extracted from the prior router monolith. Treat it as load-bearing orchestration law, not optional background.",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p11-d17-kernel-2a-trigger",
+   "op": "replace",
+   "phase": "P11",
+   "source": "plan P11 Difference 17: narrow the read trigger in kernel section 2a (replace row)",
+   "start_anchor": "- Before workflow creation, artifact mutation, hook policy changes, or resume logic that depends on artifact fields, immediately read `references/workflow-artifact-and-hook-policy.md`.",
+   "status": "drafted",
+   "text": "- Read `references/workflow-artifact-and-hook-policy.md` before resume logic that depends on artifact fields, before a hook-policy change, before writing an artifact field the router has not written before, and after the first post-agent artifact update of a session.\n- That reference holds the verbatim artifact schema, event log contract and gate wording. Treat it as load-bearing orchestration law.\n"
+  },
+  {
+   "action": "update",
+   "condition": "difference_17",
+   "id": "p11-d17-readmap-artifact-policy",
+   "match": {
+    "class": "start",
+    "file": "skills/craftflow-router/references/workflow-artifact-and-hook-policy.md"
+   },
+   "op": "readmap",
+   "phase": "P11",
+   "row": {
+    "class": "stage",
+    "happy_path": true,
+    "trigger": "before resume artifact logic / hook policy change / unnamed artifact field write / first post-agent artifact update"
+   },
+   "source": "plan P11 Difference 17: start -> stage with the narrower trigger"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p11-xref-1",
+   "op": "replace",
+   "phase": "P11",
+   "source": "plan P11 cross-reference fix 1",
+   "start_anchor": "- Use the `### BUILD preparation` and `### BUILD task graph` blocks in that file as the canonical BUILD law.",
+   "text": "- Use `### BUILD preparation` in that file and the task-graph file for the chosen `build_mode` (`references/build-graph-standard.md` or `references/build-graph-fast.md`, per the Read Map) as the canonical BUILD law.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p11-xref-2",
+   "op": "replace",
+   "phase": "P11",
+   "source": "plan P11 cross-reference fix 2",
+   "start_anchor": "- Before fast-path routing (performed during BUILD preparation), read `references/fast-path.md` for the canonical keyword table, agent dispatch table, gate table, and escalation protocol.",
+   "text": "- Before fast-path routing (performed during BUILD preparation), read `references/fast-path.md` for the canonical keyword table, agent dispatch table, gate table and escalation cap; the fast-path escalation flow is in `references/build-fast-path-escalation.md` (Read Map).\n"
+  },
+  {
+   "condition": "always",
+   "end_anchor": "\"Previous Agent Findings Handoff\". DEBUG skips hunter findings.",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p11-xref-5",
+   "op": "replace",
+   "phase": "P11",
+   "source": "plan P11 cross-reference fix 5 (SKILL.md:939-941, stays in the kernel; DEBUG skips hunter findings stays verbatim)",
+   "start_anchor": "Shared with Cursor — canonical text lives in",
+   "text": "Shared with Cursor — canonical text lives in\n`tools/craftflow-plugin/plugins/craftflow/skills/_shared/verifier-handoff.md` §\n\"Previous Agent Findings Handoff\". DEBUG skips hunter findings.\n"
+  },
+  {
+   "condition": "always",
+   "end_anchor": "\"Skill-Distill Approval Flow\" (the four options (Approve / Approve + register in SKILL_HINTS / Reject / Defer), the exact",
+   "file": "skills/craftflow-router/references/post-agent-validation.md",
+   "id": "p11-xref-6",
+   "op": "replace",
+   "phase": "P11",
+   "source": "plan P11 cross-reference fix 6 (pointer now in post-agent-validation.md after P10)",
+   "start_anchor": "**Shared with Cursor — canonical text lives in",
+   "text": "**Shared with Cursor — canonical text lives in\n`tools/craftflow-plugin/plugins/craftflow/skills/_shared/skill-distill-approval.md` §\n\"Skill-Distill Approval Flow\" (the four options (Approve / Approve + register in SKILL_HINTS / Reject / Defer), the exact\n"
+  },
+  {
+   "condition": "always",
+   "end_anchor": "\"Verifier Findings Handoff\".",
+   "file": "skills/craftflow-router/references/post-agent-validation.md",
+   "id": "p11-xref-7",
+   "op": "replace",
+   "phase": "P11",
+   "source": "plan P11 cross-reference fix 7 (pointer now in post-agent-validation.md after P10)",
+   "start_anchor": "Shared with Cursor — canonical text lives in",
+   "text": "Shared with Cursor — canonical text lives in\n`tools/craftflow-plugin/plugins/craftflow/skills/_shared/verifier-handoff.md` §\n\"Verifier Findings Handoff\".\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p11-xref-8",
+   "op": "replace",
+   "phase": "P11",
+   "source": "plan P11 cross-reference fix 8",
+   "start_anchor": "- See `references/build-workflow.md` and apply its `### BUILD task graph` block verbatim before creating BUILD child tasks.",
+   "text": "- See `references/build-graph-standard.md` (standard) or `references/build-graph-fast.md` (`### BUILD task graph — fast path`, fast_path) and apply its task graph block verbatim before creating BUILD child tasks.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p11-xref-9",
+   "op": "replace",
+   "phase": "P11",
+   "source": "plan P11 cross-reference fix 9",
+   "start_anchor": "     - Read `references/build-workflow.md → ### Fast Path Escalation` block and execute it",
+   "text": "     - Read `references/build-fast-path-escalation.md → ### Fast Path Escalation` block and execute it\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/harness-self-checks.md",
+   "id": "p11-xref-10a",
+   "op": "replace",
+   "phase": "P11",
+   "source": "plan P11 cross-reference fix 10",
+   "start_anchor": "(`build-workflow.md` § `### BUILD task graph`), fast-path BUILD escalation's re-review spawn",
+   "text": "(`build-graph-standard.md` § `### BUILD task graph`), fast-path BUILD escalation's re-review spawn\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/harness-self-checks.md",
+   "id": "p11-xref-10b",
+   "op": "replace",
+   "phase": "P11",
+   "source": "plan P11 cross-reference fix 10",
+   "start_anchor": "(`build-workflow.md` § `### Fast Path Escalation`), and REVIEW (`review-workflow.md` §",
+   "text": "(`build-fast-path-escalation.md` § `### Fast Path Escalation`), and REVIEW (`review-workflow.md` §\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/build-graph-fast.md",
+   "id": "p11-xref-11",
+   "op": "replace",
+   "phase": "P11",
+   "source": "plan P11 cross-reference fix 11",
+   "start_anchor": "**Verifier FAIL on fast path:** Do NOT advance phase cursor. Trigger Fast Path Escalation (see `### Fast Path Escalation` below).",
+   "text": "**Verifier FAIL on fast path:** Do NOT advance phase cursor. Trigger Fast Path Escalation (see `build-fast-path-escalation.md` → `### Fast Path Escalation`).\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/build-fast-path-escalation.md",
+   "id": "p11-xref-12",
+   "op": "replace",
+   "phase": "P11",
+   "source": "plan P11 cross-reference fix 12",
+   "start_anchor": "    - Re-verify PASS → set `chain_tail_task_id = re_verify_task_id`, then run the Learn-Distill Gate and Skill-Distill Gate (identical gate checks, identical `TaskCreate` shape, identical `chain_tail_task_id` update rule as described in `### BUILD task graph — fast path` above — `remediation_history` is now populated by this escalation cycle, so the Learn-Distill Gate fires) BEFORE creating the Memory Update task, then proceed to memory-finalize",
+   "text": "    - Re-verify PASS → set `chain_tail_task_id = re_verify_task_id`, then run the Learn-Distill Gate and Skill-Distill Gate (identical gate checks, identical `TaskCreate` shape, identical `chain_tail_task_id` update rule as described in `build-graph-fast.md` → `### BUILD task graph — fast path` — `remediation_history` is now populated by this escalation cycle, so the Learn-Distill Gate fires) BEFORE creating the Memory Update task, then proceed to memory-finalize\n"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p11-readmap-multirepo",
+   "op": "readmap",
+   "phase": "P11",
+   "row": {
+    "class": "stage",
+    "file": "skills/_shared/router-protocol-multirepo.md",
+    "happy_path": false,
+    "trigger": "TOPLEVEL_EXIT != 0",
+    "workflows": [
+     "ALL"
+    ]
+   },
+   "source": "plan P11 task 7"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p11-readmap-skill-distill-approval",
+   "op": "readmap",
+   "phase": "P11",
+   "row": {
+    "class": "stage",
+    "file": "skills/_shared/skill-distill-approval.md",
+    "happy_path": false,
+    "trigger": "skill-author COMPLETE",
+    "workflows": [
+     "BUILD",
+     "DEBUG"
+    ]
+   },
+   "source": "plan P11 task 7 (workflows from the Applicability check: skill-distill appears in build and debug graphs only)"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p11-readmap-verifier-handoff",
+   "op": "readmap",
+   "phase": "P11",
+   "row": {
+    "class": "stage",
+    "file": "skills/_shared/verifier-handoff.md",
+    "happy_path": true,
+    "trigger": "before integration-verifier dispatch",
+    "workflows": [
+     "BUILD",
+     "DEBUG"
+    ]
+   },
+   "source": "plan P11 task 7 (integration-verifier appears in build and debug only)"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p11-readmap-graph-standard",
+   "op": "readmap",
+   "phase": "P11",
+   "row": {
+    "class": "start",
+    "file": "skills/craftflow-router/references/build-graph-standard.md",
+    "happy_path": true,
+    "trigger": "build_mode standard",
+    "variant": "standard",
+    "workflows": [
+     "BUILD"
+    ]
+   },
+   "source": "plan P11 task 7"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p11-readmap-graph-fast",
+   "op": "readmap",
+   "phase": "P11",
+   "row": {
+    "class": "start",
+    "file": "skills/craftflow-router/references/build-graph-fast.md",
+    "happy_path": true,
+    "trigger": "build_mode fast_path",
+    "variant": "fast_path",
+    "workflows": [
+     "BUILD"
+    ]
+   },
+   "source": "plan P11 task 7"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p11-readmap-escalation",
+   "op": "readmap",
+   "phase": "P11",
+   "row": {
+    "class": "stage",
+    "file": "skills/craftflow-router/references/build-fast-path-escalation.md",
+    "happy_path": false,
+    "trigger": "fast-path verifier FAIL",
+    "variant": "fast_path",
+    "workflows": [
+     "BUILD"
+    ]
+   },
+   "source": "plan P11 task 7"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p11-readmap-bakeoff",
+   "op": "readmap",
+   "phase": "P11",
+   "row": {
+    "class": "stage",
+    "file": "skills/craftflow-router/references/plan-bakeoff.md",
+    "happy_path": false,
+    "trigger": "bake-off qualify",
+    "workflows": [
+     "PLAN"
+    ]
+   },
+   "source": "plan P11 task 7"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p11-readmap-maintainer-README.md",
+   "op": "readmap",
+   "phase": "P11",
+   "row": {
+    "class": "maintainer",
+    "file": "hooks/README.md",
+    "trigger": "maintainers only",
+    "workflows": []
+   },
+   "source": "plan P11: unloaded destination docs; maintainer entries cover no workflow and are not rendered in the kernel table"
+  },
+  {
+   "action": "add",
+   "condition": "always",
+   "id": "p11-readmap-maintainer-router-protocol-history.md",
+   "op": "readmap",
+   "phase": "P11",
+   "row": {
+    "class": "maintainer",
+    "file": "tools/craftflow-plugin/docs/router-protocol-history.md",
+    "trigger": "maintainers only",
+    "workflows": []
+   },
+   "source": "plan P11: unloaded destination docs; maintainer entries cover no workflow and are not rendered in the kernel table"
+  },
+  {
+   "anchor": "**Runtime contract only.** v10 restores trust-first orchestration: route intent, hydrate workflow state, write workflow artifacts, execute the task graph, validate agent output, and fail closed on ambiguity, skipped work, or missing persistence.",
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p12-shared-header-statement",
+   "op": "insert",
+   "phase": "P12",
+   "position": "after_anchor",
+   "source": "plan P12 task 2: one statement in the kernel header",
+   "status": "drafted",
+   "text": "\n`(shared)` marks text whose canonical copy lives in `_shared/router-protocol.md`, which the Cursor router also reads.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p12-shared-26",
+   "op": "dedupe",
+   "phase": "P12",
+   "replacement_text": "**(shared) `_shared/router-protocol.md` §\n\"Intent Routing\" (full priority/keyword/chain table, routing rules, announce-line convention).** See `references/fast-path.md`\n",
+   "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
+   "start_anchor": "**Shared with Cursor — canonical text lives in\n`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §\n\"Intent Routing\" (full priority/keyword/chain table, routing rules, announce-line convention).** See `references/fast-path.md`",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p12-shared-38",
+   "op": "dedupe",
+   "phase": "P12",
+   "replacement_text": "**(shared) `_shared/router-protocol.md` §\n\"Resolve Project Root\" (single-repo/multi-repo resolution: the `git rev-parse --show-toplevel`\n",
+   "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
+   "start_anchor": "**Shared with Cursor — canonical text lives in\n`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §\n\"Resolve Project Root\" (single-repo/multi-repo resolution: the `git rev-parse --show-toplevel`",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "end_anchor": "\"Explicit Dispatcher (Phase-to-Agent Table)\" (full phase→agent mapping).** Claude Code resolves each row via `Task()`/`TaskCreate()`",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p12-shared-850",
+   "op": "dedupe",
+   "phase": "P12",
+   "replacement_text": "**(shared) `_shared/router-protocol.md` §\n\"Explicit Dispatcher (Phase-to-Agent Table)\" (full phase→agent mapping).** Claude Code resolves each row via `Task()`/`TaskCreate()`\n",
+   "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
+   "start_anchor": "**Shared with Cursor — canonical text lives in\n`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "end_anchor": "Prompt Scaffold\" (full field list: `## Task",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p12-shared-876",
+   "op": "dedupe",
+   "phase": "P12",
+   "replacement_text": "**(shared) `_shared/router-protocol.md` § \"Dispatch\nPrompt Scaffold\" (full field list: `## Task\n",
+   "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
+   "start_anchor": "**Shared with Cursor — canonical text lives in",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "end_anchor": "Prompt Scaffold\" section referenced immediately above** (the Prompt assembly rule is the",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p12-shared-898",
+   "op": "dedupe",
+   "phase": "P12",
+   "replacement_text": "**(shared) `_shared/router-protocol.md` § \"Dispatch\nPrompt Scaffold\" section referenced immediately above** (the Prompt assembly rule is the\n",
+   "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
+   "start_anchor": "**Shared with Cursor — canonical text lives in the same",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "end_anchor": "\"Previous Agent Findings Handoff\". DEBUG skips hunter findings.",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p12-shared-939",
+   "op": "dedupe",
+   "phase": "P12",
+   "replacement_text": "(shared) `_shared/verifier-handoff.md` §\n\"Previous Agent Findings Handoff\". DEBUG skips hunter findings.\n",
+   "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
+   "start_anchor": "Shared with Cursor — canonical text lives in",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "end_anchor": "\"Skill-Distill Approval Flow\" (the four options (Approve / Approve + register in SKILL_HINTS / Reject / Defer), the exact",
+   "file": "skills/craftflow-router/references/post-agent-validation.md",
+   "id": "p12-shared-1293",
+   "op": "dedupe",
+   "phase": "P12",
+   "replacement_text": "**(shared) `_shared/skill-distill-approval.md` §\n\"Skill-Distill Approval Flow\" (the four options (Approve / Approve + register in SKILL_HINTS / Reject / Defer), the exact\n",
+   "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
+   "start_anchor": "**Shared with Cursor — canonical text lives in",
+   "status": "drafted"
+  },
+  {
+   "condition": "always",
+   "end_anchor": "\"Verifier Findings Handoff\".",
+   "file": "skills/craftflow-router/references/post-agent-validation.md",
+   "id": "p12-shared-1456",
+   "op": "dedupe",
+   "phase": "P12",
+   "replacement_text": "(shared) `_shared/verifier-handoff.md` §\n\"Verifier Findings Handoff\".\n",
+   "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
+   "start_anchor": "Shared with Cursor — canonical text lives in",
+   "status": "drafted"
+  },
+  {
+   "condition": "live_verified",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p12-delete-enterplanmode-kernel",
+   "op": "delete",
+   "phase": "P12",
+   "source": "plan P12 task 1 / P13 task 4: EnterPlanMode rule deleted only after live proof (policy native_plan_mode, Policy table row)",
+   "start_anchor": "- Never use EnterPlanMode. Claude Code's native plan mode is incompatible with Craftflow. Planning requests go through the Craftflow PLAN workflow (brainstorming → planner → bounded fresh review → memory finalization), which provides orchestration state, workflow artifacts, intent contracts, and verification. Native plan mode provides none of these."
+  },
+  {
+   "condition": "live_verified",
+   "file": "skills/_shared/router-protocol.md",
+   "id": "p12-delete-enterplanmode-protocol",
+   "op": "delete",
+   "phase": "P12",
+   "source": "plan P12 task 1: router-protocol.md:206 EnterPlanMode rule deleted only after live proof",
+   "start_anchor": "- NEVER use Claude Code's native plan mode (EnterPlanMode). Craftflow owns planning. All \"plan\", \"design\", \"architect\", \"brainstorm\" requests route to the Craftflow PLAN workflow — not to the built-in plan mode tool. EnterPlanMode bypasses Craftflow orchestration, memory, workflow artifacts, and verification entirely."
+  },
+  {
+   "condition": "always",
+   "contingency": "C1",
+   "end_anchor": "   - Omit the `## Worktree` section from task descriptions when in fallback mode",
+   "file": "skills/craftflow-router/references/build-workflow.md",
+   "id": "p12-c1-worktree-create-script",
+   "op": "contingency",
+   "phase": "P12",
+   "source": "plan Budget Ledger C1 (worktree creation into craftflow_worktree_finalize.py --create); real script not built - DRAFT replacement text",
+   "start_anchor": "### Worktree Isolation (BUILD Default)",
+   "status": "drafted",
+   "text": "### Worktree Isolation (BUILD Default)\n\nCreate the worktree with `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_worktree_finalize.py\" --create --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"`; it records `worktree_mode`, `worktree_path` and `worktree_branch` in the artifact, or sets the fallback mode when creation fails (never block a workflow over worktree failure).\n"
+  },
+  {
+   "condition": "always",
+   "contingency": "C2",
+   "end_anchor": "    `.craftflow-workspace.json` or `.craftflow/state/workspace/`, read `references/memory-load-workspace.md` and follow it.",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p12-c2-discover-workspace",
+   "op": "contingency",
+   "phase": "P12",
+   "source": "plan Budget Ledger C2; after P10 the 5a walk prose already left the kernel, so only the 2-line trigger remains to shrink - DRAFT",
+   "start_anchor": "5a. Workspace-tier discovery (capped upward walk, max 3 levels above PROJECT_ROOT): when an ancestor holds",
+   "status": "drafted",
+   "text": "5a. Workspace tier: run `craftflow_state_query.py --discover-workspace` and pass a printed root as `--workspace-root`. (Details: `references/memory-load-workspace.md`.)\n"
+  },
+  {
+   "condition": "always",
+   "contingency": "C3",
+   "end_anchor": "   - Standard: `-> FULL BUILD (risk signals: {matched keywords})`",
+   "file": "skills/craftflow-router/references/build-workflow.md",
+   "id": "p12-c3-fast-path-scan-script",
+   "op": "contingency",
+   "phase": "P12",
+   "source": "plan Budget Ledger C3 (craftflow_fast_path_scan.py replaces the scan procedure prose); real script not built - DRAFT replacement text",
+   "start_anchor": "### Fast Path Detection",
+   "status": "drafted",
+   "text": "### Fast Path Detection\n\nRun `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_fast_path_scan.py\" --wf {workflow_uuid}` and record `build_mode` and `fast_path_risk_signals` from its output; announce the result with the `-> FAST-PATH BUILD` or `-> FULL BUILD` line.\n"
+  },
+  {
+   "condition": "always",
+   "contingency": "C4",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p12-c4-second-rationale-pass",
+   "note": "Ledger C4 is 'a second rationale pass over plan-workflow.md (about -1 to -2 K, PLAN)': no text is named, so no anchors can be derived (P12 task 3 selects whole non-normative units at build time). Not projected; the PLAN with_contingencies tier excludes it.",
+   "op": "contingency",
+   "phase": "P12",
+   "source": "plan Budget Ledger C4",
+   "status": "needs_anchor"
+  }
+ ],
+ "version": 1
+}

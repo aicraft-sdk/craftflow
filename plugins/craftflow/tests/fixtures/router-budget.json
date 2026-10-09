@@ -1,0 +1,73 @@
+{
+  "baseline_ref": "0439c33932463d257b881ce50f136ab7661c0a39",
+  "measured_at_sha": null,
+  "last_phase": "P2",
+  "merged_phases": [
+    "P2"
+  ],
+  "conditions": {
+    "difference_17": true,
+    "live_verified_enterplanmode": false
+  },
+  "ceilings": {
+    "kernel_bytes": 128769,
+    "protocol_bytes": 29315,
+    "reference_max_bytes": 32177,
+    "description_chars": 8179,
+    "readset": {
+      "BUILD": 215553,
+      "PLAN": 201378,
+      "DEBUG": 180694,
+      "REVIEW": 178756
+    }
+  },
+  "ceiling_raises": [],
+  "targets": {
+    "kernel_bytes": 25000,
+    "protocol_bytes": 15000,
+    "reference_max_bytes": 20000,
+    "description_chars": 4000,
+    "readset": {
+      "BUILD": 60000,
+      "PLAN": 55000,
+      "DEBUG": 55000,
+      "REVIEW": 55000
+    }
+  },
+  "enforced_caps": null,
+  "enforced_caps_decision": null,
+  "projection_sha256": "47d81ad33490a0e466ceabb396bac9c88b15936aac5db3a1ae01f286cd5fb1ad",
+  "projection_revisions": [],
+  "enforce": false,
+  "p2_sha": null,
+  "p2_measured": {
+    "files": {
+      "skills/_shared/router-protocol.md": 29315,
+      "skills/craftflow-router/SKILL.md": 128769,
+      "skills/craftflow-router/references/build-workflow.md": 32177,
+      "skills/craftflow-router/references/context-boundary.md": 2469,
+      "skills/craftflow-router/references/debug-workflow.md": 7893,
+      "skills/craftflow-router/references/fast-path.md": 10575,
+      "skills/craftflow-router/references/harness-self-checks.md": 6008,
+      "skills/craftflow-router/references/plan-workflow.md": 28577,
+      "skills/craftflow-router/references/remediation-and-research.md": 16357,
+      "skills/craftflow-router/references/review-workflow.md": 5955,
+      "skills/craftflow-router/references/workflow-artifact-and-hook-policy.md": 14717
+    },
+    "readsets": {
+      "BUILD": {
+        "fast_path": 215553,
+        "standard": 215553
+      },
+      "PLAN": {
+        "standard": 201378
+      },
+      "DEBUG": {
+        "standard": 180694
+      },
+      "REVIEW": {
+        "standard": 178756
+      }
+    }
+  }
+}

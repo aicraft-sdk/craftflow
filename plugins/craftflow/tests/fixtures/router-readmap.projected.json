@@ -1,0 +1,287 @@
+{
+ "version": 1,
+ "describes": "BASELINE_SHA 0439c339: when the router reads each runtime file today",
+ "variants": {
+  "BUILD": [
+   "fast_path",
+   "standard"
+  ],
+  "PLAN": [
+   "standard"
+  ],
+  "DEBUG": [
+   "standard"
+  ],
+  "REVIEW": [
+   "standard"
+  ]
+ },
+ "files": [
+  {
+   "file": "skills/craftflow-router/SKILL.md",
+   "class": "kernel",
+   "workflows": [
+    "ALL"
+   ],
+   "trigger": "skill load",
+   "happy_path": true
+  },
+  {
+   "file": "skills/_shared/router-protocol.md",
+   "class": "kernel",
+   "workflows": [
+    "ALL"
+   ],
+   "trigger": "read before routing (SKILL.md section 1 pointer)",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/workflow-artifact-and-hook-policy.md",
+   "class": "stage",
+   "workflows": [
+    "ALL"
+   ],
+   "trigger": "before resume artifact logic / hook policy change / unnamed artifact field write / first post-agent artifact update",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/build-workflow.md",
+   "class": "start",
+   "workflows": [
+    "BUILD"
+   ],
+   "trigger": "BUILD preparation",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/fast-path.md",
+   "class": "start",
+   "workflows": [
+    "BUILD"
+   ],
+   "trigger": "fast-path routing during BUILD preparation",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "class": "start",
+   "workflows": [
+    "PLAN"
+   ],
+   "trigger": "PLAN preparation",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/debug-workflow.md",
+   "class": "start",
+   "workflows": [
+    "DEBUG"
+   ],
+   "trigger": "DEBUG preparation",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/review-workflow.md",
+   "class": "start",
+   "workflows": [
+    "REVIEW"
+   ],
+   "trigger": "REVIEW preparation",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/harness-self-checks.md",
+   "class": "stage",
+   "workflows": [
+    "BUILD",
+    "REVIEW",
+    "DEBUG"
+   ],
+   "trigger": "before code-reviewer dispatch / clean-state check",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/remediation-and-research.md",
+   "class": "stage",
+   "workflows": [
+    "ALL"
+   ],
+   "trigger": "remediation or research is triggered",
+   "happy_path": false
+  },
+  {
+   "file": "skills/craftflow-router/references/context-boundary.md",
+   "class": "stage",
+   "workflows": [
+    "BUILD",
+    "PLAN"
+   ],
+   "trigger": "phase exit",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/fast-path.md",
+   "class": "stage",
+   "workflows": [
+    "PLAN",
+    "DEBUG",
+    "REVIEW"
+   ],
+   "trigger": "first agent dispatch effort lookup (SKILL.md:907)",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/worktree.md",
+   "class": "stage",
+   "workflows": [
+    "BUILD"
+   ],
+   "trigger": "after final-phase verifier PASS (BUILD, worktree_mode == auto_created) or resume with a worktree pending_gate",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/memory-finalize.md",
+   "class": "stage",
+   "workflows": [
+    "ALL"
+   ],
+   "trigger": "memory task runnable",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/task-tool-fallback.md",
+   "class": "stage",
+   "workflows": [
+    "ALL"
+   ],
+   "trigger": "task_tools_available == false or native Task* failure",
+   "happy_path": false
+  },
+  {
+   "file": "skills/craftflow-router/references/workflow-start.md",
+   "class": "start",
+   "workflows": [
+    "ALL"
+   ],
+   "trigger": "before workflow creation",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/resume.md",
+   "class": "stage",
+   "workflows": [
+    "ALL"
+   ],
+   "trigger": "resume or a live scope marker",
+   "happy_path": false
+  },
+  {
+   "file": "skills/craftflow-router/references/post-agent-validation.md",
+   "class": "stage",
+   "workflows": [
+    "ALL"
+   ],
+   "trigger": "after any agent returns",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/verify-dispatch.md",
+   "class": "stage",
+   "workflows": [
+    "BUILD",
+    "DEBUG"
+   ],
+   "trigger": "after integration-verifier PASS",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/memory-load-workspace.md",
+   "class": "stage",
+   "workflows": [
+    "ALL"
+   ],
+   "trigger": "workspace marker found",
+   "happy_path": false
+  },
+  {
+   "file": "skills/_shared/router-protocol-multirepo.md",
+   "class": "stage",
+   "workflows": [
+    "ALL"
+   ],
+   "trigger": "TOPLEVEL_EXIT != 0",
+   "happy_path": false
+  },
+  {
+   "file": "skills/_shared/skill-distill-approval.md",
+   "class": "stage",
+   "workflows": [
+    "BUILD",
+    "DEBUG"
+   ],
+   "trigger": "skill-author COMPLETE",
+   "happy_path": false
+  },
+  {
+   "file": "skills/_shared/verifier-handoff.md",
+   "class": "stage",
+   "workflows": [
+    "BUILD",
+    "DEBUG"
+   ],
+   "trigger": "before integration-verifier dispatch",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/build-graph-standard.md",
+   "class": "start",
+   "workflows": [
+    "BUILD"
+   ],
+   "trigger": "build_mode standard",
+   "variant": "standard",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/build-graph-fast.md",
+   "class": "start",
+   "workflows": [
+    "BUILD"
+   ],
+   "trigger": "build_mode fast_path",
+   "variant": "fast_path",
+   "happy_path": true
+  },
+  {
+   "file": "skills/craftflow-router/references/build-fast-path-escalation.md",
+   "class": "stage",
+   "workflows": [
+    "BUILD"
+   ],
+   "trigger": "fast-path verifier FAIL",
+   "variant": "fast_path",
+   "happy_path": false
+  },
+  {
+   "file": "skills/craftflow-router/references/plan-bakeoff.md",
+   "class": "stage",
+   "workflows": [
+    "PLAN"
+   ],
+   "trigger": "bake-off qualify",
+   "happy_path": false
+  },
+  {
+   "file": "hooks/README.md",
+   "class": "maintainer",
+   "workflows": [],
+   "trigger": "maintainers only"
+  },
+  {
+   "file": "tools/craftflow-plugin/docs/router-protocol-history.md",
+   "class": "maintainer",
+   "workflows": [],
+   "trigger": "maintainers only"
+  }
+ ]
+}

@@ -21,6 +21,27 @@ dispatch prompt scaffold, both `Read()` from there rather than inlined below. A 
 condition, same as any other required reference read in this file — do not silently
 proceed with routing/dispatch decisions from stale in-context memory of its content.
 
+## Reference Read Map
+
+<!-- readmap:begin -->
+Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset.py --print-table`; edit the map, not this table. It lists when each runtime file is read today. The sections below carry the rules.
+
+| Class | Read when | File | Workflows | Variant | Happy path |
+|---|---|---|---|---|---|
+| kernel | skill load | `SKILL.md` | ALL | - | yes |
+| kernel | read before routing (SKILL.md section 1 pointer) | `_shared/router-protocol.md` | ALL | - | yes |
+| start | workflow start | `references/workflow-artifact-and-hook-policy.md` | ALL | - | yes |
+| start | BUILD preparation | `references/build-workflow.md` | BUILD | - | yes |
+| start | fast-path routing during BUILD preparation | `references/fast-path.md` | BUILD | - | yes |
+| start | PLAN preparation | `references/plan-workflow.md` | PLAN | - | yes |
+| start | DEBUG preparation | `references/debug-workflow.md` | DEBUG | - | yes |
+| start | REVIEW preparation | `references/review-workflow.md` | REVIEW | - | yes |
+| stage | before code-reviewer dispatch / clean-state check | `references/harness-self-checks.md` | BUILD, REVIEW, DEBUG | - | yes |
+| stage | remediation or research is triggered | `references/remediation-and-research.md` | ALL | - | no |
+| stage | phase exit | `references/context-boundary.md` | BUILD, PLAN | - | yes |
+| stage | first agent dispatch effort lookup (SKILL.md:907) | `references/fast-path.md` | PLAN, DEBUG, REVIEW | - | yes |
+<!-- readmap:end -->
+
 ## 1. Intent Routing
 
 **Shared with Cursor — canonical text lives in
