@@ -61,13 +61,28 @@ def _router_section_any(heading: str, file_hint: str | None = None) -> str:
     return router_corpus.section_any(heading, file_hint, plugin_root=PLUGIN_ROOT)[1]
 
 
-def _router_section_or_none(heading: str, file_hint: str) -> str | None:
+def _router_section_or_none(heading: str, file_hint: str | None = None) -> str | None:
     """Like `_router_section_any`, but a missing or ambiguous heading yields None so the caller can `fail()` with
-    its own message instead of crashing the suite."""
+    its own message instead of crashing the suite. Pass no `file_hint` when the heading is unique corpus-wide: the
+    section then travels with its text when a later phase moves it to another router file. Tests must call this,
+    never bare `_router_section_any` (an uncaught AmbiguousHeading aborts the whole suite)."""
     try:
         return _router_section_any(heading, file_hint)
     except (router_corpus.SectionNotFound, router_corpus.AmbiguousHeading):
         return None
+
+
+def _router_section_first(heading: str, hints: tuple = ("SKILL.md", "references/workflow-start.md")) -> str | None:
+    """For a heading that may live in several router files: the unique section when there is one, else the first
+    section found through the ordered `hints` (the kernel first, then the file a later phase moves it to)."""
+    section = _router_section_or_none(heading)
+    if section is not None:
+        return section
+    for hint in hints:
+        section = _router_section_or_none(heading, hint)
+        if section is not None:
+            return section
+    return None
 
 
 def ok(name: str) -> None:
@@ -1051,7 +1066,12 @@ def test_router_dispatches_doubt_verify() -> None:
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = _router_corpus_text()
+    # Read through the rule's own section (no file hint: it travels with the text) so deleting the rule fails the test
+    # even though other router files also name the agent.
+    content = _router_section_or_none("### Doubt-Verify Dispatch Rule")
+    if content is None:
+        fail(name, "could not bound the ### Doubt-Verify Dispatch Rule section")
+        return
     if "doubt-verify" not in content:
         fail(name, "craftflow-router SKILL.md missing 'doubt-verify' dispatch reference")
         return
@@ -1075,7 +1095,10 @@ def test_router_records_reliability_gates_evidence_in_fix_verify_and_doubt_verif
         return
     doubt_section = content[doubt_idx:fix_idx]
     # Bound by the heading (not to the end of the joined corpus) so later router files cannot satisfy it.
-    fix_section = _router_section_any("### Fix-Verify Dispatch Rule")
+    fix_section = _router_section_or_none("### Fix-Verify Dispatch Rule")
+    if fix_section is None:
+        fail(name, "could not bound the ### Fix-Verify Dispatch Rule section")
+        return
     if "craftflow_reliability_gates.py" not in doubt_section or "--record-evidence" not in doubt_section:
         fail(name, "Doubt-Verify Dispatch Rule missing --record-evidence wiring")
         return
@@ -1091,13 +1114,12 @@ def test_router_documents_task_tool_capability_detection() -> None:
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = _router_corpus_text()
-    section_idx = content.find("## 0a. Task Tool Capability Detection")
-    if section_idx == -1:
+    # K (P10): the plan keeps the `## 0a.` heading with its trigger in the kernel and moves the body to
+    # references/workflow-start.md, so the heading then exists twice and this read reports it as not found.
+    section = _router_section_or_none("## 0a. Task Tool Capability Detection")
+    if section is None:
         fail(name, "missing '## 0a. Task Tool Capability Detection' section")
         return
-    next_heading_idx = content.find("\n## ", section_idx + 1)
-    section = content[section_idx:next_heading_idx if next_heading_idx != -1 else len(content)]
     if "task_tools_available" not in section:
         fail(name, "## 0a section missing 'task_tools_available' marker")
         return
@@ -1112,7 +1134,10 @@ def test_router_task_tool_probe_call_documented() -> None:
     # ## 0a, and a second line of that section also names it, so deleting the probe call itself goes unnoticed.
     # This test pins the call literal (found wherever ## 0a lives).
     name = "router/task-tool-probe-call-documented"
-    section = _router_section_any("## 0a. Task Tool Capability Detection")
+    section = _router_section_or_none("## 0a. Task Tool Capability Detection")
+    if section is None:
+        fail(name, "## 0a. Task Tool Capability Detection not found as a single section")
+        return
     probe = 'ToolSearch(select: "TaskCreate,TaskList,TaskGet,TaskUpdate")'
     if probe not in section:
         fail(name, f"## 0a does not document the capability probe call {probe!r}")
@@ -1350,8 +1375,8 @@ def test_section_0_precedes_memory_load() -> None:
 def test_memory_load_anchored_to_project_root() -> None:
     name = "router/memory-load-anchored-to-project-root"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    # Bound by the SKILL.md heading: the protocol file also mentions the title in prose and sorts first in the corpus.
-    section = _router_section_or_none("## 2. Memory Load And Template Validation", "SKILL.md")
+    # Bound by the heading (the protocol file only mentions the title in prose, which is not a heading match).
+    section = _router_section_or_none("## 2. Memory Load And Template Validation")
     if section is None:
         fail(name, "could not bound ## 2. section")
         return
@@ -1367,8 +1392,8 @@ def test_memory_load_anchored_to_project_root() -> None:
 def test_parent_workflow_creation_anchored_to_project_root() -> None:
     name = "router/parent-workflow-creation-anchored"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    # The heading and `### BUILD task graph` also exist in references/build-workflow.md; bound within SKILL.md only.
-    section = _router_section_or_none("### Parent workflow creation", "SKILL.md")
+    # Bound by the section's own heading, wherever it lives (SKILL.md today, references/workflow-start.md after P10).
+    section = _router_section_first("### Parent workflow creation")
     if section is None:
         fail(name, "could not bound ### Parent workflow creation section")
         return
@@ -1384,8 +1409,8 @@ def test_parent_workflow_creation_anchored_to_project_root() -> None:
 def test_parent_workflow_creation_fallback_reason_wired() -> None:
     name = "router/parent-workflow-creation-fallback-reason-wired"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    # The heading and `### BUILD task graph` also exist in references/build-workflow.md; bound within SKILL.md only.
-    section = _router_section_or_none("### Parent workflow creation", "SKILL.md")
+    # Bound by the section's own heading, wherever it lives (SKILL.md today, references/workflow-start.md after P10).
+    section = _router_section_first("### Parent workflow creation")
     if section is None:
         fail(name, "could not bound ### Parent workflow creation section")
         return
@@ -1517,9 +1542,10 @@ def test_memory_finalization_for_plan_anchored_to_project_tier() -> None:
 def test_memory_finalization_for_debug_anchored_and_uses_workflow_uuid() -> None:
     name = "router/memory-finalization-for-debug-anchored-uses-workflow-uuid"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    content = _router_corpus_text()
-    start = content.find("For DEBUG:")
-    end = content.find("## 14. Hard Rules", start)
+    # Bound inside the section's own text (no file hint) so the block still resolves when ## 13 moves to another file.
+    content = _router_section_or_none("## 13. Memory Finalization")
+    start = content.find("For DEBUG:") if content is not None else -1
+    end = len(content) if content is not None else -1
     if start == -1 or end == -1:
         fail(name, "could not bound the For DEBUG: block in ## 13. Memory Finalization")
         return
@@ -1666,12 +1692,14 @@ def test_just_go_and_scope_decision_resume_anchored_to_project_root() -> None:
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
     content = _router_corpus_text()
 
-    jg_start = content.find("JUST_GO:")
-    jg_end = content.find("\n## 2a.", jg_start)
+    # JUST_GO: sits at the end of ## 2.; bound it inside that section (it ends at ## 2a.) rather than across the corpus.
+    memory_section = _router_section_or_none("## 2. Memory Load And Template Validation")
+    jg_start = memory_section.find("JUST_GO:") if memory_section is not None else -1
+    jg_end = len(memory_section) if memory_section is not None else -1
     if jg_start == -1 or jg_end == -1:
         fail(name, "could not bound JUST_GO: subsection through ## 2a.")
         return
-    jg_section = content[jg_start:jg_end]
+    jg_section = memory_section[jg_start:jg_end]
     if "`$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Session Settings`" not in jg_section:
         fail(name, "anchored JUST_GO Session Settings reference not found")
         return
@@ -1684,13 +1712,14 @@ def test_just_go_and_scope_decision_resume_anchored_to_project_root() -> None:
     # prose cross-reference. Anchor with a leading "\n" so only the real
     # heading matches (currently coincidentally safe here since both
     # interpretations agree, but not a durable guarantee).
-    resume_match = content.find("\n## 4. Resume And Hydration")
-    resume_start = resume_match + 1 if resume_match != -1 else -1
-    resume_end = content.find("\n## 5. Workflow Preparation", resume_start)
+    # K (P10): bounded by the heading itself; the plan keeps the `## 4.` heading in the kernel as the trigger and moves
+    # the body to references/resume.md, after which the Decisions reference is no longer under this heading.
+    resume_section = _router_section_or_none("## 4. Resume And Hydration")
+    resume_start = 0 if resume_section is not None else -1
+    resume_end = 0 if resume_section is not None else -1
     if resume_start == -1 or resume_end == -1:
         fail(name, "could not bound ## 4. Resume And Hydration through ## 5. Workflow Preparation")
         return
-    resume_section = content[resume_start:resume_end]
     if "`$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Decisions`" not in resume_section:
         fail(name, "anchored scope-decision-resume Decisions reference not found")
         return
@@ -2079,7 +2108,7 @@ def test_memory_finalize_permit_standalone_documented() -> None:
 
 def test_router_one_call_minting_documented() -> None:
     name = "router/one-call-workflow-minting-documented"
-    section = _router_section_or_none("### Parent workflow creation", "SKILL.md")
+    section = _router_section_first("### Parent workflow creation")
     if section is None:
         fail(name, "### Parent workflow creation not found in SKILL.md")
         return
@@ -2281,7 +2310,7 @@ def test_router_snippets_avoid_llm_quoted_requests_and_eval() -> None:
 
 def test_router_mint_command_passes_safe_shell_guard() -> None:
     name = "router/mint-command-passes-safe-shell-guard"
-    section = _router_section_or_none("### Parent workflow creation", "SKILL.md")
+    section = _router_section_first("### Parent workflow creation")
     if section is None:
         fail(name, "### Parent workflow creation not found in SKILL.md")
         return
@@ -2475,7 +2504,7 @@ def test_state_digest_required_sections_match_router_protocol_table() -> None:
 
 def test_router_memory_load_documents_digest_reread_rule() -> None:
     name = "router/memory-load-digest-reread-rule"
-    section = _router_section_or_none("## 2. Memory Load And Template Validation", "SKILL.md")
+    section = _router_section_or_none("## 2. Memory Load And Template Validation")
     if section is None:
         fail(name, "## 2. Memory Load And Template Validation not found in SKILL.md")
         return
@@ -2815,7 +2844,12 @@ def test_router_uses_workflow_id_helper() -> None:
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = _router_corpus_text()
+    # Bound to the section that mints the ids (wherever it lives): the helper name and the worktree bindings also appear in
+    # other router files, so a corpus-wide read would still pass with the rule deleted.
+    content = _router_section_first("### Parent workflow creation")
+    if content is None:
+        fail(name, "SKILL.md does not reference craftflow_workflow_id.py helper")
+        return
     if "craftflow_workflow_id.py" not in content:
         fail(name, "SKILL.md does not reference craftflow_workflow_id.py helper")
         return
@@ -16576,7 +16610,11 @@ def test_craftflow_router_documents_state_read_compaction_self_heal() -> None:
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = _router_corpus_text()
+    # Bound to the memory-load section (no file hint): 5-6 other router files carry the same markers.
+    content = _router_section_or_none("## 2. Memory Load And Template Validation")
+    if content is None:
+        fail(name, "craftflow-router SKILL.md missing expected marker: '## 2. Memory Load And Template Validation'")
+        return
     for marker in ("craftflow_state_query.py", "state-read-compaction"):
         if marker not in content:
             fail(name, f"craftflow-router SKILL.md missing expected marker: {marker!r}")
@@ -16830,8 +16868,10 @@ def test_router_phase_enum_registers_skill_distill_learn_distill_doubt_verify() 
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = _router_corpus_text()
-    match = re.search(r"^phase:\{[^}]*\}$", content, re.MULTILINE)
+    # The first `phase:{...}` line of the corpus can be the `phase:{phase}` template in remediation-and-research.md once
+    # the contract section moves, so search inside the Task Metadata Contract section (no file hint: it travels).
+    content = _router_section_or_none("## 3. Task Metadata Contract")
+    match = re.search(r"^phase:\{[^}]*\}$", content, re.MULTILINE) if content is not None else None
     if not match:
         fail(name, "SKILL.md missing the 'phase:{...}' Task Metadata Contract enum line")
         return

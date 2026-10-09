@@ -173,6 +173,63 @@ def test_enumerator_flags_annassign_async_and_class_methods() -> None:
     check("enumerator flags AnnAssign constants, async tests, class methods and the SKILL.md marker", found == want, str(found))
 
 
+_N2_FIXTURE = '''import craftflow_router_corpus as rc
+import craftflow_router_corpus
+from craftflow_router_corpus import read_corpus as rd
+from craftflow_router_corpus import section_any
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_module_alias():
+    assert rc.corpus_text(rc.read_corpus(ROOT))
+
+
+def test_from_import_alias_with_computed_path():
+    base = ROOT.joinpath("sk" + "ills")
+    assert rd(base.parent)
+
+
+def test_plain_member_import():
+    assert section_any("## 1.", None, plugin_root=ROOT)
+
+
+def test_module_without_alias():
+    assert craftflow_router_corpus.runtime_files(ROOT)
+
+
+def test_bare_api_name_without_import():
+    assert find_section("x", "## y")
+
+
+def test_lookalike_is_not_the_api():
+    assert memory_merge._find_section_span("a", "b") and not_read_corpus_here
+
+
+def test_unrelated():
+    assert 1 + 1 == 2
+'''
+
+
+def test_enumerator_flags_loader_import_aliases_and_api_names() -> None:
+    """The test_zz_bypass.py shape (REM-FIX 3): an aliased import of the corpus loader plus a computed path, no marker in the test."""
+    with tempfile.TemporaryDirectory() as tmp:
+        scratch = Path(tmp) / "test_zz_bypass.py"
+        scratch.write_text(_N2_FIXTURE, encoding="utf-8")
+        found = sorted(enum.router_reading_tests(scratch))
+    want = ["test_bare_api_name_without_import", "test_from_import_alias_with_computed_path", "test_module_alias",
+            "test_module_without_alias", "test_plain_member_import"]
+    check("enumerator flags aliased loader imports, from-imports and bare API names, not look-alike identifiers", found == want, str(found))
+
+
+def test_enumerator_covers_the_rule_inventory_fixtures() -> None:
+    check("the rule-inventory fixtures are enumerated (only the guard itself is excluded)",
+          enum.EXCLUDED_FILES == ("test_router_test_anchors.py",) and any(
+              label.startswith("fx::test_rule_inventory") for label in enum.enumerate_router_tests()),
+          f"EXCLUDED_FILES={enum.EXCLUDED_FILES}")
+
+
 def test_bare_name_exclusion_no_longer_classifies() -> None:
     doc = "Not listed: test_whatever.\n"
     found = unclassified({"hook": ["test_whatever"]}, doc)
@@ -213,6 +270,8 @@ def main() -> int:
     test_guard_detects_a_missing_row()
     test_guard_detects_a_stale_count_line()
     test_enumerator_flags_annassign_async_and_class_methods()
+    test_enumerator_flags_loader_import_aliases_and_api_names()
+    test_enumerator_covers_the_rule_inventory_fixtures()
     test_bare_name_exclusion_no_longer_classifies()
     test_exclusion_without_reason_fails()
     test_qualified_exclusion_classifies_only_its_label()
