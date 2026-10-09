@@ -5,8 +5,10 @@ A cut plan is {"rows": [...]}. Each row has id, phase (P2-P13), op, condition an
 dedupe, delete, insert, replace, readmap, contingency and descriptions (see the module-level docs in
 tests/fixtures/test_router_readset.py for the row fields). Anchors are exact lines (a multi-line anchor is a run of
 consecutive lines) and must match exactly one place in the projected file at the moment the row applies; otherwise
-ProjectionError (exit 2). A row with status `needs_anchor` is not applied and is listed under `unanchored`.
-Python 3.9 compatible.
+ProjectionError (exit 2). A row with status `needs_anchor` is not applied; it must state a direction and a size estimate, and
+is listed under `unanchored` with the net `bias` of all such rows. Unknown phase ids, condition names and flag values, a move or
+insert that creates a file the projected read map does not name, a whole-file replace of an unknown file and a read-map edit with
+no table markers to re-render are errors, not silent no-ops (see craftflow_router_readset_guard.py). Python 3.9 compatible.
 """
 from __future__ import annotations
 
@@ -18,18 +20,14 @@ from typing import Dict, Iterable, List, Optional
 
 import craftflow_router_corpus as cor
 import craftflow_router_readset_core as core
-from craftflow_router_readset_core import ReadsetError
+import craftflow_router_readset_guard as grd
+from craftflow_router_readset_guard import ALL_PHASES, ProjectionError  # noqa: F401 - re-exported for callers and tests
 
 SKILL = "skills/craftflow-router/SKILL.md"
 PROTOCOL = "skills/_shared/router-protocol.md"
 POLICY = "config/policy.json"
-ALL_PHASES = [f"P{i}" for i in range(2, 14)]
 TIERS = ("guaranteed", "conditional", "l3_upper_bound", "with_contingencies")
 GATED = re.compile(r"^skills/(craftflow-router/references|_shared)/[^/]+\.md$")
-
-
-class ProjectionError(ReadsetError):
-    """An anchor matched zero or several places, or a row is malformed: fail closed."""
 
 
 def is_gated(path: str) -> bool:
@@ -37,18 +35,15 @@ def is_gated(path: str) -> bool:
 
 
 def make_state(files: Dict[str, str], readmap: dict, descriptions: Optional[Dict[str, str]] = None) -> dict:
-    return {"files": dict(files), "readmap": copy.deepcopy(readmap), "descriptions": dict(descriptions or {}), "unanchored": []}
+    return {"files": dict(files), "readmap": copy.deepcopy(readmap), "descriptions": dict(descriptions or {}), "notes": []}
 
 
 def load_baseline_state(plugin_root, ref: str, readmap_path) -> dict:
     root = Path(plugin_root)
-    files = cor.read_corpus(root, ref)
-    names = cor._git(root, "ls-tree", "-r", "--name-only", ref, "--", "skills")
-    if names.returncode != 0:
-        raise ReadsetError(f"git ls-tree {ref} failed: {names.stderr.strip()}")
+    files = {rel: grd.read_exact(root, rel, ref) for rel in cor.runtime_files(root, ref)}
     descs = {}
-    for rel in sorted(n for n in names.stdout.split("\n") if re.fullmatch(r"skills/[^/]+/SKILL\.md", n or "")):
-        descs[rel.split("/")[1]] = core.effective_description(cor.read_text(root, rel, ref))
+    for rel in (n for n in grd.ls_tree(root, ref, "skills") if re.fullmatch(r"skills/[^/]+/SKILL\.md", n)):
+        descs[rel.split("/")[1]] = core.effective_description(grd.read_exact(root, rel, ref))
     return make_state(files, cor.load_json(readmap_path), descs)
 
 
@@ -140,6 +135,7 @@ def _insert(state: dict, r: dict) -> None:
 def _replace(state: dict, r: dict, key: str = "text") -> None:
     f, text = r.get("file"), _text(r, key)
     if r.get("whole_file"):
+        _file(state, f, r["id"])  # replacing a file the tree does not have is an insert new_file, not a replace
         state["files"][f] = text
         return
     lines = _lines(_file(state, f, r["id"]))
@@ -179,8 +175,7 @@ def _descriptions(state: dict, r: dict) -> None:
 
 def apply_row(state: dict, r: dict) -> None:
     if r.get("status") == "needs_anchor":
-        state["unanchored"].append(r["id"])
-        return
+        return  # reported by project() under `unanchored`; its bytes are in no tier
     op = r.get("op")
     if op == "insert":
         _insert(state, r)
@@ -219,8 +214,27 @@ def apply_rows(state: dict, rows: Iterable[dict]) -> dict:
 
 
 def _rerender(state: dict) -> None:
-    if SKILL in state["files"]:
-        state["files"][SKILL] = core.rerender_table(state["files"][SKILL], state["readmap"])
+    if SKILL not in state["files"]:
+        return
+    text = state["files"][SKILL]
+    if core.table_span(text) is not None:
+        state["files"][SKILL] = core.rerender_table(text, state["readmap"])
+        return
+    if not state.get("markers_optional"):
+        raise ProjectionError("read-map rows changed the map but the kernel has no readmap markers to re-render "
+                              "(the P2 table insert must be part of the projection)")
+    note = "kernel table re-render skipped: the kernel has no readmap markers (P2 is not in --phases)"
+    if note not in state["notes"]:
+        state["notes"].append(note)
+
+
+def _check_new_files_mapped(state: dict, state0: dict, label: str) -> None:
+    """A file the rows create but the projected read map does not name would drop its bytes from every read set."""
+    mapped = {e["file"] for e in state["readmap"]["files"]}
+    new = sorted(set(state["files"]) - set(state0["files"]) - mapped - {POLICY})  # policy.json is a start-set extra, not a map entry
+    if new:
+        raise ProjectionError(f"{label}: rows create {new} but the projected read map names no such file "
+                              "(its bytes would vanish from the read set)")
 
 
 # ---------------------------------------------------------------------------------------------- selection and tiers
@@ -228,6 +242,9 @@ def _rerender(state: dict) -> None:
 
 def select_rows(cutplan: dict, phases: Optional[Iterable[str]] = None) -> List[dict]:
     """Rows of the given phases in canonical order (phase number, then file order). None selects every phase."""
+    grd.check_phase_ids([r.get("phase") for r in cutplan["rows"]], "cut-plan rows", rowless_ok=False)
+    if phases is not None:
+        grd.check_phase_ids(phases, "--phases", rowless_ok=True)
     want = set(ALL_PHASES) if phases is None else set(phases)
     indexed = [(int(r["phase"][1:]), i, r) for i, r in enumerate(cutplan["rows"]) if r["phase"] in want]
     return [r for _, _, r in sorted(indexed, key=lambda t: (t[0], t[1]))]
@@ -287,15 +304,19 @@ def _capped_descriptions(state: dict, rows: List[dict]) -> int:
 def project(cutplan: dict, state0: dict, phases: Optional[Iterable[str]] = None, conditions: Optional[dict] = None,
             l3_allowlist: Optional[frozenset] = None) -> dict:
     """BC-11 output. `effective` honours the recorded conditions (the per-PR check); the four tiers use the plan's own."""
+    flags = grd.check_flags({} if conditions is None else conditions)
+    grd.check_row_conditions(cutplan["rows"])
     rows = select_rows(cutplan, phases)
-    flags = conditions or {}
+    markers_optional = "P2" not in (ALL_PHASES if phases is None else set(phases))
     plain = [r for r in rows if r["op"] != "contingency"]
     cont = [r for r in rows if r["op"] == "contingency"]
     allow = l3_allowlist if l3_allowlist is not None else frozenset()
 
     def run(use: List[dict]) -> dict:
         st = copy.deepcopy(state0)
+        st["markers_optional"] = markers_optional
         apply_rows(st, use)
+        _check_new_files_mapped(st, state0, "projection")
         return st
 
     s_g = run([r for r in plain if r["condition"] == "always"])
@@ -305,14 +326,15 @@ def project(cutplan: dict, state0: dict, phases: Optional[Iterable[str]] = None,
     tiers = {"guaranteed": measure_state(s_g), "conditional": measure_state(s_c),
              "l3_upper_bound": measure_state(s_c, allow), "with_contingencies": measure_state(s_k, allow)}
     eff = measure_state(s_e)
-    unanchored = sorted({r["id"] for r in rows if r.get("status") == "needs_anchor"})
-    return {"phases": sorted(set(ALL_PHASES) if phases is None else set(phases), key=lambda p: int(p[1:])),
+    unanchored = grd.unanchored_report(rows, state0["descriptions"])
+    return {"phases": sorted(set(ALL_PHASES) if phases is None else set(phases), key=lambda p: (int(p[1:].rstrip("C")), p.endswith("C"))),
             "tiers": {t: v["tier"] for t, v in tiers.items()}, "variant_totals": {t: v["variants"] for t, v in tiers.items()},
             "per_file": {t: v["per_file"] for t, v in tiers.items()},
             "descriptions_by_tier": {t: v["descriptions"] for t, v in tiers.items()},
             "descriptions_sum": tiers["guaranteed"]["descriptions"], "descriptions_bound": _capped_descriptions(s_g, plain),
             "effective": {"tier": eff["tier"], "variants": eff["variants"], "per_file": eff["per_file"], "descriptions": eff["descriptions"]},
-            "unanchored": unanchored, "rows_applied": len(rows) - len(unanchored)}
+            "effective_conditions": dict(sorted(flags.items())), "notes": s_c["notes"],
+            "unanchored": unanchored, "bias": grd.bias_summary(unanchored), "rows_applied": len(rows) - len(unanchored)}
 
 
 def _flatten(tier: dict, per_file: dict, desc: int) -> Dict[str, int]:
@@ -324,9 +346,11 @@ def _flatten(tier: dict, per_file: dict, desc: int) -> Dict[str, int]:
 
 
 def check_monotonic(out: dict) -> List[str]:
-    """E74: guaranteed >= conditional >= l3_upper_bound >= with_contingencies for every headline value."""
+    """E74: guaranteed >= conditional >= l3_upper_bound >= with_contingencies for every headline value and every gated file."""
     flat = {t: _flatten(out["tiers"][t], out["per_file"][t], out["descriptions_by_tier"][t]) for t in TIERS}
     bad = []
     for a, b in zip(TIERS, TIERS[1:]):
         bad += [f"{k}: {a}={flat[a][k]} < {b}={flat[b][k]}" for k in flat[a] if flat[a][k] < flat[b][k]]
+        pa, pb = out["per_file"][a], out["per_file"][b]
+        bad += [f"{k}: {a}={pa.get(k, 0)} < {b}={pb[k]}" for k in sorted(pb) if is_gated(k) and pa.get(k, 0) < pb[k]]
     return bad

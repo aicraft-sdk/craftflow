@@ -7,6 +7,7 @@ Dry-runs the wrapper against throwaway fixture directories with CRAFTFLOW_CI_KNO
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -14,7 +15,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 RUNNER = HERE / "run_fixture_suite.sh"
-WORKFLOW = HERE.parents[5] / ".github" / "workflows" / "craftflow-ci.yml"
+REPO = HERE.parents[5]
+WORKFLOW = REPO / ".github" / "workflows" / "craftflow-ci.yml"
+CODEOWNERS = REPO / ".github" / "CODEOWNERS"
+PLUGIN_REL = "tools/craftflow-plugin/plugins/craftflow"
 _passes = 0
 _errors: list = []
 
@@ -37,13 +41,16 @@ def make_fixture(directory: Path, name: str, failed) -> None:
     (directory / name).write_text(body, encoding="utf-8")
 
 
-def run(files: dict, known: str) -> subprocess.CompletedProcess:
+def run(files: dict, known: str, ci=None) -> subprocess.CompletedProcess:
     with tempfile.TemporaryDirectory() as tmp:
         fixtures = Path(tmp) / "fixtures"
         fixtures.mkdir()
         for name, failed in files.items():
             make_fixture(fixtures, name, failed)
         env = dict(os.environ, FIXTURE_DIR=str(fixtures), RUNNER_TEMP=tmp, CRAFTFLOW_CI_KNOWN_ENV_FAILURES=known)
+        env.pop("CI", None)
+        if ci is not None:
+            env["CI"] = ci
         return subprocess.run(["bash", str(RUNNER)], capture_output=True, text=True, env=env)
 
 
@@ -114,6 +121,76 @@ def test_workflow_uses_the_wrapper_with_an_empty_known_failure_list() -> None:
           and 'CRAFTFLOW_CI_KNOWN_ENV_FAILURES: ""' in text and "test_agent_structure.py | 11 |" not in text
           and "continue-on-error:" not in text,
           "workflow not wired to run_fixture_suite.sh with an empty known-failure list")
+
+
+SKIPPED = ("print('  SKIP: changed_gated_files_have_rows: no origin/main ref (CI must not skip)')\n"
+           "print('Results: 4 passed, 0 failed, 1 skipped')\n")
+
+
+def test_ci_refuses_a_skipped_origin_check() -> None:
+    """M1: a fixture that skipped its origin/main comparison is fine on a laptop and a failure in CI (fetch-depth 0)."""
+    local = run({"test_budget.py": SKIPPED}, "")
+    ci = run({"test_budget.py": SKIPPED}, "", ci="true")
+    other_skip = run({"test_node.py": "print('  SKIP: node_parity: node unavailable')\nprint('Results: 1 passed, 0 failed, 1 skipped')\n"}, "", ci="true")
+    clean = run({"test_budget.py": 0}, "", ci="true")
+    check("M1 a skip that CI must not take passes locally", local.returncode == 0, local.stdout)
+    check("M1 the same skip fails the job when CI=true", ci.returncode != 0 and "must not skip" in ci.stdout and "test_budget.py" in ci.stdout, ci.stdout)
+    check("M1 an unrelated skip (node missing) is not a CI failure", other_skip.returncode == 0, other_skip.stdout)
+    check("M1 a clean run still passes under CI=true", clean.returncode == 0, clean.stdout)
+
+
+def codeowners_patterns(text: str) -> list:
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and len(line.split()) >= 2:
+            out.append(line.split()[0])
+    return out
+
+
+def pattern_regex(pat: str) -> "re.Pattern":
+    """CODEOWNERS/gitignore-style glob for a repo-relative path: `*` stays inside a segment, `**` crosses them, a trailing `/` owns a tree."""
+    anchored = pat.startswith("/") or "/" in pat.rstrip("/")
+    pat = pat.lstrip("/")
+    body, i = "", 0
+    while i < len(pat):
+        if pat.startswith("**", i):
+            body, i = body + ".*", i + 2
+        elif pat[i] == "*":
+            body, i = body + "[^/]*", i + 1
+        elif pat[i] == "?":
+            body, i = body + "[^/]", i + 1
+        else:
+            body, i = body + re.escape(pat[i]), i + 1
+    if pat.endswith("/"):
+        body += ".*"
+    return re.compile(("^" if anchored else "^(?:.*/)?") + body + "$")
+
+
+def uncovered(paths: list, patterns: list) -> list:
+    regexes = [pattern_regex(p) for p in patterns]
+    return sorted(p for p in paths if not any(r.match(p) for r in regexes))
+
+
+def test_codeowners_cover_router_budget_fixtures_and_scripts() -> None:
+    """H3: every router fixture JSON, router script and router test is owned, so a new one cannot be added uncovered."""
+    plugin = REPO / PLUGIN_REL
+    paths = sorted(f"{PLUGIN_REL}/{p.relative_to(plugin).as_posix()}"
+                   for pat in ("tests/fixtures/router-*.json", "scripts/craftflow_router_*.py", "tests/fixtures/test_router_*.py")
+                   for p in plugin.glob(pat))
+    patterns = codeowners_patterns(CODEOWNERS.read_text(encoding="utf-8"))
+    missing = uncovered(paths, patterns)
+    named = {"router-budget.json", "router-cut-plan.json", "router-projection.json", "router-readmap.projected.json", "router-normative-allowlist.json",
+             "test_router_budget.py", "test_router_readset.py", "craftflow_router_readset.py", "craftflow_router_readset_core.py",
+             "craftflow_router_readset_project.py"}
+    present = {p.rsplit("/", 1)[1] for p in paths}
+    # negative controls: the matcher flags files an owner list does not name, and honours `*` only inside one segment
+    sample = ["tools/x/a.json @o"]
+    ctl_new = uncovered(["tools/x/a.json", "tools/x/b.json", "tools/x/sub/a.json"], codeowners_patterns("\n".join(sample)))
+    ctl_glob = uncovered(["tools/x/a.json", "tools/x/sub/a.json"], codeowners_patterns("tools/x/*.json @o"))
+    check("H3 CODEOWNERS covers every router fixture, script and router test", not missing and named <= present and len(paths) >= 20
+          and ctl_new == ["tools/x/b.json", "tools/x/sub/a.json"] and ctl_glob == ["tools/x/sub/a.json"],
+          f"uncovered={missing[:12]} ({len(missing)} total) named_present={named <= present} controls={ctl_new} {ctl_glob}")
 
 
 def main() -> int:

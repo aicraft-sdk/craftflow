@@ -127,7 +127,7 @@
     "DEBUG",
     "REVIEW"
    ],
-   "trigger": "first agent dispatch effort lookup (SKILL.md:907)",
+   "trigger": "first agent dispatch effort lookup (SKILL.md § Effort Dispatch Rule)",
    "happy_path": true
   },
   {

@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Router read-set measurer and cut-plan projection (plan P2, BC-11, DD-6, PP-10).
 
-  --workflow {BUILD,PLAN,DEBUG,REVIEW,ALL} [--variant V] [--ref SHA] [--readmap PATH] [--json]
+  --workflow {BUILD,PLAN,DEBUG,REVIEW,ALL} [--variant V] [--ref SHA --readmap PATH] [--json]
         bytes the router reads at workflow start (kernel + start files + config/policy.json) and on the happy path;
-        with --ref the bytes come from that commit (pass the frozen baseline map too, so later renames cannot move it)
+        with --ref the bytes come from that commit and --readmap is required (pass the frozen baseline map, so later
+        renames cannot move it; the live map is never paired with baseline bytes by default)
   --descriptions [--ref SHA]       skill description sum (effective YAML text; js_parser_sum is gen-craftflow-graph.mjs's)
   --print-table [--readmap PATH]   the kernel's marker-wrapped Reference Read Map section
-  --project CUTPLAN [--phases P2,P3] [--conditions k=v,...]   BC-11 projection over the baseline bytes
+  --project CUTPLAN [--phases P2,P3] [--conditions k=true|false,...]   BC-11 projection over the baseline bytes; `effective`
+        uses --conditions, else the `conditions` recorded in router-budget.json (stated in `effective_conditions[_source]`)
 
-Prints exactly one JSON line and exits 0; exits 2 on a malformed map, a missing file or an ambiguous anchor (fail closed).
+Prints exactly one JSON line and exits 0; exits 2 on a malformed map or budget, a missing or unreadable file, an unknown phase,
+condition or flag value, or an ambiguous anchor (fail closed). Bytes are counted raw: files are read as UTF-8 bytes and a CR byte
+is an error (nothing is normalised). Description lengths follow the effective YAML text.
 `compute(workflow)` is importable (P4's mint telemetry). Python 3.9 compatible.
 """
 from __future__ import annotations
@@ -16,12 +20,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import craftflow_router_corpus as cor
 import craftflow_router_readset_core as core
+import craftflow_router_readset_guard as grd
 import craftflow_router_readset_project as prj
 from craftflow_router_readset_core import ReadsetError
 
@@ -59,18 +65,15 @@ def measure(plugin_root, ref: Optional[str], readmap: dict) -> Dict[str, int]:
     for e in readmap["files"]:
         if e["class"] == "maintainer":
             continue
-        try:
-            sizes[e["file"]] = len(cor.read_text(plugin_root, e["file"], ref).encode("utf-8"))
-        except (OSError, RuntimeError) as exc:
-            raise ReadsetError(f"cannot read {e['file']} at {ref or 'working tree'}: {exc}") from exc
+        sizes[e["file"]] = len(grd.read_exact(plugin_root, e["file"], ref).encode("utf-8"))
     return sizes
 
 
 def policy_bytes(plugin_root, ref: Optional[str]) -> Dict[str, int]:
-    try:
-        return {POLICY: len(cor.read_text(plugin_root, POLICY, ref).encode("utf-8"))}
-    except (OSError, RuntimeError):
-        return {}  # the file does not exist yet (before P4): it adds nothing to any start set
+    """config/policy.json counts toward every start set. Only a file that is not there (before P4) counts 0; one that is there
+    but cannot be read or decoded is an error, never a silent 0."""
+    absent = not grd.ls_tree(plugin_root, ref, POLICY) if ref else not os.path.lexists(Path(plugin_root) / POLICY)
+    return {} if absent else {POLICY: len(grd.read_exact(plugin_root, POLICY, ref).encode("utf-8"))}
 
 
 def _budget(plugin_root, workflow: str, path) -> Optional[int]:
@@ -79,15 +82,20 @@ def _budget(plugin_root, workflow: str, path) -> Optional[int]:
         return None
     try:
         v = cor.load_json(p)["ceilings"]["readset"][workflow]
-    except (KeyError, TypeError, ValueError):
-        return None
-    return v if isinstance(v, int) and not isinstance(v, bool) else None
+    except (OSError, KeyError, TypeError, ValueError) as exc:  # a budget that exists but cannot be read is not "no budget"
+        raise ReadsetError(f"cannot read the {workflow} read-set ceiling from {p}: {type(exc).__name__}: {exc}") from exc
+    if not isinstance(v, int) or isinstance(v, bool):
+        raise ReadsetError(f"the {workflow} read-set ceiling in {p} must be an integer, got {v!r}")
+    return v
 
 
 def compute(workflow: str, plugin_root=None, ref: Optional[str] = None, readmap=None, variant: Optional[str] = None,
             budget_path=None) -> dict:
     """Read-set record for one workflow (or {"workflow": "ALL", "workflows": {...}}). Raises ReadsetError."""
     root = Path(plugin_root or PLUGIN_ROOT)
+    if ref and readmap is None:
+        raise ReadsetError("--ref measures the bytes of another commit and needs --readmap (the frozen baseline map for the baseline), "
+                           "never the live map by default")
     rm = readmap if isinstance(readmap, dict) else load_map(readmap or root / "config" / "router-readmap.json")
     sizes = measure(root, ref, rm)
     extra = policy_bytes(root, ref)
@@ -108,20 +116,30 @@ def descriptions(plugin_root=None, ref: Optional[str] = None) -> dict:
     generator's parser sees; the two differ for skills written as `description: >-`, which that parser reads as 2 chars."""
     root = Path(plugin_root or PLUGIN_ROOT)
     if ref:
-        res = cor._git(root, "ls-tree", "-r", "--name-only", ref, "--", "skills")
-        if res.returncode != 0:
-            raise ReadsetError(f"git ls-tree {ref} failed: {res.stderr.strip()}")
-        rels = sorted(n for n in res.stdout.split("\n") if n.count("/") == 2 and n.endswith("/SKILL.md"))
+        rels = [n for n in grd.ls_tree(root, ref, "skills") if n.count("/") == 2 and n.endswith("/SKILL.md")]
     else:
         rels = sorted(p.relative_to(root).as_posix() for p in (root / "skills").glob("*/SKILL.md"))
     per, js = {}, {}
     for rel in rels:
-        text = cor.read_text(root, rel, ref)
+        text = grd.read_exact(root, rel, ref)
         name = rel.split("/")[1]
         per[name], js[name] = core.effective_description(text), js_description(text)
     return {"sum": sum(len(v) for v in per.values()), "per_skill": {k: len(v) for k, v in per.items()},
             "js_parser_sum": sum(len(v) for v in js.values()),
             "js_parser_blind": sorted(k for k in per if len(js[k]) != len(per[k])), "parser": "effective-yaml"}
+
+
+def recorded_conditions(root: Path) -> tuple:
+    """(flags, source): the `conditions` of router-budget.json when no --conditions is given, so the `effective` block of
+    router-projection.json describes the state David recorded (difference_17 true), not an all-false world."""
+    path = root / FIX / "router-budget.json"
+    if not path.is_file():
+        return {}, "none"
+    try:
+        flags = cor.load_json(path)["conditions"]
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise ReadsetError(f"cannot read the recorded conditions from {path}: {type(exc).__name__}: {exc}") from exc
+    return grd.check_flags(flags), "router-budget.json"
 
 
 def run_projection(root: Path, args) -> dict:
@@ -133,10 +151,13 @@ def run_projection(root: Path, args) -> dict:
     if not isinstance(plan, dict) or not isinstance(plan.get("rows"), list):
         raise ReadsetError("cut plan must be an object with a 'rows' list")
     phases = None if args.phases is None else [p for p in args.phases.split(",") if p]
-    flags = {k: v == "true" for k, v in (kv.split("=", 1) for kv in (args.conditions or "").split(",") if "=" in kv)}
+    flags, source = grd.parse_conditions(args.conditions), "cli"
+    if not args.conditions:
+        flags, source = recorded_conditions(root)
     from craftflow_rule_inventory_units import load_allowlist
     allow = root / FIX / "router-normative-allowlist.json"
     out = prj.project(plan, state0, phases, flags, frozenset(load_allowlist(allow)) if allow.is_file() else frozenset())
+    out["effective_conditions_source"] = source
     out["cutplan_sha256"] = hashlib.sha256(plan_bytes).hexdigest()
     out["baseline_ref"] = ref
     return out
@@ -154,7 +175,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--readmap")
     ap.add_argument("--budget")
     ap.add_argument("--phases", default=None, help="comma-separated phase ids; empty selects none")
-    ap.add_argument("--conditions", default="", help="difference_17=true,live_verified=false")
+    ap.add_argument("--conditions", default="", help="difference_17=true,live_verified_enterplanmode=false (true|false only)")
     ap.add_argument("--plugin-root")
     ap.add_argument("--json", action="store_true", help="accepted for clarity: output is always one JSON line")
     args = ap.parse_args(argv)

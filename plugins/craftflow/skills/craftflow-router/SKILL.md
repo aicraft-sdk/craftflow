@@ -39,7 +39,7 @@ Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset
 | stage | before code-reviewer dispatch / clean-state check | `references/harness-self-checks.md` | BUILD, REVIEW, DEBUG | - | yes |
 | stage | remediation or research is triggered | `references/remediation-and-research.md` | ALL | - | no |
 | stage | phase exit | `references/context-boundary.md` | BUILD, PLAN | - | yes |
-| stage | first agent dispatch effort lookup (SKILL.md:907) | `references/fast-path.md` | PLAN, DEBUG, REVIEW | - | yes |
+| stage | first agent dispatch effort lookup (SKILL.md § Effort Dispatch Rule) | `references/fast-path.md` | PLAN, DEBUG, REVIEW | - | yes |
 <!-- readmap:end -->
 
 ## 1. Intent Routing

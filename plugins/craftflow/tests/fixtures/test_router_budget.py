@@ -4,7 +4,8 @@
 Run: python3 tests/fixtures/test_router_budget.py
 Reads tests/fixtures/router-budget.json and compares it with the measured tree (craftflow_router_readset), with the
 committed cut-plan projection and, where a remote is available, with origin/main. Every `origin/main` comparison is
-skipped with an `ok("skip: no origin")` line when `git show` fails. The bound checks are pure functions that take the
+skipped with a counting `skip(...)` line ("... CI must not skip") when `git show` fails; run_fixture_suite.sh fails a CI run
+(CI=true) that prints one, because CI checks out with fetch-depth 0 and must never skip. The bound checks are pure functions that take the
 projection as a callback, so the negative tests run them on fixture budgets and cut plans.
 """
 from __future__ import annotations
@@ -49,6 +50,12 @@ def ok(name: str) -> None:
     global _passes
     _passes += 1
     print(f"  PASS: {name}")
+
+
+def skip(name: str, reason: str) -> None:
+    global _skips
+    _skips += 1
+    print(f"  SKIP: {name}: {reason}")
 
 
 def fail(name: str, reason: str) -> None:
@@ -229,14 +236,24 @@ def effective_values(budget: dict) -> Callable[[List[str]], Dict[str, int]]:
 # ---------------------------------------------------------------------------------------------- tests on the live budget
 
 
+def shape_ok(b: dict) -> bool:
+    """The budget file's shape; the condition flags must be real booleans (a "false" string is truthy)."""
+    c = b["ceilings"]
+    return set(b) == SHAPE and set(c) == {"kernel_bytes", "protocol_bytes", "reference_max_bytes", "description_chars", "readset"} \
+        and set(c["readset"]) == {"BUILD", "PLAN", "DEBUG", "REVIEW"} and all(isinstance(get_key(c, k), int) for k in KEYS) \
+        and bool(b["merged_phases"]) and b["merged_phases"][-1] == b["last_phase"] and len(set(b["merged_phases"])) == len(b["merged_phases"]) \
+        and set(b["conditions"]) == {"difference_17", "live_verified_enterplanmode"} \
+        and all(isinstance(v, bool) for v in b["conditions"].values()) and isinstance(b["enforce"], bool)
+
+
 def test_budget_shape() -> None:
     b = load_budget()
-    c = b["ceilings"]
-    good = set(b) == SHAPE and set(c) == {"kernel_bytes", "protocol_bytes", "reference_max_bytes", "description_chars", "readset"} \
-        and set(c["readset"]) == {"BUILD", "PLAN", "DEBUG", "REVIEW"} and all(isinstance(get_key(c, k), int) for k in KEYS) \
-        and b["merged_phases"] and b["merged_phases"][-1] == b["last_phase"] and len(set(b["merged_phases"])) == len(b["merged_phases"]) \
-        and set(b["conditions"]) == {"difference_17", "live_verified_enterplanmode"} and isinstance(b["enforce"], bool)
-    check("budget_shape", good, f"keys={sorted(set(b) ^ SHAPE)} merged={b.get('merged_phases')} last={b.get('last_phase')}")
+    stringy = copy.deepcopy(b)
+    stringy["conditions"]["difference_17"] = "false"
+    renamed = copy.deepcopy(b)
+    renamed["conditions"] = {"difference_17": True, "live_verified": False}
+    check("budget_shape", shape_ok(b) and not shape_ok(stringy) and not shape_ok(renamed),
+          f"keys={sorted(set(b) ^ SHAPE)} merged={b.get('merged_phases')} last={b.get('last_phase')} string_flag_rejected={not shape_ok(stringy)}")
 
 
 def test_kernel_le_ceiling() -> None:
@@ -276,7 +293,7 @@ def test_targets_are_design_values() -> None:
 def test_ceiling_changes_bounded_vs_origin_main() -> None:
     status, origin = origin_budget()
     if status == "skip":
-        ok("skip: no origin")
+        skip("ceiling_changes_bounded_vs_origin_main", "no origin/main ref (CI must not skip)")
         return
     if status == "new":
         ok("ceiling_changes_bounded_vs_origin_main:first_introduction")
@@ -286,21 +303,54 @@ def test_ceiling_changes_bounded_vs_origin_main() -> None:
     check("ceiling_changes_bounded_vs_origin_main", not problems, "; ".join(problems))
 
 
+def append_only_problems(origin: dict, b: dict, identical: bool) -> List[str]:
+    """The lists only grow (always); a phase PR whose budget file differs from origin/main's adds exactly its own id to
+    merged_phases, and a PR that leaves the file byte-equal to origin/main's (any non-phase PR, or main itself) adds none."""
+    problems = [f"{k} is not an append-only extension of origin/main's" for k in LISTS if not is_prefix(origin[k], b[k])]
+    old = ((origin.get("enforced_caps_decision") or {}).get("amendments")) or []
+    new = ((b.get("enforced_caps_decision") or {}).get("amendments")) or []
+    if not is_prefix(old, new):
+        problems.append("enforced_caps_decision.amendments is not an append-only extension of origin/main's")
+    added = len(b["merged_phases"]) - len(origin["merged_phases"])
+    want = 0 if identical else 1
+    if added != want:
+        problems.append(f"merged_phases added {added}, expected {want} "
+                        f"({'the file equals origin/main, so nothing' if identical else 'a phase PR adds exactly its own id'})")
+    return problems
+
+
 def test_budget_lists_append_only() -> None:
     status, origin = origin_budget()
     b = load_budget()
     pure = is_prefix(["P2"], ["P2", "P2C"]) and not is_prefix(["P2", "P2C"], ["P2"]) and not is_prefix(["P2"], ["P3", "P2"])
     own = len(set(b["merged_phases"])) == len(b["merged_phases"])
-    if status != "ok":
-        check("budget_lists_append_only", pure and own, "prefix helper or own-list sanity broken")
-        ok("skip: no origin" if status == "skip" else "budget_lists_append_only:first_introduction")
+    check("budget_lists_append_only:helpers", pure and own, "prefix helper or own-list sanity broken")
+    if status == "skip":
+        skip("budget_lists_append_only", "no origin/main ref (CI must not skip)")
         return
-    bad = [k for k in LISTS if not is_prefix(origin[k], b[k])]
-    amend_old = ((origin.get("enforced_caps_decision") or {}).get("amendments")) or []
-    amend_new = ((b.get("enforced_caps_decision") or {}).get("amendments")) or []
-    added = len(b["merged_phases"]) - len(origin["merged_phases"])
-    check("budget_lists_append_only", pure and own and not bad and is_prefix(amend_old, amend_new) and added == 1,
-          f"not append-only: {bad}; merged_phases added {added} (a phase PR adds exactly its own id)")
+    if status == "new":
+        ok("budget_lists_append_only:first_introduction")
+        return
+    identical = git_show("origin/main", REL_BUDGET) == BUDGET.read_bytes()
+    problems = append_only_problems(origin, b, identical)
+    check("budget_lists_append_only", not problems, "; ".join(problems))
+
+
+def test_append_only_both_branches() -> None:
+    """H2: byte-equal to origin/main -> added 0 passes; a changed budget needs exactly one new id."""
+    origin = {"merged_phases": ["P2"], "ceiling_raises": [], "projection_revisions": []}
+    same = copy.deepcopy(origin)
+    phase = dict(copy.deepcopy(origin), merged_phases=["P2", "P3"])
+    two = dict(copy.deepcopy(origin), merged_phases=["P2", "P3", "P4"])
+    reorder = dict(copy.deepcopy(origin), merged_phases=["P3", "P2"])
+    shrink = dict(copy.deepcopy(origin), merged_phases=[])
+    check("append_only_both_branches",
+          append_only_problems(origin, same, True) == [] and append_only_problems(origin, phase, False) == []
+          and append_only_problems(origin, same, False) != [] and append_only_problems(origin, two, False) != []
+          and append_only_problems(origin, phase, True) != [] and append_only_problems(origin, reorder, False) != []
+          and append_only_problems(origin, shrink, False) != [],
+          f"identical/0={append_only_problems(origin, same, True)} changed/0={append_only_problems(origin, same, False)} "
+          f"changed/2={append_only_problems(origin, two, False)}")
 
 
 def test_enforced_caps_have_decision_record() -> None:
@@ -326,7 +376,7 @@ def test_enforced_caps_have_decision_record() -> None:
 def test_decision_record_immutable() -> None:
     status, origin = origin_budget()
     if status == "skip":
-        ok("skip: no origin")
+        skip("decision_record_immutable", "no origin/main ref (CI must not skip)")
         return
     b = load_budget()
     if status == "new" or origin.get("enforced_caps") is None:

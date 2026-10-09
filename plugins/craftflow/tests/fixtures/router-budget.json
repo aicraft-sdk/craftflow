@@ -10,15 +10,15 @@
     "live_verified_enterplanmode": false
   },
   "ceilings": {
-    "kernel_bytes": 128769,
+    "kernel_bytes": 128789,
     "protocol_bytes": 29315,
     "reference_max_bytes": 32177,
     "description_chars": 8179,
     "readset": {
-      "BUILD": 215553,
-      "PLAN": 201378,
-      "DEBUG": 180694,
-      "REVIEW": 178756
+      "BUILD": 215573,
+      "PLAN": 201398,
+      "DEBUG": 180714,
+      "REVIEW": 178776
     }
   },
   "ceiling_raises": [],
@@ -36,14 +36,14 @@
   },
   "enforced_caps": null,
   "enforced_caps_decision": null,
-  "projection_sha256": "47d81ad33490a0e466ceabb396bac9c88b15936aac5db3a1ae01f286cd5fb1ad",
+  "projection_sha256": "c3a0c575a4fd5853030e543fe95a565ef8d722235ecb447e4867881d9767db6e",
   "projection_revisions": [],
   "enforce": false,
   "p2_sha": "3417db204f64df5447c3498cfa32d4d0da8113a3",
   "p2_measured": {
     "files": {
       "skills/_shared/router-protocol.md": 29315,
-      "skills/craftflow-router/SKILL.md": 128769,
+      "skills/craftflow-router/SKILL.md": 128789,
       "skills/craftflow-router/references/build-workflow.md": 32177,
       "skills/craftflow-router/references/context-boundary.md": 2469,
       "skills/craftflow-router/references/debug-workflow.md": 7893,
@@ -56,17 +56,17 @@
     },
     "readsets": {
       "BUILD": {
-        "fast_path": 215553,
-        "standard": 215553
+        "fast_path": 215573,
+        "standard": 215573
       },
       "PLAN": {
-        "standard": 201378
+        "standard": 201398
       },
       "DEBUG": {
-        "standard": 180694
+        "standard": 180714
       },
       "REVIEW": {
-        "standard": 178756
+        "standard": 178776
       }
     }
   }

@@ -186,6 +186,14 @@ Excluded tests. `tests/fixtures/router_test_enumerate.py` flags a test when its 
 - Not listed: fx::test_router_budget.py::test_protocol_le_ceiling — compares measured file sizes of the live router with `router-budget.json`; no router prose is asserted.
 - Not listed: fx::test_router_budget.py::test_descriptions_le_ceiling — compares measured file sizes of the live router with `router-budget.json`; no router prose is asserted.
 - Not listed: fx::test_router_budget.py::test_measured_within_phase_projection — compares measured file sizes of the live router with `router-budget.json`; no router prose is asserted.
+- Not listed: fx::test_router_readset.py::test_p2_sha_absent_is_reported_not_passed — compares byte counts of a committed tree with the budget snapshot (and a fake sha); no router prose is asserted.
+- Not listed: fx::test_router_readset.py::test_unknown_condition_name_is_an_error — builds a synthetic world in memory (files keyed by router-looking paths such as `skills/craftflow-router/SKILL.md`); the live router is not read.
+- Not listed: fx::test_router_readset.py::test_conditions_input_is_strict — builds a synthetic world in memory (files keyed by router-looking paths such as `skills/craftflow-router/SKILL.md`); the live router is not read.
+- Not listed: fx::test_router_readset.py::test_effective_block_uses_the_recorded_conditions — compares tier byte totals of the committed projection under recorded and explicit flags; it measures bytes and asserts no router prose.
+- Not listed: fx::test_router_readset.py::test_unknown_phase_ids_are_errors — builds a synthetic world in memory (files keyed by router-looking paths such as `skills/craftflow-router/SKILL.md`); the live router is not read.
+- Not listed: fx::test_router_readset.py::test_monotonic_compares_per_file — checks the per-file byte ordering of the committed projection tiers; it measures bytes and asserts no router prose.
+- Not listed: fx::test_router_readset.py::test_unanchored_rows_and_bias_are_disclosed — checks the unanchored-row report and bias summary of the committed cut plan (and a synthetic one); it asserts no router prose.
+- Not listed: fx::test_router_readset.py::test_projector_refuses_rows_that_lose_bytes_silently — builds a synthetic world in memory (files keyed by router-looking paths such as `skills/craftflow-router/SKILL.md`); the live router is not read.
 
 
 Failure messages of the corpus-wide tests still say "SKILL.md missing ..." because rewording `fail(name, ...)` lines would break the P1 assertion-count proof; the Kind column, not the message, says what a test reads.

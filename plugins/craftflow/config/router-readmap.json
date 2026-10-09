@@ -19,6 +19,6 @@
     {"file": "skills/craftflow-router/references/harness-self-checks.md", "class": "stage", "workflows": ["BUILD", "REVIEW", "DEBUG"], "trigger": "before code-reviewer dispatch / clean-state check", "happy_path": true},
     {"file": "skills/craftflow-router/references/remediation-and-research.md", "class": "stage", "workflows": ["ALL"], "trigger": "remediation or research is triggered", "happy_path": false},
     {"file": "skills/craftflow-router/references/context-boundary.md", "class": "stage", "workflows": ["BUILD", "PLAN"], "trigger": "phase exit", "happy_path": true},
-    {"file": "skills/craftflow-router/references/fast-path.md", "class": "stage", "workflows": ["PLAN", "DEBUG", "REVIEW"], "trigger": "first agent dispatch effort lookup (SKILL.md:907)", "happy_path": true}
+    {"file": "skills/craftflow-router/references/fast-path.md", "class": "stage", "workflows": ["PLAN", "DEBUG", "REVIEW"], "trigger": "first agent dispatch effort lookup (SKILL.md § Effort Dispatch Rule)", "happy_path": true}
   ]
 }

@@ -8,6 +8,9 @@
 # A different count, an unparseable summary, or a listed file that now passes (or no longer exists) fails the job:
 # the entry must be updated or removed. File names are compared literally, never as a regex.
 #
+# With CI=true a fixture that exits 0 but printed a `SKIP: ... CI must not skip` line fails the job (a skipped origin/main
+# comparison is fine on a laptop, never in CI).
+#
 # FIXTURE_DIR defaults to this script's directory; RUNNER_TEMP to $TMPDIR or /tmp.
 set -u
 
@@ -72,6 +75,12 @@ for t in "$dir"/test_*.py; do
   if python3 "$t" >"$out" 2>&1; then
     if [ -n "$want" ]; then
       echo "::error::$name passed but is listed in CRAFTFLOW_CI_KNOWN_ENV_FAILURES; remove the entry"
+      failed=1
+    fi
+    # CI checks out with fetch-depth 0, so a comparison that skipped itself ("... CI must not skip") skipped a real check.
+    if [ "${CI:-}" = "true" ] && grep -q 'SKIP: .*CI must not skip' "$out"; then
+      echo "::error::$name skipped a check that CI must not skip (origin/main or the P2 commit is missing from the checkout):"
+      grep 'SKIP: .*CI must not skip' "$out"
       failed=1
     fi
     continue

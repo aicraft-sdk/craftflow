@@ -11,7 +11,22 @@
    "phase": "P2",
    "position": "after_anchor",
    "source": "plan P2 task 2/3: generated Reference Read Map table, markers, after the 'Mandatory reference read' paragraph (SKILL.md:17-22)",
-   "text": "\n## Reference Read Map\n\n<!-- readmap:begin -->\nGenerated from `config/router-readmap.json` by `scripts/craftflow_router_readset.py --print-table`; edit the map, not this table. It lists when each runtime file is read today. The sections below carry the rules.\n\n| Class | Read when | File | Workflows | Variant | Happy path |\n|---|---|---|---|---|---|\n| kernel | skill load | `SKILL.md` | ALL | - | yes |\n| kernel | read before routing (SKILL.md section 1 pointer) | `_shared/router-protocol.md` | ALL | - | yes |\n| start | workflow start | `references/workflow-artifact-and-hook-policy.md` | ALL | - | yes |\n| start | BUILD preparation | `references/build-workflow.md` | BUILD | - | yes |\n| start | fast-path routing during BUILD preparation | `references/fast-path.md` | BUILD | - | yes |\n| start | PLAN preparation | `references/plan-workflow.md` | PLAN | - | yes |\n| start | DEBUG preparation | `references/debug-workflow.md` | DEBUG | - | yes |\n| start | REVIEW preparation | `references/review-workflow.md` | REVIEW | - | yes |\n| stage | before code-reviewer dispatch / clean-state check | `references/harness-self-checks.md` | BUILD, REVIEW, DEBUG | - | yes |\n| stage | remediation or research is triggered | `references/remediation-and-research.md` | ALL | - | no |\n| stage | phase exit | `references/context-boundary.md` | BUILD, PLAN | - | yes |\n| stage | first agent dispatch effort lookup (SKILL.md:907) | `references/fast-path.md` | PLAN, DEBUG, REVIEW | - | yes |\n<!-- readmap:end -->\n"
+   "text": "\n## Reference Read Map\n\n<!-- readmap:begin -->\nGenerated from `config/router-readmap.json` by `scripts/craftflow_router_readset.py --print-table`; edit the map, not this table. It lists when each runtime file is read today. The sections below carry the rules.\n\n| Class | Read when | File | Workflows | Variant | Happy path |\n|---|---|---|---|---|---|\n| kernel | skill load | `SKILL.md` | ALL | - | yes |\n| kernel | read before routing (SKILL.md section 1 pointer) | `_shared/router-protocol.md` | ALL | - | yes |\n| start | workflow start | `references/workflow-artifact-and-hook-policy.md` | ALL | - | yes |\n| start | BUILD preparation | `references/build-workflow.md` | BUILD | - | yes |\n| start | fast-path routing during BUILD preparation | `references/fast-path.md` | BUILD | - | yes |\n| start | PLAN preparation | `references/plan-workflow.md` | PLAN | - | yes |\n| start | DEBUG preparation | `references/debug-workflow.md` | DEBUG | - | yes |\n| start | REVIEW preparation | `references/review-workflow.md` | REVIEW | - | yes |\n| stage | before code-reviewer dispatch / clean-state check | `references/harness-self-checks.md` | BUILD, REVIEW, DEBUG | - | yes |\n| stage | remediation or research is triggered | `references/remediation-and-research.md` | ALL | - | no |\n| stage | phase exit | `references/context-boundary.md` | BUILD, PLAN | - | yes |\n| stage | first agent dispatch effort lookup (SKILL.md § Effort Dispatch Rule) | `references/fast-path.md` | PLAN, DEBUG, REVIEW | - | yes |\n<!-- readmap:end -->\n"
+  },
+  {
+   "action": "update",
+   "condition": "always",
+   "id": "p2-readmap-trigger-fix",
+   "match": {
+    "class": "stage",
+    "file": "skills/craftflow-router/references/fast-path.md"
+   },
+   "op": "readmap",
+   "phase": "P2",
+   "row": {
+    "trigger": "first agent dispatch effort lookup (SKILL.md § Effort Dispatch Rule)"
+   },
+   "source": "P2 REM-FIX 1 R-M1: the baseline trigger pointed at SKILL.md:907 (stale; the rule is the Effort Dispatch Rule section); triggers are not part of readmap_widened"
   },
   {
    "condition": "always",
@@ -254,6 +269,8 @@
   },
   {
    "condition": "always",
+   "direction": "add",
+   "est_bytes": 290,
    "file": "skills/craftflow-router/SKILL.md",
    "id": "p3-kernel-when-to-use",
    "note": "P3 task 3: 'Trigger lists move verbatim into body ## When To Use' for skills whose description exceeds 160 chars; the craftflow-router description (499 chars) has a keyword list, and the plan does not say whether it gets a '## When To Use' section in the kernel (about +290 B to every start set). Not applied; kernel tiers exclude it.",
@@ -390,6 +407,45 @@
    "source": "plan P6 Prose: one sentence before the 'When plan-gap-reviewer pass 1 returns PASS' line (remediation-and-research.md:145)",
    "status": "drafted",
    "text": "After applying a block's `Increment planning_review_runs += 1` line, run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate plan_review_passes_max --point post_verdict --pass {N} --verdict {PASS|FINDINGS}`, where N is the pass of the returning `plan-review-gap-N` task; `proceed` → continue with that block; `human_checkpoint` with `reason: cap-reached` → the pass-2 `FINDINGS` block applies (`pending_gate=clarification`); any other result → `loop_cap_check_failed` (`SKILL.md` § 14).\n\n"
+  },
+  {
+   "anchor": "**After doubt-verifier returns:**",
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p6-fallback-cycle-doubt",
+   "note": "agents/doubt-verifier.md expects `## Cycle` in its prompt (:42, :148); without it every fallback-mode verdict lands on `loop_cap_check_failed`. Drafted text: P6 confirms the wording against the agent contract.",
+   "op": "insert",
+   "phase": "P6",
+   "position": "before_anchor",
+   "source": "Review Pass 3 Disposition Finding 5 (build advisory, P6 prose): the Task*-tool fallback paragraphs never tell the router to put the cycle in the dispatch prompt",
+   "status": "drafted",
+   "text": "In fallback mode include `## Cycle` N (per-phase, from 1) in the `craftflow:doubt-verifier` dispatch prompt; there is no `Cycle:` task line for the agent to read.\n\n"
+  },
+  {
+   "anchor": "**After doubt-verifier returns** (see `agents/doubt-verifier.md → ## Fix-Verify Contract`):",
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p6-fallback-cycle-fixverify",
+   "note": "agents/doubt-verifier.md expects `## Cycle` in its prompt (:42, :148); without it every fallback-mode verdict lands on `loop_cap_check_failed`. Drafted text: P6 confirms the wording against the agent contract.",
+   "op": "insert",
+   "phase": "P6",
+   "position": "before_anchor",
+   "source": "Review Pass 3 Disposition Finding 5 (build advisory, P6 prose): the Task*-tool fallback paragraphs never tell the router to put the cycle in the dispatch prompt",
+   "status": "drafted",
+   "text": "In fallback mode include `## Cycle` N (per-phase, from 1) in the fix-verify dispatch prompt too; there is no `Cycle:` task line to read.\n\n"
+  },
+  {
+   "anchor": "When `plan-gap-reviewer` pass 1 returns `PASS`:",
+   "condition": "always",
+   "file": "skills/craftflow-router/references/remediation-and-research.md",
+   "id": "p6-rr-fallback-pass-identity",
+   "note": "Plan review in fallback mode has no `plan-review-gap-N` task, so the pass number the gate check needs has no carrier. Drafted text: P6 confirms the field name against agents/plan-gap-reviewer.md.",
+   "op": "insert",
+   "phase": "P6",
+   "position": "before_anchor",
+   "source": "Review Pass 3 Disposition Finding 5 (build advisory, P6 prose): the Task*-tool fallback paragraphs never tell the router to put the cycle in the dispatch prompt",
+   "status": "drafted",
+   "text": "In Task*-tool fallback mode there is no `plan-review-gap-N` task: N is 1 for the first fresh review and 2 for the one after `re-plan`, and the `plan-gap-reviewer` dispatch prompt states it as `Pass: N`.\n\n"
   },
   {
    "condition": "always",
@@ -1214,6 +1270,8 @@
   },
   {
    "condition": "always",
+   "direction": "add",
+   "est_bytes": 100,
    "id": "p10-xref-unqualified-moved",
    "note": "P10 cross-reference fix 3: 'Every unqualified `## 8. Post-Agent Validation → …` and `## 12. Chain Execution Loop` reference inside moved text gets its file named (`SKILL.md` or `references/post-agent-validation.md`)'. The plan does not list the sites (they depend on the P9/P10 move order), so no exact anchors exist yet; expected cost is small (about +20 B per site).",
    "op": "replace",
@@ -1844,7 +1902,7 @@
    "status": "drafted"
   },
   {
-   "condition": "live_verified",
+   "condition": "live_verified_enterplanmode",
    "file": "skills/craftflow-router/SKILL.md",
    "id": "p12-delete-enterplanmode-kernel",
    "op": "delete",
@@ -1853,7 +1911,7 @@
    "start_anchor": "- Never use EnterPlanMode. Claude Code's native plan mode is incompatible with Craftflow. Planning requests go through the Craftflow PLAN workflow (brainstorming → planner → bounded fresh review → memory finalization), which provides orchestration state, workflow artifacts, intent contracts, and verification. Native plan mode provides none of these."
   },
   {
-   "condition": "live_verified",
+   "condition": "live_verified_enterplanmode",
    "file": "skills/_shared/router-protocol.md",
    "id": "p12-delete-enterplanmode-protocol",
    "op": "delete",
@@ -1901,8 +1959,13 @@
    "text": "### Fast Path Detection\n\nRun `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_fast_path_scan.py\" --wf {workflow_uuid}` and record `build_mode` and `fast_path_risk_signals` from its output; announce the result with the `-> FAST-PATH BUILD` or `-> FULL BUILD` line.\n"
   },
   {
+   "affects": [
+    "PLAN"
+   ],
    "condition": "always",
    "contingency": "C4",
+   "direction": "cut",
+   "est_bytes": 1500,
    "file": "skills/craftflow-router/references/plan-workflow.md",
    "id": "p12-c4-second-rationale-pass",
    "note": "Ledger C4 is 'a second rationale pass over plan-workflow.md (about -1 to -2 K, PLAN)': no text is named, so no anchors can be derived (P12 task 3 selects whole non-normative units at build time). Not projected; the PLAN with_contingencies tier excludes it.",

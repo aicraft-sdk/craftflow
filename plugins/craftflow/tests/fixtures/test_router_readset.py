@@ -360,12 +360,33 @@ def test_projection_p2_equals_measured_head() -> None:
     per_file_ok = all(proj["per_file"]["guaranteed"].get(f) == b for f, b in (snap or {}).get("files", {}).items()
                       if f.startswith("skills/"))
     sha = budget.get("p2_sha")
-    sha_ok = True
-    if sha:
-        have = subprocess.run(["git", "-C", str(PLUGIN_ROOT), "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True).returncode == 0
-        sha_ok = (measured_tree(PLUGIN_ROOT, sha) == snap) if have else True
-    check("projection_p2_equals_measured_head", ref_ok and snap_ok and per_file_ok and sha_ok and g["PLAN"] > 0,
-          f"tree={same_vs_tree} snapshot={snap_ok} per_file={per_file_ok} sha={sha_ok} last={last}")
+    verdict = p2_sha_verdict(sha, snap)
+    if verdict == "absent":  # never a silent True: say so, and let CI (fetch-depth 0, which has the commit) refuse a skip
+        skip("projection_p2_equals_measured_head:p2_sha", f"commit {sha} is absent from this clone (CI must not skip)")
+    check("projection_p2_equals_measured_head", ref_ok and snap_ok and per_file_ok and verdict in ("match", "absent") and g["PLAN"] > 0,
+          f"tree={same_vs_tree} snapshot={snap_ok} per_file={per_file_ok} sha={verdict} last={last}")
+
+
+def p2_sha_verdict(sha, snap) -> str:
+    """'none' without a recorded sha, 'absent' when the commit is not in this clone, else 'match' or 'mismatch' of the snapshot."""
+    if not sha:
+        return "none"
+    have = subprocess.run(["git", "-C", str(PLUGIN_ROOT), "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True).returncode == 0
+    if not have:
+        return "absent"
+    return "match" if measured_tree(PLUGIN_ROOT, sha) == snap else "mismatch"
+
+
+def test_p2_sha_absent_is_reported_not_passed() -> None:
+    budget = json.loads(BUDGET.read_text(encoding="utf-8"))
+    snap = budget["p2_measured"]
+    bad_snap = copy.deepcopy(snap)
+    bad_snap["files"]["skills/craftflow-router/SKILL.md"] += 1
+    real = budget["p2_sha"]
+    check("p2_sha_absent_is_reported_not_passed",
+          p2_sha_verdict("0" * 40, snap) == "absent" and p2_sha_verdict(None, snap) == "none"
+          and p2_sha_verdict(real, snap) == "match" and p2_sha_verdict(real, bad_snap) == "mismatch",
+          f"absent={p2_sha_verdict('0' * 40, snap)} none={p2_sha_verdict(None, snap)}")
 
 
 def test_insert_bytes_exact() -> None:
@@ -395,6 +416,7 @@ def test_replace_delta_exact() -> None:
     ok1 = sizes_of(r1)[BW] - before == len("short\n") - len(span.encode())
     r2 = apply([row("r2", "P6", "replace", file=BW, start_anchor="line 1 of B", text="line one B (= 3)\n")], base)
     ok2 = sizes_of(r2)[BW] - before == len("line one B (= 3)\n") - len("line 1 of B\n")
+    base["files"][POLICY] = "{}\n"  # a whole-file replace needs the file to exist (a missing one is ProjectionError); new files are `insert new_file`
     r3 = apply([row("r3", "P5", "replace", file=POLICY, whole_file=True, text='{"a": 1}\n')], base)
     r4 = apply([row("r4", "P5", "replace", file=BW, whole_file=True, text="whole\n")], base)
     ok3 = r3["files"][POLICY] == '{"a": 1}\n' and r4["files"][BW] == "whole\n"
@@ -536,7 +558,7 @@ def test_projected_readmap_equals_applied_rows() -> None:
 
 PHASES = {f"P{i}" for i in range(2, 14)}
 OPS = {"move", "dedupe", "delete", "insert", "replace", "readmap", "contingency", "descriptions"}
-CONDITIONS = {"always", "difference_17", "live_verified"}
+CONDITIONS = {"always", "difference_17", "live_verified_enterplanmode"}
 
 
 def row_problems(r: dict, projected_files: set) -> list:
@@ -608,13 +630,13 @@ def test_changed_gated_files_have_rows() -> None:
     repo = PLUGIN_ROOT.parents[2]
     probe = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "-q", "origin/main"], capture_output=True, text=True)
     if probe.returncode != 0:
-        ok("skip: no origin")
+        skip("changed_gated_files_have_rows", "no origin/main ref (CI must not skip)")
         return
     names = set()
     for args in (["diff", "--name-only", "origin/main...HEAD"], ["diff", "--name-only", "HEAD"], ["ls-files", "--others", "--exclude-standard"]):
         res = subprocess.run(["git", "-C", str(repo), *args, "--", "tools/craftflow-plugin/plugins/craftflow"], capture_output=True, text=True)
         if res.returncode != 0:
-            ok("skip: no origin")
+            skip("changed_gated_files_have_rows", "no origin/main ref: git diff failed (CI must not skip)")
             return
         names |= set(res.stdout.split())
     prefix = "tools/craftflow-plugin/plugins/craftflow/"
@@ -625,6 +647,170 @@ def test_changed_gated_files_have_rows() -> None:
             covered |= {r[k] for k in ("file", "src", "dst") if isinstance(r.get(k), str)}
     missing = sorted(changed - covered)
     check("changed_gated_files_have_rows", not missing, f"changed gated files with no {last} row: {missing}")
+
+
+# ---------------------------------------------------------------------------------------------- strict inputs (P2 REM-FIX 1)
+
+
+def plan_file(rows: list, tmp: Path) -> Path:
+    path = tmp / "plan.json"
+    path.write_text(json.dumps({"rows": rows}), encoding="utf-8")
+    return path
+
+
+def test_unknown_condition_name_is_an_error() -> None:
+    """H1: a row naming a condition outside {always} + the budget flags used to read as silently false."""
+    old_name = [row("h1", "P12", "delete", condition="live_verified", file=BW, start_anchor="line 2 of A")]
+    exc = raises(lambda: prj.project({"rows": old_name}, syn_state()), prj.ProjectionError)
+    canon = row("h2", "P12", "delete", condition="live_verified_enterplanmode", file=BW, start_anchor="line 2 of A")
+    off = prj.project({"rows": [canon]}, syn_state(), conditions={"live_verified_enterplanmode": False})
+    on = prj.project({"rows": [canon]}, syn_state(), conditions={"live_verified_enterplanmode": True})
+    drop = len("line 2 of A\n")
+    tmp = Path(tempfile.mkdtemp())
+    res = run_cli("--project", str(plan_file(old_name, tmp)), "--json")
+    shutil.rmtree(tmp, ignore_errors=True)
+    real_conditions = {r["condition"] for r in real_cutplan()["rows"]}
+    check("unknown_condition_name_is_an_error", exc and res.returncode == 2 and res.stdout == ""
+          and off["effective"]["tier"]["BUILD"]["max"] - on["effective"]["tier"]["BUILD"]["max"] == drop
+          and real_conditions <= {"always", "difference_17", "live_verified_enterplanmode"},
+          f"raised={exc} cli={res.returncode} real={sorted(real_conditions)}")
+
+
+def test_conditions_input_is_strict() -> None:
+    """H1/M2: only difference_17 / live_verified_enterplanmode with true|false are accepted, as bools."""
+    rows = [row("c1", "P4", "insert", file=BW, position="end_of_file", text="x\n", condition="difference_17")]
+    str_flag = raises(lambda: prj.project({"rows": rows}, syn_state(), conditions={"difference_17": "false"}), prj.ProjectionError)
+    unknown = raises(lambda: prj.project({"rows": rows}, syn_state(), conditions={"difference_18": True}), prj.ProjectionError)
+    tmp = Path(tempfile.mkdtemp())
+    plan = str(plan_file(rows, tmp))
+    codes = {c: run_cli("--project", plan, "--conditions", c, "--json").returncode
+             for c in ("difference_17=1", "difference_17=True", "difference_17=yes", "bogus=true", "difference_17",
+                       "difference_17=true,difference_17=false")}
+    good = run_cli("--project", plan, "--conditions", "difference_17=true,live_verified_enterplanmode=false", "--json")
+    shutil.rmtree(tmp, ignore_errors=True)
+    eff = json.loads(good.stdout)["effective_conditions"] if good.returncode == 0 else None
+    check("conditions_input_is_strict", str_flag and unknown and set(codes.values()) == {2}
+          and eff == {"difference_17": True, "live_verified_enterplanmode": False},
+          f"str={str_flag} unknown={unknown} codes={codes} eff={eff}")
+
+
+def test_effective_block_uses_the_recorded_conditions() -> None:
+    """L6: router-projection.json's `effective` block follows the budget's recorded flags (difference_17 is true there)."""
+    budget = json.loads(BUDGET.read_text(encoding="utf-8"))
+    recorded = cli_json_args_project([])
+    all_off = cli_json_args_project(["--conditions", "difference_17=false,live_verified_enterplanmode=false"])
+    check("effective_block_uses_the_recorded_conditions",
+          recorded["effective_conditions"] == budget["conditions"] and recorded["effective_conditions_source"] == "router-budget.json"
+          and recorded["effective"]["tier"] != recorded["tiers"]["guaranteed"]
+          and all_off["effective"]["tier"] == all_off["tiers"]["guaranteed"] and all_off["effective_conditions_source"] == "cli",
+          f"recorded={recorded['effective_conditions']} src={recorded['effective_conditions_source']}")
+
+
+def test_unknown_phase_ids_are_errors() -> None:
+    """M2: a row phase or a --phases id outside P2-P13 (+ the row-less P2C) used to select nothing silently."""
+    rows = lambda ph: {"rows": [row("u1", ph, "insert", file=BW, position="end_of_file", text="a\n")]}  # noqa: E731
+    bad_rows = {ph: raises(lambda ph=ph: prj.project(rows(ph), syn_state()), prj.ProjectionError) for ph in ("P14", "p4", "P1", "P2C")}
+    bad_arg = raises(lambda: prj.project(rows("P4"), syn_state(), phases=["P99"]), prj.ProjectionError)
+    rowless = prj.project(rows("P4"), syn_state(), phases=["P4", "P2C"])
+    p99 = run_cli("--project", str(CUTPLAN), "--phases", "P99", "--json")
+    p2c = run_cli("--project", str(CUTPLAN), "--phases", "P2,P2C", "--json")
+    check("unknown_phase_ids_are_errors", all(bad_rows.values()) and bad_arg and rowless["rows_applied"] == 1 and p99.returncode == 2
+          and p2c.returncode == 0, f"rows={bad_rows} arg={bad_arg} p99={p99.returncode} p2c={p2c.returncode}")
+
+
+def test_monotonic_compares_per_file() -> None:
+    """M4: totals can stay ordered while one file's bytes rise from a stricter tier to a looser one."""
+    out = prj.project(real_cutplan(), real_state0(), phases=["P2"])
+    clean = prj.check_monotonic(out)
+    bent = copy.deepcopy(out)
+    f = "skills/craftflow-router/references/build-workflow.md"
+    bent["per_file"]["l3_upper_bound"][f] = bent["per_file"]["conditional"][f] + 5
+    bad = prj.check_monotonic(bent)
+    check("monotonic_compares_per_file", clean == [] and any(f in b for b in bad), f"clean={clean} bad={bad}")
+
+
+def test_unanchored_rows_and_bias_are_disclosed() -> None:
+    """M3: unanchored rows carry a direction and a size estimate; the projection reports them and the net bias."""
+    out = prj.project(real_cutplan(), real_state0())
+    un = {u["id"]: u for u in out["unanchored"]}
+    keys_ok = all(isinstance(u, dict) and {"id", "phase", "direction", "est_bytes", "note"} <= set(u) and u["direction"] in ("add", "cut")
+                  and isinstance(u["est_bytes"], int) and u["est_bytes"] > 0 for u in out["unanchored"])
+    b = out["bias"]
+    wf_ok = all(isinstance(b.get(w), int) for w in ("BUILD", "PLAN", "DEBUG", "REVIEW")) and b["kernel"] == 290
+    undisclosed = row("n1", "P4", "insert", file=BW, position="end_of_file", text="x\n", status="needs_anchor", note="n")
+    refuses = raises(lambda: prj.project({"rows": [undisclosed]}, syn_state()), prj.ProjectionError)
+    sized = dict(undisclosed, direction="cut", est_bytes=40, affects=["PLAN"])
+    small = prj.project({"rows": [sized]}, syn_state())
+    on_disk = json.loads((FIXTURES / "router-projection.json").read_text(encoding="utf-8"))
+    check("unanchored_rows_and_bias_are_disclosed", keys_ok and {"p3-kernel-when-to-use", "p10-xref-unqualified-moved", "p12-c4-second-rationale-pass"} <= set(un)
+          and un["p3-kernel-when-to-use"]["direction"] == "add" and un["p12-c4-second-rationale-pass"]["direction"] == "cut"
+          and wf_ok and refuses and small["bias"]["PLAN"] == -40 and small["bias"]["BUILD"] == 0
+          and on_disk["unanchored"] == out["unanchored"] and on_disk["bias"] == out["bias"],
+          f"keys_ok={keys_ok} wf_ok={wf_ok} refuses={refuses}")
+
+
+def test_projector_refuses_rows_that_lose_bytes_silently() -> None:
+    """Hunter item 2: a move to an unmapped file, a whole-file replace of an unknown file and a missing table marker."""
+    st = syn_state()
+    move = row("g1", "P10", "move", src=BW, start_anchor="line 2 of A", end_anchor="line 4 of A", dst=REF + "unmapped.md", pointer_text="")
+    unmapped = raises(lambda: prj.project({"rows": [move]}, st), prj.ProjectionError)
+    new_entry = {"file": REF + "unmapped.md", "class": "stage", "workflows": ["BUILD"], "trigger": "t", "happy_path": False}
+    mapped_row = row("g2", "P10", "readmap", action="add", row=new_entry)
+    fine = prj.project({"rows": [mapped_row, move]}, st)
+    whole = row("g3", "P5", "replace", file=REF + "ghost.md", whole_file=True, text="x\n")
+    ghost = raises(lambda: apply([whole]), prj.ProjectionError)
+    nomark = syn_state()
+    nomark["files"][KER] = "# Kernel\n\nno table here\n"
+    w_entry = {"file": REF + "w.md", "class": "stage", "workflows": ["BUILD"], "trigger": "t", "happy_path": False}
+    add = row("g4", "P8", "readmap", action="add", row=w_entry)
+    mk = row("g5", "P8", "insert", file=REF + "w.md", position="new_file", text="# W\n")
+    raised = raises(lambda: prj.project({"rows": [mk, add]}, nomark, phases=["P2", "P8"]), prj.ProjectionError)
+    said = prj.project({"rows": [mk, add]}, nomark, phases=["P8"])
+    check("projector_refuses_rows_that_lose_bytes_silently", unmapped and fine["rows_applied"] == 2 and ghost and raised
+          and any("re-render" in n for n in said["notes"]), f"unmapped={unmapped} ghost={ghost} raised={raised} notes={said.get('notes')}")
+
+
+def test_measurer_inputs_are_strict() -> None:
+    """L2-L4: unreadable policy, malformed budget and --ref without --readmap are errors, never silent defaults."""
+    tmp = Path(tempfile.mkdtemp())
+    (tmp / "config").mkdir()
+    (tmp / "config" / "policy.json").mkdir()  # present but not readable as a file
+    unreadable = raises(lambda: rs.policy_bytes(tmp, None), rs.ReadsetError)
+    absent = rs.policy_bytes(Path(tempfile.mkdtemp()), None) == {}
+    bad = tmp / "bad-budget.json"
+    bad.write_text("{not json", encoding="utf-8")
+    nokey = tmp / "nokey-budget.json"
+    nokey.write_text("{}", encoding="utf-8")
+    codes = [run_cli("--workflow", "PLAN", "--budget", str(p), "--json").returncode for p in (bad, nokey)]
+    missing_budget = run_cli("--workflow", "PLAN", "--budget", str(tmp / "none.json"), "--json").returncode
+    no_map = run_cli("--workflow", "PLAN", "--ref", baseline_sha(), "--json")
+    shutil.rmtree(tmp, ignore_errors=True)
+    check("measurer_inputs_are_strict", unreadable and absent and codes == [2, 2] and missing_budget == 0 and no_map.returncode == 2
+          and "--readmap" in no_map.stderr, f"unreadable={unreadable} absent={absent} codes={codes} missing={missing_budget} ref={no_map.returncode}")
+
+
+def test_reads_are_byte_exact() -> None:
+    """L5: bytes are decoded as UTF-8 and counted raw; CR bytes or invalid UTF-8 fail closed instead of being normalised."""
+    import craftflow_router_readset_guard as grd
+    tmp = Path(tempfile.mkdtemp())
+
+    def git(*a: str) -> None:
+        subprocess.run(["git", "-C", str(tmp), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, check=True)
+
+    git("init", "-q")
+    (tmp / "ok.md").write_bytes("café → x\n".encode("utf-8"))
+    (tmp / "cr.md").write_bytes(b"a\r\nb\r\n")
+    (tmp / "bin.md").write_bytes(b"\xff\xfe\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "x")
+    good = grd.read_exact(tmp, "ok.md", "HEAD")
+    wt = grd.read_exact(tmp, "ok.md", None)
+    cr = [raises(lambda r=r: grd.read_exact(tmp, "cr.md", r), rs.ReadsetError) for r in ("HEAD", None)]
+    inval = [raises(lambda r=r: grd.read_exact(tmp, "bin.md", r), rs.ReadsetError) for r in ("HEAD", None)]
+    gone = raises(lambda: grd.read_exact(tmp, "nope.md", "HEAD"), rs.ReadsetError)
+    shutil.rmtree(tmp, ignore_errors=True)
+    check("reads_are_byte_exact", good == wt == "café → x\n" and len(good.encode()) == 12 and all(cr) and all(inval) and gone,
+          f"good={good!r} cr={cr} invalid={inval} gone={gone}")
 
 
 def main() -> int:

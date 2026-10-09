@@ -177,7 +177,11 @@ def _frontmatter_lines(text: str) -> List[str]:
 
 def effective_description(text: str) -> str:
     """The description a YAML reader (and the harness) sees: `|` keeps line breaks, `>`/`>-` fold them, quotes drop.
-    gen-craftflow-graph.mjs reads `>-` as the literal text `>-`, so it undercounts those skills (E66)."""
+    gen-craftflow-graph.mjs reads `>-` as the literal text `>-`, so it undercounts those skills (E66).
+
+    Convention (L1): a `|` block is returned stripped, without the trailing newline YAML keeps for `|` (not `|-`), and the
+    `|+`/`|-` chomping indicators are not distinguished. Against a PyYAML load that is 8,179 chars versus 8,183 for the live
+    tree; the plan's expected figure and the budget ceiling are the 8,179 form, so the convention is kept and pinned here."""
     lines = _frontmatter_lines(text)
     for i, line in enumerate(lines):
         m = re.match(r"^description:\s*(.*)$", line)
