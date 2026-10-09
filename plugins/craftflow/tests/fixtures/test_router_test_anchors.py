@@ -21,6 +21,7 @@ from typing import Dict, List, Set, Tuple
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import router_relocation_drills as drills  # noqa: E402
 import router_test_enumerate as enum  # noqa: E402
 
 ANCHORS = HERE / "router-test-anchors.md"
@@ -264,6 +265,28 @@ def test_real_exclusions_and_rows_are_well_formed() -> None:
     check("no table row or exclusion names a test that does not exist", not stale, f"stale_rows: {stale}")
 
 
+def test_heading_text_is_unique_across_the_router_corpus() -> None:
+    """REM-FIX 4 invariant: every heading text occurs once in the runtime corpus, except the frozen pre-existing duplicates."""
+    problems = drills.heading_problems(drills.rc.read_corpus(drills.PLUGIN_ROOT))
+    check("no heading repeats across the runtime router corpus beyond the frozen allowlist", not problems, "; ".join(problems))
+
+
+def test_heading_allowlist_is_exact_so_it_can_only_shrink() -> None:
+    """A phase that removes a pre-existing duplicate must delete its allowlist entry (exact match, not an upper bound)."""
+    counts = {h: len(files) for h, files in drills.heading_occurrences(drills.rc.read_corpus(drills.PLUGIN_ROOT)).items() if len(files) > 1}
+    check("the allowlist equals the live duplicate set", counts == drills.HEADING_DUP_ALLOWLIST,
+          f"live-only={sorted(set(counts) - set(drills.HEADING_DUP_ALLOWLIST))} stale={sorted(set(drills.HEADING_DUP_ALLOWLIST) - set(counts))}")
+
+
+def test_heading_check_flags_a_new_duplicate_and_a_grown_one() -> None:
+    corpus = {"a.md": "# A\n\n## 2. Same\n", "b.md": "# B\n\n## 2. same\n\n### `Dup` heading\n", "c.md": "### Dup heading\n"}
+    found = drills.heading_problems(corpus, allowlist={})
+    check("a repeated heading (case, backticks, # level ignored) is reported once per heading", len(found) == 2 and any("2. same" in f for f in found) and any("dup heading" in f for f in found), str(found))
+    check("an allowlisted duplicate passes until it grows", drills.heading_problems(corpus, allowlist={"2. same": 2, "dup heading": 2}) == [], "allowlisted duplicate rejected")
+    grown = dict(corpus, **{"d.md": "## 2. Same\n"})
+    check("an allowlisted duplicate that gains a third copy is reported", len(drills.heading_problems(grown, allowlist={"2. same": 2, "dup heading": 2})) == 1, "growth accepted")
+
+
 def main() -> int:
     test_every_router_reading_test_is_classified()
     test_row_count_line_matches_table()
@@ -277,6 +300,9 @@ def main() -> int:
     test_qualified_exclusion_classifies_only_its_label()
     test_ghost_row_is_stale()
     test_real_exclusions_and_rows_are_well_formed()
+    test_heading_text_is_unique_across_the_router_corpus()
+    test_heading_allowlist_is_exact_so_it_can_only_shrink()
+    test_heading_check_flags_a_new_duplicate_and_a_grown_one()
     print(f"Results: {_passes} passed, {len(_errors)} failed")
     for err in _errors:
         print(err)

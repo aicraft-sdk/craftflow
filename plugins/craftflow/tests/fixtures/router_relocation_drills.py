@@ -2,6 +2,7 @@
 """Router relocation drills (P1 REM-FIX 3): simulate the plan's P9/P10/P11 section moves on scratch copies.
 
 Run: python3 tests/fixtures/router_relocation_drills.py [--drills a,b] [--list] [--jobs N] [--keep] [--verbose]
+(the `x_*` variants are probes the heading-uniqueness invariant must reject; they run only when named in --drills)
 
 For each drill the harness copies `tools/craftflow-plugin` (minus `ref-*`) to a temp dir, moves verbatim router sections
 between files the way the plan's P9/P10/P11 file lists do, runs the hook suite and the router-reading fixtures on the
@@ -11,12 +12,18 @@ the repo: ADR-exists tests, git-lock rule-inventory tests) and is subtracted fro
 
 A drill passes when every failing test is a K/F row whose owner names the drill's phase, no C row fails, no failing
 test is unclassified, and no suite crashes (no summary line, or a fixture traceback with no `Results:` line).
+A failure counts only when the same test PASSES on the control copy, FAILS in the drill and is not in DRILL_IGNORED_TESTS.
+Heading-uniqueness invariant (REM-FIX 4): every heading text occurs once across the runtime corpus (HEADING_DUP_ALLOWLIST
+freezes the pre-existing duplicates). A drill whose result repeats a heading, or grows an allowlisted one, is a violation
+and its suites are not run: a kernel pointer for a moved section must not be a heading with the moved text.
+Drills are single moves on the P1 tree, not cumulative P9 -> P10 -> P11 sequences (a cumulative mode is not implemented).
 Temp dirs follow $TMPDIR (set it to keep the copies inside a given workspace). Python 3.9 stdlib.
 """
 from __future__ import annotations
 
 import argparse
 import ast
+import os
 import re
 import shutil
 import subprocess
@@ -39,6 +46,57 @@ FIXTURE_MARKERS = ("craftflow-router", "router-protocol", "SKILL.md", "_shared",
                    "router-readmap", "router-policy")
 SKIP_FIXTURES = ("test_router_test_anchors.py", "test_router_relocation_drills.py")
 ROW = re.compile(r"^\| (?P<test>(?:hook|fx)::[^|]+?) \| (?P<kind>[CKF]) \| (?P<where>[^|]*) \| (?P<owner>[^|]*) \|", re.M)
+
+# Tests that measure wall-clock time, not router prose. Under the contention of parallel drills they exceed their budget
+# without any router text having changed, so a failure here says nothing about a relocation.
+DRILL_IGNORED_TESTS = (
+    "fx::test_craftflow_jev_prompt_hint.py::test_new_modules_are_import_cheap",
+    "fx::test_craftflow_context_nudge.py::test_module_import_cheap",
+)
+# Any other `*import_cheap*` test is a timing budget too. "timing" alone is not a fragment: router tests cover timing telemetry.
+IGNORED_NAME_FRAGMENTS = ("import_cheap",)
+
+# Heading texts (normalized, `#` level ignored) that already occur more than once in the runtime corpus at the P1 HEAD,
+# with their occurrence count. Frozen: the invariant test fails when a heading repeats beyond this, and when an entry no
+# longer matches the live corpus, so a phase that removes a duplicate must delete its entry here (the list only shrinks).
+HEADING_DUP_ALLOWLIST: Dict[str, int] = {
+    # SKILL.md pointer heading + reference body of the same per-type section (the P0 xref allowlist duplicates):
+    # P10 (workflow-start / build-workflow moves) and P11 (build split) take them apart.
+    "build preparation": 2, "build task graph": 2, "debug preparation": 2, "debug task graph": 2,
+    "plan preparation": 2, "plan task graph": 2, "review preparation": 2, "review task graph": 2,
+    # SKILL.md section also present in references/remediation-and-research.md or workflow-artifact-and-hook-policy.md: P9 / P10 / P11.
+    "9. remediation and workflow rules": 2, "10. research orchestration": 2, "11. re-review loop": 2,
+    "2a. workflow artifact and hook policy": 2,
+    # SKILL.md pointer heading + canonical text in _shared/router-protocol.md: P11 moves them to _shared/*.md files.
+    "previous agent findings handoff": 2, "prompt assembly rule": 2, "prompt scaffold for every agent": 2,
+    "skill-distill approval flow": 2, "verifier findings handoff": 2,
+    # build-workflow.md and fast-path.md carry the same gate headings: P11 (build split).
+    "learn-distill gate": 2, "skill-distill gate": 2,
+}
+
+
+def heading_occurrences(corpus: Dict[str, str]) -> Dict[str, List[str]]:
+    """{normalized heading text: [file of each occurrence]} over a {path: text} corpus (fenced lines excluded)."""
+    found: Dict[str, List[str]] = {}
+    for rel in sorted(corpus):
+        for _, _, text in rc.headings(corpus[rel]):
+            found.setdefault(rc.norm_text(text), []).append(rel)
+    return found
+
+
+def heading_problems(corpus: Dict[str, str], allowlist: Optional[Dict[str, int]] = None) -> List[str]:
+    """One line per heading that occurs more often than the allowlist permits (default 1)."""
+    allowed = HEADING_DUP_ALLOWLIST if allowlist is None else allowlist
+    return [f"duplicate heading {h!r} x{len(files)} (allowed {allowed.get(h, 1)}) in {sorted(set(files))}"
+            for h, files in sorted(heading_occurrences(corpus).items()) if len(files) > allowed.get(h, 1)]
+
+
+def is_ignored_test(key: str) -> bool:
+    return key in DRILL_IGNORED_TESTS or any(f in key.rsplit("::", 1)[-1] for f in IGNORED_NAME_FRAGMENTS)
+
+
+def default_jobs() -> int:
+    return max(1, min(4, (os.cpu_count() or 2) // 2))
 
 
 # ------------------------------------------------------------------------------------------------ move primitives
@@ -136,7 +194,8 @@ def d_p10_0a(t: Tree) -> None:
     lines = _read(t.skill)
     s, e = span(lines, "## 0a. Task Tool Capability Detection")
     block = cut(t.skill, s + 1, e, ["", "Trigger: before the first workflow artifact write of a session, read `references/workflow-start.md`.", ""])
-    put(t.refs / "workflow-start.md", [lines[s], ""] + block, "# Workflow start (P10)")
+    # The moved body sits under its own heading: the kernel keeps `## 0a.` as the trigger, so repeating it would be a duplicate.
+    put(t.refs / "workflow-start.md", ["## Task tool capability detection (body of the kernel 0a trigger)", ""] + block, "# Workflow start (P10)")
 
 
 def d_p10_section3(t: Tree) -> None:
@@ -157,7 +216,8 @@ def d_p10_worktree13(t: Tree) -> None:
     first = line_index(lines, "1. At BUILD start", ws)
     step4 = line_index(lines, "4. After `integration-verifier` returns PASS", first)
     steps = cut(t.skill, first, step4, ["(Steps 1-3: see `references/build-workflow.md`.)", ""])
-    put(t.refs / "build-workflow.md", fpd + ["### Worktree Isolation (BUILD Default)", ""] + steps)
+    # SKILL.md keeps `### Worktree Isolation (BUILD Default)` (steps 4+), so the moved steps get a different heading.
+    put(t.refs / "build-workflow.md", fpd + ["### Worktree isolation steps 1-3", ""] + steps)
 
 
 def d_p11_proto_split(t: Tree) -> None:
@@ -185,10 +245,127 @@ def d_p11_build_split(t: Tree) -> None:
         put(t.refs / name, block)
 
 
+def d_p9_memfin_pointer(t: Tree) -> None:
+    """P9: `## 13.` moves verbatim; the kernel keeps a bold pointer line (not a heading) that names the section."""
+    lines = _read(t.skill)
+    s, e = span(lines, "## 13. Memory Finalization")
+    block = cut(t.skill, s, e, ["**Memory Finalization** (body): read `references/memory-finalize.md` when a memory task is runnable.", ""])
+    put(t.refs / "memory-finalize.md", block, "# Memory finalize (P9)")
+
+
+FALLBACK_LABELS = ("§4 Resume", "§6 Parent creation", "§6 Per-type task graphs", "§7 Dispatcher", "§7 Doubt-Verify", "§7 Fix-Verify",
+                   "§12 Chain loop step 1", "§12 After agent completion")
+FALLBACK_TRIGGER = ("When `capabilities.task_tools_available == false`, or any router-owned native Task* call fails mid-session, read "
+                    "`references/task-tool-fallback.md` now and apply its per-site rule wherever this document or a reference calls "
+                    "`TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate`.")
+
+
+def _fallback_sites(lines: List[str]) -> List[Tuple[int, int, List[str], str]]:
+    """(start, end, body, nearest heading above) for the eight Task*-tool fallback sites of SKILL.md, in file order."""
+    heads = rc.headings("\n".join(lines))
+    sites: List[Tuple[int, int, List[str], str]] = []
+    for i, line in enumerate(lines):
+        if line.startswith("**Task*-tool fallback"):
+            end = next((j for j in range(i, len(lines)) if not lines[j].strip()), len(lines))
+            above = [h for h in heads if h[0] < i]
+            sites.append((i, end, lines[i:end], above[-1][2] if above else ""))
+    s, e = span(lines, "### Task*-tool fallback for per-type task graphs and remediation/research task sites")
+    sites.append((s, e, lines[s + 1:e], lines[s].lstrip("# ")))
+    sites.sort(key=lambda x: x[0])
+    if len(sites) != len(FALLBACK_LABELS):
+        raise DrillError(f"expected {len(FALLBACK_LABELS)} Task*-tool fallback sites in SKILL.md, found {len(sites)}")
+    return sites
+
+
+def _move_fallbacks(t: Tree, heading_for: Callable[[str, str], str]) -> None:
+    lines = _read(t.skill)
+    sites = _fallback_sites(lines)
+    out = list(lines)
+    moved: List[str] = []
+    for start, end, _, _ in reversed(sites):
+        out[start:end] = [""]
+    for (_, _, body, source), label in zip(sites, FALLBACK_LABELS):
+        moved += [heading_for(label, source), ""] + body + [""]
+    s, e = span(out, "## 0a. Task Tool Capability Detection")
+    out[e:e] = [FALLBACK_TRIGGER, ""]
+    _write(t.skill, out)
+    put(t.refs / "task-tool-fallback.md", moved, "# Task*-tool fallback (P9)")
+
+
+def d_p9_fallback_labels(t: Tree) -> None:
+    """P9: the eight fallback paragraphs move to references/task-tool-fallback.md under the plan's `§n ...` labels; §0a gains the trigger."""
+    _move_fallbacks(t, lambda label, source: f"### {label}")
+
+
+def d_p10_postagent(t: Tree) -> None:
+    """P10: `## 8. Post-Agent Validation` and `### After every agent completion` move to references/post-agent-validation.md."""
+    lines = _read(t.skill)
+    s8, e8 = span(lines, "## 8. Post-Agent Validation")
+    sa, ea = span(lines, "### After every agent completion")
+    if not (e8 <= sa):
+        raise DrillError("`After every agent completion` no longer follows § 8")
+    after = cut(t.skill, sa, ea, ["After every agent completion: read `references/post-agent-validation.md` after any agent returns.", ""])
+    sec8 = cut(t.skill, s8, e8, ["Post-agent validation: read `references/post-agent-validation.md` after any agent returns.", ""])
+    put(t.refs / "post-agent-validation.md", sec8 + [""] + after, "# Post-agent validation (P10)")
+
+
+def _memload_5a(t: Tree) -> Tuple[int, List[str]]:
+    """Cut step 5a and the self-heal paragraph out of § 2; returns (index of the § 2 heading, moved lines)."""
+    lines = _read(t.skill)
+    s, e = span(lines, "## 2. Memory Load And Template Validation")
+    first = line_index(lines, "5a. Workspace-tier discovery", s)
+    step6 = line_index(lines, "6. If workflow_uuid is known", first)
+    heal = line_index(lines, "State-read compaction self-heal:", step6)
+    if not (s < first < step6 < heal < e):
+        raise DrillError("§ 2 no longer holds step 5a before step 6 and the self-heal paragraph")
+    steps = cut(t.skill, first, step6, ["5a. Workspace-tier discovery: when a workspace marker may exist, read `references/memory-load-workspace.md`."])
+    lines = _read(t.skill)
+    heal = line_index(lines, "State-read compaction self-heal:")
+    heal_end = next((j for j in range(heal, len(lines)) if not lines[j].strip()), len(lines))
+    para = cut(t.skill, heal, heal_end, ["State-read compaction self-heal: see `references/memory-load-workspace.md`."])
+    return s, steps + [""] + para
+
+
+def d_p10_memload_5a(t: Tree) -> None:
+    """P10: step 5a and the self-heal paragraph move to references/memory-load-workspace.md (own H1); § 2 keeps a one-line trigger per moved item."""
+    _, block = _memload_5a(t)
+    put(t.refs / "memory-load-workspace.md", block, "# Memory load: workspace tier and state-read self-heal")
+
+
+# Variants a doubt-verifier proposed: each REPEATS a moved heading, which the uniqueness invariant must reject (they are
+# not planned moves). Run them with --drills x_...; they are not part of the default set.
+
+
+def v_p10_memload_dup(t: Tree) -> None:
+    _, block = _memload_5a(t)
+    put(t.refs / "memory-load-workspace.md", ["## 2. Memory Load And Template Validation", ""] + block, "# Memory load workspace")
+
+
+def v_p9_memfin_keep(t: Tree) -> None:
+    lines = _read(t.skill)
+    s, e = span(lines, "## 13. Memory Finalization")
+    block = cut(t.skill, s, e, ["## 13. Memory Finalization", "", "Read `references/memory-finalize.md` when a memory task is runnable.", ""])
+    put(t.refs / "memory-finalize.md", block, "# Memory finalize (P9)")
+
+
+def v_p9_fb_verbatim(t: Tree) -> None:
+    _move_fallbacks(t, lambda label, source: f"### {source}")
+
+
 # name -> (phase, one-line description, function)
+VARIANTS: Dict[str, Tuple[int, str, Callable[[Tree], None]]] = {
+    "x_p10_memload_dup": (10, "variant: 5a move whose new file repeats `## 2.` (must be rejected)", v_p10_memload_dup),
+    "x_p9_memfin_keep": (9, "variant: kernel keeps the `## 13.` heading as the pointer (must be rejected)", v_p9_memfin_keep),
+    "x_p9_fb_verbatim": (9, "variant: fallback paragraphs placed under their source headings (must be rejected)", v_p9_fb_verbatim),
+}
+
 DRILLS: Dict[str, Tuple[int, str, Callable[[Tree], None]]] = {
     "control": (0, "no move (environmental baseline)", d_control),
-    "p9_memfin": (9, "## 13 Memory Finalization -> references/memory-finalize.md", d_p9_memfin),
+    "p9_memfin": (9, "## 13 Memory Finalization -> references/memory-finalize.md (plain pointer line)", d_p9_memfin),
+    "p9_memfin_pointer": (9, "## 13 -> references/memory-finalize.md, kernel keeps a bold non-heading pointer", d_p9_memfin_pointer),
+    "p9_fallback_labels": (9, "eight Task*-tool fallback paragraphs -> references/task-tool-fallback.md under `§n` labels", d_p9_fallback_labels),
+    "p10_postagent": (10, "## 8 Post-Agent Validation + After every agent completion -> references/post-agent-validation.md", d_p10_postagent),
+    "p10_memload_5a": (10, "## 2 step 5a + self-heal paragraph -> references/memory-load-workspace.md", d_p10_memload_5a),
     "p10_parent": (10, "### Parent workflow creation -> references/workflow-start.md", d_p10_parent),
     "p10_resume": (10, "## 4 body -> references/resume.md, kernel heading kept as trigger", d_p10_resume),
     "p10_0a": (10, "## 0a body -> references/workflow-start.md, trigger stays under ## 0a", d_p10_0a),
@@ -197,6 +374,7 @@ DRILLS: Dict[str, Tuple[int, str, Callable[[Tree], None]]] = {
     "p11_proto_split": (11, "step 1a -> _shared/router-protocol-multirepo.md", d_p11_proto_split),
     "p11_build_split": (11, "build-workflow.md -> graph-standard / graph-fast / escalation", d_p11_build_split),
 }
+ALL_DRILLS = {**DRILLS, **VARIANTS}
 
 
 # ------------------------------------------------------------------------------------------------ anchors lookup
@@ -273,6 +451,7 @@ class Run:
     def __init__(self) -> None:
         self.failed: Dict[str, str] = {}  # key (`hook::t`, `fx::f.py::t`, `fx::f.py[section]`, `fx::f.py::?`) -> reason
         self.crashes: List[str] = []
+        self.heading_problems: List[str] = []  # the drilled copy repeats a heading (suites are not run for it)
 
 
 def _run(cmd: List[str], cwd: Path, timeout: int) -> Tuple[int, str]:
@@ -348,7 +527,7 @@ def copy_plugin(dst: Path) -> Path:
 
 
 def run_drill(name: str, base: Path, jobs: int) -> Run:
-    phase, _, fn = DRILLS[name]
+    _, _, fn = ALL_DRILLS[name]
     out = Run()
     work = Path(tempfile.mkdtemp(prefix=f"drill-{name}-", dir=str(base)))
     root = copy_plugin(work)
@@ -356,6 +535,9 @@ def run_drill(name: str, base: Path, jobs: int) -> Run:
         fn(Tree(root))
     except DrillError as err:
         out.crashes.append(f"drill {name} could not be applied: {err}")
+        return out
+    out.heading_problems = heading_problems(rc.read_corpus(root))
+    if out.heading_problems:  # the heading-uniqueness invariant failed: no point running 5 minutes of suites on it
         return out
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         futures = [pool.submit(run_hook_suite, root, out)] + [pool.submit(run_fixture, p, out) for p in fixture_files(root)]
@@ -391,12 +573,18 @@ def classify(key: str, phase: int, rows: Dict[str, Tuple[str, str]]) -> Tuple[st
 
 def evaluate(name: str, run: Run, control: Run, rows: Dict[str, Tuple[str, str]]) -> Tuple[List[str], List[str]]:
     """(report lines, violation lines) for one drill, after subtracting the control's environmental failures."""
-    phase = DRILLS[name][0]
+    phase = ALL_DRILLS[name][0]
     report: List[str] = []
     env_crashes = {c.split(" ")[0] for c in control.crashes}  # crash keys: the fixture file name, or `hook`
     violations: List[str] = [f"CRASH: {c}" for c in run.crashes if name == "control" or c.split(" ")[0] not in env_crashes]
+    violations += [f"HEADING: {p}" for p in run.heading_problems]
     per_file: Dict[str, int] = {}
+    # A failure is a candidate violation only when the test passed on the control copy (not in control.failed) and is not a
+    # wall-clock budget test; ignored ones are logged so they stay visible.
     for key in sorted(k for k in run.failed if k not in control.failed):
+        if is_ignored_test(key):
+            report.append(f"  ignored (wall-clock budget, not router prose)  {key}")
+            continue
         kind, owner, ok = classify(key, phase, rows)
         if "::?" in key and key.startswith("fx::"):  # one line per file for checks that could not be tied to a single test
             file_key = key.split("::?", 1)[0] + "::?"
@@ -417,16 +605,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--drills", default="", help="comma-separated drill names (default: all)")
     ap.add_argument("--list", action="store_true")
-    ap.add_argument("--jobs", type=int, default=4, help="drills run in parallel; each also runs its fixtures in parallel")
+    ap.add_argument("--jobs", type=int, default=default_jobs(), help="drills run in parallel (default min(4, cpus // 2)); each also runs its fixtures in parallel")
     ap.add_argument("--keep", action="store_true", help="keep the scratch copies")
     ap.add_argument("--verbose", action="store_true", help="print the failure reason of every failing test")
     args = ap.parse_args(argv)
     if args.list:
-        for n, (phase, desc, _) in DRILLS.items():
+        for n, (phase, desc, _) in ALL_DRILLS.items():
             print(f"{n}\tP{phase}\t{desc}")
         return 0
     wanted = [n for n in args.drills.split(",") if n] or [n for n in DRILLS if n != "control"]
-    unknown = [n for n in wanted if n not in DRILLS]
+    unknown = [n for n in wanted if n not in ALL_DRILLS]
     if unknown:
         print(f"unknown drills: {unknown}", file=sys.stderr)
         return 2
@@ -443,11 +631,11 @@ def main(argv: Optional[List[str]] = None) -> int:
               + "".join(f"\n  env {k}" for k in sorted(control.failed)) + "".join(f"\n  env CRASH {c}" for c in control.crashes))
         for n in names[1:]:
             report, violations = evaluate(n, runs[n], control, rows)
-            print(f"drill {n} (P{DRILLS[n][0]}): {DRILLS[n][1]} -> {len(report)} failing test(s)")
+            print(f"drill {n} (P{ALL_DRILLS[n][0]}): {ALL_DRILLS[n][1]} -> {len(report)} failing test(s)")
             for line in report:
                 print(line)
             for v in violations:
-                if v.startswith("CRASH"):
+                if v.startswith(("CRASH", "HEADING")):
                     print(f"  BAD {v}")
             if args.verbose:
                 for k in sorted(k for k in runs[n].failed if k not in control.failed):
