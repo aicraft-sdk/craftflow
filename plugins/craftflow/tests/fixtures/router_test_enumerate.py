@@ -10,6 +10,14 @@ transitively inside the same file), names a router path or one of the corpus hel
 test_rule_inventory*.py and test_router_test_anchors.py (synthetic corpora, or the guard itself); in test_router_xrefs.py
 only the tests that read the real tree (PLUGIN_ROOT) count, the rest build synthetic corpora from string constants.
 Static analysis only (ast): nothing is imported or executed. Python 3.9 stdlib.
+
+Covered shapes: top-level `def`/`async def test_*` and `test_*` methods of top-level classes; helpers and constants bound
+by `=`, `: T =` and `+=` at module level, followed transitively inside the same file. Known limits, so the guard is a
+convention check for the in-repo style and not a proof: a helper imported from another module (`from helper import
+read_router`), a router file reached through a glob or a computed path with no marker in the test's own source, and
+tests defined in nested functions or built dynamically are not seen. Fixtures that run checks at module level without a
+`def test_` (test_agent_structure.py) and tests/live/* are outside the enumeration; a SyntaxError in any test_*.py
+fixture aborts the enumeration with a traceback (no `Results:` line).
 """
 from __future__ import annotations
 
@@ -25,6 +33,7 @@ HOOK_SUITE = PLUGIN_ROOT / "scripts" / "craftflow_hook_unit_tests.py"
 ROUTER_MARKERS = (
     "craftflow-router",
     "router-protocol",
+    "SKILL.md",
     "craftflow_router_corpus",
     "router_corpus",
     "_router_corpus_text",
@@ -32,7 +41,16 @@ ROUTER_MARKERS = (
     "_shared",
 )
 REAL_TREE_ONLY_FILE = "test_router_xrefs.py"  # only its tests that read the real tree (PLUGIN_ROOT) count
-EXCLUDED_FILE_PREFIXES = ("test_rule_inventory", "test_router_test_anchors")
+# Exact filenames, not prefixes: a new fixture must never be exempted by accident because of its name.
+EXCLUDED_FILES = (
+    "test_router_test_anchors.py",
+    "test_rule_inventory.py",
+    "test_rule_inventory_doubt.py",
+    "test_rule_inventory_doubt2.py",
+    "test_rule_inventory_doubt3.py",
+    "test_rule_inventory_hardening.py",
+    "test_rule_inventory_rows2.py",
+)
 
 
 def _segment(lines: List[str], node: ast.AST) -> str:
@@ -53,10 +71,16 @@ def router_reading_tests(path: Path) -> List[str]:
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             (tests if node.name.startswith("test_") else helpers)[node.name] = node
+        elif isinstance(node, ast.ClassDef):
+            for member in node.body:
+                if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) and member.name.startswith("test_"):
+                    tests[member.name] = member
         elif isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     helpers[target.id] = node
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)) and isinstance(node.target, ast.Name):
+            helpers[node.target.id] = node
     reading = {name for name, node in helpers.items() if any(m in _segment(lines, node) for m in ROUTER_MARKERS)}
     changed = True
     while changed:  # a helper that uses a router helper reads the router too
@@ -78,7 +102,7 @@ def enumerate_router_tests() -> Dict[str, List[str]]:
     """{short file label: [test names]} for the hook suite (`hook`) and each tests/fixtures/test_*.py (`fx::<file>`)."""
     result: Dict[str, List[str]] = {"hook": router_reading_tests(HOOK_SUITE)}
     for path in sorted(HERE.glob("test_*.py")):
-        if path.name.startswith(EXCLUDED_FILE_PREFIXES):
+        if path.name in EXCLUDED_FILES:
             continue
         names = router_reading_tests(path)
         if names:

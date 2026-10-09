@@ -10,13 +10,134 @@ Kinds:
 
 `TBD-by-mover` means the plan does not say where the asserted text ends up; the phase that moves it assigns the retarget.
 
-Not listed (matched by the P1 enumeration but they do not read the runtime router corpus): hook-suite `test_pretooluse_guard_allows_benign_stderr_redirect_to_dev_null` and `test_bash_guard_allows_benign_stderr_redirect_to_dev_null` (a path appears only in a comment), `test_cursor_router_shared_protocol_read_and_hard_rule_carveout`, `test_cursor_router_skill_md_wires_completed_cap` and `test_cursor_bootstrap_mdc_heading_references_resolve` (read `cursor-router/SKILL.md`, which no phase moves text out of except through the P11 pointer rows already covered by `test_cursor_router_shared_refs_checked`), `test_rubric_documents_three_rejection_cases`, `test_systematic_debugging_documents_sandbox_vs_real_failure_protocol` and `test_agents_only_read_references_of_their_own_skills` (other skills or agent files); and the P0 tooling fixtures (`test_router_xrefs.py` other than the three rows below, `test_rule_inventory*.py`), which build synthetic corpora from string constants. Also not listed, flagged by `tests/fixtures/router_test_enumerate.py` only because they mention a router path or helper without asserting router prose: hook-suite `test_install_cursor_sh_raw_github_urls_include_plugin_subpath` (install script URLs); `test_craftflow_cursor_exempt_wiring.py::test_exempt_block` (`cursor-router/SKILL.md`); `test_craftflow_jev_ab_report.py::test_manifest_by_call_id_is_reused_from_shared_lib_not_duplicated` (module import identity); `test_craftflow_jev_prompt_hint.py::test_roster_excludes_internal_and_host_skills_and_appends_none` and `::test_real_plugin_roster_size_matches_exclusion_rule` (skill roster, the router is only an excluded name); `test_craftflow_retro_v2.py::test_skill_recurrence_text`, `test_craftflow_retro_wiring.py::test_frontmatter` and `::test_boundary_statement` (the retro skill); `test_router_xrefs.py::test_runtime_files_sorted_and_excludes_maintainer`, `::test_read_corpus_from_ref_matches_tree` and `::test_h_h1_empty_corpus_and_cli_errors` (corpus loader behavior, no router prose).
+Excluded tests. `tests/fixtures/router_test_enumerate.py` flags a test when its source (or a same-file helper it uses) names a router path, a corpus helper or any `SKILL.md`, so it also flags tests that mention a path without asserting runtime router prose. Each such test is excluded by exactly one line of the form `Not listed: <label>::<test> — <reason>` below. The label is `hook` or `fx::<file>`, the reason is mandatory, and a bare test name classifies nothing, so an exclusion cannot match a same-named test in another file. The P0 tooling fixtures (`test_router_xrefs.py` other than the rows below and the exclusions, `test_rule_inventory*.py`) build synthetic corpora from string constants and are not enumerated.
+
+- Not listed: hook::test_intent_interview_skill_present — asserts that another skill's `SKILL.md` exists, not router prose.
+- Not listed: hook::test_pretooluse_guard_allows_unrelated_hand_authored_skill_write_no_ledger — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_edit_write_to_claude_skills_skill_md — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_edit_write_to_cursor_skills_skill_md — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_bash_redirect_to_claude_skills_skill_md — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_python_oneliner_write_to_inflight_skill — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_python_os_system_write_to_inflight_skill — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_python_heredoc_write_to_inflight_skill — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_tamper_then_write_via_ledger_write — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_write_to_skill_proposal_file — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_write_to_not_yet_existing_proposal_path — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_bash_redirect_to_not_yet_existing_proposal_path — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_python_oneliner_write_to_not_yet_existing_proposal_path — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_bash_redirect_to_skill_ledger — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_write_when_ledger_json_is_malformed — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_any_skill_write_when_ledger_malformed_no_matching_candidate — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_fails_closed_when_candidate_entry_missing_status — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_allows_bash_permit_write_multiline_command — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_allows_benign_redirect_to_dev_null — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_allows_benign_stderr_redirect_to_dev_null — a router path appears only in a comment.
+- Not listed: hook::test_pretooluse_guard_denies_bash_cp_write_to_skill_proposal_file — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_bash_mv_write_to_skill_proposal_file — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_bash_mv_write_to_inflight_skill_promotion_path — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_denies_bash_cp_target_directory_form_write_to_skill_proposals — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_skill_propose_non_utf8_skill_md_file_returns_json_error — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_skill_promote_non_utf8_skill_md_returns_json_error — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_bash_guard_permit_write_end_to_end_skill_md_literal_project_root_prefixed_spelling — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_bash_guard_allows_benign_redirect_to_dev_null — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_bash_guard_allows_benign_stderr_redirect_to_dev_null — a router path appears only in a comment.
+- Not listed: hook::test_hooklib_matches_permit_shape_true_regardless_of_target_spelling — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_ledger_prune_promoted_healthy_no_needs_review — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_ledger_prune_promoted_missing_referenced_path_flags_stale_path — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_ledger_prune_promoted_elapsed_review_after_flags_review_after_elapsed — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_ledger_prune_promoted_missing_name_flags_missing_promoted_skill_name — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_ledger_prune_promoted_unparseable_review_after_flags_unparseable — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_ledger_prune_promoted_referenced_path_escapes_project_root_flags_stale_path — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_ledger_prune_promoted_name_escapes_project_root_flags_stale_path — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_ledger_prune_multi_entry_malformed_promoted_entry_does_not_affect_healthy_entry — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_ledger_prune_promoted_missing_skill_md_flags_stale_path_no_crash — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_refuses_short_description — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_refuses_missing_name — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_refuses_both_skill_md_and_patch_present — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_refuses_neither_present — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_refuses_unsafe_skill_name — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_writes_canonical_and_syncs_cursor_symlink — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_stale_backup_on_conflicting_cursor_entry — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_dereference_fallback_when_symlink_unavailable — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_idempotent_when_already_correctly_linked — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_marks_ledger_entry_promoted — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_applies_update_patch_to_existing_skill — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_critical1_rejects_mismatched_patch_target_and_name — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_high2_rejects_nonexistent_project_root — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_high3_concurrent_approve_no_traceback — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_medium6_project_root_is_file_returns_json_not_traceback — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_refuses_already_rejected_candidate — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_refuses_candidate_not_in_ledger — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_fails_closed_when_ledger_flag_points_to_never_created_sibling_path — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_refuses_cross_candidate_name_collision — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_reapproving_same_already_promoted_candidate_still_refused — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_refuses_case_fold_collision_across_candidates — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_promote_malformed_non_dict_ledger_entry_returns_json_error — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_propose_stages_valid_candidate_and_updates_ledger_status — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_propose_allows_overwrite_with_flag — skill ledger or promotion script behavior on temp skill directories; no runtime router text is read.
+- Not listed: hook::test_skill_distillation_skill_present — asserts that another skill's `SKILL.md` exists, not router prose.
+- Not listed: hook::test_cursor_router_shared_protocol_read_and_hard_rule_carveout — reads `cursor-router/SKILL.md`, which no phase moves text out of except through the P11 pointer rows already covered by `fx::test_router_xrefs.py::test_cursor_router_shared_refs_checked`.
+- Not listed: hook::test_cursor_router_verdict_table_cross_ref_and_scaffold_no_op_documented — reads `cursor-router/SKILL.md`, which no phase moves text out of except through the P11 pointer rows already covered by `fx::test_router_xrefs.py::test_cursor_router_shared_refs_checked`.
+- Not listed: hook::test_cursor_bootstrap_mdc_heading_references_resolve — reads `cursor-router/SKILL.md`, which no phase moves text out of except through the P11 pointer rows already covered by `fx::test_router_xrefs.py::test_cursor_router_shared_refs_checked`.
+- Not listed: hook::test_install_cursor_sh_raw_github_urls_include_plugin_subpath — install script URLs; the router appears only as a path in the script.
+- Not listed: hook::test_cursor_router_memory_finalize_parity_mentions_apply — reads `cursor-router/SKILL.md`, which no phase moves text out of except through the P11 pointer rows already covered by `fx::test_router_xrefs.py::test_cursor_router_shared_refs_checked`.
+- Not listed: hook::test_cursor_router_skill_md_wires_completed_cap — reads `cursor-router/SKILL.md`, which no phase moves text out of except through the P11 pointer rows already covered by `fx::test_router_xrefs.py::test_cursor_router_shared_refs_checked`.
+- Not listed: hook::test_cursor_router_wires_skill_distill_gate — reads `cursor-router/SKILL.md`, which no phase moves text out of except through the P11 pointer rows already covered by `fx::test_router_xrefs.py::test_cursor_router_shared_refs_checked`.
+- Not listed: hook::test_systematic_debugging_documents_sandbox_vs_real_failure_protocol — reads the `systematic-debugging` skill, not the router.
+- Not listed: hook::test_planning_patterns_adr_section_defers_to_project_convention — reads the `planning-patterns` skill, not the router.
+- Not listed: hook::test_pretooluse_guard_skill_ledger_diverges_cwd_and_claude_project_dir — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_skill_promotion_diverges_cwd_and_claude_project_dir — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_skill_promotion_ledger_corrupt_case_fold_bypass — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_skill_promotion_cwd_is_ancestor_of_project — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_skill_promotion_case_sensitive_ancestor_fallback — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_pretooluse_guard_skill_promotion_ancestor_root_has_own_ledger — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_ai_first_setup_item10_collects_workspace_members — reads the `ai-first-setup` skill, not the router.
+- Not listed: hook::test_ai_first_setup_membership_snippet_survives_quote_in_workspace_root — reads the `ai-first-setup` skill, not the router.
+- Not listed: hook::test_ai_first_setup_step5_workspace_allowlist_snippet_survives_quote_in_workspace_root — reads the `ai-first-setup` skill, not the router.
+- Not listed: hook::test_pretooluse_guard_bash_unrelated_unresolvable_target_does_not_hide_skill_promotion_violation — skill-write guard behavior on synthetic paths and ledgers; `SKILL.md` appears only in test inputs, not as router prose.
+- Not listed: hook::test_split_skill_cores_stay_within_budget_and_references_resolve — byte budgets of the verification, code-generation and TDD skill cores, not the router.
+- Not listed: fx::test_craftflow_conductor_inspection.py::test_text — reads `cursor-router/SKILL.md` or the router-exempt inspection skills, which no phase moves.
+- Not listed: fx::test_craftflow_conductor_inspection.py::test_oneliner — reads `cursor-router/SKILL.md` or the router-exempt inspection skills, which no phase moves.
+- Not listed: fx::test_craftflow_conductor_inspection.py::test_nested_cwd — reads `cursor-router/SKILL.md` or the router-exempt inspection skills, which no phase moves.
+- Not listed: fx::test_craftflow_conductor_inspection.py::test_quoted_expression_safe_in_hostile_path — reads `cursor-router/SKILL.md` or the router-exempt inspection skills, which no phase moves.
+- Not listed: fx::test_craftflow_conductor_inspection.py::test_router — reads `cursor-router/SKILL.md` or the router-exempt inspection skills, which no phase moves.
+- Not listed: fx::test_craftflow_cursor_exempt_wiring.py::test_step1_resolution — reads `cursor-router/SKILL.md` and the exempt inspection skills, which no phase moves.
+- Not listed: fx::test_craftflow_cursor_exempt_wiring.py::test_symlink_realpath — reads `cursor-router/SKILL.md` and the exempt inspection skills, which no phase moves.
+- Not listed: fx::test_craftflow_cursor_exempt_wiring.py::test_symlink_run_readonly — reads `cursor-router/SKILL.md` and the exempt inspection skills, which no phase moves.
+- Not listed: fx::test_craftflow_cursor_exempt_wiring.py::test_exempt_block — reads `cursor-router/SKILL.md` and the exempt inspection skills, which no phase moves.
+- Not listed: fx::test_craftflow_cursor_exempt_wiring.py::test_carve_out — reads `cursor-router/SKILL.md` and the exempt inspection skills, which no phase moves.
+- Not listed: fx::test_craftflow_jev_ab_report.py::test_manifest_by_call_id_is_reused_from_shared_lib_not_duplicated — module import identity; the router is not read.
+- Not listed: fx::test_craftflow_jev_prompt_hint.py::test_roster_excludes_internal_and_host_skills_and_appends_none — builds a skill roster; the router appears only as an excluded skill name.
+- Not listed: fx::test_craftflow_jev_prompt_hint.py::test_roster_rejects_hostile_skill_id_with_newline_or_tag_content — builds a skill roster; the router appears only as an excluded skill name.
+- Not listed: fx::test_craftflow_jev_prompt_hint.py::test_roster_sources_read_project_skills_plugin_skills_and_patterns_hints — builds a skill roster; the router appears only as an excluded skill name.
+- Not listed: fx::test_craftflow_jev_prompt_hint.py::test_real_plugin_roster_size_matches_exclusion_rule — builds a skill roster; the router appears only as an excluded skill name.
+- Not listed: fx::test_craftflow_jev_session_check.py::test_jev_setup_skill_documents_auto_detect_coexistence — reads the `jev-setup` skill, not the router.
+- Not listed: fx::test_craftflow_jev_setup.py::test_jev_setup_skill_frontmatter_and_steps — reads the `jev-setup` skill, not the router.
+- Not listed: fx::test_craftflow_retro_v2.py::test_skill_recurrence_text — reads the retro skill, not the router.
+- Not listed: fx::test_craftflow_retro_wiring.py::test_skill_exists — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
+- Not listed: fx::test_craftflow_retro_wiring.py::test_frontmatter — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
+- Not listed: fx::test_craftflow_retro_wiring.py::test_boundary_statement — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
+- Not listed: fx::test_craftflow_retro_wiring.py::test_signal_ids_in_rubric — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
+- Not listed: fx::test_craftflow_retro_wiring.py::test_rubric_no_mappable_line — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
+- Not listed: fx::test_craftflow_retro_wiring.py::test_skill_resolution_order — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
+- Not listed: fx::test_craftflow_retro_wiring.py::test_steps_present — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
+- Not listed: fx::test_craftflow_retro_wiring.py::test_cursor_router_exemption_block — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
+- Not listed: fx::test_craftflow_retro_wiring.py::test_cursor_router_hard_rules_carve_out — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
+- Not listed: fx::test_craftflow_retro_wiring.py::test_readme_counts_and_install — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
+- Not listed: fx::test_craftflow_retro_wiring.py::test_symlink_realpath_resolution — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
+- Not listed: fx::test_craftflow_retro_wiring.py::test_pruning_row_no_speculative_causation — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
+- Not listed: fx::test_router_xrefs.py::test_runtime_files_sorted_and_excludes_maintainer — corpus loader behavior (file ordering and maintainer exclusion), no router prose asserted.
+- Not listed: fx::test_router_xrefs.py::test_read_corpus_from_ref_matches_tree — corpus loader behavior (git ref versus tree), no router prose asserted.
+- Not listed: fx::test_router_xrefs.py::test_h_h1_empty_corpus_and_cli_errors — corpus loader behavior (empty corpus, CLI errors), no router prose asserted.
+
 
 Failure messages of the corpus-wide tests still say "SKILL.md missing ..." because rewording `fail(name, ...)` lines would break the P1 assertion-count proof; the Kind column, not the message, says what a test reads.
 
-Reproduce the enumeration with `python3 tests/fixtures/router_test_enumerate.py [--names]`; `tests/fixtures/test_router_test_anchors.py` fails when a router-reading test is neither a row below nor named in the Not listed note, or when the row count line is stale.
+Reproduce the enumeration with `python3 tests/fixtures/router_test_enumerate.py [--names]`; `tests/fixtures/test_router_test_anchors.py` fails when a router-reading test is neither a row below nor a qualified, reasoned `Not listed` line, when a row or exclusion names a test that no longer exists (stale), or when the row count line is stale.
 
-Rows: 97 (C=35, K=38, F=24).
+Limits of the guard (a convention check for the in-repo style, not a proof). The enumerator reads each test's own source and the same-file helpers and constants it uses (`=`, annotated and augmented assignments, class `test_` methods). It does not follow a helper imported from another module, a router file reached by a glob or a computed path with no marker in the test, or a nested or dynamically built test. `fx::test_agent_structure.py` runs its checks at module level without `def test_`, so its rows below are hand-classified, are verified only by their `[section]` label still existing in the file, and a new check added there is not detected; `tests/live/*` is outside the enumeration. The enumeration skips only the exact filenames in `EXCLUDED_FILES` (the guard itself and the `test_rule_inventory*.py` fixtures), so a new fixture is enumerated unless it is added to that list. A SyntaxError in any `tests/fixtures/test_*.py` aborts the guard with a traceback (exit 1, no `Results:` line). `_router_section_or_none` failures report an ambiguous heading as not found or not bounded; the message wording is left as is because rewording `fail(name, ...)` lines would break the P1 assertion-count proof.
+
+Rows: 98 (C=35, K=39, F=24).
 
 Paths are relative to the plugin root (`tools/craftflow-plugin/plugins/craftflow/`). Test paths use the short form `hook::` for `scripts/craftflow_hook_unit_tests.py` and `fx::` for `tests/fixtures/`.
 
@@ -117,5 +238,6 @@ Paths are relative to the plugin root (`tools/craftflow-plugin/plugins/craftflow
 | fx::test_agent_structure.py [test_router_protocol_optional_sections_lists_target_plan_file] | K | _shared/router-protocol.md#Prompt assembly rule | never-move |
 | fx::test_agent_structure.py [test_plan_workflow_has_dispatch_time_prompt_assembly_heading] | K | references/plan-workflow.md (dispatch-time prompt assembly heading) | P11 (TBD-by-mover) |
 | fx::test_router_xrefs.py::test_section_any_with_hint_resolves | K | SKILL.md#BUILD preparation and references/build-workflow.md#BUILD preparation (both must exist, differ) | P10 (Fast Path Detection and Worktree steps move into build-workflow.md; the kernel keeps the pointer heading) |
+| fx::test_router_xrefs.py::test_section_any_ambiguous_without_hint_raises | K | SKILL.md#BUILD preparation and references/build-workflow.md#BUILD preparation (the heading must stay ambiguous without a file hint) | P10 (Fast Path Detection and Worktree steps move into build-workflow.md; the kernel keeps the pointer heading) |
 | fx::test_router_xrefs.py::test_known_sites_are_parsed | K | the `KNOWN` list: cross-reference sites in SKILL.md, harness-self-checks.md, cursor-router/SKILL.md and their target files | TBD-by-mover (P9, P10 and P11 each update the minimum counts for the sites they move) |
 | fx::test_router_xrefs.py::test_cursor_router_shared_refs_checked | K | cursor-router/SKILL.md references into _shared/router-protocol.md (at least 5, all resolving) | P11 (Cursor pointers retarget to the new `_shared/` files) |

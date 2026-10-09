@@ -301,6 +301,8 @@ DELTA_RULES: tuple[DeltaRule, ...] = (
             ("skill_precedence_gate", "explicit instruction precedence enforcement"),
             (".craftflow/state", "state root is the shared memory namespace"),
         ),
+        # corpus=True searches the whole runtime router corpus, but the v7 baseline snapshot is SKILL.md only, so a
+        # "better" delta here can mean text moved into references/ rather than text added.
         corpus=True,
     ),
     DeltaRule(

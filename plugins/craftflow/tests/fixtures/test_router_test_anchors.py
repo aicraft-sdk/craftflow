@@ -3,14 +3,19 @@
 
 Run: python3 tests/fixtures/test_router_test_anchors.py
 Fails when a test that reads the runtime router text (as enumerated by router_test_enumerate.py) is neither a row of
-router-test-anchors.md nor named in its "Not listed" note, so a newly written router-reading test cannot slip past the
-classification a later phase relies on. Also checks that the "Rows: N (C=.., K=.., F=..)" line matches the table.
+router-test-anchors.md nor excluded by a line `Not listed: <label>::<test> — <reason>` (qualified name, non-empty
+reason; a bare test name or a reasonless line classifies nothing and is reported), so a newly written router-reading
+test cannot slip past the classification a later phase relies on. Also fails on stale entries (a row or exclusion whose
+test no longer exists in its file) and checks that the "Rows: N (C=.., K=.., F=..)" line matches the table.
+Limits are those of the enumerator: a convention check for the in-repo style, not a proof (see its docstring).
 Prints `Results: N passed, M failed`; exits 1 on any failure.
 """
 from __future__ import annotations
 
+import ast
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
@@ -41,20 +46,64 @@ def table_rows(doc: str) -> List[Tuple[str, str]]:
     return [(m.group("test"), m.group("kind")) for m in ROW.finditer(doc)]
 
 
-def classified_names(doc: str) -> Set[str]:
-    """Bare test names that are a table row or are named in the 'Not listed' note."""
-    names: Set[str] = set()
-    for cell, _ in table_rows(doc):
-        names.update(re.findall(r"test_\w+", cell))
+def cell_key(cell: str) -> str:
+    """Qualified `label::test` for a table cell: `hook::t`, `fx::file.py::t`, `fx::file.py::t (:54)`, `fx::file.py [t]`."""
+    cell = re.sub(r"\s*\(:\d+\)$", "", cell.strip())
+    bracket = re.match(r"^(fx::[^\s\[]+)\s*\[(\w+)\]$", cell)
+    return f"{bracket.group(1)}::{bracket.group(2)}" if bracket else cell
+
+
+EXCLUSION = re.compile(r"^(?:- )?Not listed: (?P<key>(?:hook|fx)::\S+) — (?P<reason>\S.*)$")
+
+
+def exclusions(doc: str) -> Dict[str, str]:
+    """{qualified `label::test`: reason} for every well-formed `Not listed: <label>::<test> — <reason>` line."""
+    found: Dict[str, str] = {}
     for line in doc.splitlines():
-        if line.startswith("Not listed") or line.startswith("Also not listed") or " Also not listed" in line:
-            names.update(re.findall(r"test_\w+", line))
-    return names
+        match = EXCLUSION.match(line)
+        if match:
+            found[match.group("key")] = match.group("reason")
+    return found
+
+
+def exclusion_problems(doc: str) -> List[str]:
+    """Lines that start like an exclusion but lack a qualified `label::test` or a non-empty reason."""
+    problems = []
+    for line in doc.splitlines():
+        text = line[2:] if line.startswith("- ") else line
+        if text.startswith(("Not listed", "Also not listed")) and not EXCLUSION.match(line):
+            no_reason = re.match(r"^(?:- )?Not listed: (?:hook|fx)::\S+(?: —\s*)?$", line)
+            why = "has no reason after the dash" if no_reason else "is not `Not listed: <label>::<test> — <reason>`"
+            problems.append(f"{line[:90]!r} {why}")
+    return problems
+
+
+def classified_names(doc: str) -> Set[str]:
+    """Qualified `label::test` names that are a table row or a well-formed 'Not listed' exclusion."""
+    return {cell_key(cell) for cell, _ in table_rows(doc)} | set(exclusions(doc))
 
 
 def unclassified(enumerated: Dict[str, List[str]], doc: str) -> List[str]:
     known = classified_names(doc)
-    return [f"{label}::{name}" for label, names in enumerated.items() for name in names if name not in known]
+    return [f"{label}::{name}" for label, names in enumerated.items() for name in names if f"{label}::{name}" not in known]
+
+
+def _defined(key: str) -> bool:
+    """True when the file named by `label::test` defines `test` (any `def`, any depth) or carries the `[test]` section label."""
+    label, _, name = key.rpartition("::")
+    path = enum.HOOK_SUITE if label == "hook" else HERE / label.partition("::")[2]
+    if not path.is_file():
+        return False
+    source = path.read_text(encoding="utf-8")
+    defs = {n.name for n in ast.walk(ast.parse(source)) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    return name in defs or f"[{name}]" in source
+
+
+def stale_rows(doc: str, enumerated: Dict[str, List[str]]) -> List[str]:
+    """Table rows and exclusions whose test neither is enumerated nor is defined in its file (renamed or removed)."""
+    seen = {f"{label}::{name}" for label, names in enumerated.items() for name in names}
+    keys = [cell_key(cell) for cell, _ in table_rows(doc)] + list(exclusions(doc))
+    return [key for key in keys if key not in seen and not _defined(key)]
 
 
 def count_line_problem(doc: str) -> str:
@@ -76,7 +125,7 @@ def test_row_count_line_matches_table() -> None:
 
 
 def test_guard_detects_a_missing_row() -> None:
-    doc = "| hook::test_a | C | corpus | none |\nNot listed (x): `test_b`.\n"
+    doc = "| hook::test_a | C | corpus | none |\nNot listed: hook::test_b — reads another skill.\n"
     found = unclassified({"hook": ["test_a", "test_b", "test_c"]}, doc)
     check("guard flags only the test that is neither a row nor excluded", found == ["hook::test_c"], str(found))
 
@@ -86,11 +135,89 @@ def test_guard_detects_a_stale_count_line() -> None:
     check("guard flags a stale count line", bool(count_line_problem(doc)), "stale count line accepted")
 
 
+_N1_FIXTURE = '''import pathlib
+from pathlib import Path
+
+ROOT = Path(".")
+SK: pathlib.Path = ROOT / "skills" / "craftflow-router" / "SKILL.md"
+
+
+def test_ann_constant():
+    assert SK.read_text()
+
+
+async def test_async_ann_constant():
+    assert SK.read_text()
+
+
+class TestX:
+    def test_h(self):
+        assert Path("skills/craftflow-router/SKILL.md").read_text()
+
+
+def test_marker_skill_md():
+    assert Path("other/SKILL.md").read_text()
+
+
+def test_unrelated():
+    assert 1 + 1 == 2
+'''
+
+
+def test_enumerator_flags_annassign_async_and_class_methods() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        scratch = Path(tmp) / "test_scratch.py"
+        scratch.write_text(_N1_FIXTURE, encoding="utf-8")
+        found = sorted(enum.router_reading_tests(scratch))
+    want = ["test_ann_constant", "test_async_ann_constant", "test_h", "test_marker_skill_md"]
+    check("enumerator flags AnnAssign constants, async tests, class methods and the SKILL.md marker", found == want, str(found))
+
+
+def test_bare_name_exclusion_no_longer_classifies() -> None:
+    doc = "Not listed: test_whatever.\n"
+    found = unclassified({"hook": ["test_whatever"]}, doc)
+    check("a bare-name exclusion does not classify", found == ["hook::test_whatever"], str(found))
+    check("a bare-name exclusion is reported as malformed", bool(exclusion_problems(doc)), "no exclusion problem reported")
+
+
+def test_exclusion_without_reason_fails() -> None:
+    doc = "Not listed: hook::test_x\n"
+    problems = exclusion_problems(doc)
+    check("an exclusion without a reason is reported", len(problems) == 1 and "reason" in problems[0], str(problems))
+    check("an exclusion without a reason does not classify", unclassified({"hook": ["test_x"]}, doc) == ["hook::test_x"], "classified")
+
+
+def test_qualified_exclusion_classifies_only_its_label() -> None:
+    doc = "Not listed: hook::test_x — mentions a path only in a comment.\n"
+    found = unclassified({"hook": ["test_x"], "fx::a.py": ["test_x"]}, doc)
+    check("a qualified exclusion classifies only hook::test_x", found == ["fx::a.py::test_x"], str(found))
+    check("a well-formed exclusion has no problems", exclusion_problems(doc) == [], str(exclusion_problems(doc)))
+
+
+def test_ghost_row_is_stale() -> None:
+    doc = "| hook::test_ghost | C | x | none |\n"
+    found = stale_rows(doc, enum.enumerate_router_tests())
+    check("a ghost row is reported as stale", found == ["hook::test_ghost"], f"stale_rows: {found}")
+
+
+def test_real_exclusions_and_rows_are_well_formed() -> None:
+    doc = ANCHORS.read_text(encoding="utf-8")
+    check("every exclusion line is qualified and reasoned", exclusion_problems(doc) == [], str(exclusion_problems(doc)))
+    stale = stale_rows(doc, enum.enumerate_router_tests())
+    check("no table row or exclusion names a test that does not exist", not stale, f"stale_rows: {stale}")
+
+
 def main() -> int:
     test_every_router_reading_test_is_classified()
     test_row_count_line_matches_table()
     test_guard_detects_a_missing_row()
     test_guard_detects_a_stale_count_line()
+    test_enumerator_flags_annassign_async_and_class_methods()
+    test_bare_name_exclusion_no_longer_classifies()
+    test_exclusion_without_reason_fails()
+    test_qualified_exclusion_classifies_only_its_label()
+    test_ghost_row_is_stale()
+    test_real_exclusions_and_rows_are_well_formed()
     print(f"Results: {_passes} passed, {len(_errors)} failed")
     for err in _errors:
         print(err)
