@@ -41,7 +41,10 @@ TARGETS = {"kernel_bytes": 25000, "protocol_bytes": 15000, "reference_max_bytes"
            "readset": {"BUILD": 60000, "PLAN": 55000, "DEBUG": 55000, "REVIEW": 55000}}
 KEYS = ["kernel_bytes", "protocol_bytes", "reference_max_bytes", "description_chars",
         "readset.BUILD", "readset.PLAN", "readset.DEBUG", "readset.REVIEW"]
-SHAPE = {"baseline_ref", "measured_at_sha", "last_phase", "merged_phases", "conditions", "ceilings", "ceiling_raises", "targets",
+REACH_AMENDMENTS = (None, "D17-B")
+REL_ADR = "docs/ai/decisions/0073-craftflow-policy-first-router-kernel.md"
+DEFAULT_TIERS = ("guaranteed", "conditional", "with_contingencies")
+SHAPE = {"baseline_ref", "measured_at_sha", "last_phase", "merged_phases", "conditions", "reach_amendment", "ceilings", "ceiling_raises", "targets",
          "enforced_caps", "enforced_caps_decision", "projection_sha256", "projection_revisions", "enforce", "p2_sha", "p2_measured"}
 LISTS = ("merged_phases", "ceiling_raises", "projection_revisions")
 
@@ -242,12 +245,31 @@ def check_cutplan_revision(budget: dict, origin: Optional[dict], origin_projecti
         for k in ("cause", "decided_by"):
             if not isinstance(r.get(k), str) or not r[k].strip():
                 problems.append(f"revision {r.get('phase')}: {k} missing")
+        if isinstance(r.get("decided_by"), str) and r["decided_by"].strip() and r["decided_by"] != "David":
+            problems.append(f"revision {r.get('phase')}: decided_by must be David (advisory 4a), not {r['decided_by']!r}")
     return problems
 
 
 def sha_exists_in_repo(sha: str) -> bool:
     return isinstance(sha, str) and bool(sha) and subprocess.run(["git", "-C", str(REPO_ROOT), "cat-file", "-e", f"{sha}^{{commit}}"],
                                                                   capture_output=True).returncode == 0
+
+
+def is_descendant(sha: str, ancestor: str) -> bool:
+    """True when `sha` is a commit strictly after `ancestor` (git merge-base --is-ancestor; the same commit is not a descendant)."""
+    rev = lambda s: subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "-q", f"{s}^{{commit}}"],  # noqa: E731
+                                   capture_output=True, text=True).stdout.strip()
+    a, d = rev(sha) if isinstance(sha, str) and sha else "", rev(ancestor) if isinstance(ancestor, str) and ancestor else ""
+    return bool(a) and bool(d) and a != d and subprocess.run(["git", "-C", str(REPO_ROOT), "merge-base", "--is-ancestor", d, a],
+                                                             capture_output=True).returncode == 0
+
+
+def origin_adr_text() -> Optional[str]:
+    """ADR-0073 as origin/main has it: None without a remote, "" while the ADR is not on origin/main yet (every line is then new)."""
+    if not origin_available():
+        return None
+    raw = git_show("origin/main", REL_ADR)
+    return "" if raw is None else raw.decode("utf-8")
 
 
 def adr_text() -> str:
@@ -269,14 +291,29 @@ def effective_caps(budget: dict) -> dict:
     return caps
 
 
-def check_amendments(budget: dict, sha_exists: Callable[[str], bool], adr: str) -> List[str]:
-    """F4: an amendment is {key, from, to, cause, decided_by: David, at_sha, adr: ADR-0073}; key is a cap, `from` is the cap in force
-    at that point of the chain, at_sha is a commit and ADR-0073 has a line citing it. Append-only vs origin: append_only_problems."""
-    ams = (budget.get("enforced_caps_decision") or {}).get("amendments") or []
+def adr_line_cites(a: dict, adr: str, origin_adr: Optional[str]) -> bool:
+    """G4: an ADR-0073 line cites the amendment when it names at_sha and (the key and the new value, or the line is new against
+    origin/main's ADR, i.e. a visible edit of this PR). An old line that merely mentions the sha proves nothing."""
+    old = None if origin_adr is None else set(origin_adr.splitlines())
+    values = (str(a["to"]), f"{a['to']:,}") if isinstance(a["to"], int) and not isinstance(a["to"], bool) else ()
+    for line in adr.splitlines():
+        if a["at_sha"] in line and ((a["key"] in line and any(v in line for v in values)) or (old is not None and line not in old)):
+            return True
+    return False
+
+
+def check_amendments(budget: dict, sha_exists: Callable[[str], bool], adr: str, descends: Callable[[str, str], bool],
+                     origin_adr: Optional[str] = None) -> List[str]:
+    """F4 + G4: an amendment is {key, from, to, cause, decided_by: David, at_sha, adr: ADR-0073}; key is a cap, `from` is the cap in
+    force at that point of the chain, at_sha is a commit that descends from the decision's decided_at_sha, and an ADR-0073 line cites it
+    with the key and the new value (adr_line_cites). Append-only vs origin: append_only_problems."""
+    decision = budget.get("enforced_caps_decision") or {}
+    ams = decision.get("amendments") or []
     if not ams:
         return []
     if budget.get("enforced_caps") is None:
         return ["amendments recorded while enforced_caps is null"]
+    decided = decision.get("decided_at_sha")
     caps, problems = copy.deepcopy(budget["enforced_caps"]), []
     for i, a in enumerate(ams):
         w = f"amendment {i}"
@@ -299,18 +336,21 @@ def check_amendments(budget: dict, sha_exists: Callable[[str], bool], adr: str) 
         sha = a["at_sha"]
         if not isinstance(sha, str) or not sha.strip() or not sha_exists(sha):
             problems.append(f"{w}: at_sha {sha!r} is not a commit of this repository")
-        elif not any(sha in line for line in adr.splitlines()):
-            problems.append(f"{w}: ADR-0073 has no line citing at_sha {sha}")
+        elif not isinstance(decided, str) or not decided.strip() or not descends(sha, decided):
+            problems.append(f"{w}: at_sha {sha} is not a commit after the decision's decided_at_sha {decided!r}")
+        elif not adr_line_cites(a, adr, origin_adr):
+            problems.append(f"{w}: no ADR-0073 line cites at_sha {sha} with {a['key']} and {a['to']} (or is new against origin/main's ADR)")
         if isinstance(a["to"], int) and not isinstance(a["to"], bool):
             set_key(caps, a["key"], a["to"])
     return problems
 
 
 def computed_fits(budget: dict, projector: Callable[[List[str]], Dict[str, int]]) -> Optional[bool]:
-    """F5a: does the projection of the committed cut plan (recorded conditions, merged phases) fit the effective caps? None: no caps yet."""
+    """F5a + G3: does the projection of the whole committed cut plan (every phase, recorded conditions and reach_amendment: the revised
+    full projection) fit the effective caps? None: no caps yet. `measured_within_phase_projection` stays per merged phase."""
     if budget.get("enforced_caps") is None:
         return None
-    caps, now = effective_caps(budget), projector(budget["merged_phases"])
+    caps, now = effective_caps(budget), projector(list(prj.ALL_PHASES))
     return all(now[k] <= get_key(caps, k) for k in KEYS)
 
 
@@ -326,7 +366,7 @@ def effective_values(budget: dict) -> Callable[[List[str]], Dict[str, int]]:
     flags = budget.get("conditions", {})
 
     def project(phases: List[str]) -> Dict[str, int]:
-        out = prj.project(cutplan, state0, phases, flags)["effective"]
+        out = prj.project(cutplan, state0, phases, flags, reach_amendment=budget.get("reach_amendment"))["effective"]
         t, pf = out["tier"], out["per_file"]
         return {"kernel_bytes": pf["kernel_bytes"], "protocol_bytes": pf["protocol_bytes"], "reference_max_bytes": pf["reference_max_bytes"],
                 "description_chars": out["descriptions"], "readset.BUILD": t["BUILD"]["max"], "readset.PLAN": t["PLAN"],
@@ -345,7 +385,8 @@ def shape_ok(b: dict) -> bool:
         and set(c["readset"]) == {"BUILD", "PLAN", "DEBUG", "REVIEW"} and all(isinstance(get_key(c, k), int) for k in KEYS) \
         and bool(b["merged_phases"]) and b["merged_phases"][-1] == b["last_phase"] and len(set(b["merged_phases"])) == len(b["merged_phases"]) \
         and set(b["conditions"]) == {"difference_17", "live_verified_enterplanmode"} \
-        and all(isinstance(v, bool) for v in b["conditions"].values()) and isinstance(b["enforce"], bool)
+        and all(isinstance(v, bool) for v in b["conditions"].values()) and isinstance(b["enforce"], bool) \
+        and b["reach_amendment"] in REACH_AMENDMENTS
 
 
 def test_budget_shape() -> None:
@@ -354,7 +395,11 @@ def test_budget_shape() -> None:
     stringy["conditions"]["difference_17"] = "false"
     renamed = copy.deepcopy(b)
     renamed["conditions"] = {"difference_17": True, "live_verified": False}
-    check("budget_shape", shape_ok(b) and not shape_ok(stringy) and not shape_ok(renamed),
+    bad_amend = [dict(copy.deepcopy(b), reach_amendment=v) for v in ("D17-A", True, "", "d17-b")]
+    good_amend = shape_ok(dict(copy.deepcopy(b), reach_amendment="D17-B")) and shape_ok(dict(copy.deepcopy(b), reach_amendment=None))
+    no_key = {k: v for k, v in b.items() if k != "reach_amendment"}
+    check("budget_shape", shape_ok(b) and not shape_ok(stringy) and not shape_ok(renamed) and good_amend
+          and not any(shape_ok(x) for x in bad_amend) and not shape_ok(no_key),
           f"keys={sorted(set(b) ^ SHAPE)} merged={b.get('merged_phases')} last={b.get('last_phase')} string_flag_rejected={not shape_ok(stringy)}")
 
 
@@ -555,7 +600,7 @@ def test_ceilings_le_enforced_caps_when_enforced() -> None:
 
 def amendment(**kw) -> dict:
     good = {"key": "kernel_bytes", "from": 35000, "to": 36000, "cause": "reach rows add 1,000 B", "decided_by": "David",
-            "at_sha": "abc1234", "adr": "ADR-0073"}
+            "at_sha": "bcd2345", "adr": "ADR-0073"}
     good.update(kw)
     return good
 
@@ -570,28 +615,49 @@ def amended_budget(*ams: dict) -> dict:
 
 
 def test_amendments_are_validated() -> None:
-    """F4: each amendment names an existing cap, the current effective value, a cause, David, an existing sha that ADR-0073 cites."""
-    sha_exists = lambda s: s == "abc1234"  # noqa: E731
-    adr = "# ADR\n- kernel_bytes cap 35000 -> 36000 at abc1234\n"
-    run = lambda *ams, text=adr: check_amendments(amended_budget(*ams), sha_exists, text)  # noqa: E731
-    bare = {"key": "kernel_bytes", "to": 10 ** 9}
+    """F4 + G4: each amendment names an existing cap, the current effective value, a cause, David, a commit that descends from the
+    decision's decided_at_sha and an ADR-0073 line that cites it with the key and the new value (or is new against origin/main's ADR)."""
+    sha_exists = lambda s: s in ("abc1234", "bcd2345", "cde3456", "base000")  # noqa: E731
+    descends = lambda at, decided: decided == "abc1234" and at in ("bcd2345", "cde3456")  # noqa: E731
+    adr = "# ADR\n- kernel_bytes cap 35000 -> 36000 at bcd2345\n- kernel_bytes cap 36000 -> 37,000 at cde3456\n"
+    run = lambda *ams, text=adr, origin=None: check_amendments(amended_budget(*ams), sha_exists, text, descends, origin)  # noqa: E731
+    chain2 = amendment(**{"from": 36000, "to": 37000, "at_sha": "cde3456"})
+    e6c = amendment(**{"to": 10 ** 9, "at_sha": "base000", "cause": "x"})  # the doubt-verifier's E6c: a sha the ADR already cites
+    cites_only = "# ADR\n- decision pinned at base000\n"
     controls = {
         "good": run(amendment()) == [],
-        "chain": run(amendment(), amendment(**{"from": 36000, "to": 37000, "at_sha": "abc1234"})) == [],
-        "bare": bool(run(bare)),
+        "chain": run(amendment(), chain2) == [],
+        "bare": bool(run({"key": "kernel_bytes", "to": 10 ** 9})),
         "wrong_from": bool(run(amendment(**{"from": 34000}))),
         "missing_cause": bool(run({k: v for k, v in amendment().items() if k != "cause"})),
         "empty_cause": bool(run(amendment(cause=" "))),
         "decided_by": bool(run(amendment(decided_by="agent"))),
-        "unknown_sha": bool(run(amendment(at_sha="deadbee"), text=adr.replace("abc1234", "deadbee"))),
+        "unknown_sha": bool(run(amendment(at_sha="deadbee"), text=adr.replace("bcd2345", "deadbee"))),
         "not_in_adr": bool(run(amendment(), text="# ADR\nnothing about the sha\n")),
         "unknown_key": bool(run(amendment(key="nope"))),
         "wrong_adr": bool(run(amendment(adr="ADR-0001"))),
         "bool_to": bool(run(amendment(to=True))),
         "stale_from_after_chain": bool(run(amendment(), amendment(**{"from": 35000, "to": 40000}))),
+        # G4: lineage. The sha must exist AND descend from decided_at_sha (equal or unrelated shas do not).
+        "not_a_descendant": bool(run(e6c, text=cites_only + "- kernel_bytes 35000 -> 1000000000 at base000\n")),
+        "equal_to_decided": bool(run(amendment(at_sha="abc1234"), text=adr.replace("bcd2345", "abc1234"))),
+        # G4: the citing line must carry the key and the value, so an old line that merely cites the sha proves nothing
+        "line_without_key_and_to": bool(run(amendment(), text="# ADR\n- decided at bcd2345\n", origin="# ADR\n- decided at bcd2345\n")),
+        "line_without_to": bool(run(amendment(), text="# ADR\n- kernel_bytes at bcd2345\n", origin="# ADR\n- kernel_bytes at bcd2345\n")),
+        "line_without_key": bool(run(amendment(), text="# ADR\n- 36000 at bcd2345\n", origin="# ADR\n- 36000 at bcd2345\n")),
+        "wrong_to_in_line": bool(run(amendment(**{"to": 38000}), text=adr)),
+        "formatted_to_ok": run(amendment(**{"from": 35000, "to": 37000, "at_sha": "cde3456"}), text="# ADR\n- kernel_bytes 37,000 at cde3456\n") == [],
+        # a line that is new against origin/main's ADR is a visible edit of this PR and may cite the sha alone; an old one may not
+        "new_line_ok": run(amendment(), text="# ADR\n- decided at bcd2345\n", origin="# ADR\n") == [],
+        "no_decided_sha": bool(check_amendments(dict(amended_budget(amendment()), enforced_caps_decision={"decided_by": "David", "amendments": [amendment()]}),
+                                                sha_exists, adr, descends)),
     }
-    live = check_amendments(load_budget(), lambda s: sha_exists_in_repo(s), adr_text())
-    check("amendments_are_validated", all(controls.values()) and not live, f"controls={controls} live={live}")
+    live = check_amendments(load_budget(), sha_exists_in_repo, adr_text(), is_descendant, origin_adr_text())
+    # the same lineage rule against the real repository: HEAD descends from the baseline commit, the baseline does not descend from HEAD
+    head = subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    base = json.loads((FIXTURES / "router-baseline.lock.json").read_text(encoding="utf-8"))["baseline_sha"]
+    git_ok = is_descendant(head, base) and not is_descendant(base, head) and not is_descendant(head, head) and not is_descendant("nope", head)
+    check("amendments_are_validated", all(controls.values()) and not live and git_ok, f"controls={controls} live={live} git_ok={git_ok}")
 
 
 def test_amendments_append_only_vs_origin() -> None:
@@ -631,6 +697,81 @@ def test_fits_enforced_caps_is_computed() -> None:
           f"ok_fit={ok_fit} liar={liar} honest={honest} pre_true={pre_true} pre_null={pre_null} live={live}")
 
 
+def capped_budget(build_cap: int, amendment_key=None) -> dict:
+    """A P2C-shaped budget: every cap generous except the BUILD read set; `amendment_key` is router-budget.json `reach_amendment`."""
+    b = load_budget()
+    caps = copy.deepcopy(b["ceilings"])
+    caps["readset"]["BUILD"] = build_cap
+    for k in KEYS:
+        if k != "readset.BUILD":
+            set_key(caps, k, 10 ** 7)
+    b.update(enforce=True, enforced_caps=caps, reach_amendment=amendment_key,
+             enforced_caps_decision={"option": "B", "decided_by": "David", "adr": "ADR-0073", "decided_at_sha": "abc1234", "amendments": []})
+    return b
+
+
+def test_computed_fits_projects_the_full_plan_with_the_recorded_amendment() -> None:
+    """G3: computed_fits projects every phase (the revised full projection), not merged_phases, with the recorded conditions and the
+    recorded reach_amendment; the tagged D17 rows count only once the budget records D17-B."""
+    out = {}
+    for cap, amend in ((90000, None), (90000, "D17-B"), (100000, None), (100000, "D17-B")):
+        b = capped_budget(cap, amend)
+        out[(cap, amend)] = computed_fits(b, effective_values(b))
+    b = capped_budget(100000)
+    stale = effective_values(b)(b["merged_phases"])["readset.BUILD"]  # what the merged-phases-only projection used to compare (P2 alone)
+    full = effective_values(b)(list(prj.ALL_PHASES))["readset.BUILD"]
+    seen = []
+    computed_fits(b, lambda phases: seen.append(list(phases)) or {k: 0 for k in KEYS})
+    check("computed_fits_projects_the_full_plan_with_the_recorded_amendment",
+          out == {(90000, None): False, (90000, "D17-B"): True, (100000, None): True, (100000, "D17-B"): True}
+          and stale > 100000 >= full > 90000 and seen == [list(prj.ALL_PHASES)],
+          f"fits={out} merged_only_BUILD={stale} full_BUILD={full} projected_phases={seen}")
+
+
+def test_effective_projection_leaves_out_infeasible_rows_unless_amended() -> None:
+    """G2 on the budget side: the measured-within-projection and fits projector follow the recorded reach_amendment."""
+    base = effective_values(dict(load_budget(), reach_amendment=None))(list(prj.ALL_PHASES))
+    amended = effective_values(dict(load_budget(), reach_amendment="D17-B"))(list(prj.ALL_PHASES))
+    check("effective_projection_leaves_out_infeasible_rows_unless_amended",
+          amended["readset.BUILD"] < base["readset.BUILD"] and amended["kernel_bytes"] > base["kernel_bytes"],  # D17-B: -12,606 B, kernel +101
+          f"default={base['readset.BUILD']} amended={amended['readset.BUILD']}")
+
+
+def feasibility_problems(proj: dict, origin: Optional[dict]) -> List[str]:
+    """Ratchet on the residual limits of the reach report: the default tiers carry no `unreachable` removal (a new untagged row P0 would
+    refuse shows up there), and `single_token_units` (units no @reach quote can ever cover) never grows against origin/main's projection."""
+    tiers = proj["reach_feasibility"]["tiers"]
+    problems = [f"{t}: unreachable is {tiers[t]['unreachable']}, expected 0" for t in DEFAULT_TIERS if tiers[t]["unreachable"] != 0]
+    if origin is not None:
+        old = origin["reach_feasibility"]["tiers"]
+        problems += [f"{t}: single_token_units grew {old[t]['single_token_units']} -> {tiers[t]['single_token_units']}"
+                     for t in DEFAULT_TIERS if tiers[t]["single_token_units"] > old[t]["single_token_units"]]
+    return problems
+
+
+def test_feasibility_ratchet_vs_origin_main() -> None:
+    mk = lambda unreachable, single: {"reach_feasibility": {"tiers": {t: {"unreachable": unreachable, "single_token_units": single}  # noqa: E731
+                                                                      for t in DEFAULT_TIERS}}}
+    controls = {
+        "clean": feasibility_problems(mk(0, 1), mk(0, 1)) == [],
+        "shrinks": feasibility_problems(mk(0, 0), mk(0, 1)) == [],
+        "unreachable_in_default_tier": bool(feasibility_problems(mk(1, 1), mk(0, 1))),
+        "single_token_grows": bool(feasibility_problems(mk(0, 2), mk(0, 1))),
+        "no_origin": feasibility_problems(mk(0, 5), None) == [],
+    }
+    proj = json.loads(PROJECTION.read_text(encoding="utf-8"))
+    raw = git_show("origin/main", REL_PROJECTION) if origin_available() else None
+    if not origin_available():
+        skip("feasibility_ratchet_vs_origin_main:live", "no origin/main ref (CI must not skip)")
+        live = feasibility_problems(proj, None)
+    elif raw is None or "reach_feasibility" not in json.loads(raw.decode("utf-8")):
+        ok("feasibility_ratchet_vs_origin_main:first_introduction")  # origin/main has no reach_feasibility block yet: only the absolute rule
+        live = feasibility_problems(proj, None)
+    else:
+        live = feasibility_problems(proj, json.loads(raw.decode("utf-8")))
+    check("feasibility_ratchet_vs_origin_main", all(controls.values()) and not live, f"controls={controls} live={live}")
+
+
 def revision(frm: str, to: str, **kw) -> dict:
     return dict({"phase": "P3", "from_projection_sha256": frm, "to_projection_sha256": to, "fits_enforced_caps": None,
                  "cause": "new rows", "decided_by": "David"}, **kw)
@@ -649,6 +790,7 @@ def test_cutplan_change_needs_revision_entry() -> None:
         "wrong_to": bool(run(mk(revision("o" * 64, "x" * 64)))),
         "no_cause": bool(run(mk(revision("o" * 64, "h" * 64, cause="")))),
         "no_decider": bool(run(mk(revision("o" * 64, "h" * 64, decided_by=None)))),
+        "agent_decider": bool(run(mk(revision("o" * 64, "h" * 64, decided_by="agent")))),  # G4: advisory 4a, only David decides
         "first_introduction": check_cutplan_revision(mk(), None, None, None, b"B") == [],
     }
     status, live_origin = origin_budget()
@@ -668,6 +810,18 @@ def test_adr_records_codeowner_identity() -> None:
     text = adr_text()
     check("adr_records_codeowner_identity", "## P2 REM-FIX 2 notes" in text and "@volkz" in text and "second reviewer" in text,
           "ADR-0073 must note that CODEOWNERS @volkz is also the agent identity")
+
+
+def test_adr_discloses_the_rem_fix_3_findings() -> None:
+    """G1/G5: ADR-0073 carries the corrected coverage figure, the REACH-A kernel penalty and the reach_amendment key; the stale 309 is gone."""
+    text = adr_text()
+    proj = json.loads(PROJECTION.read_text(encoding="utf-8"))["reach_feasibility"]["tiers"]["guaranteed"]
+    need = ("## P2 REM-FIX 3 notes", "reach_a_kernel_penalty_bytes", "3,913 B", "reach_amendment", "167 / 88 / 160", "rewrite rows inside a moved section")
+    split = [proj["reach_loss_split"][c]["units"] for c in ("pure_2_to_1_covered", "drops_to_0", "drops_workflow_or_variant")]
+    check("adr_discloses_the_rem_fix_3_findings",
+          all(n in text for n in need) and "309 of them into happy-path files" not in text and split == [167, 88, 160]
+          and proj["reach_a_kernel_penalty_bytes"] == 3913,
+          f"missing={[n for n in need if n not in text]} split={split}")
 
 
 # ---------------------------------------------------------------------------------------------- negative tests (fixtures)

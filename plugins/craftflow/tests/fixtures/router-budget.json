@@ -9,6 +9,7 @@
     "difference_17": true,
     "live_verified_enterplanmode": false
   },
+  "reach_amendment": null,
   "ceilings": {
     "kernel_bytes": 128789,
     "protocol_bytes": 29315,
@@ -36,8 +37,17 @@
   },
   "enforced_caps": null,
   "enforced_caps_decision": null,
-  "projection_sha256": "c690662d3f830c8d8db7f08e58334429806b953af476543862893370dc530c16",
-  "projection_revisions": [],
+  "projection_sha256": "2747f6bcb2c9a926dd8c5a0feba718dd96a54338e17e70b7a0c3bbc3ba87ebdb",
+  "projection_revisions": [
+    {
+      "phase": "P2",
+      "from_projection_sha256": "c690662d3f830c8d8db7f08e58334429806b953af476543862893370dc530c16",
+      "to_projection_sha256": "2747f6bcb2c9a926dd8c5a0feba718dd96a54338e17e70b7a0c3bbc3ba87ebdb",
+      "fits_enforced_caps": null,
+      "cause": "P2 REM-FIX 3 (user-authorized, scope ALL_ISSUES), G6: seven P11 replace rows fix the 5b pointer, the 5a/5b heading and the five `below` references that the bake-off split left in plan-workflow.md and SKILL.md; the reach_feasibility block gains the per-pair split and signing_burden",
+      "decided_by": "David"
+    }
+  ],
   "enforce": false,
   "p2_sha": "7df49dfab017fa1ba5dc1c42af3454b3f1d3eea7",
   "p2_measured": {

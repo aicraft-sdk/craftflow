@@ -60,16 +60,27 @@ def check_row_conditions(rows: Iterable[dict]) -> None:
             raise ProjectionError(f"{r.get('id')}: feasibility must be a non-empty string (the reason the row cannot pass the P0 reach rule)")
 
 
-def tier_row_sets(plain: List[dict], cont: List[dict], flags: Dict[str, bool]) -> Dict[str, List[dict]]:
+REACH_AMENDMENTS = (None, "D17-B")  # router-budget.json `reach_amendment`: null until David records the P2C decision
+
+
+def check_reach_amendment(value) -> Optional[str]:
+    if value not in REACH_AMENDMENTS or isinstance(value, bool):
+        raise ProjectionError(f"reach_amendment must be one of {list(REACH_AMENDMENTS)}, got {value!r}")
+    return value
+
+
+def tier_row_sets(plain: List[dict], cont: List[dict], flags: Dict[str, bool], reach_amendment: Optional[str] = None) -> Dict[str, List[dict]]:
     """The row sets behind every tier, in application order. A row tagged `feasibility` (it needs a reach-model amendment, so the
-    P0 tooling would refuse it) is left out of the default sets and appears only in the `_if_reach_amended` ones and in `effective`
-    when its condition flag is recorded true (`effective_without_infeasible_rows` drops them again)."""
+    P0 tooling would refuse it) is left out of the default sets and appears only in the `_if_reach_amended` ones. `effective` (the
+    state the budget records) drops them too, unless the budget records `reach_amendment: "D17-B"`; `effective_without_infeasible_rows`
+    always drops them."""
     feasible = [r for r in plain if not r.get("feasibility")]
     on = lambda r: r["condition"] == "always" or bool(flags.get(r["condition"]))  # noqa: E731
+    eff = [r for r in (plain if check_reach_amendment(reach_amendment) else feasible) if on(r)]
     return {"guaranteed": [r for r in feasible if r["condition"] == "always"], "conditional": feasible,
             "with_contingencies": feasible + cont, "guaranteed_if_reach_amended": [r for r in plain if r["condition"] == "always"],
             "conditional_if_reach_amended": plain, "with_contingencies_if_reach_amended": plain + cont,
-            "effective": [r for r in plain if on(r)], "effective_without_infeasible_rows": [r for r in feasible if on(r)]}
+            "effective": eff, "effective_without_infeasible_rows": [r for r in feasible if on(r)]}
 
 
 def parse_conditions(text: Optional[str]) -> Dict[str, bool]:

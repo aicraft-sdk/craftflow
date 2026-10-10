@@ -10,7 +10,8 @@
   --project CUTPLAN [--phases P2,P3] [--conditions k=true|false,...] [--assume-reach-amendment]   BC-11 projection over the baseline
         bytes; `effective` uses --conditions, else the `conditions` recorded in router-budget.json (stated in
         `effective_conditions[_source]`). Rows tagged `feasibility` (they need a reach-model amendment) are in `tiers_if_reach_amended`
-        only, unless --assume-reach-amendment puts them into `tiers`. A full projection (no --phases) adds `reach_feasibility`: the P0
+        only, unless --assume-reach-amendment puts them into `tiers`; `effective` leaves them out too unless router-budget.json records
+        `reach_amendment: "D17-B"` (or --assume-reach-amendment is given). A full projection (no --phases) adds `reach_feasibility`: the P0
         accounting run on every projected tree (craftflow_router_readset_feasibility.py); every projection carries `happy_path_total`.
 
 Prints exactly one JSON line and exits 0; exits 2 on a malformed map or budget, a missing or unreadable file, an unknown phase,
@@ -133,16 +134,18 @@ def descriptions(plugin_root=None, ref: Optional[str] = None) -> dict:
 
 
 def recorded_conditions(root: Path) -> tuple:
-    """(flags, source): the `conditions` of router-budget.json when no --conditions is given, so the `effective` block of
-    router-projection.json describes the state David recorded (difference_17 true), not an all-false world."""
+    """(flags, source, reach_amendment): the `conditions` and `reach_amendment` of router-budget.json when no --conditions is given,
+    so the `effective` block of router-projection.json describes the state David recorded (difference_17 true, the tagged rows in
+    only with reach_amendment "D17-B"), not an all-false world."""
     path = root / FIX / "router-budget.json"
     if not path.is_file():
-        return {}, "none"
+        return {}, "none", None
     try:
-        flags = cor.load_json(path)["conditions"]
+        budget = cor.load_json(path)
+        flags, amendment = budget["conditions"], budget.get("reach_amendment")
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise ReadsetError(f"cannot read the recorded conditions from {path}: {type(exc).__name__}: {exc}") from exc
-    return grd.check_flags(flags), "router-budget.json"
+    return grd.check_flags(flags), "router-budget.json", grd.check_reach_amendment(amendment)
 
 
 def run_projection(root: Path, args) -> dict:
@@ -154,13 +157,15 @@ def run_projection(root: Path, args) -> dict:
     if not isinstance(plan, dict) or not isinstance(plan.get("rows"), list):
         raise ReadsetError("cut plan must be an object with a 'rows' list")
     phases = None if args.phases is None else [p for p in args.phases.split(",") if p]
-    flags, source = grd.parse_conditions(args.conditions), "cli"
+    flags, source, amendment = grd.parse_conditions(args.conditions), "cli", None
     if not args.conditions:
-        flags, source = recorded_conditions(root)
+        flags, source, amendment = recorded_conditions(root)
+    amendment = "D17-B" if args.assume_reach_amendment else amendment  # the flag also stands in for the budget's reach_amendment
     from craftflow_rule_inventory_units import load_allowlist
     allow = root / FIX / "router-normative-allowlist.json"
     allowed = frozenset(load_allowlist(allow)) if allow.is_file() else frozenset()
-    res = prj.project(plan, state0, phases, flags, allowed, args.assume_reach_amendment, with_states=phases is None)
+    res = prj.project(plan, state0, phases, flags, allowed, args.assume_reach_amendment, with_states=phases is None,
+                      reach_amendment=amendment)
     out, states = res if phases is None else (res, None)
     if states is not None:  # a full-plan projection also says whether the P0 accounting would accept each projected tree
         import craftflow_router_readset_feasibility as feas

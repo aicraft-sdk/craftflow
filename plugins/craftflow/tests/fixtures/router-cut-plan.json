@@ -1488,6 +1488,83 @@
    "start_anchor": "5b. If N-1 `plan-bakeoff-candidate-*` tasks are all runnable in the same round (PLAN workflow,"
   },
   {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p11-g6-kernel-5a-5b-pointer",
+   "op": "replace",
+   "phase": "P11",
+   "source": "P2 REM-FIX 3 G6 (doubt-verify cycle 2): step 5b left plan-workflow.md for plan-bakeoff.md in P11, so the kernel pointer written in P10 must name both files",
+   "start_anchor": "5a/5b. (PLAN workflow) parallel research and bake-off candidate dispatch: see `references/plan-workflow.md`.",
+   "status": "drafted",
+   "text": "5a. (PLAN workflow) parallel research dispatch: see `references/plan-workflow.md`. 5b. bake-off candidate dispatch: see `references/plan-bakeoff.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p11-g6-pw-chain-heading",
+   "op": "replace",
+   "phase": "P11",
+   "source": "P2 REM-FIX 3 G6 (doubt-verify cycle 2): plan-workflow.md keeps step 5a only once p11-pw-bakeoff-step5b has moved 5b",
+   "start_anchor": "## Chain loop steps 5a and 5b (PLAN)",
+   "status": "drafted",
+   "text": "## Chain loop step 5a (PLAN)\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p11-g6-pw-below-post-judge",
+   "op": "replace",
+   "phase": "P11",
+   "source": "P2 REM-FIX 3 G6 (doubt-verify cycle 2): the section left for plan-bakeoff.md, so `below` no longer resolves in this file",
+   "start_anchor": "2. The post-judge step (`### PLAN post-judge validation` below), `upstream_task_id = judge_task_id`.",
+   "status": "drafted",
+   "text": "2. The post-judge step (`### PLAN post-judge validation` in `references/plan-bakeoff.md`), `upstream_task_id = judge_task_id`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p11-g6-pw-below-fan-out-fallback",
+   "op": "replace",
+   "phase": "P11",
+   "source": "P2 REM-FIX 3 G6 (doubt-verify cycle 2): the section left for plan-bakeoff.md, so `below` no longer resolves in this file",
+   "start_anchor": "3. The all-candidates-failed fallback (`### PLAN bake-off fan-out` below), `upstream_task_id` =",
+   "status": "drafted",
+   "text": "3. The all-candidates-failed fallback (`### PLAN bake-off fan-out` in `references/plan-bakeoff.md`), `upstream_task_id` =\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p11-g6-pw-below-description",
+   "op": "replace",
+   "phase": "P11",
+   "source": "P2 REM-FIX 3 G6 (doubt-verify cycle 2): the sections left for plan-bakeoff.md, so `below` no longer resolves in this file",
+   "start_anchor": "`description` string. See `### PLAN bake-off fan-out` and `### PLAN judge dispatch` below for the",
+   "status": "drafted",
+   "text": "`description` string. See `### PLAN bake-off fan-out` and `### PLAN judge dispatch` in `references/plan-bakeoff.md` for the\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p11-g6-pw-below-edge-case",
+   "op": "replace",
+   "phase": "P11",
+   "source": "P2 REM-FIX 3 G6 (doubt-verify cycle 2): the section left for plan-bakeoff.md, so `below` no longer resolves in this file",
+   "start_anchor": "    and `### PLAN bake-off fan-out` below).",
+   "status": "drafted",
+   "text": "    and `### PLAN bake-off fan-out` in `references/plan-bakeoff.md`).\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p11-g6-pw-below-proceed",
+   "op": "replace",
+   "phase": "P11",
+   "source": "P2 REM-FIX 3 G6 (doubt-verify cycle 2): the section left for plan-bakeoff.md, so `below` no longer resolves in this file",
+   "start_anchor": "  # Proceed to `### PLAN bake-off fan-out` below. Block B is constructed later, in",
+   "status": "drafted",
+   "text": "  # Proceed to `### PLAN bake-off fan-out` (`references/plan-bakeoff.md`). Block B is constructed later, in\n"
+  },
+  {
    "condition": "difference_17",
    "dst": "hooks/README.md",
    "dst_header": "\n## Hook policy (moved from the router artifact policy)\n\n",

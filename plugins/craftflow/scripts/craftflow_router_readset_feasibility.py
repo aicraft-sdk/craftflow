@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reach feasibility of a projected router tree (plan P2 REM-FIX 2, doubt-verify cycle 1 findings F1 and F3).
+"""Reach feasibility of a projected router tree (plan P2 REM-FIX 2 and 3, doubt-verify findings F1, F3 and G1-G6).
 
 The cut-plan projection counts bytes; it does not ask whether the P0 rule inventory would accept the projected tree. This
 module does: each tier's projected files go through the P0 accounting (`craftflow_rule_inventory.diff_inventory`, called as a
@@ -10,10 +10,20 @@ library on the in-memory tree, with the projected read map) and the report state
                                                                   relocation phases must still row-sign);
   reach_lost_occurrences, reach_lost_bytes                       baseline occurrences whose unit still exists but is read later
                                                                   (kernel/start = 2 > happy-path stage = 1 > conditional stage = 0);
-  reach_loss_by_move                                              the same, per source file -> destination file, with whether the
-                                                                  destination is read on every run of the workflows that read the source;
+  reach_loss_by_move                                              the same, per source file -> destination file;
+  reach_loss_split                                                every reach-lost unit classified by what each of its source
+                                                                  (workflow, variant) pairs still reads, in units and bytes:
+                                                                  pure_2_to_1_covered      every pair now reads it on the happy path
+                                                                                           (a REACH-B candidate),
+                                                                  drops_to_0               some pair falls to a conditional stage file,
+                                                                  drops_workflow_or_variant some workflow/variant does not read the unit at all
+                                                                                           (a destination that is happy-path for its own
+                                                                                           workflows is not coverage for the others);
+  signing_burden                                                  the rows the relocation phases would sign under REACH-A and REACH-B;
   single_token_units                                              reach-lost units with fewer than two words: no `@reach`
-                                                                  Applicability quote (>= 2 whole words) can ever cover them.
+                                                                  Applicability quote (>= 2 whole words) can ever cover them;
+  reach_a_kernel_penalty_bytes                                    bytes of the kernel sections holding such units: under REACH-A they can
+                                                                  never be signed, so those sections stay in the kernel.
 
 It computes and discloses; it changes neither the P0 reach model nor the policy map (those are P2C decisions: REACH-A keeps
 per-unit signing, REACH-B would let a section-move row cover a reach drop into a happy-path file). Python 3.9 compatible.
@@ -23,20 +33,28 @@ from __future__ import annotations
 import collections
 import re
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 import craftflow_router_corpus as cor
 import craftflow_router_readset_core as core
+from craftflow_rule_inventory_readmap import RANK
 
 FIX = "tests/fixtures/"
+KERNEL = "skills/craftflow-router/SKILL.md"
 COUNTERS = ("unreachable", "unmapped_removed", "readmap_widened", "row_errors", "present", "policy_mapped", "reworded", "rationale")
 TIERS = ("guaranteed", "conditional", "with_contingencies", "conditional_if_reach_amended", "with_contingencies_if_reach_amended",
          "effective", "effective_without_infeasible_rows")
+CLASSES = ("pure_2_to_1_covered", "drops_to_0", "drops_workflow_or_variant")
 NOTE = ("l3_upper_bound is the conditional tree with whole non-normative units subtracted from the byte count only, so it has the "
         "conditional row. Counters come from the P0 diff run on the projected tree with the committed policy map: unmapped_removed "
-        "is the removal the relocation phases still have to row-sign, unreachable the removals already rowed but read later. "
+        "is every baseline occurrence no longer present at its place (the removal the relocation phases still have to row-sign); "
+        "unreachable is the part of it that stays in place but is read later or by fewer workflows (a read-map narrowing). "
         "reach_lost_* count baseline occurrences whose unit still exists in the projected tree but is read later than before, "
-        "whether or not a policy row exists yet.")
+        "whether or not a policy row exists yet; reach_loss_split classifies each by what every source (workflow, variant) pair still "
+        "reads. REACH-B (a section-move row covers a pure 2 -> 1 drop) would also have to cover the rewrite rows inside a moved section "
+        "(a reworded parent item changes its child's parent_ctx). Under REACH-A a single-token unit can never be signed (no 2-word "
+        "@reach quote exists), so the kernel section holding it stays in the kernel: reach_a_kernel_penalty_bytes. This block computes "
+        "and discloses; it implements neither option.")
 
 
 def load_context(root) -> dict:
@@ -45,9 +63,11 @@ def load_context(root) -> dict:
     root = Path(root)
     docs = root.parents[1] / "docs"
     rmb = root / FIX / "router-readmap.baseline.json"
-    base = inv.verify_lock(root / FIX / "router-rule-inventory.baseline.json", rmb, root / FIX / "router-baseline.lock.json")
+    lock = root / FIX / "router-baseline.lock.json"
+    base = inv.verify_lock(root / FIX / "router-rule-inventory.baseline.json", rmb, lock)
     rat = docs / "router-rationale.md"
     return {"inv": inv, "root": root, "base": base, "readmap_baseline": inv.load_readmap(rmb),
+            "baseline_sha": cor.load_json(lock)["baseline_sha"],
             "policy": (docs / "router-policy-map.md").read_text(encoding="utf-8"),
             "rationale": rat.read_text(encoding="utf-8") if rat.is_file() else "",
             "allow": inv._allowlist(None)}
@@ -59,14 +79,59 @@ def runtime_corpus(state: dict) -> Dict[str, str]:
     return {f: t for f, t in sorted(state["files"].items()) if cor._is_runtime(f) and f not in maintainer}
 
 
-def _happy_dst(readmap: dict, file: str) -> bool:
-    """True when every read-map row of `file` is kernel/start or a happy-path stage row, i.e. the file is read on every run."""
-    rows = [e for e in readmap["files"] if e["file"] == file and e["class"] != "maintainer"]
-    return bool(rows) and all(e["class"] in ("kernel", "start") or e.get("happy_path") for e in rows)
-
-
 def _words(text: str) -> int:
     return len(re.findall(r"\w+", re.sub(r"[`*_]", " ", text)))
+
+
+def classify(req: frozenset, supplies: list) -> str:
+    """What the best single supplied copy gives each (workflow, variant) pair that read the unit at `req` reach. Only a copy whose every
+    shortfall is 2 -> 1 is covered (a pair that read it at start now reads it on every run); any pair with no row at all in the copy
+    (the destination is not read by that workflow/variant) makes it drops_workflow_or_variant, else a fall to a conditional file is drops_to_0."""
+    best = None
+    for cov, _ in supplies:
+        have: Dict[tuple, int] = {}
+        for w, v, r in cov:
+            have[(w, v)] = max(have.get((w, v), -1), RANK[r])
+        drops = {(RANK[r], have.get((w, v), -1)) for w, v, r in req if have.get((w, v), -1) < RANK[r]}
+        if best is None or len(drops) < len(best):
+            best = drops
+    if best <= {(2, 1)}:
+        return CLASSES[0]
+    return CLASSES[2] if any(b == -1 for _, b in best) else CLASSES[1]
+
+
+def section_bytes(text: str, heading: str) -> int:
+    """Bytes of the markdown section titled `heading` (normalised), up to the next heading of the same or a higher level."""
+    lines = text.splitlines(keepends=True)
+    head = [(i, len(m.group(1)), m.group(2).strip().lower()) for i, ln in enumerate(lines) if (m := re.match(r"(#+)\s+(.*)", ln))]
+    for k, (i, level, title) in enumerate(head):
+        if title == heading or title.endswith(heading):
+            end = next((j for j, lv, _ in head[k + 1:] if lv <= level), len(lines))
+            return len("".join(lines[i:end]).encode("utf-8"))
+    return 0
+
+
+def kernel_penalty(single: List[tuple], ctx: dict) -> int:
+    """Bytes of the distinct baseline kernel sections that hold a reach-lost single-token unit (REACH-A cannot sign them)."""
+    if not single:
+        return 0
+    from craftflow_router_readset_guard import read_exact
+    text = read_exact(ctx["root"], KERNEL, ctx["baseline_sha"])
+    return sum(section_bytes(text, h) for h in {h for f, h in single if f == KERNEL})
+
+
+def signing_burden(out: dict, split: dict, moves: int, vanishing: int) -> dict:
+    """Rows to sign. REACH-A: every reach-lost unit one by one. REACH-B: a section-move row covers the pure 2 -> 1 units, the others stay
+    per unit. Both: the non-reach removals (`vanishing` ids need a rewrite or dedupe row, the rest moved without losing reach and need a
+    section-move row) and the widening pairs. The 41 moved-without-loss units share the section-move rows counted under REACH-B."""
+    lost = out["reach_lost_occurrences"]
+    non_reach = max(0, out["unmapped_removed"] - (lost - out["unreachable"]))
+    vanishing = min(vanishing, non_reach)
+    common = {"vanishing_unit_rows": vanishing, "moved_without_loss_rows": non_reach - vanishing, "widening_pairs": out["readmap_widened"]}
+    per_unit_b = lost - split[CLASSES[0]]["units"]
+    return {"REACH_A": {"per_unit_reach_rows": lost, **common, "total": lost + non_reach + out["readmap_widened"]},
+            "REACH_B": {"section_move_rows": moves, "per_unit_reach_rows": per_unit_b, **common,
+                        "total": moves + per_unit_b + non_reach + out["readmap_widened"]}}
 
 
 def reach_report(state: dict, ctx: dict) -> dict:
@@ -80,21 +145,36 @@ def reach_report(state: dict, ctx: dict) -> dict:
     for e in inv.build_inventory(corpus, rm, ctx["allow"])["entries"]:
         supply[e["id"]].extend((frozenset(map(tuple, o["applicability"])), o["file"]) for o in e["occurrences"])
     units, size = collections.Counter(), collections.Counter()
-    single = 0
+    by_class = {c: collections.Counter() for c in CLASSES}
+    split = {c: {"units": 0, "bytes": 0} for c in CLASSES}
+    single_where: List[tuple] = []
+    single, vanishing = 0, 0
     for e in ctx["base"]["entries"]:
         sup = supply.get(e["id"])
+        nbytes = len(inv._text(e).encode("utf-8"))
         for o in e["occurrences"]:
-            if not sup or any(inv.covers(c, frozenset(map(tuple, o["applicability"]))) for c, _ in sup):
-                continue  # removed outright (counted by unmapped_removed / policy rows) or still read as early as before
+            if not sup:
+                vanishing += 1  # the id is gone from the tree: a rewrite or dedupe row, not a reach question
+                continue
+            req = frozenset(map(tuple, o["applicability"]))
+            if any(inv.covers(c, req) for c, _ in sup):
+                continue  # still read as early as before (a moved section needs only its section-move row)
             key = (core.short_path(o["file"]), core.short_path(sorted({f for _, f in sup})[0]))
+            kind = classify(req, sup)
             units[key] += 1
-            size[key] += len(inv._text(e).encode("utf-8"))
-            single += _words(inv._text(e)) < 2
-    dst_of = {core.short_path(e["file"]): e["file"] for e in rm["files"]}
-    by_move = [{"from": a, "to": b, "units": n, "bytes": size[(a, b)], "happy_path_dst": _happy_dst(rm, dst_of.get(b, b))}
+            size[key] += nbytes
+            by_class[kind][key] += 1
+            split[kind]["units"] += 1
+            split[kind]["bytes"] += nbytes
+            if _words(inv._text(e)) < 2:
+                single += 1
+                single_where.append((o["file"], o["heading_ctx"]))
+    by_move = [{"from": a, "to": b, "units": n, "bytes": size[(a, b)], **{c: by_class[c][(a, b)] for c in CLASSES}}
                for (a, b), n in sorted(units.items(), key=lambda kv: (-kv[1], kv[0]))]
-    out.update({"reach_lost_occurrences": sum(units.values()), "reach_lost_bytes": sum(size.values()), "single_token_units": single,
+    out.update({"reach_lost_occurrences": sum(units.values()), "reach_lost_bytes": sum(size.values()), "reach_loss_split": split,
+                "single_token_units": single, "reach_a_kernel_penalty_bytes": kernel_penalty(single_where, ctx),
                 "reach_loss_by_move": by_move})
+    out["signing_burden"] = signing_burden(out, split, state.get("moves", 0), vanishing)
     return out
 
 

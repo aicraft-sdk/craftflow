@@ -161,7 +161,8 @@ def _move(state: dict, r: dict) -> None:
     if not isinstance(pointer, str):
         raise ProjectionError(f"{r['id']}: move needs a string pointer_text (empty string for none)")
     state["files"][src] = "".join(lines[:a]) + pointer + "".join(lines[b:])
-    cur = state["files"].get(dst, "")
+    state["moves"] = state.get("moves", 0) + 1  # section-move rows applied to this tree (feasibility.signing_burden)
+    cur =state["files"].get(dst, "")
     sep = "" if cur.endswith("\n") or not cur else "\n"
     state["files"][dst] = cur + sep + r.get("dst_header", "") + moved
 
@@ -307,16 +308,20 @@ def _capped_descriptions(state: dict, rows: List[dict]) -> int:
 
 
 def project(cutplan: dict, state0: dict, phases: Optional[Iterable[str]] = None, conditions: Optional[dict] = None,
-            l3_allowlist: Optional[frozenset] = None, assume_reach_amendment: bool = False, with_states: bool = False) -> dict:
+            l3_allowlist: Optional[frozenset] = None, assume_reach_amendment: bool = False, with_states: bool = False,
+            reach_amendment: Optional[str] = None) -> dict:
     """BC-11 output. `effective` honours the recorded conditions (the per-PR check); the four tiers use the plan's own.
     Rows tagged `feasibility` (they need a reach-model amendment) are left out of `tiers` unless `assume_reach_amendment`;
-    `tiers_if_reach_amended` always carries the other reading. `with_states` returns (output, every projected tree) for the reach report."""
+    `tiers_if_reach_amended` always carries the other reading. `effective` leaves them out too unless `reach_amendment` is "D17-B"
+    (the value router-budget.json records once David decides it). `with_states` returns (output, every projected tree) for the reach report."""
     flags = grd.check_flags({} if conditions is None else conditions)
     grd.check_row_conditions(cutplan["rows"])
     rows = select_rows(cutplan, phases)
     markers_optional = "P2" not in (ALL_PHASES if phases is None else set(phases))
     plain = [r for r in rows if r["op"] != "contingency"]
-    sets = grd.tier_row_sets(plain, [r for r in rows if r["op"] == "contingency"], flags)
+    sets = grd.tier_row_sets(plain, [r for r in rows if r["op"] == "contingency"], flags, reach_amendment)
+    in_eff = {r["id"] for r in sets["effective"]}
+    tagged_on = sorted(r["id"] for r in plain if r.get("feasibility") and (r["condition"] == "always" or flags.get(r["condition"])))
     allow = l3_allowlist if l3_allowlist is not None else frozenset()
     cache: Dict[str, dict] = {}
 
@@ -351,8 +356,9 @@ def project(cutplan: dict, state0: dict, phases: Optional[Iterable[str]] = None,
            "descriptions_by_tier_if_reach_amended": {t: v["descriptions"] for t, v in alt.items()},
            "descriptions_sum": main["guaranteed"]["descriptions"], "descriptions_bound": _capped_descriptions(state("guaranteed"), plain),
            "effective": {"tier": eff["tier"], "variants": eff["variants"], "per_file": eff["per_file"], "descriptions": eff["descriptions"],
-                         "happy_path_total": eff["happy"], "infeasible_rows_included": sorted(r["id"] for r in sets["effective"] if r.get("feasibility"))},
-           "effective_conditions": dict(sorted(flags.items())), "notes": state("conditional_if_reach_amended")["notes"],
+                         "happy_path_total": eff["happy"], "infeasible_rows_included": [i for i in tagged_on if i in in_eff]},
+           "effective_conditions": {**dict(sorted(flags.items())), "reach_amendment": reach_amendment,
+                                    "infeasible_rows_excluded": [i for i in tagged_on if i not in in_eff]}, "notes": state("conditional_if_reach_amended")["notes"],
            "unanchored": unanchored, "bias": grd.bias_summary(unanchored), "rows_applied": len(rows) - len(unanchored)}
     if not with_states:
         return out
