@@ -250,6 +250,45 @@ def check_cutplan_revision(budget: dict, origin: Optional[dict], origin_projecti
     return problems
 
 
+def check_revision_authors(budget: dict, origin: Optional[dict]) -> List[str]:
+    """K4: every projection_revisions entry this change adds against origin/main (all of them without an origin) names its cause and is decided
+    by David, also when the cut plan did not change (check_cutplan_revision only looks at entries that go with a cut-plan change)."""
+    revs = budget.get("projection_revisions", [])
+    new = revs[len((origin or {}).get("projection_revisions", [])):] if origin is not None else revs
+    problems = []
+    for r in new:
+        if not isinstance(r.get("cause"), str) or not r["cause"].strip():
+            problems.append(f"revision {r.get('phase')}: cause missing")
+        if r.get("decided_by") != "David":
+            problems.append(f"revision {r.get('phase')}: decided_by must be David (advisory 4a), not {r.get('decided_by')!r}")
+    return problems
+
+
+def check_reach_amendment_record(budget: dict, adr: str) -> List[str]:
+    """K4: a non-null `reach_amendment` is David's P2C decision and needs its record. Before the caps exist: a projection_revisions entry whose
+    cause names the amendment, decided by David. With caps: `enforced_caps_decision.reach_amendment` equal to the budget's value, decided by
+    David. Either way a line of ADR-0073's `## Budget decision (P2C)` section holds `reach_amendment` and the value. A decision record that
+    names an amendment the budget does not carry is a problem too."""
+    value = budget.get("reach_amendment")
+    d = budget.get("enforced_caps_decision") or {}
+    if value is None:
+        return [] if d.get("reach_amendment") is None else [f"enforced_caps_decision records reach_amendment {d['reach_amendment']!r}, the budget carries null"]
+    problems = []
+    if budget.get("enforced_caps") is not None:
+        if d.get("reach_amendment") != value:
+            problems.append(f"reach_amendment {value!r} has no matching enforced_caps_decision.reach_amendment (got {d.get('reach_amendment')!r})")
+        if d.get("decided_by") != "David":
+            problems.append("enforced_caps_decision.decided_by must be David for a reach_amendment")
+    elif not any("reach_amendment" in str(r.get("cause", "")) and value in str(r.get("cause", "")) and r.get("decided_by") == "David"
+                 for r in budget.get("projection_revisions", [])):
+        problems.append(f"reach_amendment {value!r} needs a projection_revisions entry whose cause names reach_amendment and {value} and whose "
+                        "decided_by is David")
+    section = adr.partition("## Budget decision (P2C)")[2]
+    if not any("reach_amendment" in ln and value in ln for ln in section.splitlines()):
+        problems.append(f"ADR-0073 has no line in '## Budget decision (P2C)' that holds reach_amendment and {value}")
+    return problems
+
+
 def sha_exists_in_repo(sha: str) -> bool:
     return isinstance(sha, str) and bool(sha) and subprocess.run(["git", "-C", str(REPO_ROOT), "cat-file", "-e", f"{sha}^{{commit}}"],
                                                                   capture_output=True).returncode == 0
@@ -291,22 +330,26 @@ def effective_caps(budget: dict) -> dict:
     return caps
 
 
-def adr_line_cites(a: dict, adr: str, origin_adr: Optional[str]) -> bool:
-    """G4: an ADR-0073 line cites the amendment when it names at_sha and (the key and the new value, or the line is new against
-    origin/main's ADR, i.e. a visible edit of this PR). An old line that merely mentions the sha proves nothing."""
+def adr_line_cites(a: dict, adr: str, origin_adr: Optional[str], same_change: bool = False) -> bool:
+    """G4 + K5: an ADR-0073 line cites the amendment when it holds the key AND the new value (thousands separators allowed) AND at_sha,
+    whether the line is new against origin/main's ADR or old (REM-FIX 3 let any new line that merely held the sha pass). When `same_change`
+    (at_sha is the HEAD of this very change) the citing line must also be new against origin/main's ADR, a visible edit of the PR; with no
+    origin ADR newness cannot be judged and that part is skipped. Residual: an amendment and its decision recorded in one PR remain a
+    human-diff control (CODEOWNERS @volkz is also the agent identity)."""
     old = None if origin_adr is None else set(origin_adr.splitlines())
     values = (str(a["to"]), f"{a['to']:,}") if isinstance(a["to"], int) and not isinstance(a["to"], bool) else ()
-    for line in adr.splitlines():
-        if a["at_sha"] in line and ((a["key"] in line and any(v in line for v in values)) or (old is not None and line not in old)):
-            return True
-    return False
+    lines = [ln for ln in adr.splitlines() if a["at_sha"] in ln and a["key"] in ln and any(v in ln for v in values)]
+    if same_change and old is not None:
+        return any(ln not in old for ln in lines)
+    return bool(lines)
 
 
 def check_amendments(budget: dict, sha_exists: Callable[[str], bool], adr: str, descends: Callable[[str, str], bool],
-                     origin_adr: Optional[str] = None) -> List[str]:
-    """F4 + G4: an amendment is {key, from, to, cause, decided_by: David, at_sha, adr: ADR-0073}; key is a cap, `from` is the cap in
-    force at that point of the chain, at_sha is a commit that descends from the decision's decided_at_sha, and an ADR-0073 line cites it
-    with the key and the new value (adr_line_cites). Append-only vs origin: append_only_problems."""
+                     origin_adr: Optional[str] = None, head: Optional[str] = None) -> List[str]:
+    """F4 + G4 + K5: an amendment is {key, from, to, cause, decided_by: David, at_sha, adr: ADR-0073}; key is a cap, `from` is the cap in
+    force at that point of the chain, at_sha is a commit that descends strictly from the decision's decided_at_sha (and is not this change's
+    own `head` unless the citing line is new), and an ADR-0073 line cites it with the key, the new value and the sha (adr_line_cites).
+    Append-only vs origin: append_only_problems."""
     decision = budget.get("enforced_caps_decision") or {}
     ams = decision.get("amendments") or []
     if not ams:
@@ -338,8 +381,9 @@ def check_amendments(budget: dict, sha_exists: Callable[[str], bool], adr: str, 
             problems.append(f"{w}: at_sha {sha!r} is not a commit of this repository")
         elif not isinstance(decided, str) or not decided.strip() or not descends(sha, decided):
             problems.append(f"{w}: at_sha {sha} is not a commit after the decision's decided_at_sha {decided!r}")
-        elif not adr_line_cites(a, adr, origin_adr):
-            problems.append(f"{w}: no ADR-0073 line cites at_sha {sha} with {a['key']} and {a['to']} (or is new against origin/main's ADR)")
+        elif not adr_line_cites(a, adr, origin_adr, same_change=bool(head) and sha == head):
+            problems.append(f"{w}: no ADR-0073 line holds {a['key']}, {a['to']} and at_sha {sha}"
+                            f"{' (at_sha is this change HEAD, so the line must be new against origin/main ADR)' if head and sha == head else ''}")
         if isinstance(a["to"], int) and not isinstance(a["to"], bool):
             set_key(caps, a["key"], a["to"])
     return problems
@@ -647,14 +691,24 @@ def test_amendments_are_validated() -> None:
         "line_without_key": bool(run(amendment(), text="# ADR\n- 36000 at bcd2345\n", origin="# ADR\n- 36000 at bcd2345\n")),
         "wrong_to_in_line": bool(run(amendment(**{"to": 38000}), text=adr)),
         "formatted_to_ok": run(amendment(**{"from": 35000, "to": 37000, "at_sha": "cde3456"}), text="# ADR\n- kernel_bytes 37,000 at cde3456\n") == [],
-        # a line that is new against origin/main's ADR is a visible edit of this PR and may cite the sha alone; an old one may not
-        "new_line_ok": run(amendment(), text="# ADR\n- decided at bcd2345\n", origin="# ADR\n") == [],
+        # K5: the citing line carries the key AND the new value AND the sha, whether it is new against origin/main's ADR or old;
+        # a new line that merely mentions the sha (or an unrelated one) is not a citation any more
+        "new_line_with_sha_alone": bool(run(amendment(), text="# ADR\n- decided at bcd2345\n", origin="# ADR\n")),
+        "new_unrelated_line": bool(run(amendment(), text="# ADR\n- projection regenerated at bcd2345.\n", origin="# ADR\n")),
+        "new_line_with_key_to_sha_ok": run(amendment(), text="# ADR\n- kernel_bytes 35000 -> 36000 at bcd2345\n", origin="# ADR\n") == [],
+        "old_line_with_key_to_sha_ok": run(amendment(), origin=adr) == [],
+        # K5: an at_sha that is the HEAD of this very change needs a citing line that is new against origin/main's ADR (a visible edit);
+        # without a remote the newness cannot be judged and the rule does not apply (every origin comparison skips then)
+        "head_with_old_line": bool(check_amendments(amended_budget(amendment()), sha_exists, adr, descends, adr, head="bcd2345")),
+        "head_with_new_line_ok": check_amendments(amended_budget(amendment()), sha_exists, adr, descends, "# ADR\n", head="bcd2345") == [],
+        "head_without_origin": check_amendments(amended_budget(amendment()), sha_exists, adr, descends, None, head="bcd2345") == [],
+        "other_head_old_line_ok": check_amendments(amended_budget(amendment()), sha_exists, adr, descends, adr, head="cde3456") == [],
         "no_decided_sha": bool(check_amendments(dict(amended_budget(amendment()), enforced_caps_decision={"decided_by": "David", "amendments": [amendment()]}),
                                                 sha_exists, adr, descends)),
     }
-    live = check_amendments(load_budget(), sha_exists_in_repo, adr_text(), is_descendant, origin_adr_text())
-    # the same lineage rule against the real repository: HEAD descends from the baseline commit, the baseline does not descend from HEAD
     head = subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    live = check_amendments(load_budget(), sha_exists_in_repo, adr_text(), is_descendant, origin_adr_text(), head=head)
+    # the same lineage rule against the real repository: HEAD descends from the baseline commit, the baseline does not descend from HEAD
     base = json.loads((FIXTURES / "router-baseline.lock.json").read_text(encoding="utf-8"))["baseline_sha"]
     git_ok = is_descendant(head, base) and not is_descendant(base, head) and not is_descendant(head, head) and not is_descendant("nope", head)
     check("amendments_are_validated", all(controls.values()) and not live and git_ok, f"controls={controls} live={live} git_ok={git_ok}")
@@ -822,6 +876,89 @@ def test_adr_discloses_the_rem_fix_3_findings() -> None:
           all(n in text for n in need) and "309 of them into happy-path files" not in text and split == [167, 88, 160]
           and proj["reach_a_kernel_penalty_bytes"] == 3913,
           f"missing={[n for n in need if n not in text]} split={split}")
+
+
+# ---------------------------------------------------------------------------------------------- P2 REM-FIX 4 tests (K4, K5, K6)
+
+DECISION_LINE = "- Reach model: `reach_amendment` is `D17-B` (David, P2C): a happy-path file counts as reach 2.\n"
+
+
+def adr_with(line: str = "", section: str = "## Budget decision (P2C)") -> str:
+    return f"# ADR\n\n- `reach_amendment: \"D17-B\"` is only described here, in the notes.\n\n{section}\n\n{line}"
+
+
+def test_reach_amendment_needs_a_decision_record() -> None:
+    """K4: `reach_amendment: "D17-B"` switches the effective projection, the fits flag and the signing burden, yet only an incidental
+    live-state readset assertion noticed a flipped key (budget 31/31 stayed green with `decided_by: agent` and no ADR line). It now needs the
+    decision record: before the caps exist a projection_revisions entry naming D17-B decided by David, after they exist
+    `enforced_caps_decision.reach_amendment` with the same value decided by David, and in both cases a line in ADR-0073's Budget decision
+    (P2C) section that holds `reach_amendment` and `D17-B`."""
+    base = dict(load_budget(), reach_amendment="D17-B", enforce=False, enforced_caps=None, enforced_caps_decision=None)
+    rev = lambda cause="P2C decision: reach_amendment D17-B", by="David": [{"phase": "P2C", "from_projection_sha256": "a", "to_projection_sha256": "b",  # noqa: E731
+                                                                          "fits_enforced_caps": None, "cause": cause, "decided_by": by}]
+    pre = dict(base, projection_revisions=rev())
+    caps = copy.deepcopy(load_budget()["ceilings"])
+    post = dict(base, enforce=True, enforced_caps=caps, projection_revisions=[],
+                enforced_caps_decision={"option": "B", "decided_by": "David", "adr": "ADR-0073", "decided_at_sha": "abc1234", "amendments": [],
+                                        "reach_amendment": "D17-B"})
+    adr = adr_with(DECISION_LINE)
+    flipped_alone = dict(load_budget(), reach_amendment="D17-B")  # the doubt-verifier's clone: only the key flipped
+    controls = {
+        "null_needs_nothing": check_reach_amendment_record(load_budget(), "# ADR\n") == [],
+        "flipped_key_alone": bool(check_reach_amendment_record(flipped_alone, adr_text())),
+        "flipped_key_with_an_adr_line_but_no_revision": bool(check_reach_amendment_record(flipped_alone, adr)),
+        "flipped_key_with_a_revision_but_no_adr_line": bool(check_reach_amendment_record(pre, adr_with(""))),
+        "pre_caps_cause_names_only_the_value": bool(check_reach_amendment_record(dict(pre, projection_revisions=rev(cause="reads D17-B")), adr)),
+        "pre_caps_good": check_reach_amendment_record(pre, adr) == [],
+        "pre_caps_cause_without_d17b": bool(check_reach_amendment_record(dict(pre, projection_revisions=rev(cause="regenerated")), adr)),
+        "pre_caps_agent": bool(check_reach_amendment_record(dict(pre, projection_revisions=rev(by="agent")), adr)),
+        "post_caps_good": check_reach_amendment_record(post, adr) == [],
+        "post_caps_no_key": bool(check_reach_amendment_record(dict(post, enforced_caps_decision={k: v for k, v in post["enforced_caps_decision"].items()
+                                                                                                 if k != "reach_amendment"}), adr)),
+        "post_caps_other_value": bool(check_reach_amendment_record(dict(post, enforced_caps_decision=dict(post["enforced_caps_decision"], reach_amendment=None)), adr)),
+        "post_caps_agent": bool(check_reach_amendment_record(dict(post, enforced_caps_decision=dict(post["enforced_caps_decision"], decided_by="agent")), adr)),
+        "decision_without_budget_key": bool(check_reach_amendment_record(dict(post, reach_amendment=None), adr)),
+        "no_adr_line": bool(check_reach_amendment_record(pre, adr_with(""))),
+        "line_only_in_the_notes": bool(check_reach_amendment_record(pre, adr_with("", section="## Other notes") + DECISION_LINE)),
+        "line_without_d17b": bool(check_reach_amendment_record(pre, adr_with("- `reach_amendment` decided.\n"))),
+    }
+    live = check_reach_amendment_record(load_budget(), adr_text())
+    check("reach_amendment_needs_a_decision_record", all(controls.values()) and not live, f"controls={controls} live={live}")
+
+
+def test_revision_entries_are_decided_by_david() -> None:
+    """K4: `projection_revisions[].decided_by == "David"` was enforced only next to a cut-plan change; a budget-only revision (a new entry,
+    no cut-plan change) now needs it too, with a cause."""
+    origin = {"projection_revisions": [revision("a" * 64, "b" * 64)]}
+    mk = lambda *new: {"projection_revisions": origin["projection_revisions"] + list(new)}  # noqa: E731
+    controls = {
+        "no_new_entry": check_revision_authors(mk(), origin) == [],
+        "david": check_revision_authors(mk(revision("b" * 64, "c" * 64)), origin) == [],
+        "agent": bool(check_revision_authors(mk(revision("b" * 64, "c" * 64, decided_by="agent")), origin)),
+        "missing": bool(check_revision_authors(mk(revision("b" * 64, "c" * 64, decided_by=None)), origin)),
+        "no_cause": bool(check_revision_authors(mk(revision("b" * 64, "c" * 64, cause=" ")), origin)),
+        "old_entries_not_judged": check_revision_authors({"projection_revisions": [revision("a" * 64, "b" * 64, decided_by="agent")]},
+                                                         {"projection_revisions": [revision("a" * 64, "b" * 64, decided_by="agent")]}) == [],
+        "no_origin_judges_all": bool(check_revision_authors(mk(revision("b" * 64, "c" * 64, decided_by="agent")), None)),
+    }
+    status, live_origin = origin_budget()
+    live = check_revision_authors(load_budget(), live_origin) if status in ("ok", "new") else []
+    if status == "skip":
+        skip("revision_entries_are_decided_by_david:live", "no origin/main ref (CI must not skip)")
+    check("revision_entries_are_decided_by_david", all(controls.values()) and not live, f"controls={controls} live={live}")
+
+
+def test_adr_discloses_the_rem_fix_4_findings() -> None:
+    """K1-K6: ADR-0073 carries the REM-FIX 4 notes with the corrected figures, and the stale 576 / 787 are fixed."""
+    text = adr_text()
+    sb = json.loads(PROJECTION.read_text(encoding="utf-8"))["reach_feasibility"]["tiers"]["guaranteed"]["signing_burden"]
+    need = ("## P2 REM-FIX 4 notes", "disjoint", "definitional", "covered-first", "variant_split", "decision record", "R-M2", "32,881 B", "32,762 B",
+            "key AND", "rows_upper_bound", "591", "424", "41-49")
+    check("adr_discloses_the_rem_fix_4_findings",
+          all(n in text for n in need) and "`unmapped_removed 576`" not in text and "`unmapped_removed 787`" not in text
+          and "unmapped_removed 581" in text and "unmapped_removed 794" in text
+          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (591, 424),
+          f"missing={[n for n in need if n not in text]}")
 
 
 # ---------------------------------------------------------------------------------------------- negative tests (fixtures)

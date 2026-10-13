@@ -198,6 +198,7 @@ Excluded tests. `tests/fixtures/router_test_enumerate.py` flags a test when its 
 - Not listed: fx::test_router_readset.py::test_projection_file_carries_both_variants_and_happy_path — checks the shape and byte totals of the committed projection and a synthetic world; it asserts no router prose.
 - Not listed: fx::test_router_readset.py::test_reach_feasibility_counts_reach_lost_moves — moves one section of the baseline commit (read through git, not the working tree) and checks the reach counters; no live router prose is asserted.
 - Not listed: fx::test_router_readset.py::test_destination_happy_path_for_its_own_workflows_is_not_coverage — moves one section of the baseline commit (read through git, not the working tree) and checks the per-pair reach counters; no live router prose is asserted.
+- Not listed: fx::test_router_readset.py::test_bias_notes_carry_the_residue — reads the size of one baseline-commit file through the projector state and checks the residue notes of the projection; no live router prose is asserted.
 - Not listed: fx::test_router_readset.py::test_bakeoff_move_keeps_the_every_run_plan_path — projects the baseline commit with the committed cut plan and asserts text of the projected plan-workflow.md and plan-bakeoff.md; the live router is not read, so no phase move can break it.
 
 

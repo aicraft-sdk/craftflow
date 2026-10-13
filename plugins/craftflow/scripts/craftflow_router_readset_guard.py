@@ -133,6 +133,14 @@ def ls_tree(plugin_root, ref: str, prefix: str) -> List[str]:
     return sorted(n for n in out.decode("utf-8").split("\0") if n)
 
 
+def move_facts(r: dict, moved: str) -> dict:
+    """What a human signs for one `move` row (feasibility.signing_burden): does the moved span start at a heading, how many top-level
+    sections it holds (a span that holds several is several section-move rows), and does the destination get a heading from `dst_header`."""
+    heads = [len(m.group(1)) for m in (re.match(r"(#+)\s", ln) for ln in moved.splitlines(True)) if m]
+    return {"id": r["id"], "starts_at_heading": bool(re.match(r"#+\s", moved)), "top_sections": heads.count(min(heads)) if heads else 0,
+            "dst_heading": bool(re.search(r"(?m)^#+\s", r.get("dst_header") or "")), "bytes": len(moved.encode("utf-8"))}
+
+
 # ---------------------------------------------------------------------------------------------- unanchored rows and bias
 
 

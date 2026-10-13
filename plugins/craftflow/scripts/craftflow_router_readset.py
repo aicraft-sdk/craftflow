@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import craftflow_router_corpus as cor
+import craftflow_router_readset_burden as bur
 import craftflow_router_readset_core as core
 import craftflow_router_readset_guard as grd
 import craftflow_router_readset_project as prj
@@ -170,6 +171,8 @@ def run_projection(root: Path, args) -> dict:
     if states is not None:  # a full-plan projection also says whether the P0 accounting would accept each projected tree
         import craftflow_router_readset_feasibility as feas
         out["reach_feasibility"] = feas.reach_feasibility(states, feas.load_context(root))
+        hsc = "skills/craftflow-router/references/harness-self-checks.md"
+        out["bias"]["notes"] = bur.bias_notes(out["reach_feasibility"]["tiers"]["guaranteed"]["reach_loss_split"], len(state0["files"][hsc].encode("utf-8")))
     out["effective_conditions_source"] = source
     out["cutplan_sha256"] = hashlib.sha256(plan_bytes).hexdigest()
     out["baseline_ref"] = ref

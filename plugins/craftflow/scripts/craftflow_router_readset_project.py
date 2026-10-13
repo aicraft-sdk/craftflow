@@ -161,7 +161,7 @@ def _move(state: dict, r: dict) -> None:
     if not isinstance(pointer, str):
         raise ProjectionError(f"{r['id']}: move needs a string pointer_text (empty string for none)")
     state["files"][src] = "".join(lines[:a]) + pointer + "".join(lines[b:])
-    state["moves"] = state.get("moves", 0) + 1  # section-move rows applied to this tree (feasibility.signing_burden)
+    state.setdefault("move_log", []).append(grd.move_facts(r, moved))  # section-move rows applied to this tree (feasibility.signing_burden)
     cur =state["files"].get(dst, "")
     sep = "" if cur.endswith("\n") or not cur else "\n"
     state["files"][dst] = cur + sep + r.get("dst_header", "") + moved

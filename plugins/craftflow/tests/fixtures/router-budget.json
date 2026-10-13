@@ -37,7 +37,7 @@
   },
   "enforced_caps": null,
   "enforced_caps_decision": null,
-  "projection_sha256": "2747f6bcb2c9a926dd8c5a0feba718dd96a54338e17e70b7a0c3bbc3ba87ebdb",
+  "projection_sha256": "5b27b389a30d7205e0c07a231d218d1fd2ae16958c99fe919ca7879d84d9f832",
   "projection_revisions": [
     {
       "phase": "P2",
@@ -45,6 +45,14 @@
       "to_projection_sha256": "2747f6bcb2c9a926dd8c5a0feba718dd96a54338e17e70b7a0c3bbc3ba87ebdb",
       "fits_enforced_caps": null,
       "cause": "P2 REM-FIX 3 (user-authorized, scope ALL_ISSUES), G6: seven P11 replace rows fix the 5b pointer, the 5a/5b heading and the five `below` references that the bake-off split left in plan-workflow.md and SKILL.md; the reach_feasibility block gains the per-pair split and signing_burden",
+      "decided_by": "David"
+    },
+    {
+      "phase": "P2",
+      "from_projection_sha256": "2747f6bcb2c9a926dd8c5a0feba718dd96a54338e17e70b7a0c3bbc3ba87ebdb",
+      "to_projection_sha256": "5b27b389a30d7205e0c07a231d218d1fd2ae16958c99fe919ca7879d84d9f832",
+      "fits_enforced_caps": null,
+      "cause": "P2 REM-FIX 4 (user-authorized closing remediation after doubt-verify cycle 3, scope ALL_ISSUES), K1-K6: reach_feasibility gets disjoint per-occurrence buckets and signing_burden in rows (ids and files) for REACH-A and REACH-B with the definitional D17-B reading, section-move rows 41-49 (53 upper bound), the covered-first classify tie-break (if-amended split 359 / 88 / 160) and variant_split; bias gains notes (R-M2, signing-risk bound). No byte tier changes",
       "decided_by": "David"
     }
   ],

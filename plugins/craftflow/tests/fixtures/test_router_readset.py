@@ -705,12 +705,15 @@ def test_effective_block_uses_the_recorded_conditions() -> None:
     budget = json.loads(BUDGET.read_text(encoding="utf-8"))
     recorded = cli_json_args_project([])
     all_off = cli_json_args_project(["--conditions", "difference_17=false,live_verified_enterplanmode=false"])
+    assumed = cli_json_args_project(["--assume-reach-amendment"])["effective"]["tier"]
+    # K4: true in both legitimate states of the budget's `reach_amendment` (the decision record test owns the key itself). G2: every
+    # difference_17 row is tagged, so without the recorded amendment the flag adds nothing to `effective`; with it `effective` is what the flag gives.
+    state_ok = (recorded["effective"]["tier"] == assumed) if budget["reach_amendment"] else \
+        (recorded["effective"]["tier"] == recorded["tiers"]["guaranteed"] and assumed != recorded["tiers"]["guaranteed"])
     check("effective_block_uses_the_recorded_conditions",
           {k: recorded["effective_conditions"][k] for k in budget["conditions"]} == budget["conditions"]
           and recorded["effective_conditions"]["reach_amendment"] == budget["reach_amendment"] and recorded["effective_conditions_source"] == "router-budget.json"
-          # G2: every difference_17 row is tagged, so without the recorded amendment the flag adds nothing to `effective`
-          and recorded["effective"]["tier"] == recorded["tiers"]["guaranteed"]
-          and cli_json_args_project(["--assume-reach-amendment"])["effective"]["tier"] != recorded["tiers"]["guaranteed"]
+          and state_ok
           and all_off["effective"]["tier"] == all_off["tiers"]["guaranteed"] and all_off["effective_conditions_source"] == "cli",
           f"recorded={recorded['effective_conditions']} src={recorded['effective_conditions_source']}")
 
@@ -754,7 +757,7 @@ def test_unanchored_rows_and_bias_are_disclosed() -> None:
     check("unanchored_rows_and_bias_are_disclosed", keys_ok and {"p3-kernel-when-to-use", "p10-xref-unqualified-moved", "p12-c4-second-rationale-pass"} <= set(un)
           and un["p3-kernel-when-to-use"]["direction"] == "add" and un["p12-c4-second-rationale-pass"]["direction"] == "cut"
           and wf_ok and refuses and small["bias"]["PLAN"] == -40 and small["bias"]["BUILD"] == 0
-          and on_disk["unanchored"] == out["unanchored"] and on_disk["bias"] == out["bias"],
+          and on_disk["unanchored"] == out["unanchored"] and {k: v for k, v in on_disk["bias"].items() if k != "notes"} == out["bias"],
           f"keys_ok={keys_ok} wf_ok={wf_ok} refuses={refuses}")
 
 
@@ -981,11 +984,12 @@ def test_reach_feasibility_block_is_in_the_projection() -> None:
     split = all(sum(s["units"] for s in v["reach_loss_split"].values()) == v["reach_lost_occurrences"]
                 and sum(s["bytes"] for s in v["reach_loss_split"].values()) == v["reach_lost_bytes"]
                 and all(sum(m[c] for m in v["reach_loss_by_move"]) == v["reach_loss_split"][c]["units"] for c in classes) for v in tiers.values())
-    burden = all(v["signing_burden"]["REACH_B"]["per_unit_reach_rows"] == v["reach_lost_occurrences"] - v["reach_loss_split"][classes[0]]["units"]
-                 and v["signing_burden"]["REACH_A"]["per_unit_reach_rows"] == v["reach_lost_occurrences"]
-                 and v["signing_burden"]["REACH_A"]["widening_pairs"] == v["readmap_widened"] == v["signing_burden"]["REACH_B"]["widening_pairs"]
-                 and v["signing_burden"]["REACH_B"]["section_move_rows"] > 0 and v["signing_burden"]["REACH_B"]["total"] < v["signing_burden"]["REACH_A"]["total"]
-                 for v in tiers.values())
+    # K1/K2: rows are ids and files; REACH-B signs no more rows than REACH-A, the waiver no more than REACH-B; widening pairs stay the P0 counter
+    sb = lambda v: v["signing_burden"]  # noqa: E731
+    burden = all(sb(v)["REACH_A"]["rows_upper_bound"] >= sb(v)["REACH_B"]["rows_upper_bound"] >= sb(v)["definitional_D17B"]["REACH_B"]["rows_upper_bound"]
+                 and sb(v)["definitional_D17B"]["REACH_A"]["rows_upper_bound"] == sb(v)["definitional_D17B"]["REACH_B"]["rows_upper_bound"]
+                 and sb(v)["buckets"]["widening"]["pairs"] == v["readmap_widened"] and sb(v)["section_move_rows"]["ops"] > 0 and "formula" in sb(v)
+                 and v["variant_split"]["units"] <= v["reach_loss_split"][classes[2]]["units"] for v in tiers.values())
     penalty = g["reach_a_kernel_penalty_bytes"] == 3913 and g["single_token_units"] == 1 and "reach_a_kernel_penalty_bytes" in block["note"]
     pinned = [g["reach_loss_split"][c]["units"] for c in classes] == [167, 88, 160] and g["reach_lost_occurrences"] == 415
     check("reach_feasibility_block_is_in_the_projection",
@@ -1046,6 +1050,140 @@ def test_p11_manual_review_sites_have_rows() -> None:
     uncovered = [s["anchor_text"][:60] for s in sites if s["owning_phase"] == "P11"
                  and not any(s["anchor_text"] in (r.get("start_anchor") or "") for r in rows)]
     check("p11_manual_review_sites_have_rows", not uncovered, f"claim sites without a P11 replace row: {uncovered}")
+
+
+# ---------------------------------------------------------------------------------------------- P2 REM-FIX 4 (K1-K3, K6)
+
+
+def _tri(*pairs) -> frozenset:
+    return frozenset(pairs)
+
+
+def test_classify_prefers_a_covered_copy_then_fewest_dropped_pairs() -> None:
+    """K3: `best` was the copy with the fewest distinct drop kinds and the first copy won ties, so a covered {(2,1)} copy lost to an earlier
+    {(2,0)} copy. A covered copy wins whatever its position; among the rest the copy with the fewest dropped pairs wins."""
+    import craftflow_router_readset_feasibility as feas
+    req = _tri(("BUILD", "standard", "start"))
+    to_cond = (_tri(("BUILD", "standard", "conditional_stage")), "a.md")
+    to_happy = (_tri(("BUILD", "standard", "happy_path_stage")), "b.md")
+    two = _tri(("BUILD", "standard", "start"), ("PLAN", "standard", "start"))
+    lose_one = (_tri(("BUILD", "standard", "start")), "c.md")  # PLAN has no row in this copy
+    lose_two_to_cond = (_tri(("BUILD", "standard", "conditional_stage"), ("PLAN", "standard", "conditional_stage")), "d.md")
+    controls = {
+        "covered_first": feas.classify(req, [to_happy, to_cond]) == "pure_2_to_1_covered",
+        "covered_after_an_earlier_drop": feas.classify(req, [to_cond, to_happy]) == "pure_2_to_1_covered",  # the K3 bug: this was drops_to_0
+        "only_a_drop": feas.classify(req, [to_cond]) == "drops_to_0",
+        "fewest_pairs_not_first": feas.classify(two, [lose_two_to_cond, lose_one]) == "drops_workflow_or_variant",  # 1 dropped pair beats 2
+        "fewest_pairs_other_order": feas.classify(two, [lose_one, lose_two_to_cond]) == "drops_workflow_or_variant",
+    }
+    split = feas.is_variant_split(two, [(_tri(("BUILD", "standard", "start")), "e.md"), (_tri(("PLAN", "standard", "start")), "f.md")])
+    not_split = feas.is_variant_split(two, [(_tri(("BUILD", "standard", "start")), "e.md")])
+    check("classify_prefers_a_covered_copy_then_fewest_dropped_pairs", all(controls.values()) and split and not not_split,
+          f"controls={controls} split={split} not_split={not_split}")
+
+
+def test_reach_loss_split_pins_the_covered_first_numbers() -> None:
+    """K3 on the real plan: with the covered-first tie-break the if-amended tier splits 359 / 88 / 160 (it was 349 / 98 / 160), the
+    default tier stays 167 / 88 / 160, and 4 of the 160 are variant splits (every pair still reads the unit at its start reach, in two copies)."""
+    tiers = full_projection()["reach_feasibility"]["tiers"]
+    classes = ("pure_2_to_1_covered", "drops_to_0", "drops_workflow_or_variant")
+    got = {t: [tiers[t]["reach_loss_split"][c]["units"] for c in classes] for t in ("guaranteed", "conditional_if_reach_amended")}
+    vs = {t: tiers[t]["variant_split"] for t in ("guaranteed", "conditional_if_reach_amended")}
+    check("reach_loss_split_pins_the_covered_first_numbers",
+          got == {"guaranteed": [167, 88, 160], "conditional_if_reach_amended": [359, 88, 160]}
+          and all(v == {"units": 4, "bytes": 1186} for v in vs.values()),
+          f"split={got} variant_split={vs}")
+
+
+def test_signing_burden_formula_on_a_synthetic_ledger() -> None:
+    """K1/K2: rows are ids and files, not occurrences; the buckets are disjoint per occurrence; the moved-without-loss occurrences share the
+    section-move rows (no row of their own); the D17-B waiver drops the covered (2 -> 1) occurrences, in place or moved, from the per-unit rows."""
+    import craftflow_router_readset_feasibility as feas
+    rec = [("a", "moved", "cov"), ("a", "moved", "d0"), ("b", "moved", "cov"), ("c", "moved", "wf"), ("c", "in_place", "cov"),
+           ("d", "in_place", "d0"), ("e", "vanishing", None), ("e", "vanishing", None), ("f", "vanishing", None)]
+    mv = {"ops": 3, "rows_low": 3, "rows_high_headed_spans": 4, "rows_upper_bound": 5, "partial_spans_without_heading": 1,
+          "multi_section_spans": 1, "needs_destination_heading": []}
+    sb = feas.burden(rec, moved_without_loss=7, widening_pairs=9, widening_files=2, moves=mv)
+    A, B, D = sb["REACH_A"], sb["REACH_B"], sb["definitional_D17B"]
+    # lost ids a,b,c,d = 4 (a counts once); vanishing ids e,f = 2; section rows upper bound 5; widening files 2
+    # REACH-B per unit: non-covered a(d0) c(wf) d(d0) plus the in-place covered occurrence of c = {a, c, d}; waiver per unit: non-covered {a, c, d}
+    want = {"A": 4 + 2 + 5 + 2, "B": 3 + 2 + 5 + 2, "D": 3 + 2 + 5 + 2}
+    occ = {"A": A["occurrences"]["total"], "B": B["occurrences"]["total"], "DA": D["REACH_A"]["occurrences"]["total"],
+           "DB": D["REACH_B"]["occurrences"]["total"]}
+    # occurrences: A = lost 6 + vanishing 3 + moved-without-loss 7 + widening pairs 9; B = ops 3 + per unit (non-covered 3 + in-place covered 1) + 3 + 9;
+    # waiver: A = non-covered 3 + 3 + 7 + 9, B = 3 + 3 + 3 + 9
+    ok_occ = occ == {"A": 25, "B": 19, "DA": 22, "DB": 18}
+    buckets = sb["buckets"]
+    ok_buckets = (buckets["in_place_narrowed"] == {"occurrences": 2, "ids": 2} and buckets["moved_pure_2_to_1"] == {"occurrences": 2, "ids": 2}
+                  and buckets["moved_drops_to_0"] == {"occurrences": 1, "ids": 1} and buckets["moved_drops_workflow_or_variant"] == {"occurrences": 1, "ids": 1}
+                  and buckets["vanishing"] == {"occurrences": 3, "ids": 2} and buckets["moved_without_loss"] == {"occurrences": 7}
+                  and buckets["widening"] == {"pairs": 9, "files": 2})
+    check("signing_burden_formula_on_a_synthetic_ledger",
+          (A["rows_upper_bound"], B["rows_upper_bound"], D["REACH_A"]["rows_upper_bound"], D["REACH_B"]["rows_upper_bound"]) == (want["A"], want["B"], want["D"], want["D"])
+          and ok_occ and ok_buckets and "formula" in sb and sb["section_move_rows"] == mv,
+          f"rows={(A['rows_upper_bound'], B['rows_upper_bound'], D['REACH_A']['rows_upper_bound'], D['REACH_B']['rows_upper_bound'])} want={want} occ={occ} buckets={buckets}")
+
+
+def test_signing_burden_buckets_are_disjoint_on_every_tier() -> None:
+    """K1(a): `diff_inventory` adds the in-place narrowings to both `unreachable` and `unmapped_removed`, so unmapped_removed = in-place +
+    moved reach-lost + vanishing + moved-without-loss, each occurrence once. The old `unmapped_removed - (lost - unreachable)` counted the
+    192 in-place narrowings of the if-amended tiers twice (once as reach-lost, once as moved without loss)."""
+    tiers = full_projection()["reach_feasibility"]["tiers"]
+    bad = {}
+    for name, v in tiers.items():
+        b = v["signing_burden"]["buckets"]
+        moved = sum(b[k]["occurrences"] for k in ("moved_pure_2_to_1", "moved_drops_to_0", "moved_drops_workflow_or_variant"))
+        parts = (b["in_place_narrowed"]["occurrences"], moved, b["vanishing"]["occurrences"], b["moved_without_loss"]["occurrences"])
+        if (sum(parts) != v["unmapped_removed"] or b["in_place_narrowed"]["occurrences"] != v["unreachable"]
+                or b["in_place_narrowed"]["occurrences"] + moved != v["reach_lost_occurrences"] or b["moved_without_loss"]["occurrences"] < 0
+                or b["widening"]["pairs"] != v["readmap_widened"]):
+            bad[name] = (parts, v["unmapped_removed"], v["unreachable"], v["reach_lost_occurrences"])
+    g, d = tiers["guaranteed"]["signing_burden"]["buckets"], tiers["conditional_if_reach_amended"]["signing_burden"]["buckets"]
+    check("signing_burden_buckets_are_disjoint_on_every_tier",
+          not bad and g["moved_without_loss"]["occurrences"] == 42 and d["moved_without_loss"]["occurrences"] == 42
+          and g["in_place_narrowed"]["occurrences"] == 0 and d["in_place_narrowed"]["occurrences"] == 192,
+          f"bad={bad} guaranteed_mwl={g['moved_without_loss']} amended_mwl={d['moved_without_loss']} in_place={d['in_place_narrowed']}")
+
+
+def test_signing_burden_counts_rows_not_occurrences() -> None:
+    """K1/K2 on the real plan, guaranteed tree: 415 reach-lost occurrences are 411 ids, 124 vanishing occurrences 112 ids, 50 widening pairs 15
+    files, the section moves 41 ops (41-49 signable sections, 53 counting the unheaded bake-off span's five), so REACH-A <= 591 and REACH-B <= 424;
+    with the D17-B waiver the two coincide. If-amended tier: the narrow reading keeps every occurrence (844 = 607 + 145 + 42 + 50), the
+    definitional one waives the covered ones (485)."""
+    tiers = full_projection()["reach_feasibility"]["tiers"]
+    g, d = tiers["guaranteed"]["signing_burden"], tiers["conditional_if_reach_amended"]["signing_burden"]
+    b = g["buckets"]
+    gd = g["definitional_D17B"]
+    sec = g["section_move_rows"]
+    check("signing_burden_counts_rows_not_occurrences",
+          b["vanishing"] == {"occurrences": 124, "ids": 112} and b["widening"] == {"pairs": 50, "files": 15}
+          and (sec["ops"], sec["rows_low"], sec["rows_high_headed_spans"], sec["rows_upper_bound"]) == (41, 41, 49, 53)
+          and (sec["partial_spans_without_heading"], sec["multi_section_spans"]) == (23, 7)
+          and sec["needs_destination_heading"] == ["p10-pav-verifier-telemetry"]
+          and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (411 + 112 + 53 + 15, 244 + 112 + 53 + 15)
+          and g["REACH_A"]["occurrences"]["total"] == 415 + 124 + 42 + 50 and g["REACH_B"]["occurrences"]["total"] == 41 + 248 + 124 + 50
+          and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 244 + 112 + 53 + 15
+          and d["REACH_A"]["occurrences"]["total"] == 607 + 145 + 42 + 50
+          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 248 + 145 + 50
+          and d["definitional_D17B"]["REACH_B"]["rows_upper_bound"] < d["REACH_B"]["rows_upper_bound"] < d["REACH_A"]["rows_upper_bound"],
+          f"buckets={b} sections={sec} guaranteed={(g['REACH_A']['rows_upper_bound'], g['REACH_B']['rows_upper_bound'])} amended_A_occ={d['REACH_A']['occurrences']}")
+
+
+def test_bias_notes_carry_the_residue() -> None:
+    """K6: router-projection.json `bias.notes` (not only the ADR) states R-M2 (PLAN happy-path omits harness-self-checks.md, 6,008 B, a signed
+    widening row is owed in P11/P13) and the signing-risk bound taken from the guaranteed split (32,881 B drops to 0 + 32,762 B workflow
+    drops return to the start sets if they cannot be signed). A --phases projection has no reach report, so no notes."""
+    full = full_projection()
+    notes = full["bias"].get("notes", [])
+    split = full["reach_feasibility"]["tiers"]["guaranteed"]["reach_loss_split"]
+    hsc = len(real_state0()["files"][HSC].encode("utf-8"))
+    partial = cli_json_args_project([], phases="P2")
+    check("bias_notes_carry_the_residue",
+          len(notes) == 2 and hsc == 6008 and "R-M2" in notes[0] and "6,008 B" in notes[0] and "harness-self-checks.md" in notes[0]
+          and "widening row" in notes[0] and "P11/P13" in notes[0]
+          and f"{split['drops_to_0']['bytes']:,} B" in notes[1] and f"{split['drops_workflow_or_variant']['bytes']:,} B" in notes[1]
+          and (split["drops_to_0"]["bytes"], split["drops_workflow_or_variant"]["bytes"]) == (32881, 32762) and "notes" not in partial["bias"],
+          f"notes={notes} hsc={hsc}")
 
 
 def main() -> int:
