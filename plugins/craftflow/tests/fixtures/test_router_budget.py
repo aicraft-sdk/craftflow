@@ -185,6 +185,8 @@ def check_decision_record(budget: dict, show: Callable[[str, str], Optional[byte
         problems.append("decided_by must be David")
     if d.get("adr") != "ADR-0073":
         problems.append("adr must be ADR-0073")
+    if "reach_option" in d and d["reach_option"] not in ("REACH-A", "REACH-B"):
+        problems.append(f"reach_option {d['reach_option']!r} not in REACH-A/REACH-B")
     if not isinstance(d.get("decided_at_sha"), str) or not d.get("decided_at_sha"):
         problems.append("decided_at_sha missing")
         return problems
@@ -562,6 +564,19 @@ def test_enforced_caps_have_decision_record() -> None:
                   and check_decision_record({"enforced_caps": {"x": 1}, "enforced_caps_decision": None}, show))
     live = check_decision_record(b, lambda sha, rel: git_show(sha, rel))
     check("enforced_caps_have_decision_record", fixture_ok and not live, f"fixture_ok={fixture_ok} live={live}")
+
+
+def test_decision_record_reach_option_is_validated() -> None:
+    """P2C: `reach_option` names the chosen reach option (REACH-A or REACH-B) and is validated when present; the live record carries it."""
+    base = {"enforced_caps": {k: 1 for k in KEYS}, "enforced_caps_decision": {"option": "A", "decided_by": "David", "decided_at_sha": "abc",
+            "adr": "ADR-0073", "projection_sha256": hashlib.sha256(b"projection").hexdigest()}}
+    show = lambda sha, rel: b"projection" if sha == "abc" else None  # noqa: E731
+    with_opt = lambda v: {**base, "enforced_caps_decision": {**base["enforced_caps_decision"], "reach_option": v}}  # noqa: E731
+    controls = {"b_ok": check_decision_record(with_opt("REACH-B"), show) == [], "a_ok": check_decision_record(with_opt("REACH-A"), show) == [],
+                "bad": bool(check_decision_record(with_opt("REACH-C"), show)), "empty": bool(check_decision_record(with_opt(""), show)),
+                "none": bool(check_decision_record(with_opt(None), show))}
+    live = (load_budget().get("enforced_caps_decision") or {}).get("reach_option")
+    check("decision_record_reach_option_is_validated", all(controls.values()) and live == "REACH-B", f"controls={controls} live={live!r}")
 
 
 def test_decision_record_immutable() -> None:

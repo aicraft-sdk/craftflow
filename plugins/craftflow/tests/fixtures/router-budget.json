@@ -35,27 +35,30 @@
       "REVIEW": 55000
     }
   },
-  "enforced_caps": null,
-  "enforced_caps_decision": null,
-  "projection_sha256": "5b27b389a30d7205e0c07a231d218d1fd2ae16958c99fe919ca7879d84d9f832",
-  "projection_revisions": [
-    {
-      "phase": "P2",
-      "from_projection_sha256": "c690662d3f830c8d8db7f08e58334429806b953af476543862893370dc530c16",
-      "to_projection_sha256": "2747f6bcb2c9a926dd8c5a0feba718dd96a54338e17e70b7a0c3bbc3ba87ebdb",
-      "fits_enforced_caps": null,
-      "cause": "P2 REM-FIX 3 (user-authorized, scope ALL_ISSUES), G6: seven P11 replace rows fix the 5b pointer, the 5a/5b heading and the five `below` references that the bake-off split left in plan-workflow.md and SKILL.md; the reach_feasibility block gains the per-pair split and signing_burden",
-      "decided_by": "David"
-    },
-    {
-      "phase": "P2",
-      "from_projection_sha256": "2747f6bcb2c9a926dd8c5a0feba718dd96a54338e17e70b7a0c3bbc3ba87ebdb",
-      "to_projection_sha256": "5b27b389a30d7205e0c07a231d218d1fd2ae16958c99fe919ca7879d84d9f832",
-      "fits_enforced_caps": null,
-      "cause": "P2 REM-FIX 4 (user-authorized closing remediation after doubt-verify cycle 3, scope ALL_ISSUES), K1-K6: reach_feasibility gets disjoint per-occurrence buckets and signing_burden in rows (ids and files) for REACH-A and REACH-B with the definitional D17-B reading, section-move rows 41-49 (53 upper bound), the covered-first classify tie-break (if-amended split 359 / 88 / 160) and variant_split; bias gains notes (R-M2, signing-risk bound). No byte tier changes",
-      "decided_by": "David"
+  "enforced_caps": {
+    "kernel_bytes": 34202,
+    "protocol_bytes": 14606,
+    "reference_max_bytes": 19101,
+    "description_chars": 5081,
+    "readset": {
+      "BUILD": 98180,
+      "PLAN": 86940,
+      "DEBUG": 74204,
+      "REVIEW": 72266
     }
-  ],
+  },
+  "enforced_caps_decision": {
+    "option": "A",
+    "reach_option": "REACH-B",
+    "reach_amendment": null,
+    "decided_by": "David",
+    "adr": "ADR-0073",
+    "decided_at_sha": "38326dd2",
+    "projection_sha256": "5b27b389a30d7205e0c07a231d218d1fd2ae16958c99fe919ca7879d84d9f832",
+    "cause": "P2C: Difference 17 dropped (D17-A, reach_amendment null) and REACH-B adopted as the reach option; caps are the guaranteed effective tier of router-projection.json, exact values, ratchet-only afterwards"
+  },
+  "projection_sha256": "5b27b389a30d7205e0c07a231d218d1fd2ae16958c99fe919ca7879d84d9f832",
+  "projection_revisions": [],
   "enforce": false,
   "p2_sha": "7d573e93795b95357a7e38e6cade91335091a368",
   "p2_measured": {
