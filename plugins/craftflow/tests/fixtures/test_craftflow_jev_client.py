@@ -289,12 +289,15 @@ def test_socket_timeout_is_not_retried() -> None:
     with mock.patch("craftflow_jev_client._urlopen", side_effect=fake_urlopen):
         result = call({}, {}, api_key=SENTINEL_KEY, model="jev-1.12", timeout=2.5, cache_dir=None, log=fake_log)
 
+    # The client logs type(exc).__name__. socket.timeout is its own class named "timeout" on Python 3.9 and an alias
+    # of the builtin TimeoutError from 3.10 on, so the logged name follows the interpreter (craftflow_stop_gate.py
+    # already accepts both spellings). The no-retry assertion (one call) does not depend on the version.
     if (
         result is None
         and len(calls) == 1
         and logged
         and logged[0][1].get("status") is None
-        and logged[0][1].get("error") == "timeout"
+        and logged[0][1].get("error") == socket.timeout.__name__
     ):
         ok("socket.timeout is not retried")
     else:

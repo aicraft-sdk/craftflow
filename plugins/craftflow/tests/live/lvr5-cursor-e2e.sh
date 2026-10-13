@@ -15,6 +15,12 @@
 WT="${WT:-/Users/david.gracia/Desktop/projects/own/ai-craft/.claude/worktrees/it-execute-plan-docs-plans-2026-24c2182b}"
 SK="$HOME/.cursor/skills"; PW="$WT/tools/craftflow-plugin/plugins/craftflow/skills"; OLD_ROUTER="${OLD_ROUTER:-}"
 LVR5_TMP="${LVR5_TMP:-/tmp}"
+lvr5_mtime() {
+  # mtime in epoch seconds, or "absent". GNU stat first: there `stat -f` means file-SYSTEM status, so `stat -f %m F`
+  # prints the volume's free-block counts (they change between setup and check) and then fails on the "%m" operand.
+  # BSD/macOS stat rejects -c without printing anything to stdout, so it falls through to its own `-f %m`.
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo absent
+}
 lvr5_clean() {
   # Explicit names + existence tests: no globs, so zsh `nomatch` can never fire.
   local n
@@ -31,7 +37,7 @@ lvr5_setup() {
   printf '%s\n' "$OLD_ROUTER" > "$LVR5_TMP/lvr5-old-router" || { echo "STOP: cannot persist restore target to $LVR5_TMP/lvr5-old-router"; return 1; }
   ln -sfn "$PW/cursor-router" "$SK/cursor-router" && ln -s "$PW/retro" "$SK/retro" || { echo "STOP: relink failed; run lvr5_restore"; return 1; }
   git status --porcelain > "$LVR5_TMP/lvr5-git-before"; ls -t .craftflow/state/workflows | head -3 > "$LVR5_TMP/lvr5-wf-before"
-  { stat -f %m .craftflow/state/cursor-wf.json 2>/dev/null || echo absent; } > "$LVR5_TMP/lvr5-cwf-before"
+  lvr5_mtime .craftflow/state/cursor-wf.json > "$LVR5_TMP/lvr5-cwf-before"
   echo "LV-R5 setup: OK"
 }
 lvr5_check() {
@@ -39,7 +45,7 @@ lvr5_check() {
   for n in lvr5-git-before lvr5-wf-before lvr5-cwf-before; do
     test -f "$LVR5_TMP/$n" || { echo "STOP: run lvr5_setup first (snapshot files missing)"; return 1; }
   done
-  git status --porcelain | diff "$LVR5_TMP/lvr5-git-before" - && ls -t .craftflow/state/workflows | head -3 | diff "$LVR5_TMP/lvr5-wf-before" - && { stat -f %m .craftflow/state/cursor-wf.json 2>/dev/null || echo absent; } | diff "$LVR5_TMP/lvr5-cwf-before" - && echo "LV-R5 read-only: OK"
+  git status --porcelain | diff "$LVR5_TMP/lvr5-git-before" - && ls -t .craftflow/state/workflows | head -3 | diff "$LVR5_TMP/lvr5-wf-before" - && lvr5_mtime .craftflow/state/cursor-wf.json | diff "$LVR5_TMP/lvr5-cwf-before" -&& echo "LV-R5 read-only: OK"
 }
 lvr5_restore() {
   local target="$OLD_ROUTER"

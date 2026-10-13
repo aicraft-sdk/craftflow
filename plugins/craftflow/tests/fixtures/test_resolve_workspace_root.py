@@ -50,6 +50,29 @@ def fail(name: str, reason: str) -> None:
     print(f"  FAIL: {name}: {reason}")
 
 
+_skips = 0
+
+
+def skip(name: str, reason: str) -> None:
+    """A check whose precondition cannot hold on this host's filesystem: counted apart from passes and failures."""
+    global _skips
+    _skips += 1
+    print(f"  SKIP: {name}: {reason}")
+
+
+def _fs_treats_as_same(directory: Path, created: str, variant: str) -> bool:
+    """True when the filesystem holding `directory` resolves the name `variant` to the entry created as `created`
+    (case folding on macOS APFS; Unicode normalization on APFS/HFS+). False on Linux ext4, which compares bytes."""
+    probe = directory / created
+    probe.mkdir()
+    try:
+        return os.path.samefile(str(probe), str(directory / variant))
+    except OSError:
+        return False
+    finally:
+        probe.rmdir()
+
+
 def _init_repo(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-q"], cwd=path, check=True)
@@ -426,6 +449,11 @@ def test_read_workspace_writable_paths_rejects_entry_matching_nested_repo_by_cas
     # invariant, already handled correctly there via samefile()).
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
+        if not _fs_treats_as_same(root, "CaseProbe", "caseprobe"):
+            # Case-sensitive filesystem: "nestedrepo" is a separate directory outside the nested repo, so accepting
+            # it is correct there and the bug this test covers cannot occur.
+            skip("case-only-nested-repo-match", "needs a case-insensitive filesystem")
+            return
         nested_repo = root / "NestedRepo"
         nested_repo.mkdir()
         _write_workspace_config(root, ["nestedrepo"])
@@ -450,7 +478,11 @@ def test_read_workspace_writable_paths_rejects_entry_matching_nested_repo_by_uni
             # Nothing to prove on a platform where NFC/NFD collapse to the same code
             # points for this string -- the case-only test above already covers the
             # underlying samefile()-based mechanism.
-            ok("unicode-normalization-only-nested-repo-match (skipped: NFC == NFD here)")
+            skip("unicode-normalization-nested-repo-match", "NFC == NFD for the probe name here")
+            return
+        if not _fs_treats_as_same(root, nfc_name + "Probe", nfd_name + "Probe"):
+            # Byte-comparing filesystem: the NFD spelling is a separate directory, so accepting it is correct there.
+            skip("unicode-normalization-nested-repo-match", "needs a Unicode-normalization-insensitive filesystem")
             return
         nested_repo = root / nfc_name
         nested_repo.mkdir()
@@ -787,11 +819,11 @@ def main() -> int:
     if _errors:
         for err in _errors:
             print(err, file=sys.stderr)
-        print(f"\nResults: {_passes} passed, {len(_errors)} failed", file=sys.stderr)
+        print(f"\nResults: {_passes} passed, {len(_errors)} failed, {_skips} skipped", file=sys.stderr)
         print("FAIL", file=sys.stderr)
         return 1
 
-    print(f"Results: {_passes} passed, 0 failed")
+    print(f"Results: {_passes} passed, 0 failed, {_skips} skipped")
     print("PASS")
     return 0
 

@@ -162,6 +162,23 @@ def case_check_without_setup(shell: str, sb: Sandbox) -> None:
     check(f"{n}_no_diff_noise", "No such file" not in r.stdout + r.stderr, f"err={r.stderr!r}")
 
 
+@with_sandbox
+def case_cursor_wf_mtime_snapshot(shell: str, sb: Sandbox) -> None:
+    # The cursor-wf.json snapshot must be that file's own mtime on BSD (macOS) and GNU (Linux) stat alike. GNU
+    # `stat -f` reports file-SYSTEM status instead, whose free-block counts drift between setup and check.
+    n = f"cwf_mtime[{shell}]"
+    cwf = sb.repo / ".craftflow/state/cursor-wf.json"
+    r1 = sb.run(shell, "lvr5_setup")
+    snapshot = (sb.state / "lvr5-cwf-before").read_text().strip() if (sb.state / "lvr5-cwf-before").is_file() else ""
+    check(f"{n}_snapshot_is_mtime", snapshot == str(int(cwf.stat().st_mtime)),
+          f"snapshot={snapshot!r} mtime={int(cwf.stat().st_mtime)} out={r1.stdout!r}")
+    st = cwf.stat()
+    os.utime(cwf, (st.st_atime, st.st_mtime + 120))
+    r2 = sb.run(shell, 'lvr5_check; echo "rc=$?"; lvr5_restore')
+    check(f"{n}_change_detected", "LV-R5 read-only: OK" not in r2.stdout and "rc=1" in r2.stdout,
+          f"out={r2.stdout!r}")
+
+
 def case_syntax() -> None:
     for shell in SHELLS:
         r = subprocess.run([shell, "-n", str(SCRIPT)], capture_output=True, text=True)
@@ -182,7 +199,8 @@ def main() -> int:
         case_restore_without_state(shell)
         case_restore_without_snapshots(shell)
         case_check_without_setup(shell)
-    print(f"\n{_passes} passed, {len(_errors)} failed (shells: {', '.join(SHELLS)})")
+        case_cursor_wf_mtime_snapshot(shell)
+    print(f"\nResults: {_passes} passed, {len(_errors)} failed (shells: {', '.join(SHELLS)})")
     for e in _errors:
         print(e)
     return 1 if _errors else 0

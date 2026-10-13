@@ -43,10 +43,34 @@ import craftflow_router_corpus as router_corpus  # noqa: E402
 
 _errors: list[str] = []
 _passes: int = 0
+_skips: list[str] = []
 
 
 def fail(name: str, reason: str) -> None:
     _errors.append(f"FAIL [{name}]: {reason}")
+
+
+def skip(name: str, reason: str) -> None:
+    """Record a test whose precondition cannot hold on this host (never a pass, never a failure). Counted separately
+    in the summary line. Only for a property of the machine itself, such as a case-sensitive filesystem."""
+    _skips.append(f"SKIP [{name}]: {reason}")
+    print(f"  SKIP: {name}: {reason}")
+
+
+def _fs_folds_case(directory: Path) -> bool:
+    """True when the filesystem holding `directory` treats two spellings that differ only in letter case as the same
+    entry (macOS APFS/HFS+ default, Windows NTFS). False on a case-sensitive filesystem (Linux ext4, the CI runner).
+    Probes with a throwaway file, so the answer is about the directory the test actually uses."""
+    directory.mkdir(parents=True, exist_ok=True)
+    fd, probe_name = tempfile.mkstemp(prefix="CaseFoldProbe-", dir=str(directory))
+    os.close(fd)
+    probe = Path(probe_name)
+    try:
+        return os.path.samefile(str(probe), str(probe.with_name(probe.name.swapcase())))
+    except OSError:
+        return False
+    finally:
+        probe.unlink()
 
 
 def _router_corpus_text() -> str:
@@ -104,15 +128,28 @@ def run_hook(script: str, payload: dict, env: dict | None = None) -> tuple[int, 
     return result.returncode, result.stdout.strip()
 
 
-def run_hook_raw(script: str, raw_stdin: bytes, env: dict | None = None) -> tuple[int, str]:
+_STRICT_STDIN = "utf-8:strict"
+
+
+def run_hook_raw(
+    script: str, raw_stdin: bytes, env: dict | None = None, stdin_errors: str = _STRICT_STDIN
+) -> tuple[int, str]:
     """Run a hook script with raw BYTES on stdin, bypassing `run_hook()`'s
     `text=True`/`json.dumps()` encoding path. Used to reproduce
     invalid-UTF-8-on-stdin decode crashes that a `str` payload cannot
-    construct. Requires the merged environment (not a stripped-down one) so
-    a normal LANG/LC_ALL is inherited -- otherwise Python's C-locale
-    coercion silently swaps in a surrogateescape error handler and the
-    crash this helper exists to reproduce never fires."""
-    merged_env = {**os.environ, **(env or {})}
+    construct.
+
+    The child's stdin decoding is pinned with PYTHONIOENCODING (default
+    `utf-8:strict`) instead of being inherited from the locale. CPython picks
+    the `surrogateescape` handler for stdin under the C/POSIX locale, under
+    any locale-coercion target such as `C.UTF-8` (the Linux CI runner's
+    LANG), and in UTF-8 mode; with that handler `sys.stdin.read()` never
+    raises, the bytes reach `json.loads()` as lone surrogates, and the decode
+    branch these tests exist for is never entered. A macOS shell's
+    `xx_YY.UTF-8` locale is strict, which is why these tests used to pass
+    there and fail on Linux. Pass `stdin_errors="utf-8:surrogateescape"` to
+    exercise that Linux default on purpose."""
+    merged_env = {**os.environ, **(env or {}), "PYTHONIOENCODING": stdin_errors}
     result = subprocess.run(
         [sys.executable, str(SCRIPTS / script)],
         input=raw_stdin,
@@ -10354,11 +10391,14 @@ def _selfcheck_write_clean_script(path: Path, module_name: str) -> None:
 
 def _selfcheck_write_broken_script(path: Path) -> None:
     # Same defect class as the real craftflow_pretooluse_guard.py bug this
-    # feature exists to catch: a PEP604 `X | None` annotation with no
-    # `from __future__ import annotations`, which raises TypeError at
-    # import time on this machine's real python3 (3.9.6).
+    # feature exists to catch: a PEP604 `X | None` union evaluated at import
+    # time raises TypeError. The original `def helper(x: str | None)` only
+    # failed below Python 3.10 (`type | None` is valid from 3.10 on), so the
+    # RED fixture silently imported cleanly on the 3.12 CI runner. A union with
+    # a string forward reference, evaluated eagerly at module level (not as a
+    # lazily evaluated annotation), raises TypeError on every Python version.
     path.write_text(
-        "def helper(x: str | None) -> str | None:\n    return x\n",
+        'HelperArg = "str" | None\n\n\ndef helper(x: HelperArg) -> HelperArg:\n    return x\n',
         encoding="utf-8",
     )
 
@@ -15737,6 +15777,11 @@ def test_promote_refuses_case_fold_collision_across_candidates(tmp_dir: Path) ->
     project_root = tmp_dir / "project"
     project_root.mkdir(parents=True)
     ledger_path = tmp_dir / "ledger.json"
+    # On a case-sensitive filesystem 'Foo-Skill' and 'foo-skill' are two separate directories, so candB writes its
+    # own file and candA's is never touched: the overwrite this test guards against cannot happen there.
+    if not _fs_folds_case(project_root):
+        skip(name, "needs a case-insensitive filesystem; on this one the two names are separate directories")
+        return
 
     cand_a = "cand-a-casefold"
     cand_b = "cand-b-casefold"
@@ -22491,6 +22536,27 @@ def test_pretooluse_guard_skill_promotion_case_sensitive_ancestor_fallback() -> 
                 "logged via log_event(), got no events",
             )
             return
+
+        # Negative control: the same case-variant root, but a skill name that
+        # is NOT in flight. Reading the ledger through the trusted root's
+        # spelling must not widen protection to every SKILL.md there.
+        unrelated_target = wrong_case_root / ".claude" / "skills" / "unrelated" / "SKILL.md"
+        os.path.samefile = _fake_samefile
+        pretooluse_guard.log_event = _capturing_log_event
+        try:
+            unrelated_result = pretooluse_guard._is_protected_skill_promotion_path(
+                unrelated_target, project_root=root
+            )
+        finally:
+            os.path.samefile = original_samefile
+            pretooluse_guard.log_event = original_log_event
+        if unrelated_result is not False:
+            fail(
+                name,
+                "negative control: a SKILL.md for a skill that is not in flight "
+                f"must not be protected, got: {unrelated_result!r}",
+            )
+            return
         ok(name)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -22805,6 +22871,9 @@ def test_pretooluse_guard_reliability_gates_case_fold_identity_bypass(tmp_dir: P
     subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
     ledger = state_dir / "reliability-gates.json"
     ledger.write_text('{"gates": []}', encoding="utf-8")
+    if not _fs_folds_case(state_dir):
+        skip(name, "needs a case-insensitive filesystem; on this one the case-variant spelling is a different file")
+        return
 
     # Same real file, same parent directory spelling, differing ONLY in the
     # leaf filename's case.
@@ -22879,6 +22948,9 @@ def test_pretooluse_guard_reliability_gates_case_fold_identity_bypass_ledger_mis
 
     canonical_name = "reliability-gates.json"
     case_variant_target = state_dir / "RELIABILITY-GATES.JSON"
+    if not _fs_folds_case(state_dir):
+        skip(name, "needs a case-insensitive filesystem; on this one the case-variant spelling is a different file")
+        return
 
     # Fixture precondition: this filesystem must be case-insensitive, and
     # the check must be provable WITHOUT ever creating the real ledger
@@ -23207,6 +23279,9 @@ def test_pretooluse_guard_reliability_gates_case_fold_bypass_on_cyclic_symlink_c
     subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
     ledger = state_dir / "reliability-gates.json"
     ledger.write_text('{"gates": []}', encoding="utf-8")
+    if not _fs_folds_case(state_dir):
+        skip(name, "needs a case-insensitive filesystem; on this one the case-variant spelling is a different file")
+        return
 
     # Case-varied spelling of the SAME real file, across multiple path
     # components -- mirrors the exact live-reproduced report
@@ -24831,7 +24906,8 @@ def test_cursor_adapter_non_utf8_stdin_degrades_instead_of_crashing(tmp_dir: Pat
     )
     project_root = tmp_dir / "project"
     project_root.mkdir(parents=True)
-    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_root)}
+    # Strict stdin decoding, independent of the host locale (see run_hook_raw()).
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_root), "PYTHONIOENCODING": _STRICT_STDIN}
 
     result = subprocess.run(
         [
@@ -24983,6 +25059,39 @@ def test_sdd_cache_post_non_utf8_stdin_degrades_instead_of_crashing(tmp_dir: Pat
     )
     if code2 != 0 or out2.strip():
         fail(name, f"control case regressed: expected silent exit 0, got exit={code2}, stdout={out2!r}")
+        return
+    ok(name)
+
+
+def test_non_utf8_stdin_under_surrogateescape_locale_still_degrades(tmp_dir: Path) -> None:
+    """Variant of the non-UTF-8 stdin tests above under the stdin handler a Linux runner gets by default (LANG=C.UTF-8
+    is a locale-coercion target, so CPython decodes stdin with `surrogateescape`). There `sys.stdin.read()` does not
+    raise; the bytes reach `json.loads()` as lone surrogates and each hook must take its malformed-JSON branch: exit
+    0, no permission decision, no stdout from the WebFetch cache hooks, and the restore hook's own default path."""
+    name = "stdin/non-utf8-under-surrogateescape-locale-degrades"
+    project = tmp_dir / "surrogateescape-proj"
+    state_dir = project / ".craftflow" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(project), check=True, capture_output=True)
+    env = {"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    raw = b"\xff\xfe\x00\x01not-utf8-json-stdin"
+    for script, must_be_silent in (
+        ("craftflow_pretooluse_guard.py", False),
+        ("craftflow_memory_protect_restore.py", False),
+        ("craftflow_sdd_cache_pre.py", True),
+        ("craftflow_sdd_cache_post.py", True),
+    ):
+        code, out = run_hook_raw(script, raw, env, stdin_errors="utf-8:surrogateescape")
+        if code != 0:
+            fail(name, f"{script} crashed (exit {code}) on non-UTF-8 stdin under surrogateescape")
+            return
+        if "permissionDecision" in out or (must_be_silent and out.strip()):
+            fail(name, f"{script} expected a silent no-op under surrogateescape, got: {out!r}")
+            return
+    log_path = state_dir / "craftflow-hook-events.log"
+    log_text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+    if "unresolvable-protect-restore-stdin" not in log_text:
+        fail(name, f"expected the restore hook's malformed-stdin reason to be logged, got: {log_text!r}")
         return
     ok(name)
 
@@ -28438,6 +28547,7 @@ def main() -> int:
     test_cursor_adapter_non_utf8_stdin_degrades_instead_of_crashing(tmp / "res5")
     test_sdd_cache_pre_non_utf8_stdin_degrades_instead_of_crashing(tmp / "res6")
     test_sdd_cache_post_non_utf8_stdin_degrades_instead_of_crashing(tmp / "res7")
+    test_non_utf8_stdin_under_surrogateescape_locale_still_degrades(tmp / "res7b")
     test_no_unguarded_or_mis_guarded_stdin_read_call_sites()
 
     print()
@@ -28541,13 +28651,18 @@ def main() -> int:
         test_agents_only_read_references_of_their_own_skills()
 
     print()
+    for skipped in _skips:
+        print(skipped)
     if _errors:
         for err in _errors:
             print(err, file=sys.stderr)
-        print(f"\ncraftflow_hook_unit_tests: FAIL ({len(_errors)} errors, {_passes} passed)", file=sys.stderr)
+        print(
+            f"\ncraftflow_hook_unit_tests: FAIL ({len(_errors)} errors, {_passes} passed, {len(_skips)} skipped)",
+            file=sys.stderr,
+        )
         return 1
 
-    print(f"craftflow_hook_unit_tests: OK ({_passes} passed)")
+    print(f"craftflow_hook_unit_tests: OK ({_passes} passed, {len(_skips)} skipped)")
     return 0
 
 

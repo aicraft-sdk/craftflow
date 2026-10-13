@@ -1034,20 +1034,38 @@ def _is_protected_skill_promotion_path(
         return False
     effective_root = Path(*candidate_root_parts)
 
-    try:
-        inflight, ledger_corrupt = _inflight_skill_promotion_paths(effective_root)
-    except Exception:
-        return False
-    if ledger_corrupt:
-        return _skill_promotion_path_shape_match(effective_root, path)
-    if path in inflight:
-        return True
-    for candidate in inflight:
+    # CASE-SENSITIVE FILESYSTEM (Linux CI parity): `_root_prefix_matches()` can
+    # accept the write target's leading components as `root` through its
+    # normalized-leaf fallback (a case/Unicode spelling that `samefile()`
+    # could not resolve). The ledger must then also be read through the
+    # TRUSTED root's own spelling: on a case-sensitive filesystem the
+    # untrusted spelling names a different, usually missing, directory, so
+    # reading only there found no in-flight candidate and ALLOWED the write
+    # that the fallback had just matched. Both spellings are checked, so this
+    # can only add a DENY, never turn an existing DENY into an ALLOW; on a
+    # case-insensitive filesystem both name the same directory.
+    anchored_root = root.joinpath(*candidate_root_parts[len(root.parts):])
+    lookups = [(effective_root, path)]
+    if anchored_root != effective_root:
+        lookups.append((anchored_root, anchored_root.joinpath(*path_parts[-4:])))
+
+    for ledger_root, target in lookups:
         try:
-            if os.path.samefile(path, candidate):
-                return True
-        except (OSError, ValueError):
+            inflight, ledger_corrupt = _inflight_skill_promotion_paths(ledger_root)
+        except Exception:
             continue
+        if ledger_corrupt:
+            if _skill_promotion_path_shape_match(ledger_root, target):
+                return True
+            continue
+        if target in inflight:
+            return True
+        for candidate in inflight:
+            try:
+                if os.path.samefile(target, candidate):
+                    return True
+            except (OSError, ValueError):
+                continue
     return False
 
 
