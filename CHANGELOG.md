@@ -8,6 +8,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.29.0] - 2026-10-13
+
+### Features
+
+- record P2C decision — D17-A, REACH-B, enforced caps at the guaranteed tier
+- reference read map table, router read-set measurer, cut-plan projection and ratcheting budget test
+
+### Fixes
+
+- Linux parity for hook suite and fixtures, drop the CI failure allowlist
+- disjoint reach buckets and honest signing burden, D17-B waiver, covered-first tie-break, reach_amendment decision record, amendment line rule, residue disclosure (P2 REM-FIX 4)
+- per-pair happy-path coverage and signing burden, effective excludes infeasible rows, full-plan computed fits, amendment sha lineage, REACH-A penalty disclosure (P2 REM-FIX 3)
+- computed fits_enforced_caps, validated amendments, cut-plan revision gate, bake-off split, D17 feasibility tag, reach-feasibility and happy-path disclosure (P2 REM-FIX 2)
+- strict projector inputs, canonical condition names, append-only test vs origin, CODEOWNERS for budget fixtures, bias disclosure, table trigger fix and P6 Cycle rows (P2 REM-FIX 1)
+- branch context for every unit kind, block-scalar whitespace strictness, CODEOWNERS for corpus/util (P0 REM-FIX 7)
+- branch-context occurrence identity, strict frontmatter validation, applicability quote rule, guarded-token and bigram checks; document the semantic limit (P0 REM-FIX 6)
+- group retention, pointer section content and two-way negation guard in the rule-inventory relation checks (P0 REM-FIX 5)
+- reach on all rewrite kinds, body-only overlap, group/section-move rows, human signing policy and lock commit check (P0 REM-FIX 4)
+- close doubt-verify gaps -- reachability, read-map pinning, baseline lock, structural units, frontmatter and reviewer signing (P0 REM-FIX 3)
+- close re-hunt gaps in narrowing, xref ambiguity, read-map validation and CI count pinning (P0 REM-FIX 2)
+- harden rule-inventory and xref tooling against silent false-zero results (P0 REM-FIX 1)
+
+### Tests
+
+- owner cells for P8/P11 moves, section-helper reads for the last find()-sliced tests, P8/P11 drills, harness-audit row; document P1 test-net limits (P1 REM-FIX 5)
+- heading-uniqueness invariant, four more relocation drills, drill-runner load robustness, skill-distill pointer owner (P1 REM-FIX 4)
+- section-travelling corpus reads, K reclassification with correct owners, rule-inventory rows, guard import markers, relocation drill harness (P1 REM-FIX 3)
+- anchors guard enumerates AnnAssign and class methods, requires qualified reasoned exclusions, detects stale rows (P1 REM-FIX 2)
+- section-bounded corpus slices, policy-file read, anchors coverage guard and benchmark retarget (P1 REM-FIX 1)
+- router doc tests read through the corpus loader; fix stale §6 artifact assertions
+- complete the normative allowlist from the doubt-verifier review and regenerate the rule-inventory baseline
+- router corpus loader, cross-reference resolver and occurrence-aware rule-inventory baseline
+
+### Chores
+
+- record p2_sha
+- record p2_sha
+- record p2_sha
+- record the P2 REM-FIX 1 commit sha in router-budget.json (projection_p2_equals_measured_head reads it)
+- record the P2 commit sha in router-budget.json (projection_p2_equals_measured_head reads it)
+
 ## [1.28.0] - 2026-10-08
 
 ### Features
