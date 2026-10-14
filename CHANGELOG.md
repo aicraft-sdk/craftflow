@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.30.0] - 2026-10-14
+
+### Features
+
+- fail-closed policy.json loader, selfcheck policy/version lines, policy_loaded telemetry
+
+### Fixes
+
+- policy loader avoids getattr so the conductor import-closure extractor accepts it
+- policy loader reads only regular files, sha sentinel for unreadable, real log-failure test
+- policy loader is total (RecursionError, unreadable dir), hooklib stub catches Exception, mint stamps error state
+
 ## [1.29.1] - 2026-10-14
 
 ### Fixes
