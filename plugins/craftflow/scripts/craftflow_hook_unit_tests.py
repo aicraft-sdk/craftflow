@@ -11214,6 +11214,23 @@ def test_selfcheck_policy_validator_non_utf8_output(tmp_dir: Path) -> None:
     ok(name)
 
 
+def test_selfcheck_policy_validator_exit_0_unparseable_output(tmp_dir: Path) -> None:
+    """A validator that exits 0 but prints non-JSON must produce one warning line, not silence."""
+    name = "hook-selfcheck/policy-validator-exit-0-unparseable-output"
+    checker = _selfcheck_policy_layout(tmp_dir / "unparseable", b"{}")
+    (checker.parent / "craftflow_policy.py").write_text("print('not json at all')\n", encoding="utf-8")
+    result = _selfcheck_run_policy(checker, tmp_dir / "cfg")
+    try:
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+    except (ValueError, KeyError):
+        fail(name, f"expected one warning line; got rc={result.returncode} stdout={result.stdout!r}")
+        return
+    if result.returncode != 0 or "policy validator output unreadable" not in context or context.count("\n") != 0:
+        fail(name, f"unexpected warning: rc={result.returncode} context={context!r}")
+        return
+    ok(name)
+
+
 def test_selfcheck_version_drift_line(tmp_dir: Path) -> None:
     name = "hook-selfcheck/version-drift-line"
     shipped = (PLUGIN_ROOT / "config" / "policy.json").read_bytes()
@@ -11284,10 +11301,12 @@ def test_memory_write_permit_unchanged_with_policy_invalid(tmp_dir: Path) -> Non
         _, allowed = _guard_edit_memory(plugin_copy, project, target)
         log = state / "craftflow-hook-events.log"
         permits = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines() if "memory-write-permitted-by-finalize-token" in x] if log.exists() else []
-        outcomes[label] = ('"permissionDecision": "deny"' in denied, '"permissionDecision": "deny"' in allowed, [e.get("memory_write") for e in permits])
-    if outcomes["invalid"] != (True, False, ["finalize-only"]) or outcomes["valid"] != outcomes["invalid"]:
-        fail(name, f"(denied_without_permit, denied_with_permit, logged memory_write) invalid={outcomes['invalid']} valid={outcomes['valid']}; "
-                   "want (True, False, ['finalize-only']) for both")
+        outcomes[label] = ('"permissionDecision": "deny"' in denied, '"permissionDecision": "deny"' in allowed,
+                           [(e.get("memory_write"), e.get("policy_status")) for e in permits])
+    # The permit decision is identical for both; only the additive policy_status field differs (BC-4).
+    if outcomes["invalid"] != (True, False, [("finalize-only", "invalid")]) or outcomes["valid"] != (True, False, [("finalize-only", "ok")]):
+        fail(name, f"(denied_without_permit, denied_with_permit, logged (memory_write, policy_status)) invalid={outcomes['invalid']} valid={outcomes['valid']}; "
+                   "want (True, False, [('finalize-only', 'invalid')]) and (True, False, [('finalize-only', 'ok')])")
         return
     ok(name)
 
@@ -27945,6 +27964,7 @@ def main() -> int:
         test_selfcheck_silent_on_valid_policy(tmp / "hp2")
         test_selfcheck_warns_when_shipped_policy_missing(tmp / "hp2b")
         test_selfcheck_policy_validator_non_utf8_output(tmp / "hp2c")
+        test_selfcheck_policy_validator_exit_0_unparseable_output(tmp / "hp2d")
         test_selfcheck_version_drift_line(tmp / "hp3")
         test_selfcheck_flushes_before_external_kill_when_sweep_runs_long(tmp / "hc5")
         test_selfcheck_discovery_itself_bounded_by_timeout(tmp / "hc6")

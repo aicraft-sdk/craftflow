@@ -381,30 +381,49 @@ def test_cli_validate_deep_nesting():
 
 
 def test_log_invalid_retries_after_failed_write():
-    print("\n[_log_invalid retries until a write succeeds]")
+    print("\n[_log_invalid retries after a REAL failed write (read-only .craftflow)]")
     import craftflow_hooklib as hl
-    calls = []
-    real_log, real_dir, real_flag = hl.log_event, hl.project_dir, pol._logged_invalid
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        skip("log_invalid:real_write_failure", "running as root; chmod 500 does not restrict root")
+        return
+    real_dir, real_flag = hl.project_dir, pol._logged_invalid
     with tempfile.TemporaryDirectory() as tmp:
-        (Path(tmp) / ".craftflow").mkdir()
-
-        def boom(name, payload):
-            calls.append("boom")
-            raise OSError("disk full")
-
+        cf = Path(tmp) / ".craftflow"
+        cf.mkdir()
+        log = cf / "state" / "craftflow-hook-events.log"
         try:
             hl.project_dir = lambda: Path(tmp)
             pol._logged_invalid = False
-            hl.log_event = boom
+            os.chmod(cf, 0o500)
+            try:
+                pol._log_invalid(Path("p.json"), ["e"])
+                failed_flag = pol._logged_invalid
+            finally:
+                os.chmod(cf, 0o700)
             pol._log_invalid(Path("p.json"), ["e"])
-            failed_flag = pol._logged_invalid
-            hl.log_event = lambda name, payload: calls.append(name)
             pol._log_invalid(Path("p.json"), ["e"])
-            pol._log_invalid(Path("p.json"), ["e"])
+            events = [json.loads(x)["event"] for x in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
         finally:
-            hl.log_event, hl.project_dir, pol._logged_invalid = real_log, real_dir, real_flag
-    check("log_invalid:failed_write_leaves_flag_unset_then_retries_once", failed_flag is False and calls == ["boom", "policy_invalid"],
-          f"flag_after_failure={failed_flag} calls={calls}")
+            hl.project_dir, pol._logged_invalid = real_dir, real_flag
+    check("log_invalid:failed_write_leaves_flag_unset_then_retries_once", failed_flag is False and events == ["policy_invalid"],
+          f"flag_after_failure={failed_flag} events={events}")
+
+
+def test_log_event_reports_outcome():
+    print("\n[hooklib.log_event returns True on a written line, False on a failed one, never raises]")
+    import craftflow_hooklib as hl
+    real_dir = hl.project_dir
+    with tempfile.TemporaryDirectory() as good, tempfile.TemporaryDirectory() as bad:
+        (Path(bad) / ".craftflow").write_text("a file where the state root's parent should be", encoding="utf-8")
+        try:
+            hl.project_dir = lambda: Path(good)
+            wrote = hl.log_event("probe", {})
+            hl.project_dir = lambda: Path(bad)
+            failed = hl.log_event("probe", {})
+        finally:
+            hl.project_dir = real_dir
+    check("log_event:returns_true_on_success", wrote is True, f"wrote={wrote!r}")
+    check("log_event:returns_false_on_failure", failed is False, f"failed={failed!r}")
 
 
 def test_hooklib_stub_on_broken_policy_module():
@@ -417,7 +436,9 @@ def test_hooklib_stub_on_broken_policy_module():
             code = ("import sys, json; sys.path.insert(0, %r); import craftflow_hooklib as h; "
                     "p, s, e = h.load_policy(); print(json.dumps([p.get('memory_write'), s, e]))" % str(scripts))
             res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
-            good = res.returncode == 0 and json.loads(res.stdout) == ["finalize-only", "invalid", ["import-error"]]
+            out = json.loads(res.stdout) if res.returncode == 0 else []
+            want = {"syntax_error": "import-error: SyntaxError: ", "runtime_error": "import-error: RuntimeError: boom"}[label]
+            good = res.returncode == 0 and out[:2] == ["finalize-only", "invalid"] and len(out[2]) == 1 and out[2][0].startswith(want) and len(out[2][0]) <= 120
             check(f"hooklib_stub:{label}", good, f"rc={res.returncode} out={res.stdout!r} err={res.stderr[-300:]!r}")
 
 
@@ -441,11 +462,12 @@ def test_is_cursor_host_true_only_when_set():
 
 
 def hooklib_stub_returns_invalid():
-    """The ImportError fallback in hooklib returns (defaults copy, "invalid", ["import-error"]); load it with the policy module hidden."""
+    """The ImportError fallback in hooklib returns (defaults copy, "invalid", ["import-error: <type>: <message>"]); load it with the policy module hidden."""
     code = ("import sys; sys.modules['craftflow_policy'] = None; sys.path.insert(0, %r); import craftflow_hooklib as h; "
             "import json; p, s, e = h.load_policy(); print(json.dumps([p.get('memory_write'), s, e]))" % str(SCRIPTS))
     res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
-    return res.returncode == 0 and json.loads(res.stdout) == ["finalize-only", "invalid", ["import-error"]], res
+    out = json.loads(res.stdout) if res.returncode == 0 else []
+    return res.returncode == 0 and out[:2] == ["finalize-only", "invalid"] and len(out[2]) == 1 and out[2][0].startswith("import-error"), res
 
 
 def test_hooklib_reexport():
@@ -454,6 +476,109 @@ def test_hooklib_reexport():
     check("hooklib_reexport:same_functions", hl.load_policy is pol.load_policy and hl.policy_value is pol.policy_value, "not re-exported")
     good, res = hooklib_stub_returns_invalid()
     check("hooklib_reexport:import_error_stub", good, f"rc={res.returncode} out={res.stdout!r} err={res.stderr[-300:]!r}")
+
+
+def test_unreadable_policy_sha_is_not_defaults():
+    print("\n[M2 sha sentinel: 'defaults' only when missing; 'unreadable' when no bytes were read]")
+    import hashlib
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp) / "dir-as-file"
+        d.mkdir()
+        _, st, _, sha = pol.load_policy_with_sha(d)
+        check("sha:directory_is_unreadable", st == "invalid" and sha == "unreadable", f"{st} {sha}")
+        loop = Path(tmp) / "loop.json"
+        loop.symlink_to(loop)
+        _, st, _, sha = pol.load_policy_with_sha(loop)
+        check("sha:symlink_loop_is_unreadable", st == "invalid" and sha == "unreadable", f"{st} {sha}")
+        _, st, _, sha = pol.load_policy_with_sha(Path(tmp) / "none.json")
+        check("sha:missing_stays_defaults", st == "defaults" and sha == "defaults", f"{st} {sha}")
+        check("sha:policy_sha256_directory_is_unreadable", pol.policy_sha256(d) == "unreadable", pol.policy_sha256(d))
+        check("sha:policy_sha256_missing_is_defaults", pol.policy_sha256(Path(tmp) / "none.json") == "defaults", "missing")
+        bad = write(tmp, b"{nope")
+        check("sha:invalid_content_keeps_its_hash", pol.load_policy_with_sha(bad)[3] == hashlib.sha256(b"{nope").hexdigest(), "hash")
+        root = make_root(Path(tmp) / "r")
+        (root / "config" / "policy.json").mkdir()
+        res = cli(["--hash"], root)
+        check("sha:cli_hash_directory_is_unreadable", res.returncode == 0 and res.stdout.strip() == "unreadable", f"rc={res.returncode} out={res.stdout!r}")
+        res = cli(["--validate"], root)
+        out = json.loads(res.stdout) if res.stdout.strip() else {}
+        check("sha:cli_validate_directory_is_unreadable", res.returncode == 1 and out.get("sha256") == "unreadable", f"out={res.stdout!r}")
+
+
+def _load_with_timeout(path, seconds=10):
+    code = ("import sys, json; sys.path.insert(0, %r); import craftflow_policy as p; "
+            "pol, st, er = p.load_policy(sys.argv[1]); print(json.dumps([st, er, pol == p.DEFAULTS]))" % str(SCRIPTS))
+    return subprocess.run([sys.executable, "-c", code, str(path)], capture_output=True, text=True, timeout=seconds)
+
+
+def test_load_reads_only_regular_files():
+    print("\n[L3 non-regular policy.json: FIFO and device are invalid, never a hang]")
+    with tempfile.TemporaryDirectory() as tmp:
+        if hasattr(os, "mkfifo"):
+            fifo = Path(tmp) / "policy.json"
+            os.mkfifo(fifo)
+            try:
+                res = _load_with_timeout(fifo)
+                out = json.loads(res.stdout) if res.returncode == 0 else []
+                check("regular_only:fifo_is_invalid_not_a_hang", len(out) == 3 and out[0] == "invalid" and out[2] is True
+                      and "not a regular file" in " ".join(out[1]), f"rc={res.returncode} out={res.stdout!r} err={res.stderr[-200:]!r}")
+            except subprocess.TimeoutExpired:
+                fail("regular_only:fifo_is_invalid_not_a_hang", "load_policy hung on a FIFO (10 s)")
+        else:
+            skip("regular_only:fifo", "os.mkfifo unavailable")
+        if Path("/dev/null").exists():
+            link = Path(tmp) / "null.json"
+            link.symlink_to("/dev/null")
+            _, status, errors = pol.load_policy(link)
+            check("regular_only:device_is_invalid", status == "invalid" and "not a regular file" in " ".join(errors), f"{status} {errors}")
+        if Path("/dev/zero").exists():
+            link = Path(tmp) / "zero.json"
+            link.symlink_to("/dev/zero")
+            try:
+                res = _load_with_timeout(link)
+                out = json.loads(res.stdout) if res.returncode == 0 else []
+                check("regular_only:dev_zero_rejected_before_any_read", len(out) == 3 and out[0] == "invalid", f"rc={res.returncode} out={res.stdout[:200]!r}")
+            except subprocess.TimeoutExpired:
+                fail("regular_only:dev_zero_rejected_before_any_read", "load_policy did not return on /dev/zero (10 s)")
+        big = Path(tmp) / "big.json"
+        big.write_bytes(b" " * (pol.MAX_POLICY_BYTES + 5))
+        _, status, errors = pol.load_policy(big)
+        check("regular_only:oversized_regular_file_still_invalid", status == "invalid" and "byte limit" in " ".join(errors), f"{status} {errors}")
+
+
+def test_cli_get_on_invalid_policy_reports_first_error():
+    print("\n[L5 --get on an invalid policy: error on stderr, exit 0 and default value on stdout unchanged]")
+    with tempfile.TemporaryDirectory() as tmp:
+        res = cli(["--get", "memory_write"], make_root(tmp, b"{corrupt"))
+    check("cli_get:invalid_policy_warns_on_stderr", res.returncode == 0 and res.stdout.strip() == "finalize-only"
+          and res.stderr.startswith("craftflow_policy: policy.json invalid: ") and "policy: cannot load policy.json" in res.stderr,
+          f"rc={res.returncode} out={res.stdout!r} err={res.stderr!r}")
+    with tempfile.TemporaryDirectory() as tmp:
+        quiet = cli(["--get", "memory_write"], make_root(tmp, b'{"memory_write": "finalize-only"}'))
+        missing = cli(["--get", "memory_write"], make_root(tmp + "/m"))
+    check("cli_get:valid_or_missing_policy_stays_silent", quiet.stderr == "" and missing.stderr == "", f"{quiet.stderr!r} {missing.stderr!r}")
+
+
+def test_hooklib_stub_logs_policy_invalid():
+    print("\n[L4 stub logs one best-effort policy_invalid without importing the broken module]")
+    with tempfile.TemporaryDirectory() as tmp:
+        scripts = Path(tmp) / "scripts"
+        shutil.copytree(SCRIPTS, scripts, ignore=shutil.ignore_patterns("__pycache__"))
+        (scripts / "craftflow_policy.py").write_text("def broken(:\n", encoding="utf-8")
+        proj = Path(tmp) / "proj"
+        (proj / ".craftflow").mkdir(parents=True)
+        code = ("import sys; sys.path.insert(0, %r); import craftflow_hooklib as h; h.load_policy(); h.load_policy()" % str(scripts))
+        env = {**os.environ, "CLAUDE_PROJECT_DIR": str(proj)}
+        res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        log = proj / ".craftflow" / "state" / "craftflow-hook-events.log"
+        events = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
+        invalid = [e for e in events if e.get("event") == "policy_invalid"]
+        check("hooklib_stub:logs_policy_invalid_once", res.returncode == 0 and len(invalid) == 1
+              and invalid[0]["errors"][0].startswith("import-error: SyntaxError: "), f"rc={res.returncode} events={events} err={res.stderr[-200:]!r}")
+        bare = Path(tmp) / "bare"
+        bare.mkdir()
+        res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env={**os.environ, "CLAUDE_PROJECT_DIR": str(bare)})
+        check("hooklib_stub:no_state_dir_created_outside_a_project", res.returncode == 0 and not (bare / ".craftflow").exists(), f"rc={res.returncode}")
 
 
 # ---- PP-3 key coverage: only literal policy_value(<expr>, "<dotted key>") call sites count -------------------------------
@@ -556,7 +681,8 @@ def main():
                test_enter_plan_mode_decision, test_cli_validate_json_and_exit, test_cli_get_and_hash,
                test_print_table_matches_defaults, test_defaults_equal_prose_values, test_is_cursor_host_true_only_when_set,
                test_hooklib_reexport, test_load_is_total_on_hostile_files, test_cli_validate_deep_nesting,
-               test_log_invalid_retries_after_failed_write, test_hooklib_stub_on_broken_policy_module, test_key_coverage, test_key_coverage_ignores_dict_literals_and_stub,
+               test_log_invalid_retries_after_failed_write, test_log_event_reports_outcome, test_hooklib_stub_on_broken_policy_module,
+               test_unreadable_policy_sha_is_not_defaults, test_load_reads_only_regular_files, test_cli_get_on_invalid_policy_reports_first_error, test_hooklib_stub_logs_policy_invalid, test_key_coverage, test_key_coverage_ignores_dict_literals_and_stub,
                test_key_coverage_requires_literal_key, test_schema_leaf_keys_equal_defaults,
                test_shipped_policy_is_exactly_p4_keys, test_py39_compile):
         try:

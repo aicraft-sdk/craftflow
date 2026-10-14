@@ -2474,7 +2474,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
         clear_denial(data.get("session_id"), str(path))
         # BC-4 (ADR-0073): memory_write is document-only. It is read and logged, never branched on: the permit decision above
         # is identical for every policy value and for an invalid policy.json.
-        policy, _policy_status, _policy_errors = load_policy()
+        policy, policy_status, _policy_errors = load_policy()
         log_event(
             "plugin_pretooluse_guard",
             {
@@ -2488,6 +2488,7 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
                 "decision": "permit",
                 "reason": "memory-write-permitted-by-finalize-token",
                 "memory_write": policy_value(policy, "memory_write"),
+                "policy_status": policy_status,
             },
         )
         return 0

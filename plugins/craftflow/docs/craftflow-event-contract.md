@@ -323,8 +323,9 @@ only `ts`, `session_id`, `mode`, `hook_ms` and `settings_tags: ["hook_error:<Exc
 - Trigger: once per minted workflow (`--init-artifact`). The same fact is also the second line of the workflow
   `events.jsonl` (`policy_loaded`, right after `workflow_started`) and the artifact's `policy` field.
 - Fail-open: any failure to load the policy or write the line is swallowed; the mint never fails because of it.
-- Payload: `wf` (workflow id), `policy_sha256` (sha256 of the bytes that were validated, `"defaults"` when the file is
-  missing, `"unreadable"` when the loader itself failed), `policy_status` (`ok`, `defaults`, `invalid` or `error`) and,
+- Payload: `wf` (workflow id), `policy_sha256` (sha256 of the bytes that were validated, `"defaults"` only when the file is
+  missing, `"unreadable"` when no bytes were validated: the file could not be read (a directory, a FIFO or device, a symlink
+  loop, permissions), was over the size limit, or the loader itself failed), `policy_status` (`ok`, `defaults`, `invalid` or `error`) and,
   for `invalid` or `error` only, `policy_errors` (at most 3 short strings). Informational only; no gate reads it.
 
 ```json
@@ -339,15 +340,17 @@ only `ts`, `session_id`, `mode`, `hook_ms` and `settings_tags: ["hook_error:<Exc
   and every gated decision takes its most restrictive branch (`memory_write` is document-only and keeps today's behavior).
 - Fail-open: the line is written only inside an existing `.craftflow` project and any write failure is swallowed;
   loading a policy never prints to stdout.
+- Also emitted, once per process and under the same project-only rule, by the `craftflow_hooklib.py` fallback when
+  `craftflow_policy.py` cannot be imported (`path` is `craftflow_policy.py`; `errors` is one string, `import-error: <ExceptionType>: <message>`, at most 120 ASCII characters).
 - Payload: `path` (the policy file) and `errors` (up to 5 validation messages).
 
 ```json
-{"event": "policy_invalid", "path": "/plugin/config/policy.json", "errors": ["policy: file is 70000 bytes, over the 65536 byte limit"]}
+{"event": "policy_invalid", "path": "/plugin/config/policy.json", "errors": ["policy: file is over the 65536 byte limit"]}
 ```
 
 The permit record the pretooluse guard already logs for a finalize-permitted memory write
 (`reason: "memory-write-permitted-by-finalize-token"`) now also carries `memory_write`, the effective policy value
-(`finalize-only`). It is read and logged only; the permit decision never depends on it.
+(`finalize-only`), and `policy_status` (`ok`, `defaults` or `invalid`). Both are read and logged only; the permit decision never depends on it.
 
 ## Keeping this doc honest
 

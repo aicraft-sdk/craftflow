@@ -207,7 +207,10 @@ def is_cursor_host(env: "Dict[str, str] | None" = None) -> bool:
 # the stub returns defaults with status "invalid", so every gated decision takes its most restrictive branch.
 try:
     from craftflow_policy import load_policy, policy_value
-except Exception:  # ImportError, and also a SyntaxError or error at import time in the policy module
+except Exception as _policy_import_exc:  # ImportError, and also a SyntaxError or error at import time in the policy module
+    _POLICY_STUB_ERROR = " ".join(f"import-error: {type(_policy_import_exc).__name__}: {_policy_import_exc}".split())
+    _POLICY_STUB_ERROR = _POLICY_STUB_ERROR.encode("ascii", "backslashreplace").decode("ascii")[:120]
+    _POLICY_STUB_LOGGED = [False]
     _POLICY_STUB_DEFAULTS: Dict[str, Any] = {
         "native_plan_mode": "never",
         "plan_commit": "never",
@@ -225,7 +228,13 @@ except Exception:  # ImportError, and also a SyntaxError or error at import time
     }
 
     def load_policy(path=None, log=True):  # type: ignore[no-redef]
-        return json.loads(json.dumps(_POLICY_STUB_DEFAULTS)), "invalid", ["import-error"]
+        if log and not _POLICY_STUB_LOGGED[0]:  # best effort, once per process, only inside an existing project
+            try:
+                if (project_dir() / ".craftflow").is_dir():
+                    _POLICY_STUB_LOGGED[0] = log_event("policy_invalid", {"path": "craftflow_policy.py", "errors": [_POLICY_STUB_ERROR]})
+            except Exception:
+                pass
+        return json.loads(json.dumps(_POLICY_STUB_DEFAULTS)), "invalid", [_POLICY_STUB_ERROR]
 
     def policy_value(policy, dotted):  # type: ignore[no-redef]
         node: Any = policy
@@ -324,7 +333,9 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def log_event(name: str, payload: Dict[str, Any]) -> None:
+def log_event(name: str, payload: Dict[str, Any]) -> bool:
+    """Append one line to the hook event log. Never raises. True when the line was written, False when it was not (callers
+    that only fire and forget ignore the result)."""
     try:
         path = logs_dir() / "craftflow-hook-events.log"
         event = {
@@ -335,8 +346,9 @@ def log_event(name: str, payload: Dict[str, Any]) -> None:
         }
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(event, ensure_ascii=True) + "\n")
+        return True
     except Exception:
-        pass  # never fail the hook
+        return False  # never fail the hook
 
 
 # ---------------------------------------------------------------------------

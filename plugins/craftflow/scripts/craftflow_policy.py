@@ -9,7 +9,8 @@ defaults with status "invalid" (callers then take their most restrictive branch;
 Pure stdlib, Python 3.9 compatible. `load_policy` never writes to stdout or stderr. It logs one `policy_invalid` hook
 event per process, and only inside an existing `.craftflow` project, so loading never creates state directories.
 
-CLI: --validate | --get KEY | --hash | --print-table   (--validate exits 1 only for status "invalid")
+CLI: --validate | --get KEY | --hash | --print-table   (--validate exits 1 only for status "invalid"; --get on an invalid
+policy still exits 0 and prints the default, but writes the first error to stderr)
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ import copy
 import hashlib
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -126,9 +128,19 @@ def _clip(text: str, limit: int = 120) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
+def _read_regular(target: Path) -> bytes:
+    """At most MAX_POLICY_BYTES + 1 bytes of a regular file. Opened O_NONBLOCK so a FIFO cannot block the open, and checked
+    with fstat before any read so a FIFO, device or /dev/zero is never read."""
+    fd = os.open(target, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(fd, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            raise ValueError("not a regular file")
+        return fh.read(MAX_POLICY_BYTES + 1)
+
+
 def _log_invalid(path: Path, errors: List[str]) -> None:
-    """Best effort, once per process after a successful write, and only where a `.craftflow` project already exists (no
-    state dirs are created). A failed write leaves the flag unset so a later load can retry."""
+    """Best effort, once per process after a successful write (hooklib.log_event returns False on a failed one, so a later
+    load retries), and only where a `.craftflow` project already exists (no state dirs are created)."""
     global _logged_invalid
     if _logged_invalid:
         return
@@ -136,30 +148,29 @@ def _log_invalid(path: Path, errors: List[str]) -> None:
         import craftflow_hooklib as hooklib
 
         if (hooklib.project_dir() / ".craftflow").is_dir():
-            hooklib.log_event("policy_invalid", {"path": str(path), "errors": errors[:5]})
-            _logged_invalid = True
+            _logged_invalid = hooklib.log_event("policy_invalid", {"path": str(path), "errors": errors[:5]})
     except Exception:  # never fail a hook because the log line could not be written
         pass
 
 
 def load_policy_with_sha(path: Optional[Path] = None, log: bool = True) -> Tuple[Dict[str, Any], str, List[str], str]:
-    """(policy, status, errors, sha256). TOTAL: never raises. The sha is of the very bytes that were validated, or
-    "defaults" when no bytes were read. Missing file -> "defaults"; any other failure (unreadable, a directory, deeply nested
-    JSON, ...) -> "invalid"."""
+    """(policy, status, errors, sha256). TOTAL: never raises. The sha is of the very bytes that were validated;
+    "defaults" for a missing file; "unreadable" when no (or not all) bytes were read. Missing file -> "defaults"; any other
+    failure (unreadable, a directory, a FIFO, oversized, deeply nested JSON, ...) -> "invalid"."""
     errors: List[str] = []
     obj: Any = None
-    sha = "defaults"
+    sha = "unreadable"
     target = Path("policy.json")
     try:
         target = Path(path) if path is not None else policy_path()
         try:
-            raw = target.read_bytes()
+            raw = _read_regular(target)
         except FileNotFoundError:
             return copy.deepcopy(DEFAULTS), "defaults", [], "defaults"
-        sha = hashlib.sha256(raw).hexdigest()
         if len(raw) > MAX_POLICY_BYTES:
-            errors.append(f"policy: file is {len(raw)} bytes, over the {MAX_POLICY_BYTES} byte limit")
+            errors.append(f"policy: file is over the {MAX_POLICY_BYTES} byte limit")
         else:
+            sha = hashlib.sha256(raw).hexdigest()
             obj = json.loads(raw.decode("utf-8"))
             schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
             errors = validate_policy(obj, schema)
@@ -190,11 +201,8 @@ def policy_value(policy: Dict[str, Any], dotted: str) -> Any:
 
 
 def policy_sha256(path: Optional[Path] = None) -> str:
-    """sha256 of the policy file's bytes, or "defaults" when the file is missing or unreadable."""
-    try:
-        return hashlib.sha256((Path(path) if path is not None else policy_path()).read_bytes()).hexdigest()
-    except OSError:
-        return "defaults"
+    """sha256 of the policy file's bytes; "defaults" when the file is missing, "unreadable" when it cannot be read."""
+    return load_policy_with_sha(path, log=False)[3]
 
 
 def enter_plan_mode_decision(native_plan_mode: Any, status: str) -> Tuple[str, str]:
@@ -237,20 +245,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Craftflow gate policy loader")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--validate", action="store_true", help="print {status, errors, sha256}; exit 1 only when invalid")
-    group.add_argument("--get", metavar="KEY", help="print the effective value of a dotted key")
-    group.add_argument("--hash", action="store_true", help="print the policy file's sha256 (or 'defaults')")
+    group.add_argument("--get", metavar="KEY", help="print the effective value of a dotted key (invalid policy: exit 0, first error on stderr)")
+    group.add_argument("--hash", action="store_true", help="print the policy file's sha256 (or 'defaults' / 'unreadable')")
     group.add_argument("--print-table", action="store_true", help="print the Policy table markdown")
     args = parser.parse_args(argv)
     if args.print_table:
         print(print_table())
         return 0
-    if args.hash:
-        print(policy_sha256())
-        return 0
     policy, status, errors, sha = load_policy_with_sha(log=False)
+    if args.hash:
+        print(sha)
+        return 0
     if args.validate:
         print(json.dumps({"errors": errors, "sha256": sha, "status": status}, sort_keys=True))
         return 1 if status == "invalid" else 0
+    if status == "invalid":
+        sys.stderr.write(f"craftflow_policy: policy.json invalid: {errors[0]}\n")
     try:
         value = policy_value(policy, args.get)
     except KeyError:

@@ -181,7 +181,7 @@ def check_policy(scripts_dir: Path) -> str | None:
             try:
                 status = json.loads(result.stdout).get("status")
             except (ValueError, AttributeError):
-                status = None
+                return "CRAFTFLOW policy.json check: policy validator output unreadable, so the policy could not be confirmed valid."
             if status == "defaults":  # this plugin's own shipped config/policy.json is absent: a broken install
                 return ("CRAFTFLOW policy.json missing: config/policy.json is absent from this plugin, "
                         "so gated actions run on the built-in defaults.")
