@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.29.1] - 2026-10-14
+
+### Fixes
+
+- P3 review findings
+
+### Performance
+
+- one-line skill descriptions
+
+### Tests
+
+- p2c_in_merged_phases checks the prefix so later phases can append
+
+### Chores
+
+- record P2C in router-budget merged_phases
+
 ## [1.29.0] - 2026-10-13
 
 ### Features
