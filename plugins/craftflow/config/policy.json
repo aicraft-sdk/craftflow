@@ -1,0 +1,4 @@
+{
+  "memory_write": "finalize-only",
+  "$comment": "craftflow gate policy; values mirror router prose (ADR-0073)"
+}

@@ -358,6 +358,46 @@ def _describe_os_error(exc: OSError) -> str:
     return f"{exc.strerror or exc}: {target}" if target else str(exc)
 
 
+def _policy_stamp() -> dict | None:
+    """{sha256, status} of config/policy.json, or None when the loader cannot be used. Never raises: the policy stamp is
+    observability only and must not fail a mint (ADR-0073)."""
+    try:
+        import craftflow_policy
+
+        path = craftflow_policy.policy_path()
+        _policy, status, _errors = craftflow_policy.load_policy(path, log=False)
+        return {"sha256": craftflow_policy.policy_sha256(path), "status": status}
+    except Exception:  # cf:shortcut: broad on purpose, a telemetry stamp never blocks workflow creation
+        return None
+
+
+def _router_readset_bytes(workflow_type: str) -> int | None:
+    """Bytes the router reads at workflow start (read-set `start_total`), or None when it cannot be measured."""
+    try:
+        import craftflow_router_readset
+
+        value = craftflow_router_readset.compute(workflow_type)["start_total"]
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+    except Exception:  # cf:shortcut: broad on purpose, same reason as _policy_stamp
+        return None
+
+
+def _hook_log_writer(project_dir: Path):
+    """A `log_event(name, payload)` appending to this project's craftflow-hook-events.log (same record shape as
+    craftflow_hooklib.log_event, which cannot be used here: it resolves the project from the environment, not --project)."""
+    path = project_dir / ".craftflow" / "state" / "craftflow-hook-events.log"
+
+    def log_event(name: str, payload: dict) -> None:
+        try:
+            record = {"ts": payload.get("ts"), "event": name, "state_version": "v10", **payload}
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=True) + "\n")
+        except OSError:
+            pass  # never fail a mint because the log line could not be written
+
+    return log_event
+
+
 def init_artifact(project_dir: Path, info: dict, *, workflow_type: str, request: str,
                   phase: str, task_tools_available: str, task_id: str | None = None,
                   workspace_writable_paths: list | None = None,
@@ -380,6 +420,15 @@ def init_artifact(project_dir: Path, info: dict, *, workflow_type: str, request:
     events = [{"ts": ts, "wf": wf, "event": "workflow_started", "host": "claude-code",
                "phase": phase, "task_id": task_id, "agent": "router", "decision": "start",
                "reason": "User request"}]
+    stamp = _policy_stamp()
+    if stamp is not None:
+        artifact["policy"] = stamp
+        entry = {"event": "policy_loaded", "ts": ts, "policy_sha256": stamp["sha256"], "policy_status": stamp["status"]}
+        artifact["status_history"].append(entry)
+        events.append({"ts": ts, "wf": wf, **entry})
+    readset_bytes = _router_readset_bytes(workflow_type)
+    if readset_bytes is not None:
+        artifact["telemetry"]["router_readset_bytes"] = readset_bytes
     if fallback_reason:
         entry = {"event": "project_root_resolution_fallback", "ts": ts, "reason": fallback_reason}
         artifact["status_history"].append(entry)
@@ -413,6 +462,9 @@ def init_artifact(project_dir: Path, info: dict, *, workflow_type: str, request:
         if left_behind:
             failure.rollback_incomplete = left_behind  # type: ignore[attr-defined]
         raise
+    if stamp is not None:
+        log_event = _hook_log_writer(project_dir)
+        log_event("policy_loaded", {"ts": ts, "wf": wf, "policy_sha256": stamp["sha256"], "policy_status": stamp["status"]})
     return artifact_path
 
 

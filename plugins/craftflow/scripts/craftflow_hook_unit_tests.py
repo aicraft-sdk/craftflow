@@ -1849,6 +1849,7 @@ _WF_ARTIFACT_KEYS = {
     "fast_path_escalated", "worktree_mode", "worktree_path", "worktree_branch",
     "workspace_writable_paths", "memory_notes", "pending_gate", "circuit_breaker",
     "status_history", "remediation_history", "created_at", "updated_at",
+    "policy",  # P4: {sha256, status} of config/policy.json, stamped by --init-artifact
 }
 
 
@@ -1931,13 +1932,15 @@ def test_workflow_id_init_artifact_writes_schema_and_events() -> None:
             fail(name, f"capabilities wrong: {art['capabilities']!r}")
             return
         hist = art["status_history"]
-        if len(hist) != 1 or hist[0]["event"] != "workflow_started" or hist[0]["phase"] != "build" \
-                or hist[0]["ts"] != art["created_at"] or art["created_at"] != art["updated_at"]:
+        # P4: policy_loaded follows workflow_started in both status_history and events.jsonl.
+        if [h["event"] for h in hist] != ["workflow_started", "policy_loaded"] or hist[0]["phase"] != "build" \
+                or hist[0]["ts"] != art["created_at"] or art["created_at"] != art["updated_at"] \
+                or hist[1]["policy_status"] != art["policy"]["status"] or hist[1]["policy_sha256"] != art["policy"]["sha256"]:
             fail(name, f"status_history/timestamps wrong: {hist!r}")
             return
         lines = (wf_dir / f"{wf}.events.jsonl").read_text(encoding="utf-8").splitlines()
-        if len(lines) != 1:
-            fail(name, f"expected 1 event line, got {len(lines)}")
+        if len(lines) != 2 or json.loads(lines[1]).get("event") != "policy_loaded":
+            fail(name, f"expected workflow_started + policy_loaded event lines, got {lines!r}")
             return
         ev = json.loads(lines[0])
         want_ev = {
@@ -1973,10 +1976,11 @@ def test_workflow_id_init_artifact_optional_flags_and_null_session() -> None:
             fail(name, f"session/paths wrong: {art['session_id']!r} {art['workspace_writable_paths']!r}")
             return
         events = [e["event"] for e in art["status_history"]]
-        if events != ["workflow_started", "project_root_resolution_fallback", "workspace_writable_paths_entries_dropped"]:
+        if events != ["workflow_started", "policy_loaded", "project_root_resolution_fallback",
+                      "workspace_writable_paths_entries_dropped"]:
             fail(name, f"status_history events wrong: {events}")
             return
-        if art["status_history"][1]["reason"] != "NO_REPO_FOUND" or art["status_history"][2]["dropped"] != ["/ws/x"]:
+        if art["status_history"][2]["reason"] != "NO_REPO_FOUND" or art["status_history"][3]["dropped"] != ["/ws/x"]:
             fail(name, f"conditional entries wrong: {art['status_history']!r}")
             return
         ev_lines = [json.loads(x) for x in (wf_dir / f"{wf}.events.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -11098,6 +11102,14 @@ def test_selfcheck_internal_budget_stays_under_registered_hook_timeout() -> None
         + module.SELFCHECK_TIME_BUDGET_SECONDS
         + module.PER_SCRIPT_TIMEOUT_SECONDS
     )
+    # P4: the policy --validate subprocess (2 s) is charged INSIDE the sweep budget, so it adds nothing to the worst case.
+    policy_timeout = getattr(module, "POLICY_TIMEOUT_SECONDS", None)
+    if policy_timeout != 2 or policy_timeout > module.SELFCHECK_TIME_BUDGET_SECONDS:
+        fail(name, f"POLICY_TIMEOUT_SECONDS must be 2 and fit inside SELFCHECK_TIME_BUDGET_SECONDS; got {policy_timeout!r}")
+        return
+    if worst_case > 12:
+        fail(name, f"internal worst-case budget is {worst_case}s; the policy check must be charged inside the sweep budget (<= 12s)")
+        return
     min_margin_seconds = 1  # sane minimum buffer for process startup/shutdown overhead
     if worst_case + min_margin_seconds > registered_timeout:
         fail(
@@ -11107,6 +11119,178 @@ def test_selfcheck_internal_budget_stays_under_registered_hook_timeout() -> None
             f"one script {module.PER_SCRIPT_TIMEOUT_SECONDS}s) leaves less than {min_margin_seconds}s "
             f"margin under the registered hook timeout ({registered_timeout}s) in hooks/hooks.json",
         )
+        return
+    ok(name)
+
+
+_SELFCHECK_SILENT_ENV_DROP = ("CLAUDE_PLUGIN_ROOT", "CLAUDE_CONFIG_DIR")
+
+
+def _selfcheck_policy_layout(tmp_dir: Path, policy_bytes: bytes | None, version: str | None = None) -> Path:
+    """A scratch plugin root: scripts/ (real checker, real policy loader + schema, clean siblings), config/policy.json, and
+    optionally .claude-plugin/plugin.json. Returns the scratch checker path."""
+    scripts = tmp_dir / "scripts"
+    checker = _selfcheck_scratch_checker(scripts)
+    shutil.copy2(SCRIPTS / "craftflow_policy.py", scripts / "craftflow_policy.py")
+    (scripts / "schemas").mkdir()
+    shutil.copy2(SCRIPTS / "schemas" / "policy.json", scripts / "schemas" / "policy.json")
+    if policy_bytes is not None:
+        (tmp_dir / "config").mkdir()
+        (tmp_dir / "config" / "policy.json").write_bytes(policy_bytes)
+    if version is not None:
+        (tmp_dir / ".claude-plugin").mkdir()
+        (tmp_dir / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "craftflow", "version": version}), encoding="utf-8")
+    return checker
+
+
+def _selfcheck_run_policy(checker: Path, config_dir: Path):
+    env = {k: v for k, v in os.environ.items() if k not in _SELFCHECK_SILENT_ENV_DROP}
+    env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    return subprocess.run([sys.executable, str(checker)], capture_output=True, text=True, timeout=60, env=env)
+
+
+def test_selfcheck_warns_on_invalid_policy(tmp_dir: Path) -> None:
+    name = "hook-selfcheck/warns-on-invalid-policy"
+    checker = _selfcheck_policy_layout(tmp_dir, b"{corrupt")
+    result = _selfcheck_run_policy(checker, tmp_dir / "cfg")
+    if result.returncode != 0:
+        fail(name, f"exit code {result.returncode}; expected 0")
+        return
+    try:
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+    except (ValueError, KeyError):
+        fail(name, f"expected one SessionStart additionalContext JSON; got: {result.stdout!r}")
+        return
+    if not context.startswith("CRAFTFLOW policy.json invalid: ") or not context.endswith(" \u2014 gated actions will fail closed."):
+        fail(name, f"unexpected warning text: {context!r}")
+        return
+    if result.stdout.count("additionalContext") != 1:
+        fail(name, f"expected exactly one warning line; got: {result.stdout!r}")
+        return
+    ok(name)
+
+
+def test_selfcheck_silent_on_valid_policy(tmp_dir: Path) -> None:
+    name = "hook-selfcheck/silent-on-valid-policy"
+    shipped = (PLUGIN_ROOT / "config" / "policy.json").read_bytes()
+    for label, policy_bytes in (("valid-file", shipped), ("missing-file", None)):
+        result = _selfcheck_run_policy(_selfcheck_policy_layout(tmp_dir / label, policy_bytes), tmp_dir / "cfg")
+        if result.returncode != 0 or result.stdout.strip():
+            fail(name, f"{label}: expected silence and exit 0; got rc={result.returncode} stdout={result.stdout!r}")
+            return
+    ok(name)
+
+
+def test_selfcheck_version_drift_line(tmp_dir: Path) -> None:
+    name = "hook-selfcheck/version-drift-line"
+    shipped = (PLUGIN_ROOT / "config" / "policy.json").read_bytes()
+
+    def installed(cfg: Path, version: str) -> None:
+        (cfg / "plugins").mkdir(parents=True)
+        (cfg / "plugins" / "installed_plugins.json").write_text(
+            json.dumps({"version": 2, "plugins": {"craftflow@craftflow": [{"scope": "user", "version": version}]}}), encoding="utf-8")
+
+    drift = _selfcheck_policy_layout(tmp_dir / "drift", shipped, version="1.2.3")
+    installed(tmp_dir / "drift-cfg", "1.1.0")
+    result = _selfcheck_run_policy(drift, tmp_dir / "drift-cfg")
+    try:
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+    except (ValueError, KeyError):
+        fail(name, f"expected a drift line on mismatch; got: {result.stdout!r}")
+        return
+    if context != "CRAFTFLOW version drift: loaded 1.2.3, installed 1.1.0. Run craftflow:update.":
+        fail(name, f"unexpected drift text: {context!r}")
+        return
+    synced = _selfcheck_policy_layout(tmp_dir / "synced", shipped, version="1.2.3")
+    installed(tmp_dir / "synced-cfg", "1.2.3")
+    result = _selfcheck_run_policy(synced, tmp_dir / "synced-cfg")
+    if result.stdout.strip():
+        fail(name, f"expected silence when versions match; got: {result.stdout!r}")
+        return
+    unreadable = _selfcheck_policy_layout(tmp_dir / "noinstall", shipped, version="1.2.3")
+    (tmp_dir / "noinstall-cfg" / "plugins").mkdir(parents=True)
+    (tmp_dir / "noinstall-cfg" / "plugins" / "installed_plugins.json").write_text("not json", encoding="utf-8")
+    result = _selfcheck_run_policy(unreadable, tmp_dir / "noinstall-cfg")
+    if result.returncode != 0 or result.stdout.strip():
+        fail(name, f"an unreadable installed_plugins.json must stay silent; got rc={result.returncode} stdout={result.stdout!r}")
+        return
+    ok(name)
+
+
+def _copy_plugin_runtime(dst: Path) -> None:
+    shutil.copytree(SCRIPTS, dst / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(PLUGIN_ROOT / "config", dst / "config")
+
+
+def _guard_edit_memory(plugin_copy: Path, project: Path, target: Path):
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin_copy)}
+    result = subprocess.run(
+        [sys.executable, str(plugin_copy / "scripts" / "craftflow_pretooluse_guard.py")],
+        input=json.dumps({"tool_name": "Edit", "tool_input": {"file_path": str(target)}}),
+        capture_output=True, text=True, env=env,
+    )
+    return result.returncode, result.stdout.strip()
+
+
+def test_memory_write_permit_unchanged_with_policy_invalid(tmp_dir: Path) -> None:
+    name = "policy/memory-write-permit-unchanged-with-policy-invalid"
+    outcomes = {}
+    for label, policy_bytes in (("invalid", b"{corrupt"), ("valid", (PLUGIN_ROOT / "config" / "policy.json").read_bytes())):
+        plugin_copy, project = tmp_dir / label / "plugin", tmp_dir / label / "proj"
+        _copy_plugin_runtime(plugin_copy)
+        (plugin_copy / "config" / "policy.json").write_bytes(policy_bytes)
+        state = project / ".craftflow" / "state"
+        target = state / "project" / "activeContext.md"
+        target.parent.mkdir(parents=True)
+        target.write_text("# Active Context\n", encoding="utf-8")
+        _, denied = _guard_edit_memory(plugin_copy, project, target)
+        wf_uuid = "wf-test-1234"
+        (state / ".memory-finalize").write_text(wf_uuid, encoding="utf-8")
+        (state / "workflows").mkdir(parents=True, exist_ok=True)
+        (state / "workflows" / f"{wf_uuid}.json").write_text(json.dumps({"workflow_uuid": wf_uuid}), encoding="utf-8")
+        _, allowed = _guard_edit_memory(plugin_copy, project, target)
+        log = state / "craftflow-hook-events.log"
+        permits = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines() if "memory-write-permitted-by-finalize-token" in x] if log.exists() else []
+        outcomes[label] = ('"permissionDecision": "deny"' in denied, '"permissionDecision": "deny"' in allowed, [e.get("memory_write") for e in permits])
+    if outcomes["invalid"] != (True, False, ["finalize-only"]) or outcomes["valid"] != outcomes["invalid"]:
+        fail(name, f"(denied_without_permit, denied_with_permit, logged memory_write) invalid={outcomes['invalid']} valid={outcomes['valid']}; "
+                   "want (True, False, ['finalize-only']) for both")
+        return
+    ok(name)
+
+
+_ROUTER_PROSE_TOKENS = ("craftflow-router", "_shared", "router-protocol")
+
+
+def _router_prose_literals(source: str) -> list:
+    """String literals (including f-string parts) that name the router's prose files. Docstrings are exempt: they are text, not paths."""
+    tree = ast.parse(source)
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.body \
+                and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant):
+            docstrings.add(id(node.body[0].value))
+    return [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in docstrings and any(tok in n.value for tok in _ROUTER_PROSE_TOKENS)]
+
+
+def test_guards_never_read_router_prose() -> None:
+    name = "policy/guards-never-read-router-prose"
+    # PP-2. craftflow_router_readset_guard.py is the maintainer-side budget measurer (it names the kernel on purpose), not an
+    # enforcement guard, so the glob skips the router_* tooling. pretooluse_guard.py's project-skill path
+    # (root/family/"skills"/name/"SKILL.md") builds no router path and stays legal (A8).
+    guards = sorted(p for p in SCRIPTS.glob("craftflow_*guard*.py") if not p.name.startswith("craftflow_router_"))
+    guards += [SCRIPTS / n for n in ("craftflow_policy.py", "craftflow_gate_check.py", "craftflow_worktree_finalize.py") if (SCRIPTS / n).exists()]
+    if len(guards) < 6 or "craftflow_pretooluse_guard.py" not in {g.name for g in guards}:
+        fail(name, f"guard discovery looks broken: {[g.name for g in guards]}")
+        return
+    hits = {g.name: lits for g in guards if (lits := _router_prose_literals(g.read_text(encoding="utf-8")))}
+    if hits:
+        fail(name, f"enforcement scripts must not name the router's prose files: {hits}")
+        return
+    planted = _router_prose_literals('P = "skills/craftflow-router/SKILL.md"\nQ = f"{x}/_shared/y.md"\nR = "router-protocol.md"\n')
+    if len(planted) != 3 or _router_prose_literals('"""craftflow-router docs"""\nX = "skills" + "SKILL.md"\n'):
+        fail(name, f"the scanner itself is broken: planted={planted!r}")
         return
     ok(name)
 
@@ -27292,6 +27476,7 @@ def main() -> int:
         print("[ pretooluse-guard ]")
         test_pretooluse_guard_blocks_memory_write_without_permit(tmp / "g1")
         test_pretooluse_guard_allows_memory_write_with_permit(tmp / "g2")
+        test_memory_write_permit_unchanged_with_policy_invalid(tmp / "g2p")
         test_pretooluse_guard_allows_workflow_scoped_memory_write_when_newer_unrelated_workflow_exists(tmp / "g2b")
         test_pretooluse_guard_denies_workflow_scoped_memory_write_with_permit_for_different_workflow(tmp / "g2c")
         test_pretooluse_guard_allows_project_tier_memory_write_when_newer_unrelated_workflow_exists(tmp / "g2d")
@@ -27723,6 +27908,9 @@ def main() -> int:
         except FileNotFoundError as exc:
             fail("hook-selfcheck/warns-on-suspiciously-low-sibling-count", f"setup crashed: {exc}")
         test_selfcheck_isolates_per_script_subprocess_errors(tmp / "hc4")
+        test_selfcheck_warns_on_invalid_policy(tmp / "hp1")
+        test_selfcheck_silent_on_valid_policy(tmp / "hp2")
+        test_selfcheck_version_drift_line(tmp / "hp3")
         test_selfcheck_flushes_before_external_kill_when_sweep_runs_long(tmp / "hc5")
         test_selfcheck_discovery_itself_bounded_by_timeout(tmp / "hc6")
         test_selfcheck_main_emits_distinct_warning_when_discovery_times_out(tmp / "hc7")
@@ -28018,6 +28206,7 @@ def main() -> int:
     test_root_hooks_json_registers_repeat_tool_call_guard()
     test_cursor_adapter_logs_target_crash_but_stays_fail_open(tmp / "ca1")
     test_selfcheck_internal_budget_stays_under_registered_hook_timeout()
+    test_guards_never_read_router_prose()
     test_workflow_id_script_present()
     test_workflow_id_emit_env_is_shell_safe_key_values()
     test_workflow_id_init_artifact_writes_schema_and_events()

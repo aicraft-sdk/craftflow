@@ -1,0 +1,26 @@
+{
+  "$comment": "Custom shape (like planner.json), read by craftflow_policy.validate_policy. Closed: additionalProperties false; only the keys in ignore_keys are also allowed. Values keep today's prose semantics or tighten them (DD-3).",
+  "type": "object",
+  "additionalProperties": false,
+  "ignore_keys": ["$comment"],
+  "properties": {
+    "native_plan_mode": {"type": "string", "enum": ["never", "allow"]},
+    "plan_commit": {"type": "string", "enum": ["never", "allow"]},
+    "memory_write": {"type": "string", "enum": ["finalize-only"]},
+    "worktree_merge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["require_clean_tree", "lock_max_attempts", "lock_sleep_seconds", "copy_fallback_on_up_to_date"],
+      "properties": {
+        "require_clean_tree": {"type": "boolean", "const": true},
+        "lock_max_attempts": {"type": "integer", "minimum": 1, "maximum": 60},
+        "lock_sleep_seconds": {"type": "integer", "minimum": 0, "maximum": 60},
+        "copy_fallback_on_up_to_date": {"type": "boolean", "const": true}
+      }
+    },
+    "remediation_cycles_max": {"type": "integer", "minimum": 1, "maximum": 3},
+    "doubt_cycles_max": {"type": "integer", "minimum": 1, "maximum": 3},
+    "fix_verify_cycles_max": {"type": "integer", "minimum": 1, "maximum": 3},
+    "plan_review_passes_max": {"type": "integer", "const": 2}
+  }
+}

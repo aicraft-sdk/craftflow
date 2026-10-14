@@ -51,6 +51,7 @@ Artifact schema must include:
 - `circuit_breaker`
 - `status_history`
 - `remediation_history`
+- `policy` — `{sha256, status}` of `config/policy.json`, stamped at workflow creation by `craftflow_workflow_id.py --init-artifact`; informational only.
 - `created_at`
 - `updated_at`
 
@@ -257,6 +258,9 @@ Workflow event log:
   - `skill_rejected`
   - `skill_distill_skipped`
   - `skill_distill_failed`
+  - `policy_loaded`
+  - `gate_check`
+  - `worktree_finalize`
 
 Hook policy:
 - CRAFTFLOW plugin hooks live in the plugin bundle under `hooks/hooks.json` and should stay minimal:

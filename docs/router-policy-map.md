@@ -179,3 +179,17 @@ baseline against the previous one shows only the intended shape change.
 ## Worktree finalize equivalence
 
 Empty until the worktree-finalize phase (P7/P8) records its step-by-step equivalence.
+
+## Pending human signature
+
+Draft rows that are written but deliberately kept OUT of the tables above: `--diff` counts an unsigned row in
+`rows_missing_review` and fails, and humans sign (see the top of this file). A signer pastes the row into the named table
+with `Name (YYYY-MM-DD)` in the `Reviewed by` cell, in the same change that signs it.
+
+P4 (`memory_write`, ADR-0073 BC-4, document-only: the guard reads and logs the value, behavior is unchanged), for
+`## Policy-mapped deletions`. The baseline id `2b1275f157fe` is the SKILL.md § 13 sentence "the `craftflow_pretooluse_guard.py`
+hook blocks direct writes to protected memory files"; the prose is not deleted.
+
+```
+| 2b1275f157fe | memory_write | craftflow_pretooluse_guard.py::_handle_edit_write | craftflow_hook_unit_tests.py::test_memory_write_permit_unchanged_with_policy_invalid | document-only | false | <Name (YYYY-MM-DD)> | |
+```

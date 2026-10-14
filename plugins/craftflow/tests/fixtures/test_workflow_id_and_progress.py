@@ -503,6 +503,97 @@ def test_statusline_output_format() -> None:
         ok("--statusline silent exit-0 when no .craftflow/")
 
 
+def _mint(project: Path, extra_env: dict = None, script: Path = None, workflow_type: str = "BUILD"):
+    """Run --init-artifact in `project` and return (completed process, artifact dict or None, events list)."""
+    (project / ".craftflow").mkdir(parents=True, exist_ok=True)
+    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_ROOT")}
+    env.update(extra_env or {})
+    proc = subprocess.run(
+        [sys.executable, str(script or SCRIPTS / "craftflow_workflow_id.py"), "--request", "policy telemetry", "--branch", "main",
+         "--project", str(project), "--init-artifact", "--workflow-type", workflow_type, "--task-tools-available", "true",
+         "--phase", "build"],
+        capture_output=True, text=True, env=env,
+    )
+    if proc.returncode != 0:
+        return proc, None, []
+    wf_dir = project / ".craftflow" / "state" / "workflows"
+    wf = proc.stdout.strip().splitlines()[-1]
+    artifact = json.loads((wf_dir / f"{wf}.json").read_text(encoding="utf-8"))
+    events = [json.loads(x) for x in (wf_dir / f"{wf}.events.jsonl").read_text(encoding="utf-8").splitlines()]
+    return proc, artifact, events
+
+
+def test_init_artifact_records_policy_loaded_event() -> None:
+    import hashlib
+    import tempfile
+    print("\n[init-artifact policy_loaded]")
+    shipped = (PLUGIN_ROOT / "config" / "policy.json").read_bytes()
+    digest = hashlib.sha256(shipped).hexdigest()
+    with tempfile.TemporaryDirectory() as tmp:
+        proc, art, events = _mint(Path(tmp) / "ok")
+        if art is None:
+            fail("init_artifact_records_policy_loaded_event", f"mint failed: {proc.stderr}")
+            return
+        names = [e["event"] for e in events]
+        loaded = events[1] if len(events) > 1 else {}
+        if art.get("policy") != {"sha256": digest, "status": "ok"} or names[:2] != ["workflow_started", "policy_loaded"] \
+                or loaded.get("policy_sha256") != digest or loaded.get("policy_status") != "ok" or loaded.get("wf") != art["workflow_uuid"]:
+            fail("init_artifact_records_policy_loaded_event", f"policy={art.get('policy')!r} events={names} loaded={loaded!r}")
+        else:
+            ok("init_artifact_records_policy_loaded_event: shipped policy -> sha256 + status ok, event right after workflow_started")
+        if [h["event"] for h in art["status_history"]] != names:
+            fail("init_artifact_records_policy_loaded_event:history", f"{[h['event'] for h in art['status_history']]} != {names}")
+        else:
+            ok("init_artifact_records_policy_loaded_event: status_history mirrors events.jsonl")
+        log = Path(tmp) / "ok" / ".craftflow" / "state" / "craftflow-hook-events.log"
+        lines = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
+        hook = [x for x in lines if x.get("event") == "policy_loaded"]
+        if len(hook) != 1 or hook[0].get("policy_sha256") != digest or hook[0].get("policy_status") != "ok" or hook[0].get("wf") != art["workflow_uuid"]:
+            fail("init_artifact_records_policy_loaded_event:hook_log", f"hook log lines: {lines!r}")
+        else:
+            ok("init_artifact_records_policy_loaded_event: one policy_loaded line in craftflow-hook-events.log")
+        # A plugin root with no policy.json -> defaults; a corrupt one -> invalid. The mint succeeds either way.
+        for label, body, want in (("absent", None, ("defaults", "defaults")), ("corrupt", b"{nope", ("invalid", None))):
+            root = Path(tmp) / f"root-{label}"
+            (root / "config").mkdir(parents=True)
+            if body is not None:
+                (root / "config" / "policy.json").write_bytes(body)
+            proc, art, events = _mint(Path(tmp) / f"proj-{label}", {"CLAUDE_PLUGIN_ROOT": str(root)})
+            got = (art or {}).get("policy") or {}
+            want_sha = want[1] or hashlib.sha256(body).hexdigest()
+            if art is None or got != {"sha256": want_sha, "status": want[0]} or events[1].get("policy_status") != want[0]:
+                fail(f"init_artifact_records_policy_loaded_event:{label}", f"rc={proc.returncode} policy={got!r} err={proc.stderr!r}")
+            else:
+                ok(f"init_artifact_records_policy_loaded_event: {label} policy does not fail the mint")
+
+
+def test_init_artifact_records_router_readset_bytes() -> None:
+    import shutil
+    import tempfile
+    print("\n[init-artifact router_readset_bytes]")
+    import craftflow_router_readset as rs
+    with tempfile.TemporaryDirectory() as tmp:
+        for wtype in ("BUILD", "PLAN"):
+            proc, art, _ = _mint(Path(tmp) / wtype, workflow_type=wtype)
+            want = rs.compute(wtype)["start_total"]
+            got = ((art or {}).get("telemetry") or {}).get("router_readset_bytes")
+            if got != want or not isinstance(got, int) or isinstance(got, bool) or got <= 0:
+                fail(f"init_artifact_records_router_readset_bytes:{wtype}", f"telemetry.router_readset_bytes={got!r}, want {want} err={proc.stderr!r}")
+            else:
+                ok(f"init_artifact_records_router_readset_bytes: {wtype} = start_total {want}")
+        # Guarded imports: a tree without the read-set modules still mints; the field is simply omitted.
+        bare = Path(tmp) / "bare" / "scripts"
+        bare.mkdir(parents=True)
+        shutil.copy2(SCRIPTS / "craftflow_workflow_id.py", bare / "craftflow_workflow_id.py")
+        shutil.copy2(SCRIPTS / "craftflow_policy.py", bare / "craftflow_policy.py")
+        shutil.copytree(SCRIPTS / "schemas", bare / "schemas")
+        proc, art, _ = _mint(Path(tmp) / "bareproj", script=bare / "craftflow_workflow_id.py")
+        if art is None or "router_readset_bytes" in art["telemetry"]:
+            fail("init_artifact_records_router_readset_bytes:omitted", f"rc={proc.returncode} telemetry={(art or {}).get('telemetry')!r} err={proc.stderr!r}")
+        else:
+            ok("init_artifact_records_router_readset_bytes: missing read-set module omits the field and still mints")
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -518,6 +609,8 @@ def main() -> int:
     test_display_label()
     test_compute_progress()
     test_statusline_output_format()
+    test_init_artifact_records_policy_loaded_event()
+    test_init_artifact_records_router_readset_bytes()
 
     print()
     print("=" * 40)

@@ -1,11 +1,12 @@
 {
   "baseline_ref": "0439c33932463d257b881ce50f136ab7661c0a39",
-  "measured_at_sha": "2173bde17472304671de0a3e1384ff0fbf73de09",
-  "last_phase": "P3",
+  "measured_at_sha": "0771302468fb06ceb857f7c870dcbc198bd63d75",
+  "last_phase": "P4",
   "merged_phases": [
     "P2",
     "P2C",
-    "P3"
+    "P3",
+    "P4"
   ],
   "conditions": {
     "difference_17": true,
@@ -18,13 +19,46 @@
     "reference_max_bytes": 32177,
     "description_chars": 4014,
     "readset": {
-      "BUILD": 215573,
-      "PLAN": 201398,
-      "DEBUG": 180714,
-      "REVIEW": 178776
+      "BUILD": 215905,
+      "PLAN": 201730,
+      "DEBUG": 181046,
+      "REVIEW": 179108
     }
   },
-  "ceiling_raises": [],
+  "ceiling_raises": [
+    {
+      "phase": "P4",
+      "key": "readset.BUILD",
+      "from": 215573,
+      "to": 215905,
+      "projected_delta": 332,
+      "at_sha": "0771302468fb06ceb857f7c870dcbc198bd63d75"
+    },
+    {
+      "phase": "P4",
+      "key": "readset.PLAN",
+      "from": 201398,
+      "to": 201730,
+      "projected_delta": 332,
+      "at_sha": "0771302468fb06ceb857f7c870dcbc198bd63d75"
+    },
+    {
+      "phase": "P4",
+      "key": "readset.DEBUG",
+      "from": 180714,
+      "to": 181046,
+      "projected_delta": 332,
+      "at_sha": "0771302468fb06ceb857f7c870dcbc198bd63d75"
+    },
+    {
+      "phase": "P4",
+      "key": "readset.REVIEW",
+      "from": 178776,
+      "to": 179108,
+      "projected_delta": 332,
+      "at_sha": "0771302468fb06ceb857f7c870dcbc198bd63d75"
+    }
+  ],
   "targets": {
     "kernel_bytes": 25000,
     "protocol_bytes": 15000,

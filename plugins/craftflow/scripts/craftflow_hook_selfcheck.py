@@ -21,6 +21,7 @@ Constraints (see design doc — do not relax without updating the design):
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 import time
@@ -62,6 +63,10 @@ DISCOVERY_TIMEOUT_SECONDS = 2
 # either side without updating the other fails the test suite instead of
 # silently reopening this exact class of bug.
 SELFCHECK_TIME_BUDGET_SECONDS = 5
+# P4: the `craftflow_policy.py --validate` subprocess. Its wall time is charged INSIDE SELFCHECK_TIME_BUDGET_SECONDS (main()
+# shortens the sweep deadline by what the policy and version checks spent), so the 12s worst case above does not grow.
+POLICY_TIMEOUT_SECONDS = 2
+MAX_NOTE_CHARS = 300
 
 
 def discover_sibling_scripts(
@@ -142,6 +147,60 @@ def check_script(scripts_dir: Path, script_path: Path) -> str | None:
     return reason or f"exited {result.returncode} with no stderr output"
 
 
+def check_policy(scripts_dir: Path) -> str | None:
+    """One warning line when `config/policy.json` is invalid, else None (silent). Runs the loader's own CLI in a subprocess,
+    so a broken loader can never crash this checker. A tree without craftflow_policy.py (a scratch dir) is not checked."""
+    script = scripts_dir / "craftflow_policy.py"
+    if not script.is_file():
+        return None
+    env = dict(os.environ)
+    env["CLAUDE_PLUGIN_ROOT"] = str(scripts_dir.parent)  # validate THIS plugin's policy, whatever the hook env says
+    try:
+        result = subprocess.run(
+            [INTERPRETER, str(script), "--validate"],
+            cwd=str(scripts_dir),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=POLICY_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        detail = f"validation timed out after {POLICY_TIMEOUT_SECONDS}s"
+    except OSError as exc:
+        detail = f"validator could not run: {exc}"
+    else:
+        if result.returncode == 0:
+            return None
+        try:
+            errors = json.loads(result.stdout).get("errors") or []
+            detail = "; ".join(str(e) for e in errors)
+        except (ValueError, AttributeError):
+            detail = ""
+        detail = detail or _last_nonblank_line(result.stderr) or f"validator exited {result.returncode}"
+    return f"CRAFTFLOW policy.json invalid: {detail[:MAX_NOTE_CHARS]} \u2014 gated actions will fail closed."
+
+
+def _installed_version() -> str | None:
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
+    data = json.loads((Path(config_dir) / "plugins" / "installed_plugins.json").read_text(encoding="utf-8"))
+    version = data["plugins"]["craftflow@craftflow"][0]["version"]
+    return version if isinstance(version, str) and version else None
+
+
+def check_version_drift(plugin_root: Path) -> str | None:
+    """A drift line when the running plugin's version differs from the installed one, else None. Any unreadable input is
+    silence: this line exists to tell the user to run craftflow:update, never to add noise when the data is missing."""
+    try:
+        loaded = json.loads((plugin_root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")).get("version")
+        installed = _installed_version()
+    except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return None
+    if not isinstance(loaded, str) or not loaded or installed is None or loaded == installed:
+        return None
+    return f"CRAFTFLOW version drift: loaded {loaded}, installed {installed}. Run craftflow:update."
+
+
 def run_selfcheck(
     scripts_dir: Path, siblings: list[Path], deadline: float | None = None
 ) -> tuple[list[tuple[str, str]], int, int]:
@@ -179,11 +238,21 @@ def run_selfcheck(
     return failures, checked, len(siblings)
 
 
+def emit_context(message: str) -> None:
+    print(
+        json.dumps(
+            {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": message}},
+            ensure_ascii=True,
+        )
+    )
+
+
 def emit_warning(
     failures: list[tuple[str, str]],
     truncated: bool = False,
     checked: int = 0,
     total: int = 0,
+    extra: str = "",
 ) -> None:
     parts = []
     if failures:
@@ -196,7 +265,7 @@ def emit_warning(
             f"Sweep truncated by its internal time budget after checking {checked} of "
             f"{total} sibling script(s); the rest were not checked this run."
         )
-    message = "CRAFTFLOW SELF-CHECK: " + " ".join(parts) + " Plugin functionality may be degraded."
+    message = "CRAFTFLOW SELF-CHECK: " + " ".join(parts) + " Plugin functionality may be degraded." + extra
     print(
         json.dumps(
             {
@@ -210,12 +279,12 @@ def emit_warning(
     )
 
 
-def emit_low_count_warning(discovered_count: int, floor: int) -> None:
+def emit_low_count_warning(discovered_count: int, floor: int, extra: str = "") -> None:
     message = (
         f"CRAFTFLOW SELF-CHECK: only {discovered_count} sibling hook script(s) discovered "
         f"(expected at least {floor}) -- this most likely means the self-check's own "
         f"directory resolution is broken, not that every other hook script is genuinely "
-        f"missing. Plugin functionality may be degraded."
+        f"missing. Plugin functionality may be degraded." + extra
     )
     print(
         json.dumps(
@@ -230,10 +299,10 @@ def emit_low_count_warning(discovered_count: int, floor: int) -> None:
     )
 
 
-def emit_discovery_error_warning(reason: str) -> None:
+def emit_discovery_error_warning(reason: str, extra: str = "") -> None:
     message = (
         f"CRAFTFLOW SELF-CHECK: could not enumerate sibling hook scripts ({reason}) -- "
-        f"this self-check could not run this session. Plugin functionality may be degraded."
+        f"this self-check could not run this session. Plugin functionality may be degraded." + extra
     )
     print(
         json.dumps(
@@ -252,21 +321,27 @@ def main() -> int:
     try:
         self_path = Path(__file__).resolve()
         scripts_dir = self_path.parent
+        started = time.monotonic()
+        notes = [n for n in (check_policy(scripts_dir), check_version_drift(scripts_dir.parent)) if n]
+        extra = "".join(" " + n for n in notes)
+        spent = time.monotonic() - started
         siblings, discovery_error = discover_sibling_scripts(
             scripts_dir, self_path, timeout=DISCOVERY_TIMEOUT_SECONDS
         )
         if discovery_error is not None:
-            emit_discovery_error_warning(discovery_error)
+            emit_discovery_error_warning(discovery_error, extra)
             return 0
         if len(siblings) < MIN_EXPECTED_SIBLING_SCRIPTS:
-            emit_low_count_warning(len(siblings), MIN_EXPECTED_SIBLING_SCRIPTS)
+            emit_low_count_warning(len(siblings), MIN_EXPECTED_SIBLING_SCRIPTS, extra)
             return 0
         failures, checked, total = run_selfcheck(
-            scripts_dir, siblings, deadline=SELFCHECK_TIME_BUDGET_SECONDS
+            scripts_dir, siblings, deadline=max(0.0, SELFCHECK_TIME_BUDGET_SECONDS - spent)
         )
         truncated = checked < total
         if failures or truncated:
-            emit_warning(failures, truncated=truncated, checked=checked, total=total)
+            emit_warning(failures, truncated=truncated, checked=checked, total=total, extra=extra)
+        elif notes:
+            emit_context(" ".join(notes))
         return 0
     except Exception:
         # Never let the checker itself crash or block the SessionStart hook chain.

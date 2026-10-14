@@ -197,6 +197,43 @@ def load_input() -> Dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def is_cursor_host(env: "Dict[str, str] | None" = None) -> bool:
+    """True when the payload comes from the Cursor adapter (DD-12): `CURSOR_PLUGIN_ROOT` is set and non-empty.
+    `craftflow_cursor_adapter.bridge_env` sets it; Claude Code's hooks never do. Pure; `env=None` reads os.environ."""
+    return bool((os.environ if env is None else env).get("CURSOR_PLUGIN_ROOT"))
+
+
+# Gate policy (ADR-0073). A broken or missing policy module must degrade to the fail-closed answer, never crash a hook:
+# the stub returns defaults with status "invalid", so every gated decision takes its most restrictive branch.
+try:
+    from craftflow_policy import load_policy, policy_value
+except ImportError:
+    _POLICY_STUB_DEFAULTS: Dict[str, Any] = {
+        "native_plan_mode": "never",
+        "plan_commit": "never",
+        "memory_write": "finalize-only",
+        "worktree_merge": {
+            "require_clean_tree": True,
+            "lock_max_attempts": 9,
+            "lock_sleep_seconds": 5,
+            "copy_fallback_on_up_to_date": True,
+        },
+        "remediation_cycles_max": 3,
+        "doubt_cycles_max": 3,
+        "fix_verify_cycles_max": 3,
+        "plan_review_passes_max": 2,
+    }
+
+    def load_policy(path=None, log=True):  # type: ignore[no-redef]
+        return json.loads(json.dumps(_POLICY_STUB_DEFAULTS)), "invalid", ["import-error"]
+
+    def policy_value(policy, dotted):  # type: ignore[no-redef]
+        node: Any = policy
+        for part in dotted.split("."):
+            node = node[part]
+        return node
+
+
 def load_mode() -> Dict[str, str]:
     path = plugin_config_dir() / "hook-mode.json"
     if not path.exists():

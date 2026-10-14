@@ -36,6 +36,7 @@ FALLBACK_ALLOWLIST = [
     "craftflow_retro_signals.py",
     "craftflow_status_report.py",
     "craftflow_hooklib.py",
+    "craftflow_policy.py",
     "craftflow_learn_scan.py",
 ]
 

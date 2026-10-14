@@ -317,6 +317,37 @@ schema-2 keys `act_blockers` (A01..A17 codes), `acted` (true only when a continu
 List-valued keys: `rule_hits`, `loop_guards`, `commit_blockers`, `settings_tags`, `act_blockers`. An `error` row carries
 only `ts`, `session_id`, `mode`, `hook_ms` and `settings_tags: ["hook_error:<ExceptionClassName>"]`.
 
+### Log event: `policy_loaded`
+
+- Emitter: `scripts/craftflow_workflow_id.py` (`init_artifact`), best effort, after the workflow artifact is written.
+- Trigger: once per minted workflow (`--init-artifact`). The same fact is also the second line of the workflow
+  `events.jsonl` (`policy_loaded`, right after `workflow_started`) and the artifact's `policy` field.
+- Fail-open: any failure to load the policy or write the line is swallowed; the mint never fails because of it.
+- Payload: `wf` (workflow id), `policy_sha256` (sha256 of `config/policy.json`, or `"defaults"` when the file is
+  missing) and `policy_status` (`ok`, `defaults` or `invalid`). Informational only; no gate reads it.
+
+```json
+{"event": "policy_loaded", "wf": "wf-example-20261014-120000-0a1b2c3d", "policy_sha256": "defaults", "policy_status": "defaults"}
+```
+
+### Log event: `policy_invalid`
+
+- Emitter: `scripts/craftflow_policy.py` (`load_policy`, via `_log_invalid`), at most once per process.
+- Trigger: `config/policy.json` exists but is unreadable, over 64 KiB, not UTF-8, not JSON, not an object, has an unknown
+  key or violates `scripts/schemas/policy.json`. The loader then returns the built-in defaults with status `invalid`
+  and every gated decision takes its most restrictive branch (`memory_write` is document-only and keeps today's behavior).
+- Fail-open: the line is written only inside an existing `.craftflow` project and any write failure is swallowed;
+  loading a policy never prints to stdout.
+- Payload: `path` (the policy file) and `errors` (up to 5 validation messages).
+
+```json
+{"event": "policy_invalid", "path": "/plugin/config/policy.json", "errors": ["policy: file is 70000 bytes, over the 65536 byte limit"]}
+```
+
+The permit record the pretooluse guard already logs for a finalize-permitted memory write
+(`reason: "memory-write-permitted-by-finalize-token"`) now also carries `memory_write`, the effective policy value
+(`finalize-only`). It is read and logged only; the permit decision never depends on it.
+
 ## Keeping this doc honest
 
 `scripts/verify-craftflow-event-contract.mjs` (`pnpm run verify:event-contract`) asserts
