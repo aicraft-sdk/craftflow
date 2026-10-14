@@ -1049,19 +1049,31 @@ DESC_MAX = 160
 # by the rule-inventory 60% token-retention check and the guarded word 'not' ("do not stop at describing capabilities"),
 # which no policy-map row can satisfy. The list must equal exactly this set; adding a skill here is a reviewed change.
 DESC_LONG_EXCEPTIONS = frozenset({"craftflow-router"})
-INTERNAL_STUBS = ("architecture-patterns", "brainstorming", "code-generation", "code-review-patterns", "intent-interview",
-                  "planning-patterns", "research", "session-memory", "test-driven-development")
+ROUTER_DESC_MAX = 499  # the exception has no individual cap otherwise: it may never grow past today's text
+# Plan P3 task 3 drafts that do not open with "Use " (read-only inspection skills, the update skill and the Cursor stub).
+DESC_OTHER_START_OK = frozenset({"status", "failure-digest", "retro", "update", "cursor-router"})
+INTERNAL_STUBS = frozenset({"architecture-patterns", "brainstorming", "code-generation", "code-review-patterns", "intent-interview",
+                            "planning-patterns", "research", "session-memory", "test-driven-development"})
 _SKILL_CALL = re.compile(r"""Skill\(\s*skill\s*=\s*["']craftflow:([a-z0-9-]+)["']""")
 _FM_FLAG = re.compile(r"^disable-model-invocation:", re.M)
 
 
+def norm(text: str) -> str:
+    """BOM and CRLF tolerant view of a file: detectors read this, the format guard reports the raw defect."""
+    return text.lstrip("﻿").replace("\r\n", "\n")
+
+
 def skill_texts() -> Dict[str, str]:
-    return {p.parent.name: p.read_text(encoding="utf-8") for p in sorted((PLUGIN_ROOT / "skills").glob("*/SKILL.md"))}
+    return {p.parent.name: p.read_bytes().decode("utf-8") for p in sorted((PLUGIN_ROOT / "skills").glob("*/SKILL.md"))}
 
 
 def frontmatter_block(text: str) -> str:
-    m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+    m = re.match(r"^---\n(.*?)\n---\n", norm(text), re.S)
     return m.group(1) if m else ""
+
+
+def desc_of(text: str) -> str:
+    return rs.core.effective_description(norm(text))
 
 
 def over_limit(texts: Dict[str, str], limit: int = DESC_MAX, exceptions=frozenset()) -> Dict[str, int]:
@@ -1069,9 +1081,27 @@ def over_limit(texts: Dict[str, str], limit: int = DESC_MAX, exceptions=frozense
     for name, text in texts.items():
         if name in exceptions:
             continue
-        d =rs.core.effective_description(text)
+        d = desc_of(text)
         if len(d) > limit or "\n" in d:
             out[name] = len(d)
+    return out
+
+
+def format_problems(texts: Dict[str, str], exceptions=frozenset(), other_start_ok=frozenset()) -> Dict[str, str]:
+    """Per skill: raw BOM or CRLF, empty frontmatter, empty description, or a description that does not open with
+    'Use ' or 'Internal skill' (the exception and the named plan drafts excluded)."""
+    out = {}
+    for name, text in texts.items():
+        if text.startswith("﻿"):
+            out[name] = "BOM"
+        elif "\r" in text:
+            out[name] = "CRLF"
+        elif not frontmatter_block(text).strip():
+            out[name] = "empty frontmatter"
+        elif not desc_of(text).strip():
+            out[name] = "empty description"
+        elif name not in exceptions and name not in other_start_ok and not desc_of(text).startswith(("Use ", "Internal skill")):
+            out[name] = "description does not start with 'Use ' or 'Internal skill'"
     return out
 
 
@@ -1089,22 +1119,41 @@ def invoked_or_preloaded(skill_texts_: Dict[str, str], agent_texts: Dict[str, st
 
 
 def agent_texts() -> Dict[str, str]:
-    return {p.stem: p.read_text(encoding="utf-8") for p in sorted((PLUGIN_ROOT / "agents").glob("*.md"))}
+    return {p.stem: p.read_bytes().decode("utf-8") for p in sorted((PLUGIN_ROOT / "agents").glob("*.md"))}
 
 
 def test_each_description_le_160() -> None:
     texts = skill_texts()
-    probe = {"x": "---\nname: x\ndescription: |\n  " + "a" * 100 + "\n  b\n---\n", "y": "---\nname: y\ndescription: \"" + "a" * 161 + "\"\n---\n"}
-    detects = set(over_limit(probe)) == {"x", "y"}
+    long_desc = "a" * 161
+    probe = {"x": "---\nname: x\ndescription: |\n  " + "a" * 100 + "\n  b\n---\n", "y": "---\nname: y\ndescription: \"" + long_desc + "\"\n---\n",
+             "crlf": "---\r\nname: c\r\ndescription: \"" + long_desc + "\"\r\n---\r\n",
+             "bom": "﻿---\nname: b\ndescription: \"" + long_desc + "\"\n---\n"}
+    detects = set(over_limit(probe)) == {"x", "y", "crlf", "bom"}
     # negative control: an exception for one name never excuses another over-long skill
-    control = set(over_limit(probe, exceptions=frozenset({"x"}))) == {"y"}
+    control = set(over_limit(probe, exceptions=frozenset({"x"}))) == {"y", "crlf", "bom"}
     closed = DESC_LONG_EXCEPTIONS == frozenset({"craftflow-router"})
     over = over_limit(texts, exceptions=DESC_LONG_EXCEPTIONS)
-    tight = {n: len(rs.core.effective_description(texts[n])) for n in ("cursor-router", "research")
-             if len(rs.core.effective_description(texts[n])) > 100}
-    check("each_description_le_160", detects and control and closed and not over and not tight,
+    router_len = len(desc_of(texts["craftflow-router"]))
+    tight = {n: len(desc_of(texts[n])) for n in ("cursor-router", "research") if len(desc_of(texts[n])) > 100}
+    check("each_description_le_160", detects and control and closed and not over and not tight and router_len <= ROUTER_DESC_MAX,
           f"detector_ok={detects} control_ok={control} exceptions_closed={closed}; one-line and <= {DESC_MAX} violated by {over}; "
-          f"cursor-router/research over 100: {tight}")
+          f"cursor-router/research over 100: {tight}; router description {router_len} (cap {ROUTER_DESC_MAX})")
+
+
+def test_every_skill_has_frontmatter_and_a_use_description() -> None:
+    texts = skill_texts()
+    probes = {"crlf": "---\r\nname: c\r\ndescription: \"Use when x\"\r\n---\r\n", "bom": "﻿---\nname: b\ndescription: \"Use when x\"\n---\n",
+              "nodesc": "---\nname: n\nallowed-tools: Read\n---\n", "nofm": "# no frontmatter\n", "bad": "---\nname: z\ndescription: \"Hello\"\n---\n",
+              "good": "---\nname: g\ndescription: \"Use when x\"\n---\n", "stub": "---\nname: s\ndescription: \"Internal skill. x\"\n---\n"}
+    got = format_problems(probes)
+    guard = set(got) == {"crlf", "bom", "nodesc", "nofm", "bad"} and got["crlf"] == "CRLF" and got["bom"] == "BOM"
+    tolerant = flagged({"c": "---\r\nname: c\r\ndisable-model-invocation: true\r\n---\r\n", "b": "﻿---\nname: b\ndisable-model-invocation: true\n---\n"}) == ["b", "c"]
+    spare = DESC_OTHER_START_OK == frozenset({"status", "failure-digest", "retro", "update", "cursor-router"})
+    bad = format_problems(texts, DESC_LONG_EXCEPTIONS, DESC_OTHER_START_OK)
+    dirs = sorted(p.name for p in (PLUGIN_ROOT / "skills").iterdir() if p.is_dir() and not p.name.startswith("_"))
+    missing = [d for d in dirs if d not in texts]
+    check("every_skill_has_frontmatter_and_a_use_description", guard and tolerant and spare and not bad and not missing,
+          f"guard_ok={guard} crlf_bom_tolerant={tolerant} start_exceptions_closed={spare}; problems={bad}; dirs without SKILL.md={missing}")
 
 
 def test_no_skill_has_disable_model_invocation() -> None:
@@ -1129,9 +1178,10 @@ def test_no_disable_model_invocation_on_invoked_or_preloaded_skills() -> None:
 
 def test_internal_stubs_keep_prefix() -> None:
     texts = skill_texts()
-    missing = [n for n in INTERNAL_STUBS if n not in texts]
-    wrong = [n for n in INTERNAL_STUBS if n in texts and not rs.core.effective_description(texts[n]).startswith("Internal skill")]
-    check("internal_stubs_keep_prefix", not missing and not wrong, f"missing={missing} without 'Internal skill' prefix={wrong}")
+    derived = frozenset(n for n, t in texts.items() if desc_of(t).startswith("Internal skill"))
+    check("internal_stubs_keep_prefix", derived == INTERNAL_STUBS and len(derived) == 9,
+          f"skills with the 'Internal skill' prefix must be exactly the {len(INTERNAL_STUBS)} stubs; "
+          f"lost the prefix={sorted(INTERNAL_STUBS - derived)} gained it={sorted(derived - INTERNAL_STUBS)}")
 
 
 def main() -> int:

@@ -186,6 +186,7 @@ Excluded tests. `tests/fixtures/router_test_enumerate.py` flags a test when its 
 - Not listed: fx::test_router_budget.py::test_protocol_le_ceiling — compares measured file sizes of the live router with `router-budget.json`; no router prose is asserted.
 - Not listed: fx::test_router_budget.py::test_descriptions_le_ceiling — compares measured file sizes of the live router with `router-budget.json`; no router prose is asserted.
 - Not listed: fx::test_router_budget.py::test_each_description_le_160 — checks every skill's effective frontmatter description length and single-line form; no router prose is asserted.
+- Not listed: fx::test_router_budget.py::test_every_skill_has_frontmatter_and_a_use_description — checks every skill's frontmatter block, description presence and opening words (BOM and CRLF guarded); no router prose is asserted.
 - Not listed: fx::test_router_budget.py::test_no_skill_has_disable_model_invocation — checks that no skill frontmatter carries `disable-model-invocation`; no router prose is asserted.
 - Not listed: fx::test_router_budget.py::test_no_disable_model_invocation_on_invoked_or_preloaded_skills — cross-checks skill frontmatter flags against agent `skills:` lists and `Skill(skill=...)` call names; no router prose is asserted.
 - Not listed: fx::test_router_budget.py::test_internal_stubs_keep_prefix — checks the `Internal skill` prefix on the internal skills' frontmatter descriptions; no router prose is asserted.

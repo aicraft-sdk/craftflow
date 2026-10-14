@@ -1,6 +1,6 @@
 ---
 name: verification-before-completion
-description: "Use before claiming work is complete, fixed or passing, or before commit, PR or task completion; needs fresh evidence."
+description: "Use when about to claim work is complete, fixed or passing, or before commit, PR or task completion; fresh evidence must exist first."
 allowed-tools: Read Grep Glob Bash LSP
 ---
 

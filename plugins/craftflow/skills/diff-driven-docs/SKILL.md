@@ -1,6 +1,6 @@
 ---
 name: diff-driven-docs
-description: "Use when a BUILD phase completes, a commit is staged or a PR is imminent and the diff is not yet reflected in docs."
+description: "Use when a BUILD phase completes, a commit is staged, a PR is imminent, or the user says 'update docs' or 'sync docs'."
 allowed-tools: Read, Edit, Write, Bash, Grep, Glob
 skills:
   - craftflow:verification-before-completion
