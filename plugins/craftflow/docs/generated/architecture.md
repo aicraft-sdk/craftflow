@@ -52,6 +52,7 @@ flowchart LR
   script_craftflow_jev_prompt_hint_py(["craftflow_jev_prompt_hint.py"])
   event_PreToolUse -->|"Edit / Write"| script_craftflow_pretooluse_guard_py
   event_PreToolUse -->|"Read"| script_craftflow_pretooluse_guard_py
+  event_PreToolUse -->|"EnterPlanMode"| script_craftflow_pretooluse_guard_py
   event_PreToolUse -->|"WebFetch"| script_craftflow_sdd_cache_pre_py
   event_PreToolUse -->|"Bash"| script_craftflow_pretooluse_guard_py
   event_PreToolUse -->|"Bash"| script_craftflow_pretooluse_bash_guard_py
@@ -81,7 +82,7 @@ flowchart LR
   event_UserPromptSubmit --> script_craftflow_context_nudge_py
 ```
 
-29 hook registrations across 11 event types, 24 distinct scripts.
+30 hook registrations across 11 event types, 24 distinct scripts.
 
 ## Agent -> declared skills
 

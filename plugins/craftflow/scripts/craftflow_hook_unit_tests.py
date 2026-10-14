@@ -6590,6 +6590,25 @@ def test_pretooluse_guard_denies_bash_python_backslash_continued_os_system_write
     ok(name)
 
 
+def test_hooks_json_registers_enterplanmode_matcher() -> None:
+    name = "hooks/enterplanmode-matcher-registered"
+    path = PLUGIN_ROOT / "hooks" / "hooks.json"
+    pre_hooks = json.loads(path.read_text(encoding="utf-8")).get("hooks", {}).get("PreToolUse", [])
+    entries = [entry for entry in pre_hooks if entry.get("matcher") == "EnterPlanMode"]
+    if len(entries) != 1:
+        fail(name, f"expected exactly one PreToolUse entry with matcher 'EnterPlanMode', found {len(entries)}")
+        return
+    commands = [h.get("command", "") for h in entries[0].get("hooks", [])]
+    if len(commands) != 1 or not commands[0].endswith('scripts/craftflow_pretooluse_guard.py"'):
+        fail(name, f"EnterPlanMode matcher must run only craftflow_pretooluse_guard.py, got {commands}")
+        return
+    cursor_template = (PLUGIN_ROOT / "hooks.json").read_text(encoding="utf-8")
+    if "EnterPlanMode" in cursor_template:
+        fail(name, "the Cursor template hooks.json must not register EnterPlanMode (Claude Code only, DD-12)")
+        return
+    ok(name)
+
+
 def test_hooks_json_registers_pretooluse_guard_on_bash() -> None:
     name = "hooks/pretooluse-guard-registered-on-bash"
     path = PLUGIN_ROOT / "hooks" / "hooks.json"
@@ -28252,6 +28271,7 @@ def main() -> int:
     test_hooks_json_registers_new_hooks()
     test_hooks_json_registers_bash_guard()
     test_hooks_json_registers_pretooluse_guard_on_bash()
+    test_hooks_json_registers_enterplanmode_matcher()
     test_hooks_json_registers_safe_shell_guard()
     test_hooks_json_registers_stop_verify()
     test_selfcheck_never_imports_hooklib_directly()

@@ -38,6 +38,13 @@ try:
 except ImportError:
     skill_promote = None
 
+try:
+    from craftflow_policy import enter_plan_mode_decision  # noqa: E402
+except Exception:  # a broken policy module must still deny EnterPlanMode (fail closed), never crash the hook
+
+    def enter_plan_mode_decision(native_plan_mode, status):  # type: ignore[no-redef]
+        return "deny", "craftflow-policy: policy-invalid —"
+
 from craftflow_hooklib import (
     DENIAL_ESCALATION_THRESHOLD,
     clear_denial,
@@ -3413,10 +3420,28 @@ def _handle_bash(data: dict, mode: dict, tool_input: dict) -> int:
     return 0
 
 
+def _handle_enter_plan_mode(data: dict) -> int:
+    """BC-2 (ADR-0073): EnterPlanMode is denied unless policy `native_plan_mode` is "allow"; an invalid policy denies too.
+    Any tool_input shape is fine because the input is never read. Claude Code only by construction (DD-12)."""
+    policy, policy_status, _policy_errors = load_policy()
+    native_plan_mode = policy_value(policy, "native_plan_mode")
+    verdict, prefix = enter_plan_mode_decision(native_plan_mode, policy_status)
+    if verdict == "allow":
+        return 0
+    log_event(
+        "native_plan_mode_denied",
+        {"native_plan_mode": native_plan_mode, "policy_status": policy_status, "cwd": data.get("cwd")},
+    )
+    pretool_deny(f"{prefix} route planning through the Craftflow PLAN workflow instead of Claude Code's native plan mode")
+    return 0
+
+
 def main() -> int:
     data = load_input()
     mode = load_mode()
     tool_name = data.get("tool_name")
+    if tool_name == "EnterPlanMode":
+        return _handle_enter_plan_mode(data)
     # REM-FIX cycle 4 (silent-failure-hunter, live-reproduced CRITICAL): `or {}` only
     # substitutes on a FALSY value (None, [], "", 0) -- a truthy non-dict like `["a"]`
     # survives untouched and crashes the first `.get()` call inside

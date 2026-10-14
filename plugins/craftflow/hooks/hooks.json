@@ -24,6 +24,17 @@
         ]
       },
       {
+        "matcher": "EnterPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/craftflow_pretooluse_guard.py\"",
+            "timeout": 10,
+            "statusMessage": "CRAFTFLOW native plan mode policy"
+          }
+        ]
+      },
+      {
         "matcher": "WebFetch",
         "hooks": [
           {

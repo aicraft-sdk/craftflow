@@ -352,6 +352,57 @@ The permit record the pretooluse guard already logs for a finalize-permitted mem
 (`reason: "memory-write-permitted-by-finalize-token"`) now also carries `memory_write`, the effective policy value
 (`finalize-only`), and `policy_status` (`ok`, `defaults` or `invalid`). Both are read and logged only; the permit decision never depends on it.
 
+### Log event: `native_plan_mode_denied`
+
+- Emitter: `scripts/craftflow_pretooluse_guard.py` (`_handle_enter_plan_mode`), Claude Code only (`hooks/hooks.json` registers the
+  `EnterPlanMode` matcher; the Cursor template does not).
+- Trigger: an `EnterPlanMode` call while policy `native_plan_mode` is `never`, or the policy is `invalid`. The hook then prints a deny
+  decision (reason prefix `craftflow-policy: native_plan_mode=never —` or `craftflow-policy: policy-invalid —`). `allow` logs nothing.
+- Fail-open: a failed log write is swallowed; the deny is still printed.
+- Payload: `native_plan_mode` (effective value), `policy_status` (`ok`, `defaults` or `invalid`) and `cwd`.
+
+```json
+{"event": "native_plan_mode_denied", "native_plan_mode": "never", "policy_status": "ok", "cwd": "/repo"}
+```
+
+### Log event: `plan_commit_denied`
+
+- Emitter: `scripts/craftflow_pretooluse_bash_guard.py` (`_plan_commit_check`), Claude Code only (DD-12: Cursor payloads return before parsing).
+- Trigger: a `git add|stage|commit` that names (or, for `commit`, stages) a plan artifact (`docs/plans/**` except `.gitkeep`,
+  `.craftflow/state/workflows/*.json`, or the live artifact's `plan_file` / `design_file`) in a craftflow-managed project, including its
+  linked worktrees, while policy `plan_commit` is `never` or `invalid`.
+- Payload: `policy_key` (`plan_commit`), `policy_value`, `policy_status`, `paths` (top-relative protected paths) and `command`.
+
+```json
+{"event": "plan_commit_denied", "policy_key": "plan_commit", "policy_value": "never", "policy_status": "ok", "paths": ["docs/plans/x.md"], "command": "git add -f docs/plans/x.md"}
+```
+
+### Log event: `plan_commit_probe_error`
+
+- Emitter: `scripts/craftflow_pretooluse_bash_guard.py` (`_plan_commit_check`).
+- Trigger: the bounded (2 s) `git diff --name-only` probe behind a `git commit` failed, timed out, or git is missing. The commit is
+  allowed (fail open, today's behavior); an explicit protected pathspec still denies.
+- Payload: `command` and `probe` (`--cached` or `worktree`).
+
+### Log event: `plan_commit_dynamic_allowed`
+
+- Emitter: `scripts/craftflow_pretooluse_bash_guard.py` (`_plan_commit_check`).
+- Trigger: a plan-commit candidate with a dynamic pathspec (`$VAR`, `$(...)`) or a dynamic `-C` / `cd` target. It cannot be resolved
+  statically, so it is allowed here and the staged-index probe catches it at commit.
+- Payload: `command` and `reason`.
+
+### Log event: `worktree_merge_dirty_denied`
+
+- Emitter: `scripts/craftflow_pretooluse_bash_guard.py` (`_merge_check`), Claude Code only (DD-12).
+- Trigger: `git merge <b>` where `<b>` is the `worktree_branch` of an artifact in `<main_root>/.craftflow/state/workflows/*.json` and the
+  main tree has uncommitted changes (`git status --porcelain` non-empty) or the status probe errored, while `worktree_merge.require_clean_tree`
+  is true (the default until the policy ships the key). Other branches and unmanaged projects are untouched.
+- Payload: `policy_key`, `policy_status`, `branch`, `status_error` (true when the probe itself failed) and `command`.
+
+```json
+{"event": "worktree_merge_dirty_denied", "policy_key": "worktree_merge.require_clean_tree", "policy_status": "ok", "branch": "wf-x-abc", "status_error": false, "command": "git merge wf-x-abc"}
+```
+
 ## Keeping this doc honest
 
 `scripts/verify-craftflow-event-contract.mjs` (`pnpm run verify:event-contract`) asserts

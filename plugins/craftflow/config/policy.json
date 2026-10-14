@@ -1,4 +1,6 @@
 {
+  "native_plan_mode": "never",
+  "plan_commit": "never",
   "memory_write": "finalize-only",
   "$comment": "craftflow gate policy; values mirror router prose (ADR-0073)"
 }

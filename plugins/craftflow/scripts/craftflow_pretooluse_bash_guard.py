@@ -16,19 +16,25 @@ from __future__ import annotations
 
 import fnmatch
 import itertools
+import json
 import os
+import posixpath
 import re
+import subprocess
 from pathlib import Path
 
 from craftflow_hooklib import (
     command_has_traversal_or_wildcard,
     extract_redirect_targets,
+    is_cursor_host,
     is_env_assignment,
     latest_live_workflow_payload,
     load_input,
     load_mode,
+    load_policy,
     log_event,
     looks_dynamic,
+    policy_value,
     matches_memory_finalize_permit_shape,
     memory_finalize_permit_path,
     pretool_deny,
@@ -1573,6 +1579,308 @@ def _is_in_cwd_critical(resolved: Path, cwd: Path) -> bool:
     return _has_wildcard_adjacent_critical_child(resolved)
 
 
+# --------------------------------------------------------------------------------------------------------------------
+# Policy guards (ADR-0073, router context cut r2 P5): `plan_commit` (BC-3) and the worktree-merge clean tree (BC-5).
+# Claude Code only (DD-12). Scoped to craftflow-managed projects, including their linked worktrees (A6). Always fail open on
+# an I/O or parse error: that is today's behavior, never a new deny.
+# --------------------------------------------------------------------------------------------------------------------
+
+_WF_JSON_RE = re.compile(r"(^|/)\.craftflow/state/workflows/[^/]+\.json$")
+_PLAN_DIR = "docs/plans"
+_WF_DIR = ".craftflow/state/workflows"
+_GLOB_CHARS = "*?["
+_PROBE_TIMEOUT_SECONDS = 2
+_COMMIT_VALUE_LONG_FLAGS = {
+    "--message", "--file", "--author", "--date", "--reuse-message", "--reedit-message", "--fixup", "--squash",
+    "--template", "--cleanup", "--trailer",
+}
+_COMMIT_VALUE_SHORT_CHARS = "mFCct"
+_MERGE_VALUE_FLAGS = {"-m", "-F", "-s", "-X", "--into-name", "--strategy", "--strategy-option", "--message", "--file"}
+
+
+def resolve_main_root(start) -> tuple:
+    """BC-3 steps 2-6, file reads only (no subprocess). Returns (top, main_root, managed). `top` is the working-tree top D
+    (first directory at or above `start` holding a `.git` entry); `main_root` is the main checkout, found through a linked
+    worktree's `.git` file -> `gitdir` -> `commondir`. managed iff `.craftflow/state/` exists in main_root or on the walk from
+    `start` to `top`. Any I/O or parse error, a garbage `.git` file, or an unusual layout gives (None, None, False)."""
+    try:
+        origin = Path(os.path.realpath(str(start)))
+        top = next((cand for cand in (origin, *origin.parents) if os.path.lexists(cand / ".git")), None)
+        if top is None:
+            return None, None, False
+        git_entry = top / ".git"
+        if git_entry.is_dir():
+            main_root = top
+        else:
+            first = git_entry.read_text(encoding="utf-8").splitlines()[0]
+            if not first.startswith("gitdir:"):
+                return None, None, False
+            gitdir = Path(first[len("gitdir:"):].strip())
+            if not gitdir.is_absolute():
+                gitdir = top / gitdir
+            commondir = gitdir / "commondir"
+            if commondir.is_file():
+                common = (gitdir / commondir.read_text(encoding="utf-8").strip()).resolve()
+            else:
+                common = gitdir.resolve()
+            if common.name != ".git":
+                return None, None, False
+            main_root = common.parent
+        walk = [origin, *origin.parents]
+        walk = walk[: walk.index(top) + 1]
+        managed = any((cand / ".craftflow" / "state").is_dir() for cand in (main_root, *walk))
+        return top, main_root, managed
+    except (OSError, ValueError, IndexError, RuntimeError):  # RuntimeError: symlink loop on Python < 3.13
+        return None, None, False
+
+
+def _pathspec_rel(token: str, cwd: str, top: str):
+    """(top-relative posix path, is_glob) for one git pathspec token, or None when it is outside the tree or an exclude."""
+    base = cwd
+    if token.startswith(":("):
+        close = token.find(")")
+        if close < 0 or "exclude" in token[: close + 1]:
+            return None
+        token = token[close + 1:]
+    elif token.startswith(":/"):
+        base, token = top, token[2:]
+    elif token[:2] in (":!", ":^"):
+        return None
+    joined = os.path.normpath(os.path.join(base, token))
+    rel = os.path.relpath(joined, top).replace(os.sep, "/")
+    if rel == ".." or rel.startswith("../"):
+        return None
+    return rel, any(ch in token for ch in _GLOB_CHARS)
+
+
+def _rel_protected(rel: str, is_glob: bool, force: bool, extra) -> bool:
+    """True when a top-relative pathspec names (or, with force, would reach) a protected plan artifact."""
+    roots = [_PLAN_DIR, _WF_DIR, *sorted(extra)]
+    if is_glob:
+        cut = min(rel.index(ch) for ch in _GLOB_CHARS if ch in rel)
+        prefix = rel[:cut]
+        if prefix.startswith(_PLAN_DIR + "/") or prefix.startswith(_WF_DIR + "/"):
+            return True
+        return force and any((root + "/").startswith(prefix) for root in roots)
+    if rel in extra or _WF_JSON_RE.search(rel):
+        return True
+    if rel == _PLAN_DIR or rel.startswith(_PLAN_DIR + "/"):
+        return posixpath.basename(rel) != ".gitkeep"
+    return force and (rel == "." or any(root.startswith(rel + "/") for root in roots))
+
+
+def plan_pathspec_violations(subcommand: str, args: list, cwd: str, top: str, extra=frozenset()) -> tuple:
+    """Pure. (violations, dynamic, has_pathspecs, all_flag) for `git add|stage|commit` args: the top-relative protected paths
+    the explicit pathspecs name (`.gitkeep` exempt), whether any pathspec was dynamic (`$VAR`, `$(...)`: allowed here, the
+    staged probe catches it at commit), whether any pathspec was given, and whether `-a|--all|-A` was. `add -f|--force` also
+    denies an ancestor pathspec (`.`, `docs`, `:/`) and `-A -f`."""
+    pathspecs, force, all_flag, after = [], False, False, False
+    idx = 0
+    while idx < len(args):
+        tok = args[idx]
+        idx += 1
+        if after:
+            pathspecs.append(tok)
+        elif tok == "--":
+            after = True
+        elif tok.startswith("--"):
+            force = force or tok == "--force"
+            all_flag = all_flag or tok == "--all"
+            if subcommand == "commit" and tok in _COMMIT_VALUE_LONG_FLAGS:
+                idx += 1
+        elif tok.startswith("-") and len(tok) > 1:
+            cluster = tok[1:]
+            if subcommand == "commit":
+                for pos, ch in enumerate(cluster):
+                    if ch == "a":
+                        all_flag = True
+                    elif ch in _COMMIT_VALUE_SHORT_CHARS:
+                        idx += 0 if cluster[pos + 1:] else 1
+                        break
+            else:
+                force = force or "f" in cluster
+                all_flag = all_flag or "A" in cluster
+        else:
+            pathspecs.append(tok)
+    violations = []
+    dynamic = False
+    for spec in pathspecs:
+        if looks_dynamic(spec):
+            dynamic = True
+            continue
+        parsed = _pathspec_rel(spec, cwd, top)
+        if parsed is not None and _rel_protected(parsed[0], parsed[1], force and subcommand != "commit", extra):
+            violations.append(parsed[0])
+    if force and all_flag and subcommand != "commit":
+        violations.append(".")
+    return violations, dynamic, bool(pathspecs), all_flag
+
+
+def is_wf_branch_merge(args: list, wf_branches) -> str:
+    """Pure. The workflow branch a `git merge` names (any flags), or ""."""
+    skip = False
+    for tok in args:
+        if skip:
+            skip = False
+        elif tok in _MERGE_VALUE_FLAGS:
+            skip = True
+        elif not tok.startswith("-") and tok in wf_branches:
+            return tok
+    return ""
+
+
+def _git_lines(top: str, *args):
+    """Output lines of a bounded git probe, or None when it errored, timed out or git is missing."""
+    try:
+        result = subprocess.run(["git", "-C", top, *args], capture_output=True, timeout=_PROBE_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return [part.decode("utf-8", "surrogateescape") for part in result.stdout.split(b"\0") if part]
+
+
+def _git_invocations(command: str, cwd: str) -> list:
+    """[(subcommand, later_tokens, effective_cwd, dynamic)] for every `git` subcommand, following `cd <static dir>`."""
+    found = []
+    here = cwd
+    dynamic_cwd = False
+    for tokens in split_subcommands(command):
+        name, rest = _split_command_name(tokens)
+        if name == "cd" and rest:
+            if looks_dynamic(rest[0]) or rest[0] == "-":
+                dynamic_cwd = True
+            else:
+                here = os.path.normpath(os.path.join(here, rest[0]))
+        elif name == "git":
+            sub, later, _override, malformed, dyn_dir = _find_git_subcommand(rest)
+            if sub is None or malformed:
+                continue
+            prefix = rest[: len(rest) - len(later) - 1]
+            eff = here
+            for pos, tok in enumerate(prefix):
+                if tok == "-C" and pos + 1 < len(prefix):
+                    eff = os.path.normpath(os.path.join(eff, prefix[pos + 1]))
+            found.append((sub, later, eff, dyn_dir or dynamic_cwd))
+    return found
+
+
+def _live_artifact_paths(data: dict, main_root) -> set:
+    """Top-relative `plan_file` / `design_file` of the live workflow artifact (anchored to main_root, never bare)."""
+    try:
+        payload = latest_live_workflow_payload(data.get("session_id"), project_root=main_root)
+    except Exception as exc:  # unreadable artifacts must not break the guard; log and treat as none
+        log_event("plugin_pretooluse_bash_guard", {"event": "pretool_guard_parse_error", "command_name": "plan_commit_artifact_lookup", "error": repr(exc)})
+        return set()
+    paths = set()
+    for key in ("plan_file", "design_file"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            rel = os.path.relpath(value, str(main_root)) if os.path.isabs(value) else os.path.normpath(value)
+            if not (rel == ".." or rel.startswith("../")):
+                paths.add(rel.replace(os.sep, "/"))
+    return paths
+
+
+def _wf_branches(main_root) -> set:
+    branches = set()
+    for artifact in sorted((Path(main_root) / ".craftflow" / "state" / "workflows").glob("*.json")):
+        try:
+            branch = json.loads(artifact.read_text(encoding="utf-8")).get("worktree_branch")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(branch, str) and branch:
+            branches.add(branch)
+    return branches
+
+
+def _policy_reason(key: str, value, status: str, remediation: str) -> str:
+    """`craftflow-policy: <key>=<value> — <remediation>`; an invalid policy reports `policy-invalid` (it never widens)."""
+    if status == "invalid":
+        return f"craftflow-policy: policy-invalid — {remediation}"
+    return f"craftflow-policy: {key}={json.dumps(value).strip(chr(34))} — {remediation}"
+
+
+def _resolve_cached(cache: dict, eff: str) -> tuple:
+    if eff not in cache:
+        cache[eff] = resolve_main_root(eff)
+    return cache[eff]
+
+
+def _plan_commit_check(sub, later, eff, dyn, command, data, cache) -> bool:
+    """True when a plan_commit deny was emitted for this git invocation."""
+    top, main_root, managed = _resolve_cached(cache, eff)
+    if not managed or dyn:
+        if managed and dyn:
+            log_event("plan_commit_dynamic_allowed", {"command": command, "reason": "dynamic -C or cd target"})
+        return False
+    extra = _live_artifact_paths(data, main_root)
+    top_s, eff_real = str(top), os.path.realpath(eff)
+    violations, dynamic, explicit, all_flag = plan_pathspec_violations(sub, later, eff_real, top_s, extra)
+    if dynamic:
+        log_event("plan_commit_dynamic_allowed", {"command": command, "reason": "dynamic pathspec"})
+    probe_paths = []
+    if not violations and sub == "commit":
+        for args in ([("--cached",)] + ([()] if (all_flag or explicit) else [])):
+            listed = _git_lines(top_s, "diff", "--name-only", "-z", "--no-renames", *args)
+            if listed is None:
+                log_event("plan_commit_probe_error", {"command": command, "probe": " ".join(args) or "worktree"})
+                continue
+            probe_paths.extend(rel for rel in listed if _rel_protected(rel, False, False, extra))
+    hits = violations + probe_paths
+    if not hits:
+        return False
+    policy, status, _errors = load_policy()
+    value = policy_value(policy, "plan_commit")
+    if value == "allow" and status != "invalid":
+        return False
+    paths = sorted(set(hits))
+    log_event("plan_commit_denied", {"policy_key": "plan_commit", "policy_value": value, "policy_status": status, "paths": paths, "command": command})
+    pretool_deny(_policy_reason(
+        "plan_commit", value, status,
+        f"{', '.join(paths)} is a plan artifact; keep plans local (docs/plans is gitignored), run "
+        "`git restore --staged <path>` if it is already staged, or set plan_commit to allow in config/policy.json via a PR",
+    ))
+    return True
+
+
+def _merge_check(later, eff, command, cache) -> bool:
+    """True when a dirty-main-tree merge deny was emitted for `git merge <workflow branch>`."""
+    top, main_root, managed = _resolve_cached(cache, eff)
+    if not managed:
+        return False
+    branch = is_wf_branch_merge(later, _wf_branches(main_root))
+    if not branch:
+        return False
+    policy, status, _errors = load_policy()
+    if policy_value(policy, "worktree_merge.require_clean_tree") is not True:
+        return False
+    dirty = _git_lines(str(top), "status", "--porcelain", "-z")
+    if dirty is not None and not dirty:
+        return False
+    log_event("worktree_merge_dirty_denied", {"policy_key": "worktree_merge.require_clean_tree", "policy_status": status,
+                                              "branch": branch, "status_error": dirty is None, "command": command})
+    pretool_deny(_policy_reason(
+        "worktree_merge.require_clean_tree", True, status,
+        f"worktree_dirty_main_tree: the main tree has uncommitted changes (or `git status` failed), so `git merge {branch}` is "
+        "blocked. Commit, stash, or otherwise resolve them, then merge",
+    ))
+    return True
+
+
+def _policy_guards(command: str, cwd: str, data: dict) -> bool:
+    """True when a policy deny was emitted. Claude Code only: Cursor payloads return at once (DD-12)."""
+    if is_cursor_host() or "git" not in command:
+        return False
+    cache: dict = {}
+    for sub, later, eff, dyn in _git_invocations(command, cwd):
+        if sub in ("add", "stage", "commit") and _plan_commit_check(sub, later, eff, dyn, command, data, cache):
+            return True
+        if sub == "merge" and not dyn and _merge_check(later, eff, command, cache):
+            return True
+    return False
+
+
 def main() -> int:
     # REM-FIX (CRITICAL, algorithmic-complexity DoS variant -- unbounded
     # call COUNT): reset the process-wide brace-scan budget exactly once,
@@ -1641,6 +1949,9 @@ def main() -> int:
         )
         cwd = None
         cwd_unresolved = True
+
+    if cwd is not None and _policy_guards(command, str(cwd), data):
+        return 0
 
     # PH1 (DD-1/DD-2/D-8): identity lookups (workflow, permit path, protected
     # redirect set) use the anchored project root so a cwd drifted into

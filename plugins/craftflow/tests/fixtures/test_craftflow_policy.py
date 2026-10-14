@@ -652,7 +652,9 @@ def test_schema_leaf_keys_equal_defaults():
 def test_shipped_policy_is_exactly_p4_keys():
     print("\n[shipped config/policy.json]")
     shipped = json.loads((PLUGIN_ROOT / "config" / "policy.json").read_text(encoding="utf-8"))
-    check("shipped_policy_only_memory_write", leaves(shipped) == {"memory_write"} and shipped["memory_write"] == "finalize-only"
+    # P5 widens the P4 pin: each phase ships only the keys whose reader it adds (B6). P6 adds the caps, P7 worktree_merge.
+    check("shipped_policy_only_memory_write", leaves(shipped) == {"memory_write", "native_plan_mode", "plan_commit"}
+          and shipped["memory_write"] == "finalize-only" and shipped["native_plan_mode"] == "never" and shipped["plan_commit"] == "never"
           and shipped.get("$comment") == "craftflow gate policy; values mirror router prose (ADR-0073)", str(shipped))
     _, status, errors = pol.load_policy(PLUGIN_ROOT / "config" / "policy.json")
     check("shipped_policy_valid", status == "ok" and errors == [], f"status={status} errors={errors}")

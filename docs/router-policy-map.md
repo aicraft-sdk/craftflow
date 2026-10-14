@@ -193,3 +193,20 @@ hook blocks direct writes to protected memory files"; the prose is not deleted.
 ```
 | 2b1275f157fe | memory_write | craftflow_pretooluse_guard.py::_handle_edit_write | craftflow_hook_unit_tests.py::test_memory_write_permit_unchanged_with_policy_invalid | document-only | false | <Name (YYYY-MM-DD)> | |
 ```
+
+P5 (`plan_commit` and `native_plan_mode`, ADR-0073 BC-2 and BC-3, Claude Code only per DD-12), for `## Policy-mapped deletions`.
+Three draft rows:
+
+- `f41d16afa416` is the SKILL.md § 13 "Never `git add` or `git commit` a plan artifact" bullet. P5 shortened it to one sentence
+  ("enforced by policy `plan_commit` in craftflow projects (see Policy table)") and kept the `- Plan:` pointer and the
+  `git restore --staged` sentences as defense in depth, so the baseline occurrence is gone: `deleted`. The pointer to the
+  Policy table has no target until the phase that renders that table lands.
+- `a01e2c640767` (SKILL.md) and `c403449266e4` (`router-protocol.md`) are the two "Never use EnterPlanMode" rules. P5 enforces them
+  but deletes neither: `pending-prose-deletion`, `live_verified: false`. The live `claude -p` probe was not run in P5; P13 (LV-3 /
+  HV-4) must prove the deny fires, or these rows become `prose_retained`.
+
+```
+| f41d16afa416 | plan_commit | craftflow_pretooluse_bash_guard.py::plan_pathspec_violations | test_policy_guards.py::test_plan_commit_staged_probe | deleted | false | <Name (YYYY-MM-DD)> | |
+| a01e2c640767 | native_plan_mode | craftflow_pretooluse_guard.py::_handle_enter_plan_mode | test_policy_guards.py::test_enterplanmode | pending-prose-deletion | false | <Name (YYYY-MM-DD)> | |
+| c403449266e4 | native_plan_mode | craftflow_pretooluse_guard.py::_handle_enter_plan_mode | test_policy_guards.py::test_enterplanmode | pending-prose-deletion | false | <Name (YYYY-MM-DD)> | |
+```
