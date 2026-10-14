@@ -131,7 +131,9 @@ def _clip(text: str, limit: int = 120) -> str:
 def _read_regular(target: Path) -> bytes:
     """At most MAX_POLICY_BYTES + 1 bytes of a regular file. Opened O_NONBLOCK so a FIFO cannot block the open, and checked
     with fstat before any read so a FIFO, device or /dev/zero is never read."""
-    fd = os.open(target, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    # hasattr, not getattr: the conductor import-closure extractor treats getattr as an opaque dynamic import.
+    nonblock = os.O_NONBLOCK if hasattr(os, "O_NONBLOCK") else 0
+    fd = os.open(target, os.O_RDONLY | nonblock)
     with os.fdopen(fd, "rb") as fh:
         if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
             raise ValueError("not a regular file")
