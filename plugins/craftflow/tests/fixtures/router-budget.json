@@ -1,9 +1,10 @@
 {
   "baseline_ref": "0439c33932463d257b881ce50f136ab7661c0a39",
   "measured_at_sha": "7d573e93795b95357a7e38e6cade91335091a368",
-  "last_phase": "P2",
+  "last_phase": "P2C",
   "merged_phases": [
-    "P2"
+    "P2",
+    "P2C"
   ],
   "conditions": {
     "difference_17": true,

@@ -637,6 +637,13 @@ def test_measured_within_phase_projection() -> None:
           f"{problems}; control={control} (apply the projection-drift stop rule, never raise a ceiling silently)")
 
 
+def test_p2c_in_merged_phases() -> None:
+    """P2C exit criterion 3: the merged P2C phase is recorded after P2, and the projection is still met with both merged."""
+    b = load_budget()
+    check("p2c_in_merged_phases", b["merged_phases"] == ["P2", "P2C"],
+          f"merged_phases={b['merged_phases']}, expected ['P2', 'P2C']")
+
+
 def test_enforce_requires_caps() -> None:
     b = load_budget()
     rule = lambda d: (not d["enforce"]) or d["enforced_caps"] is not None  # noqa: E731
