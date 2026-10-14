@@ -641,8 +641,8 @@ def test_measured_within_phase_projection() -> None:
 def test_p2c_in_merged_phases() -> None:
     """P2C exit criterion 3: the merged P2C phase is recorded after P2, and the projection is still met with both merged."""
     b = load_budget()
-    check("p2c_in_merged_phases", b["merged_phases"] == ["P2", "P2C"],
-          f"merged_phases={b['merged_phases']}, expected ['P2', 'P2C']")
+    check("p2c_in_merged_phases", b["merged_phases"][:2] == ["P2", "P2C"],
+          f"merged_phases={b['merged_phases']}, expected to start with ['P2', 'P2C'] (later phases append after them)")
 
 
 def test_enforce_requires_caps() -> None:
