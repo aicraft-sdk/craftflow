@@ -1,10 +1,14 @@
 ---
 name: frontend-patterns
-description: "Use when frontend UI work needs accessibility, responsive layout, loading/error states, performance guardrails, or DESIGN.md authoring from screenshots, existing UI, user preferences, or chosen visual inspiration under an approved visual direction."
+description: "Use when frontend UI work needs accessibility, responsive layout, loading/error states, perf guardrails or DESIGN.md authoring."
 allowed-tools: Read Grep Glob LSP
 ---
 
 # Frontend Patterns
+
+## When To Use
+
+Use when frontend UI work needs accessibility, responsive layout, loading/error states, performance guardrails, or DESIGN.md authoring from screenshots, existing UI, user preferences, or chosen visual inspiration under an approved visual direction.
 
 ## Overview
 

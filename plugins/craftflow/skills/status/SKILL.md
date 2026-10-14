@@ -1,22 +1,6 @@
 ---
 name: status
-description: |
-  Read-only status of the current (or a chosen) Craftflow workflow — which phases
-  and agents are done vs pending, blockers, proof status, and last event.
-  Never writes anything; safe to call at any point.
-
-  Use this skill when: checking workflow status, what phase am I in, what's running,
-  what's done, what's pending, workflow progress, feature status, wf status,
-  where am I in the build, what's the current phase, show me progress.
-
-  Triggers: status, craftflow status, workflow status, where am I, what phase,
-  progress, what's done, what's pending, wf status, feature status, what's running,
-  show status, show progress, current workflow.
-
-  NOTE: This skill does NOT go through craftflow-router. It is an inspection
-  tool — read-only. Running it from a separate terminal is the truly
-  non-interrupting path (works while the agent is mid-task); invoked in-session
-  it runs when the agent yields between turns.
+description: "Read-only status of the current Craftflow workflow: phases done/pending, blockers, last event; does NOT go through craftflow-router. Use for status/progress."
 allowed-tools: Read, Bash, Glob
 ---
 
@@ -28,6 +12,25 @@ Non-mutating workflow status report. Reads `.craftflow/state/` as-is.
 development task — an explicitly allowed exception to the always-route rule.
 
 ---
+
+## When To Use
+
+Read-only status of the current (or a chosen) Craftflow workflow — which phases
+and agents are done vs pending, blockers, proof status, and last event.
+Never writes anything; safe to call at any point.
+
+Use this skill when: checking workflow status, what phase am I in, what's running,
+what's done, what's pending, workflow progress, feature status, wf status,
+where am I in the build, what's the current phase, show me progress.
+
+Triggers: status, craftflow status, workflow status, where am I, what phase,
+progress, what's done, what's pending, wf status, feature status, what's running,
+show status, show progress, current workflow.
+
+NOTE: This skill does NOT go through craftflow-router. It is an inspection
+tool — read-only. Running it from a separate terminal is the truly
+non-interrupting path (works while the agent is mid-task); invoked in-session
+it runs when the agent yields between turns.
 
 ## Step 1 — Resolve Script Path
 

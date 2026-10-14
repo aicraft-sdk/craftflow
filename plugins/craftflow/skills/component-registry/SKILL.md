@@ -1,10 +1,14 @@
 ---
 name: component-registry
-description: "Use before writing any UI component, token file, layout pattern, or multi-step UI flow: search the ai-craft registry via the ai-craft-registry MCP tools, reuse and cite matching entries, and list promotion candidates after the build."
+description: "Use before writing any UI component, token file, layout pattern or UI flow: search the ai-craft registry and reuse matches."
 allowed-tools: Read Grep Glob
 ---
 
 # Component Registry
+
+## When To Use
+
+Use before writing any UI component, token file, layout pattern, or multi-step UI flow: search the ai-craft registry via the ai-craft-registry MCP tools, reuse and cite matching entries, and list promotion candidates after the build.
 
 ## Overview
 

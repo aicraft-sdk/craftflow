@@ -1,10 +1,14 @@
 ---
 name: frontend-design-critique
-description: "Use when reviewing the visual/UX quality of a built UI — to score it against an anchored rubric, catch AI-slop patterns, and avoid one reasoning head rubber-stamping its own design."
+description: "Use when reviewing the visual/UX quality of a built UI: score it against an anchored rubric and catch AI-slop patterns."
 allowed-tools: Read Grep Glob Bash
 ---
 
 # Frontend Design Critique
+
+## When To Use
+
+Use when reviewing the visual/UX quality of a built UI — to score it against an anchored rubric, catch AI-slop patterns, and avoid one reasoning head rubber-stamping its own design.
 
 ## Overview
 

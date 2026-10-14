@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -1038,6 +1039,99 @@ def test_raise_over_projection_plus_1000_fails() -> None:
     budget["ceiling_raises"] = [{"phase": "P4", "key": "readset.BUILD", "from": 3000, "to": 3400, "projected_delta": 400}]
     problems = check_raise_bounds(budget, origin, fixture_projector(table))
     check("raise_over_projection_plus_1000_fails", any("+ 1000" in p for p in problems), str(problems))
+
+
+# ---------------------------------------------------------------------------------------------- P3: skill descriptions
+
+DESC_MAX = 160
+# Explicit, closed exception list for the 160-char rule. craftflow-router keeps its original 499-char description:
+# deferred to P10/P11, where a signed kernel unit can carry the trigger list. Until then the plan's one-line draft is blocked
+# by the rule-inventory 60% token-retention check and the guarded word 'not' ("do not stop at describing capabilities"),
+# which no policy-map row can satisfy. The list must equal exactly this set; adding a skill here is a reviewed change.
+DESC_LONG_EXCEPTIONS = frozenset({"craftflow-router"})
+INTERNAL_STUBS = ("architecture-patterns", "brainstorming", "code-generation", "code-review-patterns", "intent-interview",
+                  "planning-patterns", "research", "session-memory", "test-driven-development")
+_SKILL_CALL = re.compile(r"""Skill\(\s*skill\s*=\s*["']craftflow:([a-z0-9-]+)["']""")
+_FM_FLAG = re.compile(r"^disable-model-invocation:", re.M)
+
+
+def skill_texts() -> Dict[str, str]:
+    return {p.parent.name: p.read_text(encoding="utf-8") for p in sorted((PLUGIN_ROOT / "skills").glob("*/SKILL.md"))}
+
+
+def frontmatter_block(text: str) -> str:
+    m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+    return m.group(1) if m else ""
+
+
+def over_limit(texts: Dict[str, str], limit: int = DESC_MAX, exceptions=frozenset()) -> Dict[str, int]:
+    out = {}
+    for name, text in texts.items():
+        if name in exceptions:
+            continue
+        d =rs.core.effective_description(text)
+        if len(d) > limit or "\n" in d:
+            out[name] = len(d)
+    return out
+
+
+def flagged(texts: Dict[str, str]) -> List[str]:
+    return sorted(n for n, t in texts.items() if _FM_FLAG.search(frontmatter_block(t)))
+
+
+def invoked_or_preloaded(skill_texts_: Dict[str, str], agent_texts: Dict[str, str]) -> set:
+    names = set()
+    for text in list(skill_texts_.values()) + list(agent_texts.values()):
+        names.update(_SKILL_CALL.findall(text))
+    for text in agent_texts.values():
+        names.update(re.findall(r"^\s+-\s+craftflow:([a-z0-9-]+)\s*$", frontmatter_block(text), re.M))
+    return names
+
+
+def agent_texts() -> Dict[str, str]:
+    return {p.stem: p.read_text(encoding="utf-8") for p in sorted((PLUGIN_ROOT / "agents").glob("*.md"))}
+
+
+def test_each_description_le_160() -> None:
+    texts = skill_texts()
+    probe = {"x": "---\nname: x\ndescription: |\n  " + "a" * 100 + "\n  b\n---\n", "y": "---\nname: y\ndescription: \"" + "a" * 161 + "\"\n---\n"}
+    detects = set(over_limit(probe)) == {"x", "y"}
+    # negative control: an exception for one name never excuses another over-long skill
+    control = set(over_limit(probe, exceptions=frozenset({"x"}))) == {"y"}
+    closed = DESC_LONG_EXCEPTIONS == frozenset({"craftflow-router"})
+    over = over_limit(texts, exceptions=DESC_LONG_EXCEPTIONS)
+    tight = {n: len(rs.core.effective_description(texts[n])) for n in ("cursor-router", "research")
+             if len(rs.core.effective_description(texts[n])) > 100}
+    check("each_description_le_160", detects and control and closed and not over and not tight,
+          f"detector_ok={detects} control_ok={control} exceptions_closed={closed}; one-line and <= {DESC_MAX} violated by {over}; "
+          f"cursor-router/research over 100: {tight}")
+
+
+def test_no_skill_has_disable_model_invocation() -> None:
+    probe = {"x": "---\nname: x\ndisable-model-invocation: true\n---\nbody\n", "y": "---\nname: y\n---\ndisable-model-invocation: true\n"}
+    detects = flagged(probe) == ["x"]
+    bad = flagged(skill_texts())
+    check("no_skill_has_disable_model_invocation", detects and not bad,
+          f"detector_ok={detects}; flagged={bad}. This round ships the flag nowhere; adding it is a deferred follow-up "
+          "that needs live proof (HV-3) that Skill-tool invocation still works")
+
+
+def test_no_disable_model_invocation_on_invoked_or_preloaded_skills() -> None:
+    texts, agents = skill_texts(), agent_texts()
+    used = invoked_or_preloaded(texts, agents)
+    probe_skills = {"alpha": "---\nname: alpha\ndisable-model-invocation: true\n---\n"}
+    probe_agents = {"a": "---\nname: a\nskills:\n  - craftflow:alpha\n---\n"}
+    detects = invoked_or_preloaded({}, probe_agents) == {"alpha"} and invoked_or_preloaded({"r": 'Skill(skill="craftflow:alpha")'}, {}) == {"alpha"}
+    bad = sorted(set(flagged(texts)) & used)
+    check("no_disable_model_invocation_on_invoked_or_preloaded_skills", detects and len(used) >= 10 and not bad,
+          f"detector_ok={detects}; invoked_or_preloaded={len(used)}; flagged-and-used={bad}; probe={flagged(probe_skills)}")
+
+
+def test_internal_stubs_keep_prefix() -> None:
+    texts = skill_texts()
+    missing = [n for n in INTERNAL_STUBS if n not in texts]
+    wrong = [n for n in INTERNAL_STUBS if n in texts and not rs.core.effective_description(texts[n]).startswith("Internal skill")]
+    check("internal_stubs_keep_prefix", not missing and not wrong, f"missing={missing} without 'Internal skill' prefix={wrong}")
 
 
 def main() -> int:

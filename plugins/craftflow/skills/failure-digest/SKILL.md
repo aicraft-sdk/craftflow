@@ -1,20 +1,6 @@
 ---
 name: failure-digest
-description: |
-  Read-only cross-workflow failure digest — ranks recurring failure signatures
-  (from every workflow's event log, not just the current one) by occurrence
-  count, so recurring pain points can become roadmap items instead of staying
-  buried in per-workflow memory. Never writes anything; safe to call at any point.
-
-  Use this skill when: what keeps failing, what's breaking most, failure
-  digest, recurring failures, what should we fix next, roadmap from failures,
-  what's the most common blocker, top gotchas, failure taxonomy.
-
-  Triggers: failure digest, what keeps failing, recurring failures, top
-  blockers, what breaks most, failure roadmap, craftflow failure report.
-
-  NOTE: This skill does NOT go through craftflow-router. It is an inspection
-  tool — read-only, same exception as the `status` skill.
+description: "Read-only digest ranking recurring failure signatures across Craftflow workflows; does NOT go through craftflow-router. Use to ask what keeps failing."
 allowed-tools: Read, Bash, Glob
 ---
 
@@ -33,6 +19,23 @@ every workflow, ranked, so a recurring cluster can be read as "build this" or
 "harden this" rather than just "avoid this."
 
 ---
+
+## When To Use
+
+Read-only cross-workflow failure digest — ranks recurring failure signatures
+(from every workflow's event log, not just the current one) by occurrence
+count, so recurring pain points can become roadmap items instead of staying
+buried in per-workflow memory. Never writes anything; safe to call at any point.
+
+Use this skill when: what keeps failing, what's breaking most, failure
+digest, recurring failures, what should we fix next, roadmap from failures,
+what's the most common blocker, top gotchas, failure taxonomy.
+
+Triggers: failure digest, what keeps failing, recurring failures, top
+blockers, what breaks most, failure roadmap, craftflow failure report.
+
+NOTE: This skill does NOT go through craftflow-router. It is an inspection
+tool — read-only, same exception as the `status` skill.
 
 ## Step 1 — Resolve Script Path
 

@@ -1,15 +1,15 @@
 ---
 name: skill-distillation
-description: >-
-  Use when authoring a staged skill proposal from a gate-eligible
-  skill-candidate ledger entry. Applies the anti-slop rubric (dedup check,
-  already-documented check, executable-artifact check) and writes a proposal
-  to staging only — never directly to .claude/skills/ or .cursor/skills/.
+description: "Use when authoring a staged skill proposal from a gate-eligible skill-candidate ledger entry; writes to staging only."
 allowed-tools: Read, Edit, Write, Bash, Grep, Glob
 user-invocable: false
 ---
 
 # skill-distillation
+
+## When To Use
+
+Use when authoring a staged skill proposal from a gate-eligible skill-candidate ledger entry. Applies the anti-slop rubric (dedup check, already-documented check, executable-artifact check) and writes a proposal to staging only — never directly to .claude/skills/ or .cursor/skills/.
 
 ## Overview
 

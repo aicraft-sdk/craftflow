@@ -1,8 +1,12 @@
 ---
 name: jev-setup
-description: "Use when the user asks to 'enable jev', 'set up typesafe', 'turn on the jev routing hint', 'disable jev', or 'check jev status' for the craftflow plugin."
+description: "Use when the user asks to 'enable jev', 'set up typesafe', 'disable jev' or 'check jev status' for the craftflow plugin."
 allowed-tools: Read Bash
 ---
+
+## When To Use
+
+Use when the user asks to 'enable jev', 'set up typesafe', 'turn on the jev routing hint', 'disable jev', or 'check jev status' for the craftflow plugin.
 
 ## Mission
 

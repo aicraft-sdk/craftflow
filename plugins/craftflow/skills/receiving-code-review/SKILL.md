@@ -1,10 +1,14 @@
 ---
 name: receiving-code-review
-description: "Use when a human or external reviewer gives feedback on your work — pasted PR comments, review notes, or 'can you change X' — and you must verify before agreeing or implementing."
+description: "Use when a reviewer gives feedback on your work (PR comments, review notes) and you must verify before agreeing or implementing."
 allowed-tools: Read Grep Glob Bash
 ---
 
 # Receiving Code Review
+
+## When To Use
+
+Use when a human or external reviewer gives feedback on your work — pasted PR comments, review notes, or 'can you change X' — and you must verify before agreeing or implementing.
 
 ## Overview
 

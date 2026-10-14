@@ -1,12 +1,6 @@
 ---
 name: cursor-router
-description: |
-  Craftflow router for Cursor AI agent mode. Each workflow phase is dispatched via a
-  real, isolated Cursor `Task` tool call (subagent_type: generalPurpose) — not inline
-  role-play in the router's own turn. code-reviewer and silent-failure-hunter are
-  dispatched in parallel via two Task calls in the same message when both are ready.
-  There is still no real task-tracking system in Cursor — no TaskCreate, TaskUpdate,
-  TaskList, or TaskGet — so phase-state tracking remains self-managed via cursor-wf.json.
+description: "Craftflow router for Cursor agent mode; loaded by the Cursor rule, not by Claude Code."
 ---
 
 # Craftflow Router — Cursor Task-Dispatch Mode

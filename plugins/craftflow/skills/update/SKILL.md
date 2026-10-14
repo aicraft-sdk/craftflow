@@ -1,14 +1,6 @@
 ---
 name: update
-description: |
-  Safe craftflow upgrade that preserves local modifications.
-  Stashes diffs, pulls upstream, rebuilds cache, rebases patches.
-
-  Use this skill when: updating craftflow, upgrading, pulling latest craftflow,
-  syncing plugin, refreshing cache, or checking for new versions.
-
-  Triggers: update craftflow, upgrade craftflow, pull craftflow, sync plugin, refresh craftflow,
-  check for updates, new version, update plugin, upgrade plugin.
+description: "Safe craftflow plugin upgrade preserving local modifications. Use to update, upgrade or sync craftflow."
 allowed-tools: Read, Bash, AskUserQuestion
 ---
 
@@ -19,6 +11,17 @@ Safe upgrade that preserves your local modifications to cached skill files.
 **Workflow:** Discover versions → Stash local diffs → Pull upstream → Rebuild cache → Rebase patches → Verify.
 
 ---
+
+## When To Use
+
+Safe craftflow upgrade that preserves local modifications.
+Stashes diffs, pulls upstream, rebuilds cache, rebases patches.
+
+Use this skill when: updating craftflow, upgrading, pulling latest craftflow,
+syncing plugin, refreshing cache, or checking for new versions.
+
+Triggers: update craftflow, upgrade craftflow, pull craftflow, sync plugin, refresh craftflow,
+check for updates, new version, update plugin, upgrade plugin.
 
 ## Paths (Resolve Once)
 

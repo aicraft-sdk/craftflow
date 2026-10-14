@@ -1,10 +1,14 @@
 ---
 name: handoff-package
-description: "Use when handing unfinished work to a coworker, a different tool, or a fresh session — produce a portable, secrets-redacted handoff doc that references artifacts by path, not by pasted content."
+description: "Use when handing unfinished work to a coworker, another tool or a fresh session: a portable, secrets-redacted handoff doc."
 allowed-tools: Read Grep Glob Bash
 ---
 
 # Handoff Package
+
+## When To Use
+
+Use when handing unfinished work to a coworker, a different tool, or a fresh session — produce a portable, secrets-redacted handoff doc that references artifacts by path, not by pasted content.
 
 ## Overview
 

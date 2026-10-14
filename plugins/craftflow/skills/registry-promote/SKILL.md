@@ -1,10 +1,14 @@
 ---
 name: registry-promote
-description: "Use when a built, reviewed component, pattern, ui-flow, token-set or agent-flow looks reusable and should be added to the shared ai-craft registry: decide whether to promote, author the entry, run the promote CLI from any repo, then validate and build."
+description: "Use when a built, reviewed component, pattern, ui-flow, token-set or agent-flow should be promoted to the ai-craft registry."
 allowed-tools: Read Grep Glob Bash
 ---
 
 # Registry Promote
+
+## When To Use
+
+Use when a built, reviewed component, pattern, ui-flow, token-set or agent-flow looks reusable and should be added to the shared ai-craft registry: decide whether to promote, author the entry, run the promote CLI from any repo, then validate and build.
 
 ## Overview
 

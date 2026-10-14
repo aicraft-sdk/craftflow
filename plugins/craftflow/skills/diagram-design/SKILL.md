@@ -1,6 +1,6 @@
 ---
 name: diagram-design
-description: "Use when the user asks for an architecture, flowchart, sequence, state machine, ER, timeline, swimlane, or quadrant diagram — craftflow's own token-driven, multi-type, anti-pattern-gated diagram skill (distinct from the global single-type ~/.claude/skills/architecture-diagram skill)."
+description: "Use when asked for an architecture, flowchart, sequence, state, ER, timeline, swimlane or quadrant diagram (craftflow's own)."
 allowed-tools: Read Write Grep Glob
 user-invocable: false
 ---
@@ -38,6 +38,8 @@ doesn't change what the reader understands, cut it.
   to show everything.
 
 ## When To Use
+
+Use when the user asks for an architecture, flowchart, sequence, state machine, ER, timeline, swimlane, or quadrant diagram — craftflow's own token-driven, multi-type, anti-pattern-gated diagram skill (distinct from the global single-type ~/.claude/skills/architecture-diagram skill).
 
 Use this skill for diagrams where a reader learns more from a visual than from prose because
 the value is in the *relationships*, not just the parts:

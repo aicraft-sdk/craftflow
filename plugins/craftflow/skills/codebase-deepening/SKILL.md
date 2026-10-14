@@ -1,10 +1,14 @@
 ---
 name: codebase-deepening
-description: "Use when an existing codebase has accreted shallow modules — thin wrappers, pass-through layers, near-duplicate helpers — and you want to find and deepen them rather than design greenfield."
+description: "Use when a codebase has shallow modules (thin wrappers, pass-through layers, duplicate helpers) to find and deepen them."
 allowed-tools: Read Grep Glob Bash
 ---
 
 # Codebase Deepening
+
+## When To Use
+
+Use when an existing codebase has accreted shallow modules — thin wrappers, pass-through layers, near-duplicate helpers — and you want to find and deepen them rather than design greenfield.
 
 ## Overview
 

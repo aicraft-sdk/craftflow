@@ -1,8 +1,12 @@
 ---
 name: workspace-setup
-description: "Use when the user asks to 'set up craftflow workspace memory', 'provision workspace-tier memory', 'add a north star for this workspace', 'set up cross-repo memory', or 'initialize .craftflow/state/workspace'."
+description: "Use when the user asks to 'set up craftflow workspace memory', 'add a north star' or 'set up cross-repo memory'."
 allowed-tools: Read Write Bash Edit Grep Glob
 ---
+
+## When To Use
+
+Use when the user asks to 'set up craftflow workspace memory', 'provision workspace-tier memory', 'add a north star for this workspace', 'set up cross-repo memory', or 'initialize .craftflow/state/workspace'.
 
 ## Mission
 

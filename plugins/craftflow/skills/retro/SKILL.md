@@ -1,19 +1,6 @@
 ---
 name: retro
-description: |
-  Read-only retrospective of ONE finished Craftflow workflow — extracts friction
-  signals (REM-FIX cycles, tripped breaker, gates, loop counts, refutations,
-  proof gaps, stop failures, fallbacks, slow agents, contradictions, compactions)
-  and proposes ranked, evidence-cited environment fixes. Never writes anything.
-
-  Use this skill when: retro, retrospective, what went wrong in this workflow,
-  post-mortem this workflow, why did this build take so many cycles, how do we
-  stop this happening again.
-
-  Triggers: retro, /retro, craftflow retro, retro this workflow, workflow
-  retrospective, post-mortem.
-
-  NOTE: This skill does NOT go through craftflow-router. It is an inspection tool — read-only, same exception as the `status` and `failure-digest` skills.
+description: "Read-only retrospective of one finished Craftflow workflow; does NOT go through craftflow-router. Use after a workflow completes to see what went wrong."
 allowed-tools: Read, Bash, Glob
 ---
 
@@ -26,6 +13,22 @@ Non-mutating retrospective of one workflow. A script extracts friction signals f
 This complements `failure-digest` (cross-workflow ranking of recurring failures) and `learn-distiller` (recurrence-gated folding into `patterns.md`): retro looks at ONE workflow and proposes environment fixes from it, with no recurrence required.
 
 ---
+
+## When To Use
+
+Read-only retrospective of ONE finished Craftflow workflow — extracts friction
+signals (REM-FIX cycles, tripped breaker, gates, loop counts, refutations,
+proof gaps, stop failures, fallbacks, slow agents, contradictions, compactions)
+and proposes ranked, evidence-cited environment fixes. Never writes anything.
+
+Use this skill when: retro, retrospective, what went wrong in this workflow,
+post-mortem this workflow, why did this build take so many cycles, how do we
+stop this happening again.
+
+Triggers: retro, /retro, craftflow retro, retro this workflow, workflow
+retrospective, post-mortem.
+
+NOTE: This skill does NOT go through craftflow-router. It is an inspection tool — read-only, same exception as the `status` and `failure-digest` skills.
 
 ## Step 1 — Resolve Script Path
 

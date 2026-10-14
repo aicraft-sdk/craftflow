@@ -1,6 +1,6 @@
 ---
 name: research
-description: "Internal skill. Synthesis guidance loaded via SKILL_HINTS by planner and bug-investigator when research files are available."
+description: "Internal skill. Research-synthesis guidance for planner/investigator when research files exist."
 allowed-tools: Read
 user-invocable: false
 ---

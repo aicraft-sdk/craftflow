@@ -1,8 +1,12 @@
 ---
 name: ai-first-setup
-description: "Use when the user asks to 'set up an AI-first project', 'apply the AI-first playbook', 'scaffold AGENTS.md and docs/ai', 'make this repo AI-first', 'bootstrap AI Context Pack', or 'wire up agents-md-lint'."
+description: "Use when the user asks to set up an AI-first project: scaffold AGENTS.md and docs/ai, AI Context Pack, agents-md-lint."
 allowed-tools: Read Write Edit Bash Grep Glob
 ---
+
+## When To Use
+
+Use when the user asks to 'set up an AI-first project', 'apply the AI-first playbook', 'scaffold AGENTS.md and docs/ai', 'make this repo AI-first', 'bootstrap AI Context Pack', or 'wire up agents-md-lint'.
 
 ## Mission
 

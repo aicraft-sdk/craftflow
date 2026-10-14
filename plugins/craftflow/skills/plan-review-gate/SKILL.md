@@ -1,6 +1,6 @@
 ---
 name: plan-review-gate
-description: "Use after saving a non-trivial plan or decision RFC when a fail-closed feasibility, completeness, and alignment review must block execution."
+description: "Use after saving a non-trivial plan or decision RFC when a fail-closed feasibility and alignment review must block execution."
 allowed-tools: Read Bash Grep Glob
 user-invocable: false
 ---
@@ -12,6 +12,10 @@ user-invocable: false
 **How it works:** This skill runs inline in the calling agent's context (no subagents). The calling LLM acts as an independent auditor, reads the saved artifact, and checks it against 3 criteria using Read/Grep/Glob. The value is fail-closed blocking and adversarial framing, not fake reviewer independence.
 
 **Important limit:** This gate is stronger wording plus hard blocking, not true reviewer isolation. Keep the auditor posture, but do not pretend fresh runtime separation exists when it does not.
+
+## When To Use
+
+Use after saving a non-trivial plan or decision RFC when a fail-closed feasibility, completeness, and alignment review must block execution.
 
 ## When to Skip
 
