@@ -120,43 +120,63 @@ def _merge(base: Dict[str, Any], over: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _clip(text: str, limit: int = 120) -> str:
+    """ASCII-safe and at most `limit` chars, so an error string never echoes a huge or hostile key or value."""
+    text = text.encode("ascii", "backslashreplace").decode("ascii")
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
 def _log_invalid(path: Path, errors: List[str]) -> None:
-    """Once per process, best effort, and only where a `.craftflow` project already exists (no state dirs are created)."""
+    """Best effort, once per process after a successful write, and only where a `.craftflow` project already exists (no
+    state dirs are created). A failed write leaves the flag unset so a later load can retry."""
     global _logged_invalid
     if _logged_invalid:
         return
-    _logged_invalid = True
     try:
         import craftflow_hooklib as hooklib
 
         if (hooklib.project_dir() / ".craftflow").is_dir():
             hooklib.log_event("policy_invalid", {"path": str(path), "errors": errors[:5]})
+            _logged_invalid = True
     except Exception:  # never fail a hook because the log line could not be written
         pass
 
 
-def load_policy(path: Optional[Path] = None, log: bool = True) -> Tuple[Dict[str, Any], str, List[str]]:
-    """(policy, status, errors); status is "ok" | "defaults" | "invalid". The policy is never None and never aliases DEFAULTS."""
-    target = Path(path) if path is not None else policy_path()
+def load_policy_with_sha(path: Optional[Path] = None, log: bool = True) -> Tuple[Dict[str, Any], str, List[str], str]:
+    """(policy, status, errors, sha256). TOTAL: never raises. The sha is of the very bytes that were validated, or
+    "defaults" when no bytes were read. Missing file -> "defaults"; any other failure (unreadable, a directory, deeply nested
+    JSON, ...) -> "invalid"."""
     errors: List[str] = []
     obj: Any = None
-    if not target.exists():
-        return copy.deepcopy(DEFAULTS), "defaults", []
+    sha = "defaults"
+    target = Path("policy.json")
     try:
-        raw = target.read_bytes()
+        target = Path(path) if path is not None else policy_path()
+        try:
+            raw = target.read_bytes()
+        except FileNotFoundError:
+            return copy.deepcopy(DEFAULTS), "defaults", [], "defaults"
+        sha = hashlib.sha256(raw).hexdigest()
         if len(raw) > MAX_POLICY_BYTES:
             errors.append(f"policy: file is {len(raw)} bytes, over the {MAX_POLICY_BYTES} byte limit")
         else:
             obj = json.loads(raw.decode("utf-8"))
             schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
             errors = validate_policy(obj, schema)
-    except (OSError, ValueError) as exc:  # UnicodeDecodeError and JSONDecodeError are ValueErrors
-        errors = [f"policy: cannot read {target.name}: {type(exc).__name__}: {exc}"]
+    except Exception as exc:  # RecursionError on deep nesting is not a ValueError; the loader must be total
+        errors = [f"policy: cannot load {target.name}: {type(exc).__name__}: {exc}"]
+    errors = [_clip(e) for e in errors]
     if errors:
         if log:
             _log_invalid(target, errors)
-        return copy.deepcopy(DEFAULTS), "invalid", errors
-    return _merge(DEFAULTS, obj), "ok", []
+        return copy.deepcopy(DEFAULTS), "invalid", errors, sha
+    return _merge(DEFAULTS, obj), "ok", [], sha
+
+
+def load_policy(path: Optional[Path] = None, log: bool = True) -> Tuple[Dict[str, Any], str, List[str]]:
+    """(policy, status, errors); status is "ok" | "defaults" | "invalid". The policy is never None and never aliases DEFAULTS."""
+    policy, status, errors, _sha = load_policy_with_sha(path, log)
+    return policy, status, errors
 
 
 def policy_value(policy: Dict[str, Any], dotted: str) -> Any:
@@ -227,9 +247,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.hash:
         print(policy_sha256())
         return 0
-    policy, status, errors = load_policy(log=False)
+    policy, status, errors, sha = load_policy_with_sha(log=False)
     if args.validate:
-        print(json.dumps({"errors": errors, "sha256": policy_sha256(), "status": status}, sort_keys=True))
+        print(json.dumps({"errors": errors, "sha256": sha, "status": status}, sort_keys=True))
         return 1 if status == "invalid" else 0
     try:
         value = policy_value(policy, args.get)

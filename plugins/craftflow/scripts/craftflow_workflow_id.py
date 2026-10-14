@@ -358,17 +358,28 @@ def _describe_os_error(exc: OSError) -> str:
     return f"{exc.strerror or exc}: {target}" if target else str(exc)
 
 
-def _policy_stamp() -> dict | None:
-    """{sha256, status} of config/policy.json, or None when the loader cannot be used. Never raises: the policy stamp is
-    observability only and must not fail a mint (ADR-0073)."""
+def _policy_stamp() -> dict:
+    """{sha256, status[, errors]} of config/policy.json. Never raises: the stamp is observability only and must not fail a
+    mint (ADR-0073). When the loader itself cannot run, the stamp is status "error" (sha256 "unreadable"), never absent.
+    `errors` (at most 3) is present only for status invalid or error."""
     try:
         import craftflow_policy
 
-        path = craftflow_policy.policy_path()
-        _policy, status, _errors = craftflow_policy.load_policy(path, log=False)
-        return {"sha256": craftflow_policy.policy_sha256(path), "status": status}
-    except Exception:  # cf:shortcut: broad on purpose, a telemetry stamp never blocks workflow creation
-        return None
+        _policy, status, errors, sha = craftflow_policy.load_policy_with_sha(log=False)
+        stamp: dict = {"sha256": sha, "status": status}
+        if status == "invalid":
+            stamp["errors"] = [str(e) for e in errors[:3]]
+        return stamp
+    except Exception as exc:  # cf:shortcut: broad on purpose, a telemetry stamp never blocks workflow creation
+        return {"sha256": "unreadable", "status": "error", "errors": [f"{type(exc).__name__}: {exc}"[:120]]}
+
+
+def _policy_event_fields(stamp: dict) -> dict:
+    """The policy_loaded payload fields, identical for status_history, events.jsonl and the hook log."""
+    fields = {"policy_sha256": stamp["sha256"], "policy_status": stamp["status"]}
+    if stamp.get("errors"):
+        fields["policy_errors"] = stamp["errors"][:3]
+    return fields
 
 
 def _router_readset_bytes(workflow_type: str) -> int | None:
@@ -421,11 +432,10 @@ def init_artifact(project_dir: Path, info: dict, *, workflow_type: str, request:
                "phase": phase, "task_id": task_id, "agent": "router", "decision": "start",
                "reason": "User request"}]
     stamp = _policy_stamp()
-    if stamp is not None:
-        artifact["policy"] = stamp
-        entry = {"event": "policy_loaded", "ts": ts, "policy_sha256": stamp["sha256"], "policy_status": stamp["status"]}
-        artifact["status_history"].append(entry)
-        events.append({"ts": ts, "wf": wf, **entry})
+    artifact["policy"] = {"sha256": stamp["sha256"], "status": stamp["status"]}
+    entry = {"event": "policy_loaded", "ts": ts, **_policy_event_fields(stamp)}
+    artifact["status_history"].append(entry)
+    events.append({"ts": ts, "wf": wf, **entry})
     readset_bytes = _router_readset_bytes(workflow_type)
     if readset_bytes is not None:
         artifact["telemetry"]["router_readset_bytes"] = readset_bytes
@@ -462,9 +472,8 @@ def init_artifact(project_dir: Path, info: dict, *, workflow_type: str, request:
         if left_behind:
             failure.rollback_incomplete = left_behind  # type: ignore[attr-defined]
         raise
-    if stamp is not None:
-        log_event = _hook_log_writer(project_dir)
-        log_event("policy_loaded", {"ts": ts, "wf": wf, "policy_sha256": stamp["sha256"], "policy_status": stamp["status"]})
+    log_event = _hook_log_writer(project_dir)
+    log_event("policy_loaded", {"ts": ts, "wf": wf, **_policy_event_fields(stamp)})
     return artifact_path
 
 

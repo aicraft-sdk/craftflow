@@ -11173,11 +11173,44 @@ def test_selfcheck_warns_on_invalid_policy(tmp_dir: Path) -> None:
 def test_selfcheck_silent_on_valid_policy(tmp_dir: Path) -> None:
     name = "hook-selfcheck/silent-on-valid-policy"
     shipped = (PLUGIN_ROOT / "config" / "policy.json").read_bytes()
-    for label, policy_bytes in (("valid-file", shipped), ("missing-file", None)):
-        result = _selfcheck_run_policy(_selfcheck_policy_layout(tmp_dir / label, policy_bytes), tmp_dir / "cfg")
-        if result.returncode != 0 or result.stdout.strip():
-            fail(name, f"{label}: expected silence and exit 0; got rc={result.returncode} stdout={result.stdout!r}")
-            return
+    result = _selfcheck_run_policy(_selfcheck_policy_layout(tmp_dir / "valid-file", shipped), tmp_dir / "cfg")
+    if result.returncode != 0 or result.stdout.strip():
+        fail(name, f"valid-file: expected silence and exit 0; got rc={result.returncode} stdout={result.stdout!r}")
+        return
+    ok(name)
+
+
+def test_selfcheck_warns_when_shipped_policy_missing(tmp_dir: Path) -> None:
+    """A plugin whose own config/policy.json is absent runs on defaults from a missing shipped file: that is a broken install."""
+    name = "hook-selfcheck/warns-when-shipped-policy-missing"
+    result = _selfcheck_run_policy(_selfcheck_policy_layout(tmp_dir / "missing-file", None), tmp_dir / "cfg")
+    try:
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+    except (ValueError, KeyError):
+        fail(name, f"expected one SessionStart additionalContext JSON; got rc={result.returncode} stdout={result.stdout!r}")
+        return
+    if result.returncode != 0 or "policy.json" not in context or "missing" not in context or context.count("\n") != 0:
+        fail(name, f"unexpected warning: rc={result.returncode} context={context!r}")
+        return
+    ok(name)
+
+
+def test_selfcheck_policy_validator_non_utf8_output(tmp_dir: Path) -> None:
+    """A validator that prints non-UTF-8 bytes must still produce the one warning line, never crash or go silent."""
+    name = "hook-selfcheck/policy-validator-non-utf8-output"
+    checker = _selfcheck_policy_layout(tmp_dir / "bytes", b"{}")
+    (checker.parent / "craftflow_policy.py").write_text(
+        "import sys\nsys.stdout.buffer.write(b'\\xff\\xfe not json')\nsys.stderr.buffer.write(b'bad \\xff byte')\nraise SystemExit(1)\n",
+        encoding="utf-8")
+    result = _selfcheck_run_policy(checker, tmp_dir / "cfg")
+    try:
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+    except (ValueError, KeyError):
+        fail(name, f"expected a warning line; got rc={result.returncode} stdout={result.stdout!r}")
+        return
+    if result.returncode != 0 or "CRAFTFLOW policy.json invalid: " not in context or "�" in context:
+        fail(name, f"unexpected warning: rc={result.returncode} context={context!r}")
+        return
     ok(name)
 
 
@@ -27910,6 +27943,8 @@ def main() -> int:
         test_selfcheck_isolates_per_script_subprocess_errors(tmp / "hc4")
         test_selfcheck_warns_on_invalid_policy(tmp / "hp1")
         test_selfcheck_silent_on_valid_policy(tmp / "hp2")
+        test_selfcheck_warns_when_shipped_policy_missing(tmp / "hp2b")
+        test_selfcheck_policy_validator_non_utf8_output(tmp / "hp2c")
         test_selfcheck_version_drift_line(tmp / "hp3")
         test_selfcheck_flushes_before_external_kill_when_sweep_runs_long(tmp / "hc5")
         test_selfcheck_discovery_itself_bounded_by_timeout(tmp / "hc6")

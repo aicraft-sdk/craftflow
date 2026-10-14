@@ -323,8 +323,9 @@ only `ts`, `session_id`, `mode`, `hook_ms` and `settings_tags: ["hook_error:<Exc
 - Trigger: once per minted workflow (`--init-artifact`). The same fact is also the second line of the workflow
   `events.jsonl` (`policy_loaded`, right after `workflow_started`) and the artifact's `policy` field.
 - Fail-open: any failure to load the policy or write the line is swallowed; the mint never fails because of it.
-- Payload: `wf` (workflow id), `policy_sha256` (sha256 of `config/policy.json`, or `"defaults"` when the file is
-  missing) and `policy_status` (`ok`, `defaults` or `invalid`). Informational only; no gate reads it.
+- Payload: `wf` (workflow id), `policy_sha256` (sha256 of the bytes that were validated, `"defaults"` when the file is
+  missing, `"unreadable"` when the loader itself failed), `policy_status` (`ok`, `defaults`, `invalid` or `error`) and,
+  for `invalid` or `error` only, `policy_errors` (at most 3 short strings). Informational only; no gate reads it.
 
 ```json
 {"event": "policy_loaded", "wf": "wf-example-20261014-120000-0a1b2c3d", "policy_sha256": "defaults", "policy_status": "defaults"}

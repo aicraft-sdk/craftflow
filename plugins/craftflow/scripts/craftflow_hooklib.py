@@ -207,7 +207,7 @@ def is_cursor_host(env: "Dict[str, str] | None" = None) -> bool:
 # the stub returns defaults with status "invalid", so every gated decision takes its most restrictive branch.
 try:
     from craftflow_policy import load_policy, policy_value
-except ImportError:
+except Exception:  # ImportError, and also a SyntaxError or error at import time in the policy module
     _POLICY_STUB_DEFAULTS: Dict[str, Any] = {
         "native_plan_mode": "never",
         "plan_commit": "never",

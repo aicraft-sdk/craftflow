@@ -147,8 +147,14 @@ def check_script(scripts_dir: Path, script_path: Path) -> str | None:
     return reason or f"exited {result.returncode} with no stderr output"
 
 
+def _short(value: object, limit: int = 120) -> str:
+    """One echoed validator string: ASCII-safe and at most `limit` chars."""
+    text = str(value or "").encode("ascii", "backslashreplace").decode("ascii")
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
 def check_policy(scripts_dir: Path) -> str | None:
-    """One warning line when `config/policy.json` is invalid, else None (silent). Runs the loader's own CLI in a subprocess,
+    """One warning line when `config/policy.json` is invalid or missing from this plugin, else None (silent). Runs the loader's own CLI in a subprocess,
     so a broken loader can never crash this checker. A tree without craftflow_policy.py (a scratch dir) is not checked."""
     script = scripts_dir / "craftflow_policy.py"
     if not script.is_file():
@@ -162,22 +168,30 @@ def check_policy(scripts_dir: Path) -> str | None:
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
+            errors="replace",  # a validator that prints non-UTF-8 bytes must not raise out of the decode
             timeout=POLICY_TIMEOUT_SECONDS,
             env=env,
         )
     except subprocess.TimeoutExpired:
         detail = f"validation timed out after {POLICY_TIMEOUT_SECONDS}s"
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         detail = f"validator could not run: {exc}"
     else:
         if result.returncode == 0:
+            try:
+                status = json.loads(result.stdout).get("status")
+            except (ValueError, AttributeError):
+                status = None
+            if status == "defaults":  # this plugin's own shipped config/policy.json is absent: a broken install
+                return ("CRAFTFLOW policy.json missing: config/policy.json is absent from this plugin, "
+                        "so gated actions run on the built-in defaults.")
             return None
         try:
             errors = json.loads(result.stdout).get("errors") or []
-            detail = "; ".join(str(e) for e in errors)
+            detail = "; ".join(_short(e) for e in errors)
         except (ValueError, AttributeError):
             detail = ""
-        detail = detail or _last_nonblank_line(result.stderr) or f"validator exited {result.returncode}"
+        detail = detail or _short(_last_nonblank_line(result.stderr)) or f"validator exited {result.returncode}"
     return f"CRAFTFLOW policy.json invalid: {detail[:MAX_NOTE_CHARS]} \u2014 gated actions will fail closed."
 
 

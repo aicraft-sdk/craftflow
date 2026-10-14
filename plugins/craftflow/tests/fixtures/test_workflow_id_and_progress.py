@@ -525,6 +525,7 @@ def _mint(project: Path, extra_env: dict = None, script: Path = None, workflow_t
 
 def test_init_artifact_records_policy_loaded_event() -> None:
     import hashlib
+    import shutil
     import tempfile
     print("\n[init-artifact policy_loaded]")
     shipped = (PLUGIN_ROOT / "config" / "policy.json").read_bytes()
@@ -565,6 +566,26 @@ def test_init_artifact_records_policy_loaded_event() -> None:
                 fail(f"init_artifact_records_policy_loaded_event:{label}", f"rc={proc.returncode} policy={got!r} err={proc.stderr!r}")
             else:
                 ok(f"init_artifact_records_policy_loaded_event: {label} policy does not fail the mint")
+            if label == "corrupt":
+                loaded = events[1] if len(events) > 1 else {}
+                hist = [h for h in (art or {}).get("status_history", []) if h.get("event") == "policy_loaded"]
+                errs = loaded.get("policy_errors")
+                if not (isinstance(errs, list) and 1 <= len(errs) <= 3 and hist and hist[0] == {k: v for k, v in loaded.items() if k not in ("wf",)}):
+                    fail("init_artifact_records_policy_loaded_event:corrupt_errors", f"event={loaded!r} history={hist!r}")
+                else:
+                    ok("init_artifact_records_policy_loaded_event: invalid policy event carries errors[:3], history mirrors it")
+        # A policy module that cannot even be imported must stamp an error state, never None, and never fail the mint.
+        scripts_copy = Path(tmp) / "scripts-broken"
+        shutil.copytree(SCRIPTS, scripts_copy, ignore=shutil.ignore_patterns("__pycache__"))
+        (scripts_copy / "craftflow_policy.py").write_text("def broken(:\n", encoding="utf-8")
+        proc, art, events = _mint(Path(tmp) / "proj-broken", script=scripts_copy / "craftflow_workflow_id.py")
+        got = (art or {}).get("policy")
+        loaded = events[1] if len(events) > 1 else {}
+        if art is None or got != {"status": "error", "sha256": "unreadable"} or loaded.get("policy_status") != "error" \
+                or loaded.get("policy_sha256") != "unreadable" or not loaded.get("policy_errors") or len(loaded["policy_errors"]) > 3:
+            fail("init_artifact_records_policy_loaded_event:broken_module", f"rc={proc.returncode} policy={got!r} event={loaded!r} err={proc.stderr[-200:]!r}")
+        else:
+            ok("init_artifact_records_policy_loaded_event: unimportable policy module stamps status=error, mint still succeeds")
 
 
 def test_init_artifact_records_router_readset_bytes() -> None:

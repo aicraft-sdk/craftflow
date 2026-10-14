@@ -28,6 +28,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 _passes = 0
 _errors = []
+_skips = []
 
 
 def ok(name):
@@ -39,6 +40,15 @@ def ok(name):
 def fail(name, reason):
     _errors.append(f"FAIL [{name}]: {reason}")
     print(f"  FAIL: {name}: {reason}")
+
+
+def skip(name, reason):
+    """A skip is never a pass. Under CI (env CI set) a skip is a failure: the precondition must hold there."""
+    if os.environ.get("CI"):
+        fail(name, f"skipped under CI: {reason}")
+        return
+    _skips.append(f"SKIP [{name}]: {reason}")
+    print(f"  SKIP: {name}: {reason}")
 
 
 def check(name, cond, reason=""):
@@ -127,6 +137,8 @@ def test_invalid_catalog():
         "E9_nested_key_missing": {"worktree_merge": {"require_clean_tree": True}},
         "E9_nested_unknown": {"worktree_merge": dict(nested_ok, extra=1)},
         "E10_non_utf8": b"\xff\xfe{\"memory_write\": \"finalize-only\"}",
+        "E10_deep_nesting": b"[" * 30000 + b"]" * 30000,
+        "E10_deep_object_nesting": b'{"a":' * 20000 + b"1" + b"}" * 20000,
         "E10_one_megabyte": b'{"$comment": "' + b"x" * (1024 * 1024) + b'"}',
         "memory_write_other_value": {"memory_write": "anything"},
         "native_plan_mode_bad_enum": {"native_plan_mode": "sometimes"},
@@ -282,7 +294,7 @@ def test_defaults_equal_prose_values():
     plan = show("skills/craftflow-router/references/plan-workflow.md")
     remfix = show("skills/craftflow-router/references/remediation-and-research.md")
     if kernel is None or plan is None or remfix is None:
-        ok("skip: no baseline ref")
+        skip("defaults_equal_prose_values", "baseline ref unavailable (shallow clone?)")
         return
     D = pol.DEFAULTS
 
@@ -306,6 +318,107 @@ def test_defaults_equal_prose_values():
               f"prose={value} default={pol.policy_value(D, key)}")
     check("defaults_equal_prose_values:remfix_breaker", m2 is not None and int(m2.group(1)) == D["remediation_cycles_max"],
           f"prose={m2.group(1) if m2 else None}")
+
+
+def test_load_is_total_on_hostile_files():
+    print("\n[load_policy is total: unreadable dir, directory, dangling symlink, deep nesting, long echoes]")
+    import hashlib
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp) / "dir-as-file"
+        d.mkdir()
+        policy, status, errors = pol.load_policy(d)
+        check("total:directory_in_place_of_file_is_invalid", status == "invalid" and bool(errors) and policy == pol.DEFAULTS, f"status={status} errors={errors}")
+        link = Path(tmp) / "dangling.json"
+        link.symlink_to(Path(tmp) / "nowhere.json")
+        policy, status, errors = pol.load_policy(link)
+        check("total:dangling_symlink_is_defaults", status == "defaults" and errors == [], f"status={status} errors={errors}")
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        skip("total:unreadable_parent_dir", "running as root; chmod 000 does not restrict root")
+    else:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "config"
+            cfg.mkdir()
+            (cfg / "policy.json").write_text("{}", encoding="utf-8")
+            os.chmod(cfg, 0)
+            try:
+                policy, status, errors = pol.load_policy(cfg / "policy.json")
+            except Exception as exc:  # the loader must never raise
+                policy, status, errors = None, f"RAISED {exc!r}", []
+            finally:
+                os.chmod(cfg, 0o700)
+            check("total:unreadable_parent_dir_is_invalid", status == "invalid" and bool(errors) and policy == pol.DEFAULTS, f"status={status} errors={errors}")
+    with tempfile.TemporaryDirectory() as tmp:
+        deep = write(tmp, b"[" * 30000 + b"]" * 30000)
+        try:
+            policy, status, errors = pol.load_policy(deep)
+        except BaseException as exc:
+            policy, status, errors = None, f"RAISED {exc!r}", []
+        check("total:deep_nesting_does_not_raise", status == "invalid" and len(errors) == 1 and len(errors[0]) <= 120 and policy == pol.DEFAULTS,
+              f"status={status} errors={errors}")
+        long_key = write(tmp, {"k\u00e9y" * 2000: "v" * 5000})
+        _, status, errors = pol.load_policy(long_key)
+        check("total:error_echoes_are_short_and_ascii", status == "invalid" and errors and all(len(e) <= 120 and e.isascii() for e in errors),
+              f"status={status} lens={[len(e) for e in errors]}")
+        long_val = write(tmp, {"memory_write": "x" * 5000})
+        _, status, errors = pol.load_policy(long_val)
+        check("total:long_value_echo_is_clipped", status == "invalid" and errors and all(len(e) <= 120 for e in errors), f"lens={[len(e) for e in errors]}")
+        good = write(tmp, {"memory_write": "finalize-only"})
+        _, _, _, sha = pol.load_policy_with_sha(good)
+        check("total:sha_comes_from_the_validated_bytes", sha == hashlib.sha256(good.read_bytes()).hexdigest(), sha)
+        _, st, _, sha = pol.load_policy_with_sha(Path(tmp) / "none.json")
+        check("total:sha_defaults_when_missing", st == "defaults" and sha == "defaults", f"{st} {sha}")
+        _, st, _, sha = pol.load_policy_with_sha(write(tmp, b"{nope"))
+        check("total:sha_of_invalid_file_bytes", st == "invalid" and sha == hashlib.sha256(b"{nope").hexdigest(), f"{st} {sha}")
+
+
+def test_cli_validate_deep_nesting():
+    print("\n[CLI --validate on a deeply nested file]")
+    with tempfile.TemporaryDirectory() as tmp:
+        res = cli(["--validate"], make_root(tmp, b"[" * 30000 + b"]" * 30000))
+        out = json.loads(res.stdout) if res.stdout.strip() else {}
+        check("cli_validate:deep_nesting_exit_1_json_no_traceback", res.returncode == 1 and out.get("status") == "invalid"
+              and "Traceback" not in res.stderr, f"rc={res.returncode} out={res.stdout[:200]!r} err={res.stderr[-200:]!r}")
+
+
+def test_log_invalid_retries_after_failed_write():
+    print("\n[_log_invalid retries until a write succeeds]")
+    import craftflow_hooklib as hl
+    calls = []
+    real_log, real_dir, real_flag = hl.log_event, hl.project_dir, pol._logged_invalid
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / ".craftflow").mkdir()
+
+        def boom(name, payload):
+            calls.append("boom")
+            raise OSError("disk full")
+
+        try:
+            hl.project_dir = lambda: Path(tmp)
+            pol._logged_invalid = False
+            hl.log_event = boom
+            pol._log_invalid(Path("p.json"), ["e"])
+            failed_flag = pol._logged_invalid
+            hl.log_event = lambda name, payload: calls.append(name)
+            pol._log_invalid(Path("p.json"), ["e"])
+            pol._log_invalid(Path("p.json"), ["e"])
+        finally:
+            hl.log_event, hl.project_dir, pol._logged_invalid = real_log, real_dir, real_flag
+    check("log_invalid:failed_write_leaves_flag_unset_then_retries_once", failed_flag is False and calls == ["boom", "policy_invalid"],
+          f"flag_after_failure={failed_flag} calls={calls}")
+
+
+def test_hooklib_stub_on_broken_policy_module():
+    print("\n[hooklib degrades to the stub when craftflow_policy.py is broken]")
+    with tempfile.TemporaryDirectory() as tmp:
+        scripts = Path(tmp) / "scripts"
+        shutil.copytree(SCRIPTS, scripts, ignore=shutil.ignore_patterns("__pycache__"))
+        for label, body in (("syntax_error", "def broken(:\n"), ("runtime_error", "raise RuntimeError('boom')\n")):
+            (scripts / "craftflow_policy.py").write_text(body, encoding="utf-8")
+            code = ("import sys, json; sys.path.insert(0, %r); import craftflow_hooklib as h; "
+                    "p, s, e = h.load_policy(); print(json.dumps([p.get('memory_write'), s, e]))" % str(scripts))
+            res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+            good = res.returncode == 0 and json.loads(res.stdout) == ["finalize-only", "invalid", ["import-error"]]
+            check(f"hooklib_stub:{label}", good, f"rc={res.returncode} out={res.stdout!r} err={res.stderr[-300:]!r}")
 
 
 def test_is_cursor_host_true_only_when_set():
@@ -442,7 +555,8 @@ def main():
                test_absent_key_takes_default, test_no_stdout_from_load, test_policy_value_dotted, test_policy_sha256,
                test_enter_plan_mode_decision, test_cli_validate_json_and_exit, test_cli_get_and_hash,
                test_print_table_matches_defaults, test_defaults_equal_prose_values, test_is_cursor_host_true_only_when_set,
-               test_hooklib_reexport, test_key_coverage, test_key_coverage_ignores_dict_literals_and_stub,
+               test_hooklib_reexport, test_load_is_total_on_hostile_files, test_cli_validate_deep_nesting,
+               test_log_invalid_retries_after_failed_write, test_hooklib_stub_on_broken_policy_module, test_key_coverage, test_key_coverage_ignores_dict_literals_and_stub,
                test_key_coverage_requires_literal_key, test_schema_leaf_keys_equal_defaults,
                test_shipped_policy_is_exactly_p4_keys, test_py39_compile):
         try:
@@ -457,7 +571,9 @@ def main():
         print(f"\nResults: {_passes} passed, {len(_errors)} failed", file=sys.stderr)
         print("FAIL", file=sys.stderr)
         return 1
-    print(f"Results: {_passes} passed, 0 failed")
+    print(f"Results: {_passes} passed, 0 failed, {len(_skips)} skipped")
+    for line in _skips:
+        print(line)
     print("PASS")
     return 0
 
