@@ -205,8 +205,14 @@ Three draft rows:
   but deletes neither: `pending-prose-deletion`, `live_verified: false`. The live `claude -p` probe was not run in P5; P13 (LV-3 /
   HV-4) must prove the deny fires, or these rows become `prose_retained`.
 
+Accepted gaps of the `plan_commit` guard (all fail open, today's behavior): `git update-index --index-info` (reads stdin),
+plumbing that writes the index or commits without `add`/`commit`/`update-index` (`git hash-object -w` + `commit-tree`,
+`git stash`), a `--pathspec-from-file` list without `--force` (the staged probe still catches it at commit), a
+`--git-dir` that points into a linked worktree's admin dir (repo lookup falls back to the current directory), and dynamic
+command names, `-C`/`cd`/`--git-dir`/`--work-tree` values or `sh -c` strings (each logged as `plan_commit_dynamic_allowed`).
+
 ```
-| f41d16afa416 | plan_commit | craftflow_pretooluse_bash_guard.py::plan_pathspec_violations | test_policy_guards.py::test_plan_commit_staged_probe | deleted | false | <Name (YYYY-MM-DD)> | |
-| a01e2c640767 | native_plan_mode | craftflow_pretooluse_guard.py::_handle_enter_plan_mode | test_policy_guards.py::test_enterplanmode | pending-prose-deletion | false | <Name (YYYY-MM-DD)> | |
-| c403449266e4 | native_plan_mode | craftflow_pretooluse_guard.py::_handle_enter_plan_mode | test_policy_guards.py::test_enterplanmode | pending-prose-deletion | false | <Name (YYYY-MM-DD)> | |
+| f41d16afa416 | plan_commit | craftflow_pretooluse_bash_guard.py::plan_pathspec_violations | test_policy_guards.py::plan_commit_staged_probe_denies | deleted | false | <Name (YYYY-MM-DD)> | |
+| a01e2c640767 | native_plan_mode | craftflow_pretooluse_guard.py::_handle_enter_plan_mode | test_policy_guards.py::enterplanmode_denied_by_default | pending-prose-deletion | false | <Name (YYYY-MM-DD)> | |
+| c403449266e4 | native_plan_mode | craftflow_pretooluse_guard.py::_handle_enter_plan_mode | test_policy_guards.py::enterplanmode_denied_by_default | pending-prose-deletion | false | <Name (YYYY-MM-DD)> | |
 ```

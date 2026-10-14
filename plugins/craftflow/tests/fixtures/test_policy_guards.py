@@ -145,7 +145,7 @@ def events(project, name):
 # --------------------------------------------------------------------------------------------------------------------
 
 
-def test_enterplanmode():
+def enterplanmode_denied_by_default():
     cwd = scratch_dir()
     rc, out, err = run(MAIN_GUARD, {"tool_name": "EnterPlanMode", "tool_input": {}, "cwd": str(cwd)}, cwd)
     verdict, reason = decision(out)
@@ -227,7 +227,7 @@ def test_plan_commit_table():
     check("plan_commit_deny_logs_event", len(hits) >= len(DENY_CASES) and hits[0].get("policy_key") == "plan_commit" and hits[0].get("policy_value") == "never", f"hits={len(hits)}")
 
 
-def test_plan_commit_staged_probe():
+def plan_commit_staged_probe_denies():
     repo = make_repo(ignore_plans=False)  # plans are tracked here, so a modification can be staged
     (repo / "docs" / "plans" / "x.md").write_text("changed\n")
     git(repo, "add", "-f", "docs/plans/x.md")
@@ -442,11 +442,197 @@ def test_shipped_policy_keys():
     check("shipped_policy_has_no_other_gate_keys", set(shipped) <= {"memory_write", "native_plan_mode", "plan_commit", "$comment"}, f"{sorted(shipped)}")
 
 
+# --------------------------------------------------------------------------------------------------------------------
+# REM-FIX regressions (review + hunt): C1, H1-H3, M1, M3, M4, L1
+# --------------------------------------------------------------------------------------------------------------------
+
+
+def _allowed(name, cmd, cwd, **kw):
+    rc, out, err = run(BASH_GUARD, bash(cmd, cwd), cwd, **kw)
+    check(name, rc == 0 and out == "" and err == "", f"rc={rc} out={out!r} err={err!r}")
+
+
+def _denied(name, cmd, cwd, **kw):
+    rc, out, err = run(BASH_GUARD, bash(cmd, cwd), cwd, **kw)
+    check(name, rc == 0 and decision(out)[0] == "deny", f"rc={rc} out={out!r} err={err!r}")
+
+
+def test_c1_glob_collapse_does_not_crash():
+    repo = make_repo()
+    for label, cmd in (("star_dotdot", "git add '*/..'"), ("xstar_dotdot", "git add 'x*/..'"), ("docs_star_dotdot2", "git add 'docs/*/../..'"),
+                       ("bracket_dotdot", "git add '[a]/..'"), ("commit_star_dotdot", "git commit -m x '*/..'")):
+        _allowed(f"c1_{label}_no_crash", cmd, repo)
+    # the collapse input must not skip the guards that run after it
+    rc, out, err = run(BASH_GUARD, bash("git add 'x*/..'; rm -rf .", repo), repo)
+    check("c1_later_destructive_guard_still_denies", rc == 0 and decision(out)[0] == "deny" and "in-cwd-critical" in out, f"rc={rc} out={out!r} err={err!r}")
+    # force + a collapsed glob is the ancestor '.', which is denied conservatively
+    _denied("c1_force_collapsed_glob_is_ancestor", "git add -f '*/..'", repo)
+    # main() falls through to the existing guards when _policy_guards itself raises
+    import importlib
+    import io
+    sys.path.insert(0, str(SCRIPTS))
+    saved = (os.environ.get("CLAUDE_PROJECT_DIR"), os.environ.get("CLAUDE_PLUGIN_ROOT"), sys.stdin, sys.stdout)
+    os.environ["CLAUDE_PROJECT_DIR"], os.environ["CLAUDE_PLUGIN_ROOT"] = str(repo), str(PLUGIN_ROOT)
+    try:
+        mod = importlib.import_module("craftflow_pretooluse_bash_guard")
+
+        def boom(*_a, **_k):
+            raise ValueError("forced")
+
+        mod._policy_guards = boom
+        sys.stdin = io.StringIO(json.dumps(bash("rm -rf .", repo)))
+        sys.stdout = io.StringIO()
+        rc = mod.main()
+        out = sys.stdout.getvalue()
+    finally:
+        sys.stdin, sys.stdout = saved[2], saved[3]
+        for key, val in (("CLAUDE_PROJECT_DIR", saved[0]), ("CLAUDE_PLUGIN_ROOT", saved[1])):
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+    check("c1_main_falls_through_when_policy_guards_raises", rc == 0 and "in-cwd-critical" in out, f"rc={rc} out={out!r}")
+    check("c1_policy_guard_failure_is_logged", len(events(repo, "policy_guard_error")) == 1, f"{events(repo, 'policy_guard_error')}")
+
+
+def test_h1_wrapped_git():
+    repo = make_repo()
+    cmds = {
+        "command": "command git add -f docs/plans/x.md",
+        "env": "env FOO=1 git add -f docs/plans/x.md",
+        "env_opts": "env -i -u BAR FOO=1 git add -f docs/plans/x.md",
+        "time": "time git add -f docs/plans/x.md",
+        "nice": "nice -n 5 git add -f docs/plans/x.md",
+        "exec": "exec git add -f docs/plans/x.md",
+        "sudo": "sudo -u root git add -f docs/plans/x.md",
+        "subshell": "(git add -f docs/plans/x.md)",
+        "brace": "{ git add -f docs/plans/x.md; }",
+        "bash_c": 'bash -c "git add -f docs/plans/x.md"',
+        "bash_lc": "bash -lc 'git add -f docs/plans/x.md'",
+        "sh_c_cd": "sh -c 'cd src && git add ../docs/plans/x.md'",
+        "zsh_c": "zsh -c 'git add -f docs/plans/x.md'",
+        "nested": "env bash -c 'sudo git add -f docs/plans/x.md'",
+        "eval": 'eval "git add -f docs/plans/x.md"',
+        "abs_git": "/usr/bin/git add -f docs/plans/x.md",
+    }
+    for label, cmd in cmds.items():
+        _denied(f"h1_{label}_denied", cmd, repo)
+    _allowed("h1_wrapped_ordinary_add_allowed", "env FOO=1 git add src/x.ts", repo)
+    _allowed("h1_bash_c_ordinary_allowed", "bash -c 'git add src/x.ts'", repo)
+    rc, out, err = run(BASH_GUARD, bash("$G add -f docs/plans/x.md", repo), repo)
+    check("h1_dynamic_command_name_fails_open_and_logs", rc == 0 and out == "" and len(events(repo, "plan_commit_dynamic_allowed")) >= 1, f"rc={rc} out={out!r}")
+    rc, out, _ = run(BASH_GUARD, bash('bash -c "$CMD"', repo), repo)
+    check("h1_dynamic_shell_string_fails_open", rc == 0 and out == "", f"out={out!r}")
+
+
+def test_h2_retargeted_repo():
+    repo = make_repo()
+    elsewhere = scratch_dir("p5g-else-")
+    gd, wt = f"--git-dir={repo}/.git", f"--work-tree={repo}"
+    _denied("h2_git_dir_and_work_tree_from_elsewhere", f"git {gd} {wt} add -f docs/plans/x.md", elsewhere, project=repo)
+    _denied("h2_separate_arg_form", f"git --git-dir {repo}/.git --work-tree {repo} add -f docs/plans/x.md", elsewhere, project=repo)
+    _denied("h2_env_prefix", f"GIT_DIR={repo}/.git GIT_WORK_TREE={repo} git add -f docs/plans/x.md", elsewhere, project=repo)
+    _denied("h2_git_dir_only", f"git {gd} add -f docs/plans/x.md", repo, project=repo)
+    _allowed("h2_work_tree_ordinary_add_allowed", f"git {gd} {wt} add src/x.ts", elsewhere, project=repo)
+    _allowed("h2_dynamic_work_tree_fails_open", f"git {gd} --work-tree=$W add -f docs/plans/x.md", elsewhere, project=repo)
+    # a commit retargeted at the repo is probed there
+    repo2 = make_repo(ignore_plans=False)
+    (repo2 / "docs" / "plans" / "x.md").write_text("changed\n")
+    git(repo2, "add", "-f", "docs/plans/x.md")
+    _denied("h2_retargeted_commit_probe_denies", f"git --git-dir={repo2}/.git --work-tree={repo2} commit -m x", elsewhere, project=repo2)
+
+
+def test_h3_merge_targets():
+    repo = make_merge_repo()
+    (repo / "dirty.txt").write_text("d\n")
+    for label, cmd in (("refs_heads", "git merge refs/heads/wf-x-abc"), ("heads", "git merge heads/wf-x-abc"), ("tilde", "git merge wf-x-abc~1"),
+                       ("caret", "git merge wf-x-abc^"), ("reflog", "git merge 'wf-x-abc@{1}'"), ("caret2", "git merge wf-x-abc^2"),
+                       ("pull_dot", "git pull . wf-x-abc"), ("pull_dot_refs", "git pull . refs/heads/wf-x-abc"),
+                       ("pull_dot_flags", "git pull --no-rebase . wf-x-abc"), ("pull_dot_plus_refspec", "git pull . +wf-x-abc:main"),
+                       ("wrapped", "env X=1 git merge wf-x-abc")):
+        _denied(f"h3_{label}_denied_when_dirty", cmd, repo)
+    _allowed("h3_pull_origin_ignored", "git pull origin wf-x-abc", repo)
+    _allowed("h3_remote_tracking_ref_ignored", "git merge origin/wf-x-abc", repo)
+    _allowed("h3_other_branch_ignored", "git merge wf-x-abcd", repo)
+    (repo / "dirty.txt").unlink()
+    _allowed("h3_clean_tree_allowed", "git merge refs/heads/wf-x-abc", repo)
+
+
+def test_m1_pathspec_magic():
+    repo = make_repo()
+    (repo / "list.txt").write_text("docs/plans/x.md\n")
+    for label, cmd in (("upper_case", "git add -f DOCS/Plans/x.md"), ("icase_magic", "git add ':(icase)docs/PLANS/x.md'"),
+                       ("top_magic_from_subdir", "git add ':(top)docs/plans/x.md'"), ("top_glob_magic", "git add ':(top,glob)docs/plans/*.md'"),
+                       ("short_top_with_bang_free", "git add ':/docs/plans/x.md'"),
+                       ("from_file_force", "git add -f --pathspec-from-file=list.txt"), ("from_file_force_sep", "git add -f --pathspec-from-file list.txt"),
+                       ("chmod_value_not_pathspec", "git add --chmod +x docs/plans/x.md")):
+        _denied(f"m1_{label}_denied", cmd, repo / "src" if "subdir" in label else repo)
+    _allowed("m1_from_file_without_force_allowed", "git add --pathspec-from-file=list.txt", repo)
+    _allowed("m1_chmod_equals_ordinary_allowed", "git add --chmod=+x src/x.ts", repo)
+    _allowed("m1_chmod_separate_ordinary_allowed", "git add --chmod +x src/x.ts", repo)
+    _allowed("m1_exclude_magic_not_a_pathspec", "git add src/x.ts ':(exclude)docs/plans/x.md'", repo)
+    _allowed("m1_literal_magic_star_is_not_glob", "git add ':(literal)docs/p*'", repo)
+
+
+def test_m3_probe_budget():
+    import importlib
+    import time
+    sys.path.insert(0, str(SCRIPTS))
+    mod = importlib.import_module("craftflow_pretooluse_bash_guard")
+    mod._PROBE_DEADLINE[0] = time.monotonic() - 1
+    try:
+        check("m3_expired_budget_returns_probe_error", mod._git_lines(str(PLUGIN_ROOT), "status", "--porcelain") is None)
+        mod._PROBE_DEADLINE[0] = time.monotonic() + 30
+        check("m3_live_budget_runs_probe", mod._git_lines(str(PLUGIN_ROOT), "rev-parse", "--git-dir") is not None)
+    finally:
+        mod._PROBE_DEADLINE[0] = None
+    repo = make_repo(ignore_plans=False)
+    (repo / "docs" / "plans" / "x.md").write_text("changed\n")
+    git(repo, "add", "-f", "docs/plans/x.md")
+    shim = scratch_dir("p5g-slow-")
+    real = shutil.which("git")
+    (shim / "git").write_text(f'#!/bin/sh\nfor a in "$@"; do if [ "$a" = "diff" ]; then exec sleep 30; fi; done\nexec {real} "$@"\n')
+    (shim / "git").chmod(0o755)
+    cmd = "git commit -m a; git commit -m b; git commit -m c; git commit -m d; git commit -m e"
+    started = time.monotonic()
+    rc, out, err = run(BASH_GUARD, bash(cmd, repo), repo, path_prefix=str(shim))
+    elapsed = time.monotonic() - started
+    errs = events(repo, "plan_commit_probe_error")
+    check("m3_chained_commits_stay_inside_hook_timeout", rc == 0 and out == "" and elapsed < 9, f"rc={rc} elapsed={elapsed:.1f} out={out!r}")
+    check("m3_budget_exhaustion_is_logged", any(e.get("reason") == "budget" for e in errs), f"{errs}")
+    check("m3_allow_path_stays_silent", err == "", f"err={err!r}")
+
+
+def test_m4_update_index():
+    repo = make_repo()
+    sha = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+    for label, cmd in (("cacheinfo_comma", f"git update-index --add --cacheinfo 100644,{sha},docs/plans/x.md"),
+                       ("cacheinfo_three_args", f"git update-index --add --cacheinfo 100644 {sha} docs/plans/x.md"),
+                       ("add_path", "git update-index --add docs/plans/x.md"), ("force_remove_free_add", "git update-index --add -- docs/plans/x.md")):
+        _denied(f"m4_{label}_denied", cmd, repo)
+    _allowed("m4_refresh_allowed", "git update-index --refresh", repo)
+    _allowed("m4_add_ordinary_allowed", "git update-index --add src/a.txt", repo)
+    _allowed("m4_cacheinfo_ordinary_allowed", f"git update-index --add --cacheinfo 100644,{sha},src/new.txt", repo)
+
+
+def test_l1_dry_run():
+    repo = make_repo(ignore_plans=False)
+    (repo / "docs" / "plans" / "x.md").write_text("changed\n")
+    git(repo, "add", "-f", "docs/plans/x.md")
+    _allowed("l1_commit_dry_run_allowed", "git commit --dry-run -m x", repo)
+    _allowed("l1_commit_dry_run_pathspec_allowed", "git commit --dry-run -m x docs/plans/x.md", repo)
+    _allowed("l1_add_dry_run_allowed", "git add --dry-run -f docs/plans/x.md", repo)
+    _allowed("l1_add_cluster_n_allowed", "git add -nf docs/plans/x.md", repo)
+    _denied("l1_real_commit_still_denied", "git commit -m x", repo)
+
+
 def main():
     try:
-        for fn in (test_shipped_policy_keys, test_enterplanmode, test_plan_commit_table, test_plan_commit_staged_probe, test_plan_commit_probe_error,
-                   test_plan_commit_scope, test_plan_commit_linked_worktree, test_cursor_scope, test_merge_guard,
-                   test_invalid_policy_never_widens, test_silence_on_allow_paths):
+        for fn in (test_shipped_policy_keys, enterplanmode_denied_by_default, test_plan_commit_table, plan_commit_staged_probe_denies,
+                   test_plan_commit_probe_error, test_plan_commit_scope, test_plan_commit_linked_worktree, test_cursor_scope,
+                   test_merge_guard, test_invalid_policy_never_widens, test_silence_on_allow_paths,
+                   test_c1_glob_collapse_does_not_crash, test_h1_wrapped_git, test_h2_retargeted_repo, test_h3_merge_targets,
+                   test_m1_pathspec_magic, test_m3_probe_budget, test_m4_update_index, test_l1_dry_run):
             print(fn.__name__)
             try:
                 fn()

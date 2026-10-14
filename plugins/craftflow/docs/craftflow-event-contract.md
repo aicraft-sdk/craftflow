@@ -382,19 +382,28 @@ The permit record the pretooluse guard already logs for a finalize-permitted mem
 - Emitter: `scripts/craftflow_pretooluse_bash_guard.py` (`_plan_commit_check`).
 - Trigger: the bounded (2 s) `git diff --name-only` probe behind a `git commit` failed, timed out, or git is missing. The commit is
   allowed (fail open, today's behavior); an explicit protected pathspec still denies.
-- Payload: `command` and `probe` (`--cached` or `worktree`).
+- Payload: `command`, `probe` (`--cached` or `worktree`) and `reason` (`error`, or `budget` when the shared 5 s per-run probe budget
+  was already spent, so chained commits cannot outlive the hook timeout).
 
 ### Log event: `plan_commit_dynamic_allowed`
 
 - Emitter: `scripts/craftflow_pretooluse_bash_guard.py` (`_plan_commit_check`).
-- Trigger: a plan-commit candidate with a dynamic pathspec (`$VAR`, `$(...)`) or a dynamic `-C` / `cd` target. It cannot be resolved
+- Trigger: a plan-commit candidate with a dynamic pathspec (`$VAR`, `$(...)`), a dynamic `-C` / `cd` / `--git-dir` / `--work-tree`
+  target, a dynamic command name (`$G add ...`) or a dynamic `sh -c` string that names git. It cannot be resolved
   statically, so it is allowed here and the staged-index probe catches it at commit.
 - Payload: `command` and `reason`.
+
+### Log event: `policy_guard_error`
+
+- Emitter: `scripts/craftflow_pretooluse_bash_guard.py` (`main`).
+- Trigger: the policy-guard step (`plan_commit`, merge clean tree) raised. The hook logs it and falls through to the existing
+  destructive-command guards, so a bug here can never skip them or exit non-zero.
+- Payload: `error` (repr of the exception) and `command`.
 
 ### Log event: `worktree_merge_dirty_denied`
 
 - Emitter: `scripts/craftflow_pretooluse_bash_guard.py` (`_merge_check`), Claude Code only (DD-12).
-- Trigger: `git merge <b>` where `<b>` is the `worktree_branch` of an artifact in `<main_root>/.craftflow/state/workflows/*.json` and the
+- Trigger: `git merge <b>` or `git pull . <b>` (also `refs/heads/<b>`, `heads/<b>`, `<b>~N`, `<b>^`, `<b>@{...}`) where `<b>` is the `worktree_branch` of an artifact in `<main_root>/.craftflow/state/workflows/*.json` and the
   main tree has uncommitted changes (`git status --porcelain` non-empty) or the status probe errored, while `worktree_merge.require_clean_tree`
   is true (the default until the policy ships the key). Other branches and unmanaged projects are untouched.
 - Payload: `policy_key`, `policy_status`, `branch`, `status_error` (true when the probe itself failed) and `command`.

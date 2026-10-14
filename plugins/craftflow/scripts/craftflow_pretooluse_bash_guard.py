@@ -21,6 +21,7 @@ import os
 import posixpath
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from craftflow_hooklib import (
@@ -1590,12 +1591,25 @@ _PLAN_DIR = "docs/plans"
 _WF_DIR = ".craftflow/state/workflows"
 _GLOB_CHARS = "*?["
 _PROBE_TIMEOUT_SECONDS = 2
+_PROBE_BUDGET_SECONDS = 5  # shared by every probe of one hook run, so chained commands cannot outlive the 10 s hook timeout
+_PROBE_DEADLINE = [None]
+_PROBE_STATE = {"reason": "error"}
+_MAX_UNWRAP_DEPTH = 3
 _COMMIT_VALUE_LONG_FLAGS = {
     "--message", "--file", "--author", "--date", "--reuse-message", "--reedit-message", "--fixup", "--squash",
     "--template", "--cleanup", "--trailer",
 }
 _COMMIT_VALUE_SHORT_CHARS = "mFCct"
 _MERGE_VALUE_FLAGS = {"-m", "-F", "-s", "-X", "--into-name", "--strategy", "--strategy-option", "--message", "--file"}
+_SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+_WRAPPER_VALUE_OPTS = {
+    "command": set(), "builtin": set(), "exec": {"-a"}, "nohup": set(), "time": {"-f", "-o", "--format", "--output"},
+    "nice": {"-n", "--adjustment"}, "ionice": {"-c", "-n", "-p"}, "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "sudo": {"-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U", "-R", "-T", "-c"}, "doas": {"-u", "-C"},
+}
+_CHDIR_OPTS = {"env": ("-C", "--chdir"), "sudo": ("-D",)}
+_GROUP_TOKENS = ("(", "{", "!", "then", "do", "else")
+_WATCHED_SUBCOMMANDS = ("add", "stage", "commit", "merge", "pull", "update-index")
 
 
 def resolve_main_root(start) -> tuple:
@@ -1635,46 +1649,69 @@ def resolve_main_root(start) -> tuple:
 
 
 def _pathspec_rel(token: str, cwd: str, top: str):
-    """(top-relative posix path, is_glob) for one git pathspec token, or None when it is outside the tree or an exclude."""
+    """(top-relative posix path, is_glob) for one git pathspec token, or None when it is outside the tree or an exclude.
+    Parses the `:(magic,list)` form (top, exclude, literal; icase is moot because comparison is always case-folded) and the
+    short `:/` `:!` `:^` forms. is_glob is judged on the NORMALIZED path, so a glob that collapses (`*/..`) is not a glob."""
     base = cwd
+    literal = False
     if token.startswith(":("):
         close = token.find(")")
-        if close < 0 or "exclude" in token[: close + 1]:
+        if close < 0:
             return None
+        magic = [part.strip() for part in token[2:close].split(",")]
         token = token[close + 1:]
-    elif token.startswith(":/"):
-        base, token = top, token[2:]
-    elif token[:2] in (":!", ":^"):
-        return None
+        if "exclude" in magic:
+            return None
+        if "top" in magic:
+            base = top
+        literal = "literal" in magic
+    elif token.startswith(":") and len(token) > 1:
+        end = 1
+        while end < len(token) and token[end] in "/!^":
+            end += 1
+        short = token[1:end]
+        if "!" in short or "^" in short:
+            return None
+        if "/" in short:
+            base = top
+        token = token[end:]
+        if end > 1 and token.startswith(":"):
+            token = token[1:]
     joined = os.path.normpath(os.path.join(base, token))
     rel = os.path.relpath(joined, top).replace(os.sep, "/")
     if rel == ".." or rel.startswith("../"):
         return None
-    return rel, any(ch in token for ch in _GLOB_CHARS)
+    return rel, (not literal) and any(ch in rel for ch in _GLOB_CHARS)
 
 
 def _rel_protected(rel: str, is_glob: bool, force: bool, extra) -> bool:
-    """True when a top-relative pathspec names (or, with force, would reach) a protected plan artifact."""
-    roots = [_PLAN_DIR, _WF_DIR, *sorted(extra)]
-    if is_glob:
-        cut = min(rel.index(ch) for ch in _GLOB_CHARS if ch in rel)
-        prefix = rel[:cut]
+    """True when a top-relative pathspec names (or, with force, would reach) a protected plan artifact. Comparison is
+    case-folded always (a case-insensitive filesystem reaches `DOCS/Plans`; the false positive on a case-sensitive one is
+    a path nobody has)."""
+    low = rel.casefold()
+    extra_cf = {item.casefold() for item in extra}
+    roots = [_PLAN_DIR, _WF_DIR, *sorted(extra_cf)]
+    cuts = [low.index(ch) for ch in _GLOB_CHARS if ch in low]
+    if is_glob and cuts:
+        prefix = low[: min(cuts)]
         if prefix.startswith(_PLAN_DIR + "/") or prefix.startswith(_WF_DIR + "/"):
             return True
         return force and any((root + "/").startswith(prefix) for root in roots)
-    if rel in extra or _WF_JSON_RE.search(rel):
+    if low in extra_cf or _WF_JSON_RE.search(low):
         return True
-    if rel == _PLAN_DIR or rel.startswith(_PLAN_DIR + "/"):
-        return posixpath.basename(rel) != ".gitkeep"
-    return force and (rel == "." or any(root.startswith(rel + "/") for root in roots))
+    if low == _PLAN_DIR or low.startswith(_PLAN_DIR + "/"):
+        return posixpath.basename(low) != ".gitkeep"
+    return force and (low == "." or any(root.startswith(low + "/") for root in roots))
 
 
 def plan_pathspec_violations(subcommand: str, args: list, cwd: str, top: str, extra=frozenset()) -> tuple:
     """Pure. (violations, dynamic, has_pathspecs, all_flag) for `git add|stage|commit` args: the top-relative protected paths
     the explicit pathspecs name (`.gitkeep` exempt), whether any pathspec was dynamic (`$VAR`, `$(...)`: allowed here, the
-    staged probe catches it at commit), whether any pathspec was given, and whether `-a|--all|-A` was. `add -f|--force` also
-    denies an ancestor pathspec (`.`, `docs`, `:/`) and `-A -f`."""
-    pathspecs, force, all_flag, after = [], False, False, False
+    staged probe catches it at commit), whether any pathspec was given (a `--pathspec-from-file` counts), and whether
+    `-a|--all|-A` was. `add -f|--force` also denies an ancestor pathspec (`.`, `docs`, `:/`), `-A -f` and a forced
+    `--pathspec-from-file` (the list is not read). Value-taking options are consumed so their values are not pathspecs.
+    `add --dry-run|-n` changes nothing and yields no violation."""
+    pathspecs, force, all_flag, after, from_file, dry = [], False, False, False, False, False
     idx = 0
     while idx < len(args):
         tok = args[idx]
@@ -1684,9 +1721,14 @@ def plan_pathspec_violations(subcommand: str, args: list, cwd: str, top: str, ex
         elif tok == "--":
             after = True
         elif tok.startswith("--"):
-            force = force or tok == "--force"
-            all_flag = all_flag or tok == "--all"
-            if subcommand == "commit" and tok in _COMMIT_VALUE_LONG_FLAGS:
+            name, has_value = tok.split("=", 1)[0], "=" in tok
+            force = force or name == "--force"
+            all_flag = all_flag or name == "--all"
+            dry = dry or name == "--dry-run"
+            if name == "--pathspec-from-file":
+                from_file = True
+            if (name in ("--pathspec-from-file", "--chmod") and not has_value) or (
+                    subcommand == "commit" and name in _COMMIT_VALUE_LONG_FLAGS and not has_value):
                 idx += 1
         elif tok.startswith("-") and len(tok) > 1:
             cluster = tok[1:]
@@ -1700,6 +1742,7 @@ def plan_pathspec_violations(subcommand: str, args: list, cwd: str, top: str, ex
             else:
                 force = force or "f" in cluster
                 all_flag = all_flag or "A" in cluster
+                dry = dry or "n" in cluster
         else:
             pathspecs.append(tok)
     violations = []
@@ -1711,28 +1754,96 @@ def plan_pathspec_violations(subcommand: str, args: list, cwd: str, top: str, ex
         parsed = _pathspec_rel(spec, cwd, top)
         if parsed is not None and _rel_protected(parsed[0], parsed[1], force and subcommand != "commit", extra):
             violations.append(parsed[0])
-    if force and all_flag and subcommand != "commit":
-        violations.append(".")
-    return violations, dynamic, bool(pathspecs), all_flag
+    if force and (all_flag or from_file) and subcommand != "commit":
+        violations.append("." if all_flag else "<pathspec-from-file>")
+    if dry and subcommand != "commit":
+        return [], dynamic, False, False
+    return violations, dynamic, bool(pathspecs) or from_file, all_flag
 
 
-def is_wf_branch_merge(args: list, wf_branches) -> str:
-    """Pure. The workflow branch a `git merge` names (any flags), or ""."""
-    skip = False
+def update_index_violations(args: list, cwd: str, top: str, extra=frozenset()) -> tuple:
+    """Pure. (violations, dynamic) for `git update-index`: only `--add` / `--cacheinfo` can put a new path into the index, so
+    only those are treated like a forced `git add` of the literal paths they name (`--cacheinfo mode,sha,path` and the
+    three-argument form). `--index-info` reads stdin and is an accepted gap."""
+    paths, adds, idx = [], False, 0
+    while idx < len(args):
+        tok = args[idx]
+        idx += 1
+        if tok == "--":
+            paths.extend(args[idx:])
+            break
+        if tok == "--add":
+            adds = True
+        elif tok == "--cacheinfo":
+            adds = True
+            if idx < len(args) and "," in args[idx]:
+                paths.append(args[idx].split(",", 2)[-1])
+                idx += 1
+            elif idx + 2 < len(args):
+                paths.append(args[idx + 2])
+                idx += 3
+        elif not tok.startswith("-"):
+            paths.append(tok)
+    if not adds:
+        return [], False
+    violations, dynamic = [], False
+    for spec in paths:
+        if looks_dynamic(spec):
+            dynamic = True
+            continue
+        parsed = _pathspec_rel(spec, cwd, top)
+        if parsed is not None and _rel_protected(parsed[0], False, False, extra):
+            violations.append(parsed[0])
+    return violations, dynamic
+
+
+def _merge_ref_name(token: str) -> str:
+    """A merge/pull ref token reduced to a branch name: `+src:dst` -> src, `refs/heads/b` and `heads/b` -> b, and the
+    revision suffixes `~N`, `^`, `^N`, `@{...}` stripped."""
+    name = token.lstrip("+").split(":", 1)[0]
+    previous = None
+    while previous != name:
+        previous = name
+        name = re.sub(r"(\^\d*|~\d*|@\{[^}]*\})$", "", name)
+    for prefix in ("refs/heads/", "heads/"):
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
+def is_wf_branch_merge(args: list, wf_branches, pull: bool = False) -> str:
+    """Pure. The workflow branch a `git merge` (or `git pull .`) names (any flags, any revision suffix), or ""."""
+    positional, skip = [], False
     for tok in args:
         if skip:
             skip = False
         elif tok in _MERGE_VALUE_FLAGS:
             skip = True
-        elif not tok.startswith("-") and tok in wf_branches:
-            return tok
+        elif not tok.startswith("-"):
+            positional.append(tok)
+    if pull:
+        if not positional or positional[0] != ".":
+            return ""
+        positional = positional[1:]
+    for tok in positional:
+        name = _merge_ref_name(tok)
+        if name in wf_branches:
+            return name
     return ""
 
 
 def _git_lines(top: str, *args):
-    """Output lines of a bounded git probe, or None when it errored, timed out or git is missing."""
+    """Output lines of a bounded git probe, or None when it errored, timed out, git is missing, or the shared per-run probe
+    budget is spent (`_PROBE_STATE["reason"]` then says `budget` instead of `error`)."""
+    limit = _PROBE_TIMEOUT_SECONDS
+    if _PROBE_DEADLINE[0] is not None:
+        limit = min(limit, _PROBE_DEADLINE[0] - time.monotonic())
+        if limit <= 0:
+            _PROBE_STATE["reason"] = "budget"
+            return None
+    _PROBE_STATE["reason"] = "error"
     try:
-        result = subprocess.run(["git", "-C", top, *args], capture_output=True, timeout=_PROBE_TIMEOUT_SECONDS)
+        result = subprocess.run(["git", "-C", top, *args], capture_output=True, timeout=limit)
     except (OSError, subprocess.SubprocessError):
         return None
     if result.returncode != 0:
@@ -1740,29 +1851,131 @@ def _git_lines(top: str, *args):
     return [part.decode("utf-8", "surrogateescape") for part in result.stdout.split(b"\0") if part]
 
 
-def _git_invocations(command: str, cwd: str) -> list:
-    """[(subcommand, later_tokens, effective_cwd, dynamic)] for every `git` subcommand, following `cd <static dir>`."""
+def _skip_options(rest: list, value_opts) -> tuple:
+    """(rest after leading options, chdir-like option values seen). `--` ends options."""
+    seen = []
+    while rest:
+        tok = rest[0]
+        if tok == "--":
+            return rest[1:], seen
+        if not tok.startswith("-") or len(tok) == 1:
+            break
+        if tok in value_opts and len(rest) > 1:
+            seen.append((tok, rest[1]))
+            rest = rest[2:]
+        else:
+            rest = rest[1:]
+    return rest, seen
+
+
+def _resolve_unit(tokens: list) -> tuple:
+    """Strip group tokens, env assignments and transparent wrappers (`command env time nice exec sudo ...`) from one
+    subcommand. Returns (name, rest, env, chdir): for a shell (`bash -c STR`) or `eval`, name is `__shell__` and rest is
+    [script]."""
+    env: dict = {}
+    chdir = None
+    tokens = list(tokens)
+    for _ in range(8):
+        while tokens and tokens[0] in _GROUP_TOKENS:
+            tokens = tokens[1:]
+        while tokens and tokens[-1] in (")", "}"):
+            tokens = tokens[:-1]
+        while tokens and is_env_assignment(tokens[0]):
+            key, _sep, value = tokens[0].partition("=")
+            env[key] = value
+            tokens = tokens[1:]
+        if not tokens:
+            return None, [], env, chdir
+        name, rest = os.path.basename(tokens[0]), tokens[1:]
+        if name in _WRAPPER_VALUE_OPTS:
+            tokens, seen = _skip_options(rest, _WRAPPER_VALUE_OPTS[name])
+            for opt, value in seen:
+                if opt in _CHDIR_OPTS.get(name, ()):
+                    chdir = value
+            continue
+        if name in _SHELLS:
+            for pos, tok in enumerate(rest):
+                if tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:] and pos + 1 < len(rest):
+                    return "__shell__", [rest[pos + 1]], env, chdir
+            return name, rest, env, chdir
+        if name == "eval":
+            return "__shell__", [" ".join(rest)], env, chdir
+        return name, rest, env, chdir
+    return None, [], env, chdir
+
+
+def _git_invocations(command: str, cwd: str, depth: int = 0, dynamic_in: bool = False) -> list:
+    """[{sub, later, eff, dyn, git_dir, work_tree}] for every `git` subcommand, following `cd <static dir>`, transparent
+    wrappers, subshell groups and `sh|bash|zsh -c` / `eval` strings (depth-limited). A dynamic command name carrying a
+    watched git subcommand yields `{sub: "?dynamic"}` so the caller can log and fail open."""
     found = []
     here = cwd
-    dynamic_cwd = False
+    dynamic_cwd = dynamic_in
     for tokens in split_subcommands(command):
-        name, rest = _split_command_name(tokens)
+        name, rest, env, chdir = _resolve_unit(tokens)
+        if name is None:
+            continue
+        unit_dir, unit_dyn = here, dynamic_cwd
+        if chdir is not None:
+            if looks_dynamic(chdir):
+                unit_dyn = True
+            else:
+                unit_dir = os.path.normpath(os.path.join(here, chdir))
         if name == "cd" and rest:
             if looks_dynamic(rest[0]) or rest[0] == "-":
                 dynamic_cwd = True
             else:
                 here = os.path.normpath(os.path.join(here, rest[0]))
+        elif name == "__shell__":
+            script = rest[0]
+            if looks_dynamic(script):
+                if "git" in script:
+                    found.append({"sub": "?dynamic", "later": [], "eff": unit_dir, "dyn": True, "git_dir": None, "work_tree": None})
+            elif depth < _MAX_UNWRAP_DEPTH:
+                found.extend(_git_invocations(script, unit_dir, depth + 1, unit_dyn))
         elif name == "git":
             sub, later, _override, malformed, dyn_dir = _find_git_subcommand(rest)
             if sub is None or malformed:
                 continue
             prefix = rest[: len(rest) - len(later) - 1]
-            eff = here
-            for pos, tok in enumerate(prefix):
+            eff, git_dir, work_tree = unit_dir, env.get("GIT_DIR"), env.get("GIT_WORK_TREE")
+            pos = 0
+            while pos < len(prefix):
+                tok = prefix[pos]
                 if tok == "-C" and pos + 1 < len(prefix):
                     eff = os.path.normpath(os.path.join(eff, prefix[pos + 1]))
-            found.append((sub, later, eff, dyn_dir or dynamic_cwd))
+                    pos += 2
+                elif tok == "-c":
+                    pos += 2
+                elif tok in ("--git-dir", "--work-tree") and pos + 1 < len(prefix):
+                    if tok == "--git-dir":
+                        git_dir = prefix[pos + 1]
+                    else:
+                        work_tree = prefix[pos + 1]
+                    pos += 2
+                elif tok.startswith("--git-dir="):
+                    git_dir, pos = tok.split("=", 1)[1], pos + 1
+                elif tok.startswith("--work-tree="):
+                    work_tree, pos = tok.split("=", 1)[1], pos + 1
+                else:
+                    pos += 1
+            dyn = dyn_dir or unit_dyn or any(looks_dynamic(v) for v in (git_dir, work_tree) if v)
+            found.append({"sub": sub, "later": later, "eff": eff, "dyn": dyn, "git_dir": git_dir, "work_tree": work_tree})
+        elif looks_dynamic(name) and any(tok in _WATCHED_SUBCOMMANDS for tok in rest):
+            found.append({"sub": "?dynamic", "later": [], "eff": unit_dir, "dyn": True, "git_dir": None, "work_tree": None})
     return found
+
+
+def _repo_start(inv: dict) -> str:
+    """Where to start the repo lookup: an explicit `--work-tree`, else the parent of a `--git-dir` named `.git`, else eff."""
+    eff = inv["eff"]
+    if inv["work_tree"]:
+        return os.path.normpath(os.path.join(eff, inv["work_tree"]))
+    if inv["git_dir"]:
+        git_dir = os.path.normpath(os.path.join(eff, inv["git_dir"]))
+        if os.path.basename(git_dir) == ".git":
+            return os.path.dirname(git_dir)
+    return eff
 
 
 def _live_artifact_paths(data: dict, main_root) -> set:
@@ -1801,22 +2014,30 @@ def _policy_reason(key: str, value, status: str, remediation: str) -> str:
     return f"craftflow-policy: {key}={json.dumps(value).strip(chr(34))} — {remediation}"
 
 
-def _resolve_cached(cache: dict, eff: str) -> tuple:
-    if eff not in cache:
-        cache[eff] = resolve_main_root(eff)
-    return cache[eff]
+def _resolve_cached(cache: dict, start: str) -> tuple:
+    if start not in cache:
+        cache[start] = resolve_main_root(start)
+    return cache[start]
 
 
-def _plan_commit_check(sub, later, eff, dyn, command, data, cache) -> bool:
+def _plan_commit_check(inv, command, data, cache) -> bool:
     """True when a plan_commit deny was emitted for this git invocation."""
-    top, main_root, managed = _resolve_cached(cache, eff)
-    if not managed or dyn:
-        if managed and dyn:
-            log_event("plan_commit_dynamic_allowed", {"command": command, "reason": "dynamic -C or cd target"})
+    sub, later, eff = inv["sub"], inv["later"], inv["eff"]
+    top, main_root, managed = _resolve_cached(cache, _repo_start(inv))
+    if not managed or inv["dyn"]:
+        if managed and inv["dyn"]:
+            log_event("plan_commit_dynamic_allowed", {"command": command, "reason": "dynamic -C, cd, --git-dir or --work-tree target"})
+        return False
+    if sub == "commit" and "--dry-run" in later:
         return False
     extra = _live_artifact_paths(data, main_root)
     top_s, eff_real = str(top), os.path.realpath(eff)
-    violations, dynamic, explicit, all_flag = plan_pathspec_violations(sub, later, eff_real, top_s, extra)
+    base = eff_real if (eff_real == top_s or eff_real.startswith(top_s + os.sep)) else top_s
+    if sub == "update-index":
+        violations, dynamic = update_index_violations(later, base, top_s, extra)
+        explicit = all_flag = False
+    else:
+        violations, dynamic, explicit, all_flag = plan_pathspec_violations(sub, later, base, top_s, extra)
     if dynamic:
         log_event("plan_commit_dynamic_allowed", {"command": command, "reason": "dynamic pathspec"})
     probe_paths = []
@@ -1824,7 +2045,7 @@ def _plan_commit_check(sub, later, eff, dyn, command, data, cache) -> bool:
         for args in ([("--cached",)] + ([()] if (all_flag or explicit) else [])):
             listed = _git_lines(top_s, "diff", "--name-only", "-z", "--no-renames", *args)
             if listed is None:
-                log_event("plan_commit_probe_error", {"command": command, "probe": " ".join(args) or "worktree"})
+                log_event("plan_commit_probe_error", {"command": command, "probe": " ".join(args) or "worktree", "reason": _PROBE_STATE["reason"]})
                 continue
             probe_paths.extend(rel for rel in listed if _rel_protected(rel, False, False, extra))
     hits = violations + probe_paths
@@ -1844,12 +2065,12 @@ def _plan_commit_check(sub, later, eff, dyn, command, data, cache) -> bool:
     return True
 
 
-def _merge_check(later, eff, command, cache) -> bool:
-    """True when a dirty-main-tree merge deny was emitted for `git merge <workflow branch>`."""
-    top, main_root, managed = _resolve_cached(cache, eff)
+def _merge_check(inv, command, cache) -> bool:
+    """True when a dirty-main-tree merge deny was emitted for `git merge <workflow branch>` or `git pull . <branch>`."""
+    top, main_root, managed = _resolve_cached(cache, _repo_start(inv))
     if not managed:
         return False
-    branch = is_wf_branch_merge(later, _wf_branches(main_root))
+    branch = is_wf_branch_merge(inv["later"], _wf_branches(main_root), pull=inv["sub"] == "pull")
     if not branch:
         return False
     policy, status, _errors = load_policy()
@@ -1862,7 +2083,7 @@ def _merge_check(later, eff, command, cache) -> bool:
                                               "branch": branch, "status_error": dirty is None, "command": command})
     pretool_deny(_policy_reason(
         "worktree_merge.require_clean_tree", True, status,
-        f"worktree_dirty_main_tree: the main tree has uncommitted changes (or `git status` failed), so `git merge {branch}` is "
+        f"worktree_dirty_main_tree: the main tree has uncommitted changes (or `git status` failed), so `git {inv['sub']}` of {branch} is "
         "blocked. Commit, stash, or otherwise resolve them, then merge",
     ))
     return True
@@ -1870,13 +2091,18 @@ def _merge_check(later, eff, command, cache) -> bool:
 
 def _policy_guards(command: str, cwd: str, data: dict) -> bool:
     """True when a policy deny was emitted. Claude Code only: Cursor payloads return at once (DD-12)."""
-    if is_cursor_host() or "git" not in command:
+    if is_cursor_host() or not ("git" in command or "$" in command or "`" in command):
         return False
+    _PROBE_DEADLINE[0] = time.monotonic() + _PROBE_BUDGET_SECONDS
     cache: dict = {}
-    for sub, later, eff, dyn in _git_invocations(command, cwd):
-        if sub in ("add", "stage", "commit") and _plan_commit_check(sub, later, eff, dyn, command, data, cache):
+    for inv in _git_invocations(command, cwd):
+        sub = inv["sub"]
+        if sub == "?dynamic":
+            if _resolve_cached(cache, _repo_start(inv))[2]:
+                log_event("plan_commit_dynamic_allowed", {"command": command, "reason": "dynamic command name or shell string"})
+        elif sub in ("add", "stage", "commit", "update-index") and _plan_commit_check(inv, command, data, cache):
             return True
-        if sub == "merge" and not dyn and _merge_check(later, eff, command, cache):
+        elif sub in ("merge", "pull") and not inv["dyn"] and _merge_check(inv, command, cache):
             return True
     return False
 
@@ -1950,8 +2176,12 @@ def main() -> int:
         cwd = None
         cwd_unresolved = True
 
-    if cwd is not None and _policy_guards(command, str(cwd), data):
-        return 0
+    if cwd is not None:
+        try:
+            if _policy_guards(command, str(cwd), data):
+                return 0
+        except Exception as exc:  # a policy-guard bug must never skip the destructive-command guards below (fall through)
+            log_event("policy_guard_error", {"error": repr(exc), "command": command})
 
     # PH1 (DD-1/DD-2/D-8): identity lookups (workflow, permit path, protected
     # redirect set) use the anchored project root so a cwd drifted into
