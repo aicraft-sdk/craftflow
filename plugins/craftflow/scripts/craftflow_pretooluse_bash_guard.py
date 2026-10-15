@@ -1609,7 +1609,7 @@ _WRAPPER_VALUE_OPTS = {
     "setsid": set(), "xargs": {"-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a", "-l"},
 }
 _CHDIR_OPTS = {"env": ("-C", "--chdir"), "sudo": ("-D",)}
-_GROUP_TOKENS = ("(", "{", "!", "then", "do", "else")
+_GROUP_TOKENS = ("(", "{", "!", "then", "do", "else", "if", "elif", "while", "until")
 _WATCHED_SUBCOMMANDS = ("add", "stage", "commit", "merge", "pull", "update-index")
 
 
@@ -1714,10 +1714,11 @@ def plan_pathspec_violations(subcommand: str, args: list, cwd: str, top: str, ex
 
     Options are parsed, never matched as raw tokens: value-taking options consume their value (`commit -m --dry-run` is a
     message), long options may be git's unambiguous prefixes (`--fo`), and `--no-dry-run` / `--no-force` / `--no-all` win
-    when they come last."""
+    when they come last. `commit --short|--porcelain|--long|--null|-z` print status and imply `--dry-run` in git, even
+    after `--no-dry-run`, so they count as a dry run."""
     commit = subcommand == "commit"
     known, valued = (_COMMIT_LONG, _COMMIT_VALUE) if commit else (_ADD_LONG, _ADD_VALUE)
-    pathspecs, force, all_flag, from_file, dry, after = [], False, False, False, False, False
+    pathspecs, force, all_flag, from_file, dry, implied, after = [], False, False, False, False, False, False
     idx = 0
     while idx < len(args):
         tok = args[idx]
@@ -1741,6 +1742,8 @@ def plan_pathspec_violations(subcommand: str, args: list, cwd: str, top: str, ex
                 dry = True
             elif name == "--no-dry-run":
                 dry = False
+            elif commit and name in ("--short", "--porcelain", "--long", "--null"):
+                implied = True
             elif name == "--pathspec-from-file":
                 from_file = True
             elif name == "--no-pathspec-from-file":
@@ -1755,6 +1758,8 @@ def plan_pathspec_violations(subcommand: str, args: list, cwd: str, top: str, ex
                         all_flag = True
                     elif ch in "uS":
                         break
+                    elif ch == "z":
+                        implied = True
                     elif ch in _COMMIT_VALUE_SHORT_CHARS:
                         idx += 0 if cluster[pos + 1:] else 1
                         break
@@ -1780,7 +1785,7 @@ def plan_pathspec_violations(subcommand: str, args: list, cwd: str, top: str, ex
             violations.append(parsed[0])
     if force and (all_flag or from_file) and not commit:
         violations.append("." if all_flag else "<pathspec-from-file>")
-    return violations, dynamic, bool(pathspecs) or from_file, all_flag, dry
+    return violations, dynamic, bool(pathspecs) or from_file, all_flag, dry or implied
 
 
 def update_index_violations(args: list, cwd: str, top: str, extra=frozenset()) -> tuple:
@@ -1820,13 +1825,27 @@ def update_index_violations(args: list, cwd: str, top: str, extra=frozenset()) -
 
 
 def _merge_ref_name(token: str) -> str:
-    """A merge/pull ref token reduced to a branch name: `+src:dst` -> src, `refs/heads/b` and `heads/b` -> b, and the
-    revision suffixes `~N`, `^`, `^N`, `^{...}` (peels) and `@{...}` stripped."""
+    """A merge/pull ref token reduced to a branch name: `+src:dst` -> src, `refs/heads/b` and `heads/b` -> b, and the revision
+    suffixes `~N`, `^`, `^N`, `^{...}` (peels) and `@{...}` stripped from the end. Tokens over _MAX_REF_TOKEN_CHARS are not
+    branch names: they return "" before any scanning, so a 30 KB `^^^^` token costs nothing."""
+    if len(token) > _MAX_REF_TOKEN_CHARS:
+        return ""
     name = token.lstrip("+").split(":", 1)[0]
-    previous = None
-    while previous != name:
-        previous = name
-        name = re.sub(r"(\^\{[^}]*\}|\^\d*|~\d*|@\{[^}]*\})$", "", name)
+    while True:
+        if name.endswith("}"):
+            for opener in ("^{", "@{"):
+                pos = name.rfind(opener)
+                if pos > 0 and "}" not in name[pos + 2:-1]:
+                    name = name[:pos]
+                    break
+            else:
+                break
+            continue
+        stripped = name.rstrip("0123456789")
+        if stripped and stripped[-1] in "^~":
+            name = stripped[:-1]
+            continue
+        break
     for prefix in ("refs/heads/", "heads/"):
         if name.startswith(prefix):
             return name[len(prefix):]
@@ -1839,6 +1858,8 @@ def is_wf_branch_merge(args: list, wf_branches, pull: bool = False) -> str:
     for tok in args:
         if skip:
             skip = False
+        elif len(tok) > _MAX_REF_TOKEN_CHARS:
+            positional.append("")
         elif _is_merge_value_flag(tok, pull):
             skip = True
         elif not tok.startswith("-"):
@@ -1891,25 +1912,31 @@ def _skip_options(rest: list, value_opts) -> tuple:
 
 
 def _resolve_unit(tokens: list) -> tuple:
-    """Strip group tokens, env assignments and transparent wrappers (`command env time nice exec sudo timeout stdbuf setsid
-    xargs ...`) from one subcommand. Returns (name, rest, env, chdir, notes). For a shell (`bash -c STR`), `eval` or
-    `env -S STR`, name is `__shell__` and rest is [script]. notes may hold `xargs` and `gave-up:<reason>`."""
+    """Strip group tokens (`( { ! then do else if elif while until`), env assignments and transparent wrappers (`command env
+    time nice exec sudo timeout stdbuf setsid xargs ...`) from one subcommand. `tokens` are MASKED (see `_split_units`); the
+    result is unmasked. Returns (name, rest, env, chdir, notes). For a shell (`bash -c STR`), `eval` or `env -S STR`, name is
+    `__shell__` and rest is [script]. notes may hold `xargs` and `gave-up:<reason>`. Every strip is index-based, so a thousand
+    leading `(` cost one slice."""
     env: dict = {}
     notes: list = []
     chdir = None
     tokens = list(tokens)
     for _ in range(8):
-        while tokens and tokens[0] in _GROUP_TOKENS:
-            tokens = tokens[1:]
-        while tokens and tokens[-1] in (")", "}"):
-            tokens = tokens[:-1]
-        while tokens and is_env_assignment(tokens[0]):
-            key, _sep, value = tokens[0].partition("=")
-            env[key] = value
-            tokens = tokens[1:]
+        start, end = 0, len(tokens)
+        while start < end and tokens[start] in _GROUP_TOKENS:
+            start += 1
+        while end > start and tokens[end - 1] in (")", "}"):
+            end -= 1
+        tokens = tokens[start:end]
+        idx = 0
+        while idx < len(tokens) and is_env_assignment(tokens[idx]):
+            key, _sep, value = tokens[idx].partition("=")
+            env[_um(key)] = _um(value)
+            idx += 1
+        tokens = tokens[idx:]
         if not tokens:
             return None, [], env, chdir, notes
-        name, rest = os.path.basename(tokens[0]), tokens[1:]
+        name, rest = _um(os.path.basename(tokens[0])), tokens[1:]
         if name in _WRAPPER_VALUE_OPTS:
             tokens, seen = _skip_options(rest, _WRAPPER_VALUE_OPTS[name])
             tokens = tokens[_WRAPPER_POSITIONAL.get(name, 0):]
@@ -1917,34 +1944,41 @@ def _resolve_unit(tokens: list) -> tuple:
                 notes.append("xargs")
             for opt, value in seen:
                 if opt in _CHDIR_OPTS.get(name, ()):
-                    chdir = value
+                    chdir = _um(value)
                 if name == "env" and opt in ("-S", "--split-string"):
-                    return "__shell__", [" ".join([value] + tokens)], env, chdir, notes
+                    return "__shell__", [_um(" ".join([value] + tokens))], env, chdir, notes
             continue
         if name in _SHELLS:
             for pos, tok in enumerate(rest):
                 if tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:] and pos + 1 < len(rest):
-                    return "__shell__", [rest[pos + 1]], env, chdir, notes
-            return name, rest, env, chdir, notes
+                    return "__shell__", [_um(rest[pos + 1])], env, chdir, notes
+            return name, [_um(t) for t in rest], env, chdir, notes
         if name == "eval":
-            return "__shell__", [" ".join(rest)], env, chdir, notes
-        return name, rest, env, chdir, notes
+            return "__shell__", [_um(" ".join(rest))], env, chdir, notes
+        return name, [_um(t) for t in rest], env, chdir, notes
     notes.append("gave-up:wrapper iteration cap")
     return None, [], env, chdir, notes
 
 
-def _git_invocations(command: str, cwd: str, depth: int = 0, dynamic_in: bool = False) -> list:
+def _git_invocations(command: str, cwd: str, depth: int = 0, dynamic_in: bool = False, shell_env_in=None) -> list:
     """[{sub, later, eff, dyn, git_dir, work_tree, reason}] for every `git` subcommand. Follows `cd` / `pushd <static dir>`
-    with shell scoping (a `cd` inside `( ... )`, a pipeline or a background segment does not persist), transparent
-    wrappers, subshell groups, `sh|bash|zsh -c` / `eval` / `env -S` strings (depth-limited) and `find -exec`. Anything it
-    cannot follow yields a `?dynamic` marker (logged, fail open); running past the probe deadline yields `?skipped`."""
+    with shell scoping (a `cd` inside `( ... )`, a pipeline or a background segment does not persist; a `cd` in an `if` /
+    `while` head does), exported static `GIT_DIR` / `GIT_WORK_TREE`, transparent wrappers, subshell groups, `sh|bash|zsh -c` /
+    `eval` / `env -S` strings (depth-limited) and `find -exec`. Anything it cannot follow yields a `?dynamic` marker (logged,
+    fail open). It is bounded: past the unit cap, the cwd length cap or the probe deadline it stops, marks the pass
+    exhausted (`_PASS_STATE`), and the top-level call appends a `?skipped` marker."""
     found: list = []
     here = cwd
     dynamic_cwd = dynamic_in
+    shell_env = dict(shell_env_in or {})
     stack: list = []
     for tokens, before, after in _split_units(command):
+        _PASS_STATE["units"] += 1
+        if _PASS_STATE["units"] > _MAX_UNITS:
+            _PASS_STATE["exhausted"] = _PASS_STATE["exhausted"] or "units"
+            break
         if _over_deadline():
-            found.append(_marker("time", here, sub="?skipped"))
+            _PASS_STATE["exhausted"] = _PASS_STATE["exhausted"] or "time"
             break
         opens = 0
         while opens < len(tokens) and tokens[opens] == "(":
@@ -1952,7 +1986,7 @@ def _git_invocations(command: str, cwd: str, depth: int = 0, dynamic_in: bool = 
         closes = 0
         while closes < len(tokens) - opens and tokens[len(tokens) - 1 - closes] == ")":
             closes += 1
-        stack.extend([(here, dynamic_cwd)] * opens)
+        stack.extend([(here, dynamic_cwd, dict(shell_env))] * opens)
         isolated = before == "|" or after in ("|", "&")
         name, rest, env, chdir, notes = _resolve_unit(tokens)
         for note in notes:
@@ -1968,11 +2002,18 @@ def _git_invocations(command: str, cwd: str, depth: int = 0, dynamic_in: bool = 
             if ("GIT_DIR" in env or "GIT_WORK_TREE" in env) and not isolated:
                 dynamic_cwd = True
                 found.append(_marker("GIT_DIR/GIT_WORK_TREE assignment statement", here))
-        elif name in ("export", "declare", "typeset", "readonly", "set") and any(
-                tok.startswith(("GIT_DIR", "GIT_WORK_TREE")) for tok in rest):
+        elif name in ("export", "declare", "typeset") and _exported_git_vars(name, rest):
             if not isolated:
-                dynamic_cwd = True
-                found.append(_marker("GIT_DIR/GIT_WORK_TREE assignment statement", here))
+                for key, value in _exported_git_vars(name, rest):
+                    if value is None or looks_dynamic(value):
+                        dynamic_cwd = True
+                        found.append(_marker("dynamic exported GIT_DIR/GIT_WORK_TREE", here))
+                    else:
+                        shell_env[key] = value
+        elif name == "unset":
+            if not isolated:
+                for tok in rest:
+                    shell_env.pop(tok, None)
         elif name in ("cd", "pushd", "popd"):
             targets = [tok for tok in rest if tok == "-" or not tok.startswith("-")]
             if isolated:
@@ -1981,11 +2022,18 @@ def _git_invocations(command: str, cwd: str, depth: int = 0, dynamic_in: bool = 
                 dynamic_cwd = True
             else:
                 here = os.path.normpath(os.path.join(here, targets[0]))
+                if len(here) > _MAX_CWD_CHARS:
+                    _PASS_STATE["exhausted"] = _PASS_STATE["exhausted"] or "path"
+                    break
         else:
-            _dispatch_unit(found, name, rest, env, notes, unit_dir, unit_dyn, depth)
+            merged_env = dict(shell_env)
+            merged_env.update(env)
+            _dispatch_unit(found, name, rest, merged_env, notes, unit_dir, unit_dyn, depth)
         for _ in range(closes):
             if stack:
-                here, dynamic_cwd = stack.pop()
+                here, dynamic_cwd, shell_env = stack.pop()
+    if depth == 0 and _PASS_STATE["exhausted"]:
+        found.append(_marker(_PASS_STATE["exhausted"], here, sub="?skipped"))
     return found
 
 
@@ -2020,10 +2068,9 @@ def _wf_branches(main_root) -> set:
     return branches
 
 
-_MERGE_RESERVE_SECONDS = 1.0  # part of the probe budget the plan_commit commit probes may not use: the merge status probe keeps it
 
 
-_POLICY_MAX_COMMAND_CHARS = 65536
+_POLICY_MAX_COMMAND_CHARS = 16384
 
 
 _LOG_COMMAND_CHARS = 300
@@ -2111,9 +2158,11 @@ def _explode_punct(token: str) -> list:
 
 def _split_units(command: str) -> list:
     """[(tokens, operator_before, operator_after)] like `split_subcommands`, but keeping the control operators so a `cd`
-    inside a pipeline or background segment (a subshell) can be told apart from one that persists."""
+    inside a pipeline or background segment (a subshell) can be told apart from one that persists. Operators inside quotes are
+    masked first (see `_mask_quoted`), so tokens come back MASKED: only `_resolve_unit` unmasks them. Stops at the probe
+    deadline and marks the pass exhausted."""
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n")
+        lexer = shlex.shlex(_mask_quoted(command), posix=True, punctuation_chars="();<>|&\n")
         lexer.whitespace_split = True
         lexer.whitespace = lexer.whitespace.replace("\n", "")
         tokens = list(lexer)
@@ -2121,6 +2170,9 @@ def _split_units(command: str) -> list:
         return []
     units, current, before = [], [], None
     for token in [piece for raw in tokens for piece in _explode_punct(raw)]:
+        if _over_deadline():
+            _PASS_STATE["exhausted"] = _PASS_STATE["exhausted"] or "time"
+            return units
         if token in CONTROL_OPERATORS:
             if current:
                 units.append((current, before, token))
@@ -2144,7 +2196,7 @@ def _dispatch_unit(found: list, name: str, rest: list, env: dict, notes: list, u
             if "git" in script:
                 found.append(_marker("dynamic shell string", unit_dir))
         elif depth < _MAX_UNWRAP_DEPTH:
-            found.extend(_git_invocations(script, unit_dir, depth + 1, unit_dyn))
+            found.extend(_git_invocations(script, unit_dir, depth + 1, unit_dyn, env))
         elif "git" in script:
             found.append(_marker("unwrap depth exceeded", unit_dir))
     elif name == "git":
@@ -2235,7 +2287,7 @@ def _plan_commit_one(inv, resolved, command, data) -> bool:
     probe_paths = []
     if not violations and sub == "commit":
         for args in ([("--cached",)] + ([()] if (all_flag or explicit) else [])):
-            listed = _git_lines(top_s, "diff", "--name-only", "-z", "--no-renames", *args, reserve=_MERGE_RESERVE_SECONDS)
+            listed = _git_lines(top_s, "diff", "--name-only", "-z", "--no-renames", *args)
             if listed is None:
                 log_event("plan_commit_probe_error", {"command": command[:_LOG_COMMAND_CHARS], "probe": " ".join(args) or "worktree",
                                                       "reason": _PROBE_STATE["reason"]})
@@ -2267,7 +2319,14 @@ def _merge_one(inv, resolved, command) -> bool:
     policy, status, _errors = load_policy()
     if policy_value(policy, "worktree_merge.require_clean_tree") is not True:
         return False
-    dirty = _git_lines(str(top), "status", "--porcelain", "-z")
+    # The status probe gets its own fresh deadline: a parse or commit-probe budget already spent must not turn a clean tree into
+    # a deny (`dirty is None`). A genuine git error or timeout still denies.
+    saved_deadline = _PROBE_DEADLINE[0]
+    _PROBE_DEADLINE[0] = time.monotonic() + _PROBE_TIMEOUT_SECONDS
+    try:
+        dirty = _git_lines(str(top), "status", "--porcelain", "-z")
+    finally:
+        _PROBE_DEADLINE[0] = saved_deadline
     if dirty is not None and not dirty:
         return False
     log_event("worktree_merge_dirty_denied", {"policy_key": "worktree_merge.require_clean_tree", "policy_status": status,
@@ -2295,6 +2354,105 @@ def _opaque_reason(command: str, parsed_watched: bool) -> str:
     if not parsed_watched and re.search(r"\$\(|`", command):
         return "command substitution"
     return ""
+
+
+_MAX_UNITS = 2000  # command units one policy pass will walk; more is "exhausted" (fail closed when the text names git writes)
+
+
+_MAX_CWD_CHARS = 4096
+
+
+_MAX_REF_TOKEN_CHARS = 256  # a branch name is never longer; longer tokens are not workflow branches (and are not regex-scanned)
+
+
+_PASS_STATE = {"exhausted": "", "units": 0}
+
+
+_MASKED_CHARS = "();<>|&\n"
+
+
+_MASK_TABLE = {ord(ch): chr(0xE000 + pos) for pos, ch in enumerate(_MASKED_CHARS)}
+
+
+_UNMASK_TABLE = {ord(masked): ch for ch, masked in ((ch, chr(0xE000 + pos)) for pos, ch in enumerate(_MASKED_CHARS))}
+
+
+_FAIL_CLOSED_PLAN_WORDS = frozenset(("add", "stage", "commit", "update-index"))
+
+
+_FAIL_CLOSED_MERGE_WORDS = frozenset(("merge", "pull"))
+
+
+def _um(text: str) -> str:
+    """Restore the operator characters `_mask_quoted` hid inside quotes."""
+    return text.translate(_UNMASK_TABLE)
+
+
+def _mask_quoted(command: str) -> str:
+    """Replace every shell operator character that sits inside quotes (or behind a backslash) with a private-use character, so
+    the tokenizer cannot mistake a quoted `;` `&&` `)` for an operator. `_um` undoes it. One linear pass. A command that already
+    contains those private-use characters is returned unchanged (nothing is masked, nothing would be restored wrongly)."""
+    if any(0xE000 <= ord(ch) <= 0xE000 + len(_MASKED_CHARS) for ch in command):
+        return command
+    out, quote, pos, size = [], "", 0, len(command)
+    while pos < size:
+        ch = command[pos]
+        if ch == "\\" and quote != "'" and pos + 1 < size:
+            out.append(ch)
+            out.append(command[pos + 1].translate(_MASK_TABLE))
+            pos += 2
+            continue
+        if quote:
+            if ch == quote:
+                quote = ""
+                out.append(ch)
+            else:
+                out.append(ch.translate(_MASK_TABLE))
+        else:
+            if ch in "'\"":
+                quote = ch
+            out.append(ch)
+        pos += 1
+    return "".join(out)
+
+
+def _exported_git_vars(name: str, rest: list) -> list:
+    """[(KEY, value or None)] for the GIT_DIR / GIT_WORK_TREE words of `export ...` / `declare -x ...` / `typeset -x ...`
+    (None: no value given). `declare` / `typeset` without -x do not export, so they yield nothing."""
+    if name != "export" and not any(tok.startswith("-") and "x" in tok[1:] for tok in rest):
+        return []
+    out = []
+    for tok in rest:
+        key, eq, value = tok.partition("=")
+        if key in ("GIT_DIR", "GIT_WORK_TREE"):
+            out.append((key, value if eq else None))
+    return out
+
+
+def _fail_closed(command: str, cwd: str, reason: str) -> bool:
+    """The policy pass was skipped or exhausted (`size`, `units`, `path`, `time`). In a managed project, a command whose text
+    names `git` followed by add/stage/commit/update-index (or merge/pull together with a workflow branch name) cannot be
+    verified, so it is DENIED (`plan_commit` allow turns this off, like every plan_commit deny). Anything else stays allowed.
+    Always logs `policy_guard_skipped` (with `denied`) in a managed project. True when a deny was emitted."""
+    _top, main_root, managed = resolve_main_root(cwd)
+    if not managed:
+        return False
+    denied = False
+    first = re.search(r"\bgit\b", command)
+    if first:
+        words = set(re.findall(r"\b(add|stage|commit|merge|pull|update-index)\b", command[first.end():]))
+        hit = bool(words & _FAIL_CLOSED_PLAN_WORDS)
+        if not hit and words & _FAIL_CLOSED_MERGE_WORDS:
+            hit = any(branch in command for branch in _wf_branches(main_root))
+        if hit:
+            policy, status, _errors = load_policy()
+            denied = not (policy_value(policy, "plan_commit") == "allow" and status != "invalid")
+    log_event("policy_guard_skipped", {"reason": reason, "denied": denied, "chars": len(command), "command": command[:_LOG_COMMAND_CHARS]})
+    if denied:
+        prefix = "craftflow-policy: plan_commit —" if status != "invalid" else "craftflow-policy: policy-invalid —"
+        pretool_deny(f"{prefix} this command is too large or complex for the plan-commit guard to verify ({reason}); split it into "
+                     "smaller commands, or set plan_commit to allow in config/policy.json via a PR")
+    return denied
 
 
 def _policy_reason(key: str, value, status: str, remediation: str) -> str:
@@ -2329,12 +2487,15 @@ def _merge_check(inv, command, cache) -> bool:
 
 
 def _policy_guards(command: str, cwd: str, data: dict) -> bool:
-    """True when a policy deny was emitted. Claude Code only: Cursor payloads return at once (DD-12). Fails open (logged)
-    above a size cap, past the shared deadline, and for every construct it cannot follow."""
-    if is_cursor_host() or not ("git" in command or "$" in command or "`" in command):
+    """True when a policy deny was emitted. Claude Code only: Cursor payloads return at once (DD-12). Above the size cap, past
+    the unit / path / time limits, the pass is exhausted and fails CLOSED for commands that name git writes (`_fail_closed`);
+    constructs it merely cannot follow fail open with a log line."""
+    if is_cursor_host():
         return False
+    _PASS_STATE["exhausted"], _PASS_STATE["units"] = "", 0
     if len(command) > _POLICY_MAX_COMMAND_CHARS:
-        log_event("policy_guard_skipped", {"reason": "size", "chars": len(command), "command": command[:_LOG_COMMAND_CHARS]})
+        return _fail_closed(command, cwd, "size")
+    if not ("git" in command or "$" in command or "`" in command):
         return False
     _PROBE_DEADLINE[0] = time.monotonic() + _PROBE_BUDGET_SECONDS
     cache: dict = {}
@@ -2342,8 +2503,8 @@ def _policy_guards(command: str, cwd: str, data: dict) -> bool:
     for inv in _git_invocations(command, cwd):
         sub = inv["sub"]
         if sub == "?skipped":
-            log_event("policy_guard_skipped", {"reason": inv["reason"], "command": command[:_LOG_COMMAND_CHARS]})
-        elif sub == "?dynamic":
+            continue
+        if sub == "?dynamic":
             if _resolve_cached(cache, inv["eff"])[2]:
                 log_event("plan_commit_dynamic_allowed", {"command": command[:_LOG_COMMAND_CHARS], "reason": inv["reason"]})
         elif sub in ("add", "stage", "commit", "update-index"):
@@ -2354,6 +2515,8 @@ def _policy_guards(command: str, cwd: str, data: dict) -> bool:
             parsed_watched = True
             if not inv["dyn"] and _merge_check(inv, command, cache):
                 return True
+    if _PASS_STATE["exhausted"]:
+        return _fail_closed(command, cwd, _PASS_STATE["exhausted"])
     reason = _opaque_reason(command, parsed_watched)
     if reason and _resolve_cached(cache, cwd)[2]:
         log_event("plan_commit_dynamic_allowed", {"command": command[:_LOG_COMMAND_CHARS], "reason": reason})

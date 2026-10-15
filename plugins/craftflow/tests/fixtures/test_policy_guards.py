@@ -668,8 +668,9 @@ def test_hb_git_dir_owns_the_index():
     _denied("hb_env_under_wrapper", f"env GIT_DIR={gd} GIT_WORK_TREE={unmanaged_work} git add -f docs/plans/x.md", unmanaged_work, project=managed)
     _denied("hb_work_tree_managed_git_dir_other", f"git --git-dir={other}/.git --work-tree={managed} add -f docs/plans/x.md", unmanaged_work, project=managed)
     _allowed("hb_both_unmanaged_allowed", f"git --git-dir={other}/.git --work-tree={unmanaged_work} add -f docs/plans/x.md", unmanaged_work, project=managed)
-    for label, cmd in (("export", f"export GIT_DIR={gd}; git add -f docs/plans/x.md"), ("bare_assignment", f"GIT_DIR={gd}; git add -f docs/plans/x.md"),
-                       ("export_work_tree", f"export GIT_WORK_TREE={managed} && git add -f docs/plans/x.md")):
+    # cycle 3 (M1): an exported STATIC value is resolved like `env GIT_DIR=`; only dynamic values and bare assignments stay fail-open
+    for label, cmd in (("bare_assignment", f"GIT_DIR={gd}; git add -f docs/plans/x.md"), ("export_dynamic", "export GIT_DIR=$X; git add -f docs/plans/x.md"),
+                       ("export_no_value", "export GIT_DIR; git add -f docs/plans/x.md")):
         rc, out, err = run(BASH_GUARD, bash(cmd, managed), managed)
         check(f"hb_{label}_is_dynamic_fail_open_logged", rc == 0 and out == "" and err == "", f"rc={rc} out={out!r} err={err!r}")
     check("hb_dynamic_statement_logged", len(events(managed, "plan_commit_dynamic_allowed")) >= 3, f"{events(managed, 'plan_commit_dynamic_allowed')}")
@@ -741,12 +742,14 @@ def test_m3_size_cap_and_time_box():
     import time
     sys.path.insert(0, str(SCRIPTS))
     repo = make_repo()
-    rc, out, err = run(BASH_GUARD, bash("git add -f docs/plans/x.md # " + "x" * 70000, repo), repo)
+    rc, out, err = run(BASH_GUARD, bash("echo hi # " + "x" * 70000, repo), repo)
     skipped = events(repo, "policy_guard_skipped")
-    check("m3_oversized_command_skips_the_policy_pass_and_logs", rc == 0 and out == "" and err == "" and len(skipped) == 1
-          and skipped[0].get("reason") == "size" and len(skipped[0].get("command", "")) <= 300, f"rc={rc} out={out[:80]!r} skipped={skipped}")
+    check("m3_oversized_non_git_command_is_allowed_and_logged", rc == 0 and out == "" and err == "" and len(skipped) == 1
+          and skipped[0].get("reason") == "size" and skipped[0].get("denied") is False and len(skipped[0].get("command", "")) <= 300,
+          f"rc={rc} out={out[:80]!r} skipped={skipped}")
     mod = importlib.import_module("craftflow_pretooluse_bash_guard")
     mod._PROBE_DEADLINE[0] = time.monotonic() - 1
+    mod._PASS_STATE["exhausted"], mod._PASS_STATE["units"] = "", 0
     try:
         found = mod._git_invocations("git add x; git add y", str(repo))
     finally:
@@ -826,6 +829,158 @@ def test_budget_reserve_keeps_the_merge_probe_alive():
     check("budget_reserve_clean_tree_merge_not_denied_by_burnt_budget", rc == 0 and out == "" and err == "" and time.monotonic() - started < 9, f"rc={rc} out={out!r} err={err!r}")
 
 
+# --------------------------------------------------------------------------------------------------------------------
+# REM-FIX cycle 3 (final): N-H1, N-H2, M2, M1, M3, group heads, quoted operators
+# --------------------------------------------------------------------------------------------------------------------
+
+
+def _timed(cmd, cwd, **kw):
+    import time
+    started = time.monotonic()
+    rc, out, err = run(BASH_GUARD, bash(cmd, cwd), cwd, **kw)
+    return rc, out, err, time.monotonic() - started
+
+
+def test_nh1_long_merge_tokens_are_bounded():
+    import importlib
+    import time
+    sys.path.insert(0, str(SCRIPTS))
+    mod = importlib.import_module("craftflow_pretooluse_bash_guard")
+    for label, unit in (("caret", "^"), ("tilde1", "~1"), ("caret2", "^2"), ("peel", "^{}")):
+        started = time.monotonic()
+        result = mod._merge_ref_name("wf-x-abc" + unit * (30000 // len(unit)))
+        check(f"nh1_merge_ref_name_{label}_linear", result == "" and time.monotonic() - started < 0.2, f"{result[:20]!r} {time.monotonic() - started:.2f}s")
+    check("nh1_short_suffix_chain_still_resolves", mod._merge_ref_name("refs/heads/wf-x-abc^2~1^{commit}^") == "wf-x-abc", mod._merge_ref_name("refs/heads/wf-x-abc^2~1^{commit}^"))
+    repo = make_merge_repo()
+    for label, unit in (("caret", "^"), ("tilde1", "~1"), ("caret2", "^2"), ("peel", "^{}")):
+        # 12k keeps the policy pass active (under the 16 KB cap); the destructive guard behind it must still deny
+        rc, out, err, secs = _timed("git merge wf-x-abc" + unit * (12000 // len(unit)) + "; rm -rf .", repo)
+        check(f"nh1_{label}_12k_token_fast_and_destructive_guard_still_denies", rc == 0 and secs < 1.5 and "in-cwd-critical" in out, f"rc={rc} secs={secs:.2f} out={out[:200]!r}")
+        # 30k is over the size cap: fail closed (the text names a workflow branch merge), still fast
+        rc, out, err, secs = _timed("git merge wf-x-abc" + unit * (30000 // len(unit)) + "; rm -rf .", repo)
+        check(f"nh1_{label}_30k_token_fast_and_denied", rc == 0 and secs < 1.5 and decision(out)[0] == "deny", f"rc={rc} secs={secs:.2f} out={out[:200]!r}")
+
+
+def test_nh2_big_commands_fail_closed_when_they_name_git_writes():
+    repo = _staged_plan_repo()
+    for kb in (45, 60):
+        cmd = "cd a;" * (kb * 1024 // 5) + " git commit -m x"
+        rc, out, err, secs = _timed(cmd, repo)
+        verdict, reason = decision(out)
+        check(f"nh2_{kb}kb_cd_then_commit_denied_fast", rc == 0 and verdict == "deny" and reason.startswith("craftflow-policy: plan_commit —")
+              and "split" in reason and secs < 3, f"rc={rc} secs={secs:.2f} out={out[:200]!r}")
+        skipped = events(repo, "policy_guard_skipped")
+        check(f"nh2_{kb}kb_logged_with_denied_true", bool(skipped) and skipped[-1].get("denied") is True and skipped[-1].get("reason") == "size", f"{skipped[-1:]}")
+    rc, out, err, secs = _timed("cd a;" * (45 * 1024 // 5) + " echo hi", repo)
+    check("nh2_45kb_cd_then_echo_allowed", rc == 0 and out == "" and err == "" and secs < 3, f"rc={rc} secs={secs:.2f} out={out[:120]!r}")
+    # under the size cap but over the unit cap: exhausted -> fail closed
+    rc, out, err, secs = _timed("cd a;" * 2500 + " git commit -m x", repo)
+    check("nh2_unit_cap_exhaustion_denied_fast", rc == 0 and decision(out)[0] == "deny" and secs < 3, f"rc={rc} secs={secs:.2f} out={out[:160]!r}")
+    rc, out, err, secs = _timed("(" * 3000 + " git commit -m x", repo)
+    check("nh2_3000_deep_group_bounded_and_denied", rc == 0 and decision(out)[0] == "deny" and secs < 3, f"rc={rc} secs={secs:.2f} out={out[:160]!r}")
+    big_add = "cd a;" * (45 * 1024 // 5) + " git add src/x.ts"
+    rc, out, err, secs = _timed(big_add, repo)
+    check("nh2_big_command_with_any_git_add_is_denied_by_design", rc == 0 and decision(out)[0] == "deny", f"out={out[:120]!r}")
+    allow = plugin_copy({"plan_commit": "allow"})
+    rc, out, err, secs = _timed("cd a;" * (45 * 1024 // 5) + " git commit -m x", repo, plugin=allow)
+    check("nh2_policy_allow_disables_the_fail_closed_deny", rc == 0 and out == "" and err == "", f"out={out[:120]!r} err={err!r}")
+    rc, out, err, secs = _timed("cd a;" * (45 * 1024 // 5) + " git commit -m x", repo, env_set={"CURSOR_PLUGIN_ROOT": str(PLUGIN_ROOT)})
+    check("nh2_cursor_payload_allowed", rc == 0 and out == "" and err == "", f"out={out[:120]!r}")
+    plain = make_repo(managed=False)
+    rc, out, err, secs = _timed("cd a;" * (45 * 1024 // 5) + " git commit -m x", plain)
+    check("nh2_unmanaged_project_allowed", rc == 0 and out == "" and err == "", f"out={out[:120]!r}")
+    merge_repo = make_merge_repo()
+    rc, out, err, secs = _timed("cd a;" * (45 * 1024 // 5) + " git merge feature/foo", merge_repo)
+    check("nh2_merge_without_wf_branch_text_allowed", rc == 0 and out == "", f"out={out[:120]!r}")
+    rc, out, err, secs = _timed("cd a;" * (45 * 1024 // 5) + " git merge wf-x-abc", merge_repo)
+    check("nh2_merge_with_wf_branch_text_denied", rc == 0 and decision(out)[0] == "deny", f"out={out[:120]!r}")
+
+
+def test_m2_clean_merge_is_not_denied_by_a_burnt_parse_budget():
+    import contextlib
+    import importlib
+    import io
+    import time
+    sys.path.insert(0, str(SCRIPTS))
+    mod = importlib.import_module("craftflow_pretooluse_bash_guard")
+    repo = make_merge_repo()
+    inv = {"sub": "merge", "later": ["wf-x-abc"], "eff": str(repo), "dyn": False, "git_dir": None, "work_tree": None, "reason": ""}
+    resolved = mod.resolve_main_root(repo)
+    saved_env = (os.environ.get("CLAUDE_PROJECT_DIR"), os.environ.get("CLAUDE_PLUGIN_ROOT"))
+    os.environ["CLAUDE_PROJECT_DIR"], os.environ["CLAUDE_PLUGIN_ROOT"] = str(repo), str(PLUGIN_ROOT)
+    try:
+        mod._PROBE_DEADLINE[0] = time.monotonic() - 5
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            clean = mod._merge_one(inv, resolved, "git merge wf-x-abc")
+        check("m2_clean_tree_with_spent_parse_budget_is_not_denied", clean is False and buf.getvalue() == "", f"clean={clean} out={buf.getvalue()!r}")
+        check("m2_merge_probe_restores_the_parse_deadline", mod._PROBE_DEADLINE[0] is not None and mod._PROBE_DEADLINE[0] < time.monotonic())
+        (repo / "dirty.txt").write_text("d\n")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            dirty = mod._merge_one(inv, resolved, "git merge wf-x-abc")
+        check("m2_dirty_tree_still_denied_with_spent_parse_budget", dirty is True and decision(buf.getvalue())[0] == "deny", f"{buf.getvalue()!r}")
+    finally:
+        mod._PROBE_DEADLINE[0] = None
+        for key, val in zip(("CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT"), saved_env):
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+
+
+def test_m1_static_exports_resolve_like_env_prefix():
+    managed = make_repo()
+    elsewhere = scratch_dir("p5g-else-")
+    gd = f"{managed}/.git"
+    _denied("m1_export_git_dir_and_work_tree", f"export GIT_DIR={gd} GIT_WORK_TREE={elsewhere}; git add -f docs/plans/x.md", elsewhere, project=managed)
+    _denied("m1_export_two_statements", f"export GIT_DIR={gd}; export GIT_WORK_TREE={elsewhere}; git add -f docs/plans/x.md", elsewhere, project=managed)
+    _denied("m1_declare_x", f"declare -x GIT_DIR={gd}; git add -f docs/plans/x.md", elsewhere, project=managed)
+    _allowed("m1_unset_clears_the_export", f"export GIT_DIR={gd}; unset GIT_DIR; git add -f docs/plans/x.md", elsewhere, project=managed)
+    _allowed("m1_export_in_pipeline_does_not_persist", f"export GIT_DIR={gd} | cat; git add -f docs/plans/x.md", elsewhere, project=managed)
+    _allowed("m1_export_in_subshell_does_not_persist", f"(export GIT_DIR={gd}); git add -f docs/plans/x.md", elsewhere, project=managed)
+    for label, cmd in (("cd_dash", "cd -; git add -f docs/plans/x.md"), ("popd", "popd; git add -f docs/plans/x.md"),
+                       ("cd_pwd", 'cd "$PWD"; git add -f docs/plans/x.md')):
+        rc, out, err = run(BASH_GUARD, bash(cmd, managed), managed)
+        check(f"m1_{label}_stays_dynamic_fail_open", rc == 0 and out == "" and err == "", f"rc={rc} out={out!r}")
+    check("m1_dynamic_cd_logged", len(events(managed, "plan_commit_dynamic_allowed")) >= 3, f"{events(managed, 'plan_commit_dynamic_allowed')}")
+
+
+def test_m3_status_formats_imply_dry_run():
+    repo = make_repo(ignore_plans=False)
+    (repo / "docs" / "plans" / "x.md").write_text("changed\n")
+    git(repo, "add", "-f", "docs/plans/x.md")
+    head = git(repo, "rev-parse", "HEAD").strip()
+    for opt in ("--short", "--porcelain", "--long", "-z", "--null", "--short --no-dry-run"):
+        subprocess.run(["git", "-C", str(repo), "commit", *opt.split(), "-m", "x", "--no-gpg-sign"], capture_output=True, text=True)
+        same = git(repo, "rev-parse", "HEAD").strip() == head
+        check(f"m3_real_git_{opt.replace(' ', '_')}_does_not_commit", same, f"HEAD moved for {opt}")
+        _allowed(f"m3_guard_allows_{opt.replace(' ', '_')}", f"git commit {opt} -m x", repo)
+    _denied("m3_plain_commit_still_denied", "git commit -m x", repo)
+    _denied("m3_no_short_still_denied", "git commit --no-short -m x", repo)
+
+
+def test_group_heads_and_quoted_operators():
+    repo = make_repo()
+    staged = _staged_plan_repo()
+    (repo / "src" / "docs" / "plans").mkdir(parents=True)
+    for label, cmd in (("if", "if git add -f docs/plans/x.md; then echo y; fi"), ("while", "while git add -f docs/plans/x.md; do break; done"),
+                       ("until", "until git add -f docs/plans/x.md; do :; done"), ("if_bang", "if ! git add -f docs/plans/x.md; then :; fi"),
+                       ("elif", "if true; then :; elif git add -f docs/plans/x.md; then :; fi"),
+                       ("if_cd_persists", "if cd src; then git add ../docs/plans/x.md; fi")):
+        _denied(f"grp_{label}_denied", cmd, repo)
+    _allowed("grp_if_cd_persists_allows_local_path", "if cd src; then git add docs/plans/x.md; fi", repo)
+    _denied("grp_if_commit_bang_denied", "if ! git commit -m x; then :; fi", staged)
+    for label, cmd in (("semicolon", 'git add -f ";" docs/plans/x.md'), ("andand", 'git commit -m "&&" docs/plans/x.md'),
+                       ("commit_semicolon", 'git commit -m ";" docs/plans/x.md'), ("paren_message", "git commit -m ')' docs/plans/x.md"),
+                       ("open_paren", "git commit -m '(' docs/plans/x.md"), ("pipe_in_quotes", "git add -f 'a|b' docs/plans/x.md"),
+                       ("subshell_with_quoted_paren", "(git add -f ')' docs/plans/x.md)"), ("redirect_chars", "git add -f '>' docs/plans/x.md"),
+                       ("escaped_semicolon", "git add -f \\; docs/plans/x.md")):
+        _denied(f"quoted_{label}_keeps_the_pathspec", cmd, repo)
+    _denied("quoted_paren_not_eaten_by_group_strip", "(git commit -m ')')", staged)
+    _allowed("quoted_operator_text_is_not_a_command", "echo 'git add -f docs/plans/x.md; rm -rf .' > /dev/null", repo)
+
+
 def main():
     try:
         for fn in (test_shipped_policy_keys, enterplanmode_denied_by_default, test_plan_commit_table, plan_commit_staged_probe_denies,
@@ -836,7 +991,10 @@ def main():
                    test_ha_dry_run_is_decided_from_parsed_options, test_hb_git_dir_owns_the_index,
                    test_m1_catch_all_logs_truncated_and_warns_on_stderr_only, test_m2_unwrapper_gives_up_loudly_and_more_wrappers,
                    test_m3_size_cap_and_time_box, test_rm1_cd_scope_does_not_leak, test_rm2_force_abbreviations_match_real_git,
-                   test_rm3_merge_peels_and_pull_value_options, test_budget_reserve_keeps_the_merge_probe_alive):
+                   test_rm3_merge_peels_and_pull_value_options, test_budget_reserve_keeps_the_merge_probe_alive,
+                   test_nh1_long_merge_tokens_are_bounded, test_nh2_big_commands_fail_closed_when_they_name_git_writes,
+                   test_m2_clean_merge_is_not_denied_by_a_burnt_parse_budget, test_m1_static_exports_resolve_like_env_prefix,
+                   test_m3_status_formats_imply_dry_run, test_group_heads_and_quoted_operators):
             print(fn.__name__)
             try:
                 fn()

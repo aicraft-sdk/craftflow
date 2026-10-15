@@ -383,8 +383,8 @@ The permit record the pretooluse guard already logs for a finalize-permitted mem
 - Trigger: the bounded (2 s) `git diff --name-only` probe behind a `git commit` failed, timed out, or git is missing. The commit is
   allowed (fail open, today's behavior); an explicit protected pathspec still denies.
 - Payload: `command`, `probe` (`--cached` or `worktree`) and `reason` (`error`, or `budget` when the shared 5 s per-run probe budget
-  was already spent, so chained commits cannot outlive the hook timeout). Commit probes may use at most 4 s of the 5 s budget; the
-  last second is reserved for the merge status probe, which (unlike this guard) denies on a probe error.
+  was already spent, so chained commits cannot outlive the hook timeout). The merge status probe has its own fresh 2 s deadline
+  (it does not draw on this budget) and, unlike this guard, denies on a genuine probe error.
 
 ### Log event: `plan_commit_dynamic_allowed`
 
@@ -409,9 +409,12 @@ The permit record the pretooluse guard already logs for a finalize-permitted mem
 ### Log event: `policy_guard_skipped`
 
 - Emitter: `scripts/craftflow_pretooluse_bash_guard.py` (`_policy_guards`).
-- Trigger: the policy pass was skipped and the command allowed (fail open): `reason: "size"` for a command over 64 KB, or
-  `reason: "time"` when the shared 5 s deadline passed while parsing.
-- Payload: `reason`, `command` (capped at 300 characters) and, for `size`, `chars`.
+- Trigger: the policy pass was skipped or exhausted: `reason: "size"` (over 16 KB of command text), `"units"` (over 2000 command
+  units), `"path"` (a tracked cwd over 4 KB) or `"time"` (the shared 5 s deadline passed while parsing). Logged only in a managed project.
+- Outcome: when the text names `git` followed by add/stage/commit/update-index (or merge/pull together with a workflow branch name),
+  the command is DENIED (`denied: true`, reason prefix `craftflow-policy: plan_commit —`, "split it into smaller commands"); `plan_commit: allow`,
+  Cursor payloads and unmanaged projects are not denied. Any other command is allowed (`denied: false`).
+- Payload: `reason`, `denied`, `chars` and `command` (capped at 300 characters).
 
 ### Log event: `worktree_merge_dirty_denied`
 

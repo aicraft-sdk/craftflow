@@ -209,10 +209,13 @@ Accepted gaps of the `plan_commit` guard (all fail open, today's behavior): `git
 plumbing that writes the index or commits without `add`/`commit`/`update-index` (`git hash-object -w` + `commit-tree`,
 `git stash`), a `--pathspec-from-file` list without `--force` (the staged probe still catches it at commit), a
 `--git-dir` that points into a linked worktree's admin dir (repo lookup falls back to the current directory), and dynamic
-command names, `-C`/`cd`/`--git-dir`/`--work-tree` values or `sh -c` strings, bare `export GIT_DIR=...` statements, `| sh`,
+command names, `-C`/`cd`/`--git-dir`/`--work-tree` values or `sh -c` strings, `cd -` / `popd` / `cd "$PWD"`, dynamic or value-less
+`export GIT_DIR`, bare `GIT_DIR=...` assignments, `case` statements, `| sh`,
 here-documents and here-strings, `python3 -c`-style interpreter strings, command substitution that names git, `xargs` / `find -exec`
 pathspecs supplied elsewhere, and an unwrapper that gives up past its depth or iteration cap (each logged as
-`plan_commit_dynamic_allowed` with its reason). The pass is skipped above 64 KB of command text (`policy_guard_skipped`).
+`plan_commit_dynamic_allowed` with its reason). The pass is bounded (16 KB of command text, 2000 units, a 4 KB cwd, 5 s); when it
+is skipped or exhausted, a command whose text names `git` followed by add/stage/commit/update-index (or merge/pull with a workflow
+branch name) is DENIED in a managed project (fail closed, `policy_guard_skipped` with `denied: true`), and any other command is allowed.
 
 ```
 | f41d16afa416 | plan_commit | craftflow_pretooluse_bash_guard.py::plan_pathspec_violations | test_policy_guards.py::plan_commit_staged_probe_denies | deleted | false | <Name (YYYY-MM-DD)> | |
