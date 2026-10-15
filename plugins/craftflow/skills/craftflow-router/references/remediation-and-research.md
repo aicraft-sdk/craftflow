@@ -145,7 +145,7 @@ When planner returns `STATUS=PLAN_CREATED` or `STATUS=DECISION_RFC_CREATED`:
 
 In Task*-tool fallback mode there is no `plan-review-gap-N` task: N is 1 for the first fresh review and 2 for the one after `re-plan`.
 
-After applying a block's `Increment planning_review_runs += 1` line, run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate plan_review_passes_max --point post_verdict --pass {N} --verdict {PASS|FINDINGS}`, where N is the pass of the returning `plan-review-gap-N` task; `proceed` → continue with that block; `human_checkpoint` with `reason: cap-reached` → the pass-2 `FINDINGS` block applies (`pending_gate=clarification`); any other result → `loop_cap_check_failed` (`SKILL.md` § 14).
+After applying a block's `Increment planning_review_runs += 1` line, run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate plan_review_passes_max --point post_verdict --pass {N} --verdict {PASS|FINDINGS} --wf {workflow_uuid} --project-root "$PROJECT_ROOT"`, where N is the pass of the returning `plan-review-gap-N` task; `proceed` → continue with that block; `human_checkpoint` with `reason: cap-reached` → the pass-2 `FINDINGS` block applies (`pending_gate=clarification`); any other result → `loop_cap_check_failed` (`SKILL.md` § 14; the increment above already applied, so a `proceed` reply must not repeat it).
 
 When `plan-gap-reviewer` pass 1 returns `PASS`:
 - Increment `planning_review_runs += 1`

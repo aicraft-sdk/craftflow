@@ -135,7 +135,7 @@
     "projection_sha256": "5b27b389a30d7205e0c07a231d218d1fd2ae16958c99fe919ca7879d84d9f832",
     "cause": "P2C: Difference 17 dropped (D17-A, reach_amendment null) and REACH-B adopted as the reach option; caps are the guaranteed effective tier of router-projection.json, exact values, ratchet-only afterwards"
   },
-  "projection_sha256": "3efb06fb04846b5a99b36d5fac857ad06cf1027cf5f44bbed53ad33e32b480e3",
+  "projection_sha256": "56a46a4ee8524ff6f27ad719623ce25b6c308fe9d3c87bbde8e6daa2f3b07bfc",
   "projection_revisions": [
     {
       "phase": "P5",
@@ -148,10 +148,10 @@
     {
       "phase": "P6",
       "from_projection_sha256": "8a0f281e664b6912dafb24b7f563af42e8aeeedf097bf7391ab1347c4390cba2",
-      "to_projection_sha256": "3efb06fb04846b5a99b36d5fac857ad06cf1027cf5f44bbed53ad33e32b480e3",
+      "to_projection_sha256": "56a46a4ee8524ff6f27ad719623ce25b6c308fe9d3c87bbde8e6daa2f3b07bfc",
       "fits_enforced_caps": true,
       "decided_by": "pending-David",
-      "cause": "P6 gate_check: six unsigned literal-to-key Rewrites rows join the policy map (reach_feasibility counts them), and cut-plan rows carry the as-built text where the drafts could not be applied or needed a fix (the :981 bullet keeps its (= 3) pin; the worktree_merge Policy table cell names the P5 bash guard; the plan-review fallback sentence names no prompt field; both verify call lines add 'advance once in total'; the Loop caps table drops the references/ prefix; plan-workflow.md:66 stays literal with a pin bullet below it); enforced caps unchanged and still fit"
+      "cause": "P6 gate_check: six unsigned literal-to-key Rewrites rows join the policy map (reach_feasibility counts them), and cut-plan rows carry the as-built text where the drafts could not be applied or needed a fix (the :981 bullet keeps its (= 3) pin; the worktree_merge Policy table cell names the P5 bash guard; the plan-review fallback sentence names no prompt field; both verify call lines add 'advance once in total'; the Loop caps table drops the references/ prefix; plan-workflow.md:66 stays literal with a pin bullet below it); REM-FIX r1 (P6 gate review): the plan-review call line gains --wf and --project-root plus an increment-already-applied note, the doubt and fix-verify call lines drop the dead cap-reached clause and advance regardless of verdict (Difference 33), the ask line says 'no further counter'; kernel and read-set bytes net down; enforced caps unchanged and still fit"
     }
   ],
   "enforce": false,

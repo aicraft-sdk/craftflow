@@ -439,11 +439,11 @@ The permit record the pretooluse guard already logs for a finalize-permitted mem
 
 - Emitter: `scripts/craftflow_gate_check.py` (`run`, through its local `log_event`), once per evaluation. It is not a hook event: the line is appended to the workflow's `{wf}.events.jsonl` (under `flock`), not to `craftflow-hook-events.log`.
 - Trigger: the router calls `craftflow_gate_check.py` at one of its four decision points (remediation before creating a REM-FIX; doubt-verify, fix-verify and plan-review after the verdict). Usage errors (exit 2) write nothing.
-- Fail-open: an append failure (for example no `workflows/` directory) never changes the decision. The printed JSON then carries an `event_error` field and the exit stays 0. The script never creates directories, never writes the artifact and never changes a counter or `broken`.
-- Payload: `ts`, `wf`, `gate` (`remediation_cycles_max`, `doubt_cycles_max`, `fix_verify_cycles_max` or `plan_review_passes_max`), `point` (`pre_create` or `post_verdict`), `count` (the breaker count, the dispatched cycle or the pass; null when it could not be read), `max` (the policy cap), `allow` and `action` (`proceed`, `advance` or `human_checkpoint`). Informational only: no gate reads it back.
+- Fail-open: an append failure (for example no `workflows/` directory) never changes the decision. The printed JSON then carries an `event_error` field and the exit stays 0: `event_error` means only that this audit append failed, the decision is still valid, and it is best-effort and never a `loop_cap_check_failed` trigger. The script never creates directories, never writes the artifact and never changes a counter or `broken`.
+- Payload: `ts`, `wf`, `gate` (`remediation_cycles_max`, `doubt_cycles_max`, `fix_verify_cycles_max` or `plan_review_passes_max`), `point` (`pre_create` or `post_verdict`), `count` (the breaker count, the dispatched cycle or the pass; null when it could not be read), `max` (the policy cap), `allow` and `action` (`proceed`, `advance` or `human_checkpoint`), `reason` (`cap-reached`, `below-cap`, `not-broken`, `verdict-pass`, or the failure reasons `policy-invalid`, `artifact-unreadable`, `invalid-count`) and `policy_status` (`ok`, `defaults` or `invalid`). Informational only: no gate reads it back.
 
 ```json
-{"ts": "2026-10-15T12:00:00Z", "event": "gate_check", "wf": "wf-example-20261015-120000-0a1b2c3d", "gate": "doubt_cycles_max", "point": "post_verdict", "count": 3, "max": 3, "allow": false, "action": "advance"}
+{"ts": "2026-10-15T12:00:00Z", "event": "gate_check", "wf": "wf-example-20261015-120000-0a1b2c3d", "gate": "doubt_cycles_max", "point": "post_verdict", "count": 3, "max": 3, "allow": false, "action": "advance", "reason": "cap-reached", "policy_status": "ok"}
 ```
 
 ## Keeping this doc honest

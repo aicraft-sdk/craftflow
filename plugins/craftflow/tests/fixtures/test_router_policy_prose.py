@@ -242,13 +242,18 @@ def test_call_lines_define_every_action():
           f"doubt={len(doubt)} fix={len(fix)} pre={len(rr_pre)} plan={len(rr_plan)}")
     if not (doubt and fix and rr_pre and rr_plan):
         return
-    common = ("proceed", "`human_checkpoint`", "`reason: cap-reached`", "loop_cap_check_failed")
-    check("doubt_call_line_defines_every_action", all(t in doubt[0] for t in common + ("`advance`", "no REM-FIX is created", "advance once in total", "--point post_verdict", "--cycle {N}"))
-          and "never `telemetry.loop_counts`" in doubt[0], doubt[0])
-    check("fix_verify_call_line_defines_every_action", all(t in fix[0] for t in common + ("`advance`", "no REM-FIX is created", "advance once in total", "--point post_verdict", "--cycle {N}"))
-          and "contract-override check below has been applied" in fix[0], fix[0])
-    check("remediation_call_line_defines_every_action", all(t in rr_pre[0] for t in common + ("--point pre_create",)), rr_pre[0])
-    check("plan_review_call_line_names_pass_and_verdict", all(t in rr_plan[0] for t in common + ("--pass {N}", "--verdict {PASS|FINDINGS}", "--point post_verdict")), rr_plan[0])
+    common = ("proceed", "loop_cap_check_failed")
+    capped = ("`human_checkpoint`", "`reason: cap-reached`")  # only the gates that can return human_checkpoint(cap-reached) name it
+    # the doubt and fix-verify gates return only proceed or advance (plus the failure reasons): no dead human_checkpoint clause
+    loop_gates = ("`advance`", "no REM-FIX is created", "advance once in total", "--point post_verdict", "--cycle {N}", "advance regardless of verdict")
+    dead = ("human_checkpoint", "cap-reached", "no ask block of its own", "CYCLE_COMPLETE")
+    check("doubt_call_line_defines_every_action", all(t in doubt[0] for t in common + loop_gates) and not any(t in doubt[0] for t in dead)
+          and "never `telemetry.loop_counts`" in doubt[0] and "as the hard-stop bullet does" in doubt[0], doubt[0])
+    check("fix_verify_call_line_defines_every_action", all(t in fix[0] for t in common + loop_gates) and not any(t in fix[0] for t in dead)
+          and "contract-override check below has been applied" in fix[0] and "`policy.fix_verify_cycles_max` hard stop" in fix[0], fix[0])
+    check("remediation_call_line_defines_every_action", all(t in rr_pre[0] for t in common + capped + ("--point pre_create",)), rr_pre[0])
+    check("plan_review_call_line_names_pass_and_verdict", all(t in rr_plan[0] for t in common + capped + ("--pass {N}", "--verdict {PASS|FINDINGS}", "--point post_verdict",
+          '--wf {workflow_uuid} --project-root "$PROJECT_ROOT"', "increment above already applied", "must not repeat it")), rr_plan[0])
     check("plan_review_call_line_precedes_the_first_block_and_not_between_blocks",
           rr.index("--gate plan_review_passes_max") < rr.index("When `plan-gap-reviewer` pass 1 returns `PASS`:")
           and rr.count("craftflow_gate_check.py") == 2, f"mentions={rr.count('craftflow_gate_check.py')}")
@@ -262,9 +267,7 @@ def test_call_lines_define_every_action():
         cmd = command_of(line)
         for k, v in fill.items():
             cmd = cmd.replace(k, v)
-        argv = cmd.split()[2:]
-        if "--wf" not in argv:  # the plan-review sentence omits --wf and --project-root; the router appends them like the others
-            argv += ["--wf", "wf-x", "--project-root", "/p"]
+        argv = cmd.split()[2:]  # parsed exactly as written: no argv patching
         try:
             gc.parse_args(argv)
         except gc.Usage as exc:
@@ -302,7 +305,7 @@ def test_loop_cap_check_failed_ask_line_present():
     ask = ("Loop-cap check for `{gate}` gave no usable decision (`{reason or \"exit \" + code}`), so I have not acted on the `{verdict}` verdict for cycle/pass {N}. "
            "Reply `retry` to run the check again, `advance` to apply the hard-stop handling, or `proceed` to apply the verdict as written.")
     check("loop_cap_check_failed_ask_line_present", i > kernel.index("## 14. Hard Rules") and ask in para
-          and 'persist `pending_gate: "loop_cap_check_failed"`' in para and "apply no verdict, create no task, increment no counter" in para
+          and 'persist `pending_gate: "loop_cap_check_failed"`' in para and "apply no verdict, create no task, increment no further counter" in para
           and "On resume with this `pending_gate`, re-ask the same line" in para and "`advance` is not offered" in para, para[:300])
     entry = next((ln for ln in art.splitlines() if ln.startswith("- `loop_cap_check_failed`")), "")
     check("artifact_policy_lists_loop_cap_check_failed_pending_gate", "`SKILL.md` § 14" in entry and "on resume, re-ask it" in entry, entry)

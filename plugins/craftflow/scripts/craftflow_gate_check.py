@@ -16,7 +16,8 @@ Prints exactly one sorted-key JSON line {gate, point, allow, action, count, max,
 artifact-unreadable, invalid-count) is a failed check for the router (`loop_cap_check_failed`, fail closed).
 
 Read-only: it never increments a counter, never sets `broken` and never writes the artifact. Its one write is the
-`gate_check` event appended to `{wf}.events.jsonl` under flock (an append failure adds `event_error` and still exits 0).
+`gate_check` event appended to `{wf}.events.jsonl` under flock. `event_error` means only that this audit append failed: the decision
+is still valid and exit stays 0, so it is best-effort and never a `loop_cap_check_failed` trigger.
 Python 3.9 compatible; stdlib plus craftflow_policy.
 """
 from __future__ import annotations
@@ -126,7 +127,7 @@ def counter(value: Any, name: str) -> int:
 
 
 def positive(text: str, flag: str) -> int:
-    if not re.fullmatch(r"[0-9]+", text) or int(text) < 1:
+    if not re.fullmatch(r"[0-9]{1,9}", text) or int(text) < 1:  # bounded text: never an unbounded string in the output or the event
         raise Unusable("invalid-count", f"{flag} must be a positive integer")
     return int(text)
 
@@ -184,7 +185,7 @@ def run(argv: List[str]) -> Tuple[int, str]:
         out.update(evaluate(args, read_artifact(workflows / f"{args.wf}.json"), cap))
     except Unusable as exc:
         out["reason"] = exc.reason
-    event = {"wf": args.wf, **{k: out[k] for k in ("gate", "point", "count", "max", "allow", "action")}}
+    event = {"wf": args.wf, **{k: out[k] for k in ("gate", "point", "count", "max", "allow", "action", "reason", "policy_status")}}
     try:
         log_event("gate_check", event, workflows / f"{args.wf}.events.jsonl")
     except OSError as exc:

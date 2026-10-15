@@ -419,6 +419,43 @@ def test_event_appended_under_flock():
         check("event_append_uses_flock", "fcntl.flock" in src and "LOCK_EX" in src and "LOCK_UN" in src, "no flock in source")
 
 
+def test_event_carries_reason_and_policy_status():
+    print("\n[hunter HIGH 1: the event records why a check failed]")
+    code, out, _l, events, _ = call(doubt_art(0), *gate_args("doubt_cycles_max", cycle=3))
+    check("event_has_reason_and_policy_status_on_success", code == 0 and events[0].get("reason") == "cap-reached"
+          and events[0].get("policy_status") == out["policy_status"], str(events))
+    code, out, _l, events, _ = call("absent", *gate_args("doubt_cycles_max", cycle=1))
+    check("event_logs_artifact_unreadable_reason", code == 0 and events and events[0]["reason"] == "artifact-unreadable"
+          and events[0]["policy_status"] == out["policy_status"], str(events))
+    code, out, _l, events, _ = call({}, "--gate", "doubt_cycles_max", "--point", "post_verdict", "--cycle", "0")
+    check("event_logs_invalid_count_reason", code == 0 and events and events[0]["reason"] == "invalid-count", str(events))
+    code, out, _l, events, _ = call({}, *gate_args("doubt_cycles_max", cycle=1), policy=b"{not json")
+    check("event_logs_policy_invalid_reason", code == 0 and events and events[0]["reason"] == "policy-invalid"
+          and events[0]["policy_status"] == "invalid", str(events))
+
+
+def test_overlong_cycle_and_pass_text_is_invalid_count():
+    print("\n[hunter LOW 7: bounded --cycle/--pass text]")
+    bad = []
+    for text in ("1234567890", "9" * 5000):
+        for gate, flag, extra in (("doubt_cycles_max", "--cycle", []), ("fix_verify_cycles_max", "--cycle", []),
+                                  ("plan_review_passes_max", "--pass", ["--verdict", "PASS"])):
+            code, out, line, events, _ = call({}, "--gate", gate, "--point", "post_verdict", flag, text, *extra)
+            if not (code == 0 and out and out["action"] == "human_checkpoint" and out["reason"] == "invalid-count"
+                    and events and len(json.dumps(events[0])) < 400 and len(line) < 400):
+                bad.append((gate, text[:12], code, line[:120]))
+    check("overlong_cycle_and_pass_text_invalid_count", not bad, str(bad))
+    code, out, *_ = call({}, *gate_args("doubt_cycles_max", cycle="123456789"))
+    check("nine_digit_cycle_still_accepted", code == 0 and out["action"] == "advance" and out["count"] == 123456789, str(out))
+
+
+def test_refuted_at_cap_needs_no_cycle_complete():
+    print("\n[PP-5 cell: REFUTED at cycle 3 with CYCLE_COMPLETE false or missing]")
+    # The script sees only the cycle, so its advance cannot depend on the agent's CYCLE_COMPLETE flag.
+    code, out, *_ = call(doubt_art(2), *gate_args("doubt_cycles_max", cycle=3))
+    check("refuted_cycle_3_without_cycle_complete_advances", code == 0 and out["action"] == "advance" and out["reason"] == "cap-reached", str(out))
+
+
 def test_single_line_stdout():
     res, events = cli(doubt_art(2), *gate_args("doubt_cycles_max", cycle=3))
     out = res.stdout
@@ -565,7 +602,8 @@ def main():
         return 1
     for fn in (test_doubt_grid, test_fix_verify_grid, test_fallback_counter_never_used_for_cycle, test_remediation_grid, test_plan_review_grid,
                test_bad_counters_and_cycle, test_missing_and_invalid_inputs, test_usage_errors, test_artifact_never_mutated, test_event_appended,
-               test_event_appended_under_flock, test_single_line_stdout, test_exit_criteria_scenarios,
+               test_event_appended_under_flock, test_event_carries_reason_and_policy_status, test_overlong_cycle_and_pass_text_is_invalid_count,
+               test_refuted_at_cap_needs_no_cycle_complete, test_single_line_stdout, test_exit_criteria_scenarios,
                test_reads_each_cap_through_a_literal_policy_value_call, test_b4_differential_against_baseline_prose, test_script_hygiene):
         try:
             fn()

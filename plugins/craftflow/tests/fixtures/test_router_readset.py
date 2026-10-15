@@ -1036,11 +1036,12 @@ def test_c4_second_rationale_pass_is_void() -> None:
 
 
 def test_cap_call_lines_name_every_action() -> None:
-    """F7: the doubt and fix-verify call lines also name `human_checkpoint` with `cap-reached` (P6 call_lines_define_every_action)."""
+    """F7 (superseded by P6 REM-FIX r1): the doubt and fix-verify gates return only proceed or advance, so their call lines name those plus loop_cap_check_failed and no dead `human_checkpoint` clause."""
     texts = {r["id"]: r["text"] for r in real_cutplan()["rows"] if r["id"] in ("p6-call-line-doubt", "p6-call-line-fixverify")}
-    need = ("`proceed`", "`advance`", "`human_checkpoint`", "cap-reached", "loop_cap_check_failed")
+    need = ("`proceed`", "`advance`", "loop_cap_check_failed")
     missing = {k: [n for n in need if n not in t] for k, t in texts.items()}
-    check("cap_call_lines_name_every_action", len(texts) == 2 and not any(missing.values()), f"missing={missing}")
+    dead = {k: [n for n in ("`human_checkpoint`", "cap-reached") if n in t] for k, t in texts.items()}
+    check("cap_call_lines_name_every_action", len(texts) == 2 and not any(missing.values()) and not any(dead.values()), f"missing={missing} dead={dead}")
 
 
 def test_p11_manual_review_sites_have_rows() -> None:
