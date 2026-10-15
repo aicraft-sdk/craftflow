@@ -216,9 +216,12 @@ pathspecs supplied elsewhere, and an unwrapper that gives up past its depth or i
 `plan_commit_dynamic_allowed` with its reason). The pass is bounded (16 KB of command text, 2000 units, a 4 KB cwd, 5 s); when it
 is skipped or exhausted (also: 50 distinct git-write invocations, a spent commit-probe budget, an unparseable or unmaskable
 command), a command with `git` at a command position followed by add/stage/commit/update-index (or merge/pull with a workflow
-branch name) is DENIED in a managed project (fail closed, `policy_guard_skipped` with `denied: true`; prose, quoted strings, comments
-and heredoc bodies do not count), and any other command is allowed. Still accepted gaps: `case` statements, more than 8 nested
-wrapper levels, numeric-delimiter `<<` forms.
+branch name) is DENIED in a managed project (fail closed, `policy_guard_skipped` with `denied: true`; judged on the RAW text, so a quoted
+`git commit` at a line start is a documented false deny), and any other command is allowed. The size path (over 16 KB) never runs the
+lexer; a size-exhausted commit-only command is checked with the staged and worktree diff probes. Still accepted gaps: `case` statements,
+function bodies, indirect command names (`g=git; $g commit`), arrays, more than 8 nested wrapper levels, numeric-delimiter `<<` forms,
+`git add .` of an untracked non-ignored plan, `bash -c "git commit"` once exhausted, and an `add && commit` over 16 KB or past the caps
+(false deny, split it). Recommended follow-up phase: extract the lexer into its own module and add a differential test against real bash.
 
 ```
 | f41d16afa416 | plan_commit | craftflow_pretooluse_bash_guard.py::plan_pathspec_violations | test_policy_guards.py::plan_commit_staged_probe_denies | deleted | false | <Name (YYYY-MM-DD)> | |

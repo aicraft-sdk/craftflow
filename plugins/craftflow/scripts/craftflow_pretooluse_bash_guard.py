@@ -1463,6 +1463,10 @@ def _protected_redirect_paths(project_root: "Path | None" = None) -> set:
     return paths
 
 
+_REDIRECT_PATHS_CACHE: dict = {}
+_MAX_REDIRECT_TARGETS = 2000  # redirect targets examined per run; more are denied (fail closed)
+
+
 def _is_protected_redirect_target(resolved: Path, project_root: "Path | None" = None) -> bool:
     """True only when a redirect/tee target resolves to one of this plan's
     protected paths. Ordinary, benign redirects (`> /dev/null`,
@@ -1471,7 +1475,10 @@ def _is_protected_redirect_target(resolved: Path, project_root: "Path | None" = 
     because they resolve outside {cwd} u {worktree_path} -- this predicate
     is the gate that keeps the redirect-confinement check (Task 3.2 step 2)
     from ever running against them at all."""
-    return resolved in _protected_redirect_paths(project_root)
+    key = str(project_root)
+    if key not in _REDIRECT_PATHS_CACHE:  # once per hook run: the set re-reads every workflow artifact
+        _REDIRECT_PATHS_CACHE[key] = _protected_redirect_paths(project_root)
+    return resolved in _REDIRECT_PATHS_CACHE[key]
 
 
 def _redirect_targets_in_tokens(tokens: list) -> list:
@@ -2174,11 +2181,14 @@ def _explode_punct(token: str) -> list:
 def _split_units(command: str) -> list:
     """[(tokens, operator_before, operator_after)] like `split_subcommands`, but keeping the control operators so a `cd`
     inside a pipeline or background segment (a subshell) can be told apart from one that persists. Tokens come back MASKED
-    (see `_scan_shell`); only `_resolve_unit` unmasks them. Stops at the probe deadline and marks the pass exhausted. An
-    unbalanced quote, or no units at all, in a command whose text names a git write at a command position marks the pass
-    exhausted as `unparseable` (the caller then fails closed)."""
+    (see `_scan_shell`); only `_resolve_unit` unmasks them. Stops at the probe deadline and marks the pass exhausted. When the
+    lexing pre-pass reports a problem, an unbalanced quote, or no units at all, the pass is marked exhausted (`heredoc`, `time`,
+    `unparseable`) and the caller fails closed on the RAW text if it names a git write."""
+    lex, problem = _scan_shell(command)
+    if problem:
+        _PASS_STATE["exhausted"] = _PASS_STATE["exhausted"] or problem
     try:
-        lexer = shlex.shlex(_scan_shell(command)[0], posix=True, punctuation_chars="();<>|&\n")
+        lexer = shlex.shlex(lex, posix=True, punctuation_chars="();<>|&\n")
         lexer.whitespace_split = True
         lexer.whitespace = lexer.whitespace.replace("\n", "")
         lexer.commenters = ""  # comments were already removed by _scan_shell; shlex must not drop a mid-word `#`
@@ -2437,32 +2447,34 @@ def _exported_git_vars(name: str, rest: list) -> list:
 
 
 def _fail_closed(command: str, cwd: str, reason: str, data: dict) -> bool:
-    """The policy pass was skipped or exhausted (`size`, `units`, `path`, `time`, `invocations`, `unparseable`, `unmaskable`). In a
-    managed project, a command that has `git` at a COMMAND position followed by add/stage/commit/update-index (merge/pull only
-    together with a workflow branch name in the text) cannot be verified, so it is DENIED (`plan_commit` allow turns this off).
-    Prose, quoted strings, comments and heredoc bodies never count. For `size` alone, a command whose only git write is `commit`
-    is verified by one bounded `git diff --cached` probe and denied only when a protected path is staged (or the probe fails).
-    Always logs `policy_guard_skipped` in a managed project. True when a deny was emitted."""
+    """The policy pass was skipped or exhausted (`size`, `units`, `path`, `time`, `invocations`, `unparseable`, `heredoc`,
+    `unmaskable`). In a managed project, a command that has `git` at a COMMAND position (judged on the RAW text, never on
+    lexer output) followed by add/stage/commit/update-index (merge/pull only together with a workflow branch name in the
+    text) cannot be verified, so it is DENIED (`plan_commit` allow turns this off). For `size` alone, a command whose only
+    git write is `commit` (and that is at most 256 KB) is verified by two bounded probes: `git diff --cached` and the
+    worktree `git diff` (covering `-a`, `--only`, `-i` and explicit pathspecs); it is denied only when a protected path
+    shows up in either, or a probe fails. Always logs `policy_guard_skipped` in a managed project. True when a deny was emitted."""
     top, main_root, managed = resolve_main_root(cwd)
     if not managed:
         return False
-    if reason in ("unparseable", "unmaskable"):
+    if reason in ("unparseable", "unmaskable", "heredoc"):
         log_event("plan_commit_dynamic_allowed", {"command": command[:_LOG_COMMAND_CHARS], "reason": f"{reason} command"})
     words = _git_write_words(command)
     plan_words = words & _FAIL_CLOSED_PLAN_WORDS
     hit = bool(plan_words)
     if not hit and words & _FAIL_CLOSED_MERGE_WORDS:
         hit = any(branch in command for branch in _wf_branches(main_root))
-    if hit and reason == "size" and plan_words == {"commit"}:
+    if hit and reason == "size" and plan_words == {"commit"} and len(command) <= _MAX_RAW_COMMAND_CHARS:
         saved_deadline = _PROBE_DEADLINE[0]
-        _PROBE_DEADLINE[0] = time.monotonic() + _PROBE_TIMEOUT_SECONDS
+        _PROBE_DEADLINE[0] = time.monotonic() + 2 * _PROBE_TIMEOUT_SECONDS
         try:
             staged = _git_lines(str(top), "diff", "--cached", "--name-only", "-z", "--no-renames", counted=False)
+            worktree = _git_lines(str(top), "diff", "--name-only", "-z", "--no-renames", counted=False)
         finally:
             _PROBE_DEADLINE[0] = saved_deadline
-        if staged is not None:
+        if staged is not None and worktree is not None:
             extra = _live_artifact_paths(data, main_root)
-            hit = any(_rel_protected(rel, False, False, extra) for rel in staged)
+            hit = any(_rel_protected(rel, False, False, extra) for rel in staged + worktree)
     return _unverifiable_deny(command, reason, hit)
 
 
@@ -2476,56 +2488,62 @@ _RUN_CACHE: dict = {}  # per hook run: policy, workflow branches, live artifact 
 
 
 def _scan_shell(command: str) -> tuple:
-    """One linear pass over the raw command text. Returns (lex_text, scan_text).
+    """One linear pass over the raw command text. Returns (lex_text, problem); the result is memoised per command.
 
     lex_text feeds the tokenizer: shell operator characters inside quotes or behind a backslash are masked with private-use
     characters (`_um` undoes it), comments (an unquoted `#` at a word start, to end of line) are dropped, `\\<newline>` joins
-    lines, and heredoc redirects plus their bodies are removed (a body is only dropped when its terminator line exists, so an
-    arithmetic `1<<2` cannot swallow the rest of the command).
+    lines, and heredoc redirects are removed. A heredoc body is removed too (blanked) only when it is inert: the line that opens
+    it does not feed a shell or interpreter (`sh bash zsh dash ksh eval source . xargs python node perl ruby php`). A body that
+    IS executed stays in lex_text and is lexed like any other lines (its terminator line is dropped). `<<` is not a heredoc
+    inside `((...))`, `[[...]]` or a `let` line, or when the delimiter is all digits.
 
-    scan_text feeds the cheap command-word scan: quoted contents, comments and heredoc bodies are blanked, operators stay."""
+    problem is "" or the reason the pass cannot be trusted and the caller must fail closed on RAW text: `heredoc` (an
+    unterminated heredoc, more than _MAX_PENDING_HEREDOCS unresolved ones, or an unquoted-delimiter body containing `$(` or a
+    backtick, which the shell expands) or `time` (the pre-pass exceeded _SCAN_SECONDS)."""
     mask = _PASS_STATE["mask"]
+    if _SCAN_MEMO["cmd"] == command and _SCAN_MEMO["mask"] == mask:
+        return _SCAN_MEMO["res"]
     lex: list = []
-    scan: list = []
-    size, pos, quote, word_start, pending = len(command), 0, "", True, []
+    size, pos, quote, word_start = len(command), 0, "", True
+    pending: list = []
+    live_terms: list = []
+    consumer_lines: dict = {}
+    problem, line_start, arith, test, let_line, steps = "", 0, 0, 0, False, 0
+    started = time.monotonic()
 
     def hide(ch: str) -> str:
         return ch.translate(_MASK_TABLE) if mask else ch
 
     while pos < size:
+        steps += 1
+        if steps & 2047 == 0 and time.monotonic() - started > _SCAN_SECONDS:
+            problem = problem or "time"
+            break
         ch = command[pos]
         if quote:
             if ch == "\\" and quote == '"' and pos + 1 < size:
                 lex.append(ch)
                 lex.append(hide(command[pos + 1]))
-                scan.append("  ")
                 pos += 2
                 continue
             if ch == quote:
                 quote = ""
                 lex.append(ch)
-                scan.append(ch)
             else:
                 lex.append(hide(ch))
-                scan.append(" ")
             pos += 1
             word_start = False
             continue
         if ch == "\\" and pos + 1 < size:
-            nxt = command[pos + 1]
-            if nxt == "\n":
-                scan.append(" ")
-            else:
+            if command[pos + 1] != "\n":
                 lex.append(ch)
-                lex.append(hide(nxt))
-                scan.append("  ")
+                lex.append(hide(command[pos + 1]))
             pos += 2
             word_start = False
             continue
         if ch in "'\"":
             quote = ch
             lex.append(ch)
-            scan.append(ch)
             pos += 1
             word_start = False
             continue
@@ -2533,13 +2551,19 @@ def _scan_shell(command: str) -> tuple:
             while pos < size and command[pos] != "\n":
                 pos += 1
             continue
-        if ch == "<" and command.startswith("<<", pos) and not command.startswith("<<<", pos):
-            probe, tabs = pos + 2, False
+        if ch == "<" and command.startswith("<<<", pos):  # here-string: no body
+            lex.append("<<<")
+            pos += 3
+            word_start = True
+            continue
+        if ch == "<" and command.startswith("<<", pos) and not (arith or test or let_line):
+            probe, tabs, quoted = pos + 2, False, False
             if probe < size and command[probe] == "-":
                 tabs, probe = True, probe + 1
             while probe < size and command[probe] in " \t":
                 probe += 1
             if probe < size and command[probe] in "'\"":
+                quoted = True
                 close = command.find(command[probe], probe + 1)
                 close = size if close < 0 else close
                 delim, probe = command[probe + 1:close], min(close + 1, size)
@@ -2549,38 +2573,76 @@ def _scan_shell(command: str) -> tuple:
                     close += 1
                 delim, probe = command[probe:close].replace("\\", ""), close
             if delim and not delim.isdigit():
-                pending.append((delim, tabs))
-                pos, word_start = probe, True
-                continue
+                if len(pending) >= _MAX_PENDING_HEREDOCS:
+                    problem = problem or "heredoc"
+                else:
+                    if line_start not in consumer_lines:
+                        eol = command.find("\n", pos)
+                        consumer_lines[line_start] = bool(_HEREDOC_CONSUMER.search(command[line_start: size if eol < 0 else eol]))
+                    pending.append((delim, tabs, quoted, consumer_lines[line_start]))
+                    pos, word_start = probe, True
+                    continue
         if ch == "\n":
             lex.append(ch)
-            scan.append(ch)
             pos += 1
+            line_start, let_line = pos, False
+            if live_terms and pos < size:
+                end = command.find("\n", pos)
+                line = command[pos: size if end < 0 else end]
+                if (line.lstrip("\t") if live_terms[0][1] else line) == live_terms[0][0]:
+                    live_terms.pop(0)
+                    pos = size if end < 0 else end + 1
+                    line_start = pos
+            if pending and any(item[3] for item in pending):
+                live_terms.extend((item[0], item[1]) for item in pending)  # executed bodies stay in the lexed text
+                pending.clear()
             while pending:
-                delim, tabs = pending.pop(0)
-                scan_pos = pos
+                delim, tabs, quoted, _consumer = pending.pop(0)
+                scan_pos, body, after = pos, None, pos
                 while scan_pos < size:
                     end = command.find("\n", scan_pos)
+                    nxt = size if end < 0 else end + 1
                     line = command[scan_pos: size if end < 0 else end]
-                    scan_pos = size if end < 0 else end + 1
                     if (line.lstrip("\t") if tabs else line) == delim:
-                        pos = scan_pos
+                        body, after = command[pos:scan_pos], nxt
                         break
+                    scan_pos = nxt
+                if body is None:
+                    problem = problem or "heredoc"
+                    pending.clear()
+                    break
+                if not quoted and ("$(" in body or "`" in body):
+                    problem = problem or "heredoc"
+                pos = line_start = after
             word_start = True
             continue
+        if word_start and ch == "l" and command.startswith("let", pos) and (pos + 3 >= size or command[pos + 3] in " \t"):
+            let_line = True
+        elif ch == "(" and command.startswith("((", pos):
+            arith += 1
+        elif ch == ")" and arith and command.startswith("))", pos):
+            arith -= 1
+        elif ch == "[" and word_start and command.startswith("[[", pos):
+            test += 1
+        elif ch == "]" and test and command.startswith("]]", pos):
+            test -= 1
         lex.append(ch)
-        scan.append(ch)
         pos += 1
-        word_start = ch.isspace() or ch in ";&|()<>"
-    return "".join(lex), "".join(scan)
+        word_start = ch.isspace() or ch in ";&|(<>"
+    if pending:
+        problem = problem or "heredoc"  # a heredoc opened on the last line: unterminated
+    result = ("".join(lex), problem)
+    _SCAN_MEMO.update({"cmd": command, "mask": mask, "res": result})
+    return result
 
 
 def _git_write_words(command: str) -> set:
-    """Pure, linear. The watched subcommand words (add stage commit merge pull update-index) that follow a `git` standing at a
-    COMMAND position (start of a segment, after an operator, group word or wrapper), judged on text with quoted strings,
-    comments and heredoc bodies blanked. Prose that merely mentions `git commit` yields nothing."""
+    """Pure, linear, on the RAW text (quotes, comments and heredoc bodies included: when the lexer cannot be sure, the
+    fail-closed rule must not depend on it). The watched subcommand words (add stage commit merge pull update-index) that
+    follow a `git` standing at a COMMAND position (start of a segment, after `; & | ( ) { } newline`, a group word, or a
+    wrapper such as env/sudo/time). Prose that merely mentions `git commit` after another word yields nothing."""
     found: set = set()
-    for segment in re.split(r"[;&|\n(){}]+", _scan_shell(command)[1]):
+    for segment in re.split(r"[;&|\n(){}`]+", command):
         words = segment.split()
         start = 0
         while start < len(words) and words[start] in _GROUP_TOKENS:
@@ -2617,9 +2679,30 @@ def _unverifiable_deny(command: str, reason: str, hit: bool) -> bool:
     log_event("policy_guard_skipped", {"reason": reason, "denied": denied, "chars": len(command), "command": command[:_LOG_COMMAND_CHARS]})
     if denied:
         prefix = "craftflow-policy: plan_commit —" if status != "invalid" else "craftflow-policy: policy-invalid —"
-        pretool_deny(f"{prefix} this command is too large or complex for the plan-commit guard to verify ({reason}); split it into "
-                     "smaller commands, or set plan_commit to allow in config/policy.json via a PR")
+        if reason == "invocations":
+            detail = "too many distinct git writes in one command; split it"
+        elif reason in ("unparseable", "heredoc", "unmaskable", "time"):
+            detail = f"unverifiable quoting or structure ({reason}); use `git commit -F file` or split it into smaller commands"
+        else:
+            detail = f"this command is too large or complex for the plan-commit guard to verify ({reason}); split it into smaller commands"
+        pretool_deny(f"{prefix} {detail}; or set plan_commit to allow in config/policy.json via a PR")
     return denied
+
+
+_MAX_PENDING_HEREDOCS = 16  # more unresolved heredocs than this: the lexer gives up (fail closed on raw text)
+
+
+_MAX_RAW_COMMAND_CHARS = 262144  # above this a size-exhausted commit is denied on raw text alone, with no probes
+
+
+_SCAN_SECONDS = 1.5  # wall-clock cap for one lexing pre-pass
+
+
+_SCAN_MEMO: dict = {"cmd": None, "mask": None, "res": None}
+
+
+_HEREDOC_CONSUMER = re.compile(
+    r"(?:^|[\s|;&(`])(?:sh|bash|zsh|dash|ksh|eval|source|xargs|python[0-9.]*|node|perl|ruby|php)(?=$|[\s|;&)`])|(?:^|\s)\.(?=\s)")
 
 
 def _policy_reason(key: str, value, status: str, remediation: str) -> str:
@@ -3000,9 +3083,17 @@ def main() -> int:
             permit_path = memory_finalize_permit_path(anchor).resolve()
         except Exception:
             permit_path = None
+        redirect_seen = 0
         try:
             for tokens in split_subcommands(command):
                 for target in _redirect_targets_in_tokens(tokens):
+                    redirect_seen += 1
+                    if redirect_seen > _MAX_REDIRECT_TARGETS:
+                        if redirect_seen == _MAX_REDIRECT_TARGETS + 1:
+                            log_event("plugin_pretooluse_bash_guard", {"event": "pretool_guard_parse_error", "command_name": "redirect_confinement_check",
+                                                                      "reason": "too_many_redirect_targets_fail_closed"})
+                        protected_redirect_escapes.append(str(target))
+                        continue
                     # REM-FIX (live-reproduced CRITICAL, re-reviewer, order-
                     # dependent partial variant of the same bug class fixed
                     # in the sibling `_handle_bash` above): this call had no

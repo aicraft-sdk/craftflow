@@ -1079,7 +1079,9 @@ def test_c4_fail_closed_is_keyed_on_command_words():
     repo = make_repo()
     body = "line of a commit message\n" * 900
     for label, cmd in (
-            ("heredoc_doc_writer", "cat > f <<'EOF'\n" + "git commit -m x\ngit add -f docs/plans/x.md\n" * 700 + "EOF\n"),
+            # cycle 5: the size path reads RAW text (no lexer), so a >16 KB heredoc whose body puts `git commit` at a line start is a
+            # documented false deny; a body that only mentions it in prose stays allowed
+            ("heredoc_doc_writer", "cat > f <<'EOF'\n" + "To save your work, run git commit later and git add after.\n" * 400 + "EOF\n"),
             ("python_heredoc", "python3 - <<EOF\nprint('git commit')\n" + "x = 1\n" * 3000 + "EOF\n"),
             ("diff_then_echo", "git diff; echo '<commit add update-index>'; " + pad),
             ("prose_in_quotes", "echo \"run git commit later\" # " + "x" * 17000),
@@ -1143,6 +1145,106 @@ def test_c4_export_n_and_private_use_characters():
     _allowed("c4_private_use_chars_without_git_write_allowed", "echo '' ; ls", managed)
 
 
+# --------------------------------------------------------------------------------------------------------------------
+# REM-FIX cycle 5 (regressions only): linear heredoc scan, raw-text fail-closed, worktree commits on the size path,
+# live heredoc bodies, fake heredocs in arithmetic, unparseable quoting, redirect memoisation
+# --------------------------------------------------------------------------------------------------------------------
+
+
+def test_c5_heredoc_bombs_are_linear_and_still_reach_the_destructive_guard():
+    repo = make_repo()
+    _many_workflows(repo)
+    victim = scratch_dir("p5g-victim-")
+    bombs = {
+        "40kb": "git commit -m x; cat " + "<<E " * 5000 + "\n" + "a\n" * 10000,
+        "64kb": "git commit -m x; cat " + "<<E " * 8000 + "\n" + "a\n" * 16000,
+        "1mb": "git commit -m x; " + "echo pad; " * 100000,
+        "40kb_trailing_quote": "git commit -m x; cat " + "<<E " * 5000 + "\n" + "a\n" * 10000 + "'",
+    }
+    for label, bomb in bombs.items():
+        # the destructive command comes FIRST: after the bomb it would be heredoc body text, which no guard may treat as executed
+        rc, out, err, secs = _timed(f"rm -rf {victim}; " + bomb, repo)
+        if label.endswith("trailing_quote"):  # an unterminated quote is a shell syntax error: nothing runs, so only the time matters
+            check(f"c5_{label}_bomb_fast", rc == 0 and secs < 3, f"rc={rc} secs={secs:.2f} out={out[:120]!r}")
+            continue
+        if label == "1mb":  # over 256 KB: raw-text deny only, no probes (documented)
+            check(f"c5_{label}_bomb_fast_and_denied", rc == 0 and secs < 3 and decision(out)[0] == "deny", f"rc={rc} secs={secs:.2f} out={out[:200]!r}")
+            continue
+        check(f"c5_{label}_bomb_fast_and_destructive_guard_still_denies", rc == 0 and secs < 3 and decision(out)[0] == "deny"
+              and ("worktree-confinement" in out or "escapes-cwd" in out), f"rc={rc} secs={secs:.2f} out={out[:200]!r}")
+    # under the size cap: more than 16 pending heredocs is unparseable -> fail closed on raw text, fast
+    rc, out, err, secs = _timed("git commit -m x; cat " + "<<E " * 2500 + "\n" + "a\n" * 2000, repo)
+    check("c5_small_bomb_over_the_pending_cap_fails_closed_fast", rc == 0 and secs < 3 and decision(out)[0] == "deny", f"rc={rc} secs={secs:.2f} out={out[:160]!r}")
+    rc, out, err, secs = _timed("echo hi; cat " + "<<E " * 2500 + "\n" + "a\n" * 2000, repo)
+    check("c5_small_bomb_without_a_git_write_is_allowed", rc == 0 and out == "" and secs < 3, f"rc={rc} secs={secs:.2f} out={out[:160]!r}")
+
+
+def test_c5_size_path_checks_the_worktree_for_commits():
+    pad = " # " + "x" * 17000
+    plans_tracked = make_repo(ignore_plans=False)
+    (plans_tracked / "docs" / "plans" / "x.md").write_text("changed\n")  # tracked, modified, NOT staged
+    clean = make_repo(ignore_plans=False)
+    for label, cmd in (("am", "git commit -am x"), ("all", "git commit --all -m x"), ("only", "git commit --only docs/plans/x.md -m x"),
+                       ("include", "git commit -i docs/plans/x.md -m x")):
+        _denied(f"c5_size_{label}_with_modified_tracked_plan_denied", cmd + pad, plans_tracked)
+        _allowed(f"c5_size_{label}_clean_repo_allowed", cmd + pad, clean)
+
+
+def test_c5_live_heredoc_bodies_are_inspected():
+    staged = _staged_plan_repo()
+    clean = make_repo()
+    for label, cmd in (("bash", "bash <<E\ngit commit -m x\nE"), ("pipe_sh", "cat <<E | sh\ngit commit -m x\nE"),
+                       ("sh_quoted", "sh <<'E'\ngit add docs/plans/secret.md\nE"), ("eval_subst", "eval $(cat <<E\ngit commit -m x\nE\n)"),
+                       ("unquoted_subst", "cat <<E\n$(git commit -m x)\nE"), ("unquoted_backtick", "cat <<E\n`git commit -m x`\nE"),
+                       ("xargs", "xargs -0 sh <<E\ngit commit -m x\nE"), ("python", "python3 <<E\nimport os\nE\ngit commit -m x")):
+        _denied(f"c5_live_{label}_denied", cmd, staged)
+    _allowed("c5_live_bash_clean_index_is_verified_and_allowed", "bash <<E\ngit commit -m x\nE", clean)
+    _allowed("c5_inert_quoted_heredoc_stays_blanked", "cat <<'E'\n$(git commit -m x)\nE", staged)
+    _allowed("c5_inert_plain_heredoc_stays_blanked", "tee f <<E\njust text\nE", staged)
+    _allowed("c5_inert_commit_F_dash_is_a_commit_not_a_body", "cat > f <<'E'\ngit commit -m x\nE", staged)
+
+
+def test_c5_fake_heredocs_in_arithmetic():
+    staged = _staged_plan_repo()
+    managed = make_repo()
+    for label, cmd, repo in (("arith_x", "echo $((1<<X))\ngit add -f docs/plans/x.md\nX", managed), ("arith_b", "echo $((1<<b))\ngit add -f docs/plans/x.md\nb", managed),
+                             ("let", "let n=1<<E\ngit commit -m x\nE", staged), ("double_paren", "((n=1<<E))\ngit commit -m x\nE", staged),
+                             ("test_brackets", "[[ a<<E ]]\ngit commit -m x\nE", staged)):
+        _denied(f"c5_fake_heredoc_{label}_denied", cmd, repo)
+
+
+def test_c5_unparseable_uses_raw_text():
+    staged = _staged_plan_repo()
+    for label, cmd in (("subst_quote", "echo \"$(echo '\"')\" ; git commit -m x"), ("backtick_quote", "echo \"`echo '\"'`\" ; git commit -m x"),
+                       ("plain_unbalanced", "git commit -m \"unterminated")):
+        rc, out, err = run(BASH_GUARD, bash(cmd, staged), staged)
+        verdict, reason = decision(out)
+        check(f"c5_{label}_denied_with_the_quoting_message", rc == 0 and verdict == "deny" and "unverifiable quoting" in reason, f"out={out[:200]!r}")
+    clean = make_repo()
+    _allowed("c5_unbalanced_without_git_write_allowed", 'echo "abc', clean)
+
+
+def test_c5_comment_after_closing_paren():
+    repo = make_repo()
+    _denied("c5_hash_after_command_substitution_is_not_a_comment", "echo $(true)#x; git add -f docs/plans/x.md", repo)
+    _denied("c5_hash_after_subshell_paren_is_not_a_comment", "(true)#x; git add -f docs/plans/x.md", repo)
+    _denied("c5_hash_after_space_is_a_comment_but_next_line_is_inspected", "(true) # note\ngit add -f docs/plans/x.md", repo)
+
+
+def test_c5_redirects_are_memoised():
+    repo = make_repo()
+    _many_workflows(repo)
+    rc, out, err, secs = _timed("echo x > a;" * 800, repo)
+    check("c5_800_redirects_with_441_workflows_fast", rc == 0 and secs < 4, f"rc={rc} secs={secs:.2f} out={out[:120]!r} err={err[:120]!r}")
+    check("c5_redirects_output_is_silent_or_a_deny", out == "" or decision(out)[0] == "deny", f"out={out[:120]!r}")
+
+
+def test_c5_messages():
+    repo = _staged_plan_repo()
+    rc, out, err, secs = _timed("".join(f"git add f{idx};" for idx in range(300)) + " git commit -m x", repo)
+    check("c5_invocations_message_says_split_it", "too many distinct git writes in one command; split it" in decision(out)[1], f"{decision(out)[1][:200]}")
+
+
 def main():
     try:
         for fn in (test_shipped_policy_keys, enterplanmode_denied_by_default, test_plan_commit_table, plan_commit_staged_probe_denies,
@@ -1158,7 +1260,10 @@ def main():
                    test_m2_clean_merge_is_not_denied_by_a_burnt_parse_budget, test_m1_static_exports_resolve_like_env_prefix,
                    test_m3_status_formats_imply_dry_run, test_group_heads_and_quoted_operators,
                    test_c4_per_run_work_is_bounded, test_c4_probe_exhaustion_fails_closed, test_c4_fail_closed_is_keyed_on_command_words,
-                   test_c4_comments_are_comments, test_c4_unparseable_and_heredocs, test_c4_export_n_and_private_use_characters):
+                   test_c4_comments_are_comments, test_c4_unparseable_and_heredocs, test_c4_export_n_and_private_use_characters,
+                   test_c5_heredoc_bombs_are_linear_and_still_reach_the_destructive_guard, test_c5_size_path_checks_the_worktree_for_commits,
+                   test_c5_live_heredoc_bodies_are_inspected, test_c5_fake_heredocs_in_arithmetic, test_c5_unparseable_uses_raw_text,
+                   test_c5_comment_after_closing_paren, test_c5_redirects_are_memoised, test_c5_messages):
             print(fn.__name__)
             try:
                 fn()
