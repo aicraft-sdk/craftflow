@@ -22,6 +22,7 @@ account for a removed occurrence. The script and the test named in a row must ex
 
 | Baseline ID or group (file:start-end@sha) | Policy key | Enforcing script::function | Test | Status | live_verified | Reviewed by | Evidence |
 |---|---|---|---|---|---|---|---|
+| f41d16afa416 | plan_commit | craftflow_pretooluse_bash_guard.py::plan_pathspec_violations | test_policy_guards.py::plan_commit_staged_probe_denies | deleted | true | David Gracia (2026-10-15) | live `claude -p --plugin-dir` probe 2026-10-15 (haiku, scratch managed repo): `git add -f docs/plans/live-plan.md` denied with the plan_commit=never message, nothing staged, `plan_commit_denied` logged; control `git add control.txt` staged |
 
 ## Rewrites
 
@@ -224,7 +225,6 @@ function bodies, indirect command names (`g=git; $g commit`), arrays, more than 
 (false deny, split it). Recommended follow-up phase: extract the lexer into its own module and add a differential test against real bash.
 
 ```
-| f41d16afa416 | plan_commit | craftflow_pretooluse_bash_guard.py::plan_pathspec_violations | test_policy_guards.py::plan_commit_staged_probe_denies | deleted | false | <Name (YYYY-MM-DD)> | |
 | a01e2c640767 | native_plan_mode | craftflow_pretooluse_guard.py::_handle_enter_plan_mode | test_policy_guards.py::enterplanmode_denied_by_default | pending-prose-deletion | false | <Name (YYYY-MM-DD)> | |
 | c403449266e4 | native_plan_mode | craftflow_pretooluse_guard.py::_handle_enter_plan_mode | test_policy_guards.py::enterplanmode_denied_by_default | pending-prose-deletion | false | <Name (YYYY-MM-DD)> | |
 ```
