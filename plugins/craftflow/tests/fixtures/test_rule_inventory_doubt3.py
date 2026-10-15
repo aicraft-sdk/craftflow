@@ -221,8 +221,8 @@ def test_b4_after_corpus_is_the_working_tree() -> None:
         lines = _lines_of(root)
         at = next(i for i, x in enumerate(lines) if x.startswith("## 14. Hard Rules"))
         r, res = _run(root, lines[:at] + lines[at + 1:])
-    check("B4 sentinel: control present equals the baseline occurrence count",
-          control.returncode == 0 and base.get("present") == base.get("baseline_occurrences"), repr(base))
+    check("B4 sentinel: control present plus policy-mapped deletions equals the baseline occurrence count",
+          control.returncode == 0 and base.get("present", 0) + base.get("policy_mapped", 0) == base.get("baseline_occurrences"), repr(base))
     check("B4 sentinel: a scratch edit to a corpus file changes `present` (the after corpus is the working tree)",
           res.get("present", 0) < base.get("present", 0) or r.returncode == 1, f"{res.get('present')} vs {base.get('present')}")
 

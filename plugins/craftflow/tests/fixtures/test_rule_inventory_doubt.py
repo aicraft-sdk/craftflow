@@ -78,8 +78,9 @@ def cli(*args) -> subprocess.CompletedProcess:
 
 def scratch(tmp: str) -> Path:
     root = Path(tmp) / "plugin"
-    for d in ("skills/craftflow-router", "skills/_shared", "config"):
-        shutil.copytree(PLUGIN_ROOT / d, root / d)
+    # scripts and tests/fixtures too: a signed policy row must find the script and test it names (symbol_ok)
+    for d in ("skills/craftflow-router", "skills/_shared", "config", "scripts", "tests/fixtures"):
+        shutil.copytree(PLUGIN_ROOT / d, root / d, ignore=shutil.ignore_patterns("__pycache__"))
     return root
 
 
