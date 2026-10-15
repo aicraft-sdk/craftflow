@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.31.0] - 2026-10-15
+
+### Features
+
+- policy-enforced EnterPlanMode, plan-artifact commit and worktree-merge clean-tree guards
+
+### Fixes
+
+- linear heredoc pre-pass, raw-text fail-closed, live heredoc bodies, fake heredocs in arithmetic, memoised redirect set
+- bound per-run policy work, key fail-closed on command words, comment and heredoc aware lexing
+- bound the policy pass and fail closed on exhaustion (linear parsing, quoted operators, group heads, exported git vars)
+- policy guards cycle 2 (parsed dry-run, git-dir ownership, subshell scoping, wrapper coverage, probe budget reserve)
+- harden policy guards (glob-collapse crash, wrappers, retargeted repos, merge ref forms, pathspec magic, probe budget)
+
+### Documentation
+
+- sign policy-map row f41d16afa416 (plan_commit) with live probe evidence
+
+### Tests
+
+- regenerate router projection and record revision for signed plan_commit row; scratch copies carry scripts and tests
+
 ## [1.30.0] - 2026-10-14
 
 ### Features
