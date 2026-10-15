@@ -253,7 +253,7 @@ def test_call_lines_define_every_action():
           and "contract-override check below has been applied" in fix[0] and "`policy.fix_verify_cycles_max` hard stop" in fix[0], fix[0])
     check("remediation_call_line_defines_every_action", all(t in rr_pre[0] for t in common + capped + ("--point pre_create",)), rr_pre[0])
     check("plan_review_call_line_names_pass_and_verdict", all(t in rr_plan[0] for t in common + capped + ("--pass {N}", "--verdict {PASS|FINDINGS}", "--point post_verdict",
-          '--wf {workflow_uuid} --project-root "$PROJECT_ROOT"', "increment above already applied", "must not repeat it")), rr_plan[0])
+          '--wf {workflow_uuid} --project-root "$PROJECT_ROOT"', "increment above already applied", "after its increment line", "`proceed` or `advance` reply must not repeat it")), rr_plan[0])
     check("plan_review_call_line_precedes_the_first_block_and_not_between_blocks",
           rr.index("--gate plan_review_passes_max") < rr.index("When `plan-gap-reviewer` pass 1 returns `PASS`:")
           and rr.count("craftflow_gate_check.py") == 2, f"mentions={rr.count('craftflow_gate_check.py')}")
