@@ -324,6 +324,8 @@ Before creating a new workflow:
 - Read `$PROJECT_ROOT/.craftflow/state/project/progress.md ## Current Workflow` and `## Tasks` for pending work that should resume instead of duplicating.
 - Read the latest `$PROJECT_ROOT/.craftflow/state/workflows/*.json` artifact if one exists for the current conversation.
 
+**Script directory (DD-9):** `CRAFTFLOW_SCRIPTS` = the router skill's Base directory + `/../../scripts`; fall back to `$CRAFTFLOW_INSTALL/scripts` only when that directory lacks the script you need. The Skill tool can serve a different cached version than `installed_plugins.json` names.
+
 **Intent Readiness Gate (MANDATORY before PLAN or BUILD):**
 Before dispatching to planner or builder, verify the intent contract meets three conditions:
 1. **Context-bounded:** The full intent (goal + constraints + acceptance criteria) fits within the agent's prompt scaffold without truncation. If the intent requires loading more than 5 source files to be understood, decompose first (switch to PLAN).
@@ -995,13 +997,16 @@ stop, reliability-gates evidence recording) applies unchanged; only the task-cre
 changes. When `capabilities.task_tools_available == true`, this rule runs exactly as documented
 today — no behavior change on that path.
 
+In fallback mode include `## Cycle` N (per-phase, from 1) in the `craftflow:doubt-verifier` dispatch prompt; there is no `Cycle:` task line for the agent to read.
+
 **After doubt-verifier returns:**
+- First run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate doubt_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root "$PROJECT_ROOT"` (N = the `Cycle:` of this cycle's task; in Task*-tool fallback mode, the `## Cycle` value of this dispatch's prompt, else the agent's echoed `Cycle number:`, never `telemetry.loop_counts`). `advance` → apply the bullet for the returned verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance per the `CYCLE_COMPLETE` hard-stop bullet (advance once in total). `human_checkpoint` with `reason: cap-reached` → treat it as `advance` (this gate has no ask block of its own). `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).
 - `DOUBT_VERDICT: CONFIRMED` → advance phase cursor, continue workflow
 - `DOUBT_VERDICT: REFUTED` → create REM-FIX task (same as normal verification failure), increment loop counter
 - `DOUBT_VERDICT: DOUBT_THEATER` → log event, skip further doubt cycles, advance to Memory Update with advisory note
-- `CYCLE_COMPLETE: true` on cycle 3 → advance regardless of verdict (3-cycle hard stop)
+- `CYCLE_COMPLETE: true` on cycle `policy.doubt_cycles_max` (= 3) → advance regardless of verdict (`policy.doubt_cycles_max` (= 3)-cycle hard stop)
 
-**Doubt cycle counter:** Track in workflow artifact under `telemetry.loop_counts.doubt_verify`. Max 3 cycles; router enforces the hard stop.
+**Doubt cycle counter:** Track in workflow artifact under `telemetry.loop_counts.doubt_verify`. Max `policy.doubt_cycles_max` (= 3) cycles; router enforces the hard stop.
 
 **Reliability-gates evidence recording (best-effort, non-blocking):** After the `DOUBT_VERDICT`
 is captured, check whether this cycle's `plan:`/`reason:` text loosely matches any seeded gate in
@@ -1063,7 +1068,10 @@ applies unchanged; only the task-creation mechanism changes. When
 `capabilities.task_tools_available == true`, this rule runs exactly as documented today — no
 behavior change on that path.
 
+In fallback mode include `## Cycle` N (per-phase, from 1) in the fix-verify dispatch prompt too; there is no `Cycle:` task line to read.
+
 **After doubt-verifier returns** (see `agents/doubt-verifier.md → ## Fix-Verify Contract`):
+- First run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate fix_verify_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root "$PROJECT_ROOT"` (after the contract-override check below has been applied; N = the `Cycle:` of the fix-verify task; in Task*-tool fallback mode, the `## Cycle` value of this dispatch's prompt). `advance` → apply the bullet for the returned (post-override) verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict (the 3-cycle hard stop that the cycle-counter paragraph inherits from `doubt_verify`; advance once in total). If `doubt_verify_gate` also fired on this phase, a capped verdict does not block phase exit under the stricter-verdict rule; the other gate's verdict still applies. `human_checkpoint` with `reason: cap-reached` → treat it as `advance` (this gate has no ask block of its own). `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).
 - `FIX_VERDICT: LOAD_BEARING` → advance phase cursor, continue workflow.
 - `FIX_VERDICT: NOT_LOAD_BEARING` or `SIBLING_FOUND` → create a REM-FIX task (same shape as any
   other verification failure — `origin:router`, `phase:fix-verify`), increment
@@ -1084,7 +1092,7 @@ behavior change on that path.
   introducing a new same-agent parallel-dispatch pattern is out of scope for this change.
 
 **Fix-verify cycle counter:** Track in workflow artifact under
-`telemetry.loop_counts.fix_verify`. Max 3 cycles; router enforces the hard stop (same rule as
+`telemetry.loop_counts.fix_verify`. Max `policy.fix_verify_cycles_max` (= 3) cycles; router enforces the hard stop (same rule as
 `doubt_verify`'s own counter above).
 
 **Reliability-gates evidence recording (best-effort, non-blocking):** After `FIX_VERDICT` is
@@ -1633,7 +1641,7 @@ For DEBUG:
 - Never let REVIEW create implementation tasks without an explicit router/user transition into BUILD.
 - Never `git add` or `git commit` a plan artifact (`docs/plans/**`, any `PLAN_FILE`/`design_file` the planner produces, or a workflow's own `.craftflow/state/workflows/*.json`); enforced by policy `plan_commit` in craftflow projects (see Policy table). Recording `- Plan: {plan_file}` or `Plan saved: {plan_file}` in `activeContext.md` (a memory pointer to a local path) is unaffected by this rule and still required. If any dispatched agent stages or commits a plan file anyway, the router must `git restore --staged`/`git reset` that path before continuing — never let it ride along in the next commit.
 - Never report a workflow outcome (pass, fixed, complete) to the user without first confirming the verification evidence that supports that claim. "I believe it works" is not evidence. [EASY TO MISS: "I ran the tests and they passed" without showing command output, exit codes, or scenario evidence is also not evidence. Require concrete proof artifacts, not agent assertions.]
-- Never let a remediation loop run more than 3 cycles without a human checkpoint. Drift accumulates silently in long chains.
+- Never let a remediation loop run more than `policy.remediation_cycles_max` (= 3) cycles without a human checkpoint. Drift accumulates silently in long chains.
 - Only parallelize agents whose file-write surfaces do not overlap. Reviewer and hunter are read-only and safe to parallelize. Two write agents on overlapping files must be serialized. [EASY TO MISS: Each parallel agent must have a distinct phase value and unique task description. Identical prompts cause agents to duplicate work or silently clobber each other's output.]
 - Agents must never inherit raw conversation context. They receive only the structured scaffold from the dispatcher. Leaking conversation history into agent prompts causes scope pollution and non-reproducible behavior.
 - Maintain professional objectivity in all routing decisions. Do not rationalize a failing workflow as "close enough" or downgrade critical findings to avoid remediation. The router exists to enforce quality, not to please.
@@ -1654,3 +1662,31 @@ For DEBUG:
   exists to prevent a repeat of `wf-20260720-053825-af03998a`, where a component-builder lacking
   `TaskGet`/`TaskUpdate` self-dispatched a router role and wrote a fabricated
   "integration-verifier PASS" into durable state.
+
+### Policy table
+
+Effective policy (`config/policy.json` merged over the defaults), printed by `craftflow_policy.py --print-table`. Each value is enforced by the named script; the prose location keeps the rule text.
+
+| key | value | enforced by | prose location |
+|---|---|---|---|
+| `native_plan_mode` | `never` | `craftflow_pretooluse_guard.py` | § 14 EnterPlanMode rule |
+| `plan_commit` | `never` | `craftflow_pretooluse_bash_guard.py` | § 14 plan-artifact rule |
+| `memory_write` | `finalize-only` | `craftflow_pretooluse_guard.py` | § 13 |
+| `worktree_merge` | `require_clean_tree=true, lock_max_attempts=9, lock_sleep_seconds=5, copy_fallback_on_up_to_date=true` | `craftflow_pretooluse_bash_guard.py` (clean tree) | § 5 |
+| `remediation_cycles_max` | `3` | `craftflow_gate_check.py` | § 14 remediation loop rule |
+| `doubt_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Doubt-Verify Dispatch Rule |
+| `fix_verify_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Fix-Verify Dispatch Rule |
+| `plan_review_passes_max` | `2` | `craftflow_gate_check.py` | `references/plan-workflow.md` |
+
+### Loop caps
+
+Documentation of the hard stops. The operative text stays in the lines named in the last column.
+
+| gate | max | evaluation point | input | at-cap action | operative prose |
+|---|---|---|---|---|---|
+| `remediation_cycles_max` | 3 | before creating a REM-FIX task | `circuit_breaker` | ask the user | `remediation-and-research.md` "Before creating a new remediation task" |
+| `doubt_cycles_max` | 3 | after doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Doubt-Verify "After doubt-verifier returns" |
+| `fix_verify_cycles_max` | 3 | after the fix-verify doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Fix-Verify "After doubt-verifier returns" |
+| `plan_review_passes_max` | 2 | after a plan-gap-reviewer pass | pass N, verdict | pass 2 FINDINGS: clarification | `remediation-and-research.md` plan-gap-reviewer blocks |
+
+**`loop_cap_check_failed`.** When `craftflow_gate_check.py` exits non-zero, prints anything but one JSON line with a valid `action`, or returns `human_checkpoint` with a `reason` other than `cap-reached`: persist `pending_gate: "loop_cap_check_failed"`, apply no verdict, create no task, increment no counter, and ask: "Loop-cap check for `{gate}` gave no usable decision (`{reason or "exit " + code}`), so I have not acted on the `{verdict}` verdict for cycle/pass {N}. Reply `retry` to run the check again, `advance` to apply the hard-stop handling, or `proceed` to apply the verdict as written." For remediation, `advance` is not offered and `proceed` reads "create the REM-FIX as written". On the reply, clear `pending_gate` and apply the chosen block. On resume with this `pending_gate`, re-ask the same line and take no other action.

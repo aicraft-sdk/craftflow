@@ -1140,15 +1140,15 @@ def test_signing_burden_buckets_are_disjoint_on_every_tier() -> None:
             bad[name] = (parts, v["unmapped_removed"], v["unreachable"], v["reach_lost_occurrences"])
     g, d = tiers["guaranteed"]["signing_burden"]["buckets"], tiers["conditional_if_reach_amended"]["signing_burden"]["buckets"]
     check("signing_burden_buckets_are_disjoint_on_every_tier",
-          not bad and g["moved_without_loss"]["occurrences"] == 41 and d["moved_without_loss"]["occurrences"] == 41
+          not bad and g["moved_without_loss"]["occurrences"] == 38 and d["moved_without_loss"]["occurrences"] == 39
           and g["in_place_narrowed"]["occurrences"] == 0 and d["in_place_narrowed"]["occurrences"] == 192,
           f"bad={bad} guaranteed_mwl={g['moved_without_loss']} amended_mwl={d['moved_without_loss']} in_place={d['in_place_narrowed']}")
 
 
 def test_signing_burden_counts_rows_not_occurrences() -> None:
-    """K1/K2 on the real plan, guaranteed tree: 415 reach-lost occurrences are 411 ids, 124 vanishing occurrences 112 ids, 50 widening pairs 15
+    """K1/K2 on the real plan, guaranteed tree: 415 reach-lost occurrences are 411 ids, 123 vanishing occurrences 111 ids, 50 widening pairs 15
     files, the section moves 41 ops (41-49 signable sections, 53 counting the unheaded bake-off span's five), so REACH-A <= 591 and REACH-B <= 424;
-    with the D17-B waiver the two coincide. If-amended tier: the narrow reading keeps every occurrence (843 = 607 + 145 + 41 + 50), the
+    with the D17-B waiver the two coincide. If-amended tier: the narrow reading keeps every occurrence (840 = 607 + 144 + 39 + 50), the
     definitional one waives the covered ones (485)."""
     tiers = full_projection()["reach_feasibility"]["tiers"]
     g, d = tiers["guaranteed"]["signing_burden"], tiers["conditional_if_reach_amended"]["signing_burden"]
@@ -1156,18 +1156,19 @@ def test_signing_burden_counts_rows_not_occurrences() -> None:
     gd = g["definitional_D17B"]
     sec = g["section_move_rows"]
     check("signing_burden_counts_rows_not_occurrences",
-          b["vanishing"] == {"occurrences": 124, "ids": 112} and b["widening"] == {"pairs": 50, "files": 15}
+          b["vanishing"] == {"occurrences": 123, "ids": 111} and b["widening"] == {"pairs": 50, "files": 15}
           and (sec["ops"], sec["rows_low"], sec["rows_high_headed_spans"], sec["rows_upper_bound"]) == (41, 41, 49, 53)
           and (sec["partial_spans_without_heading"], sec["multi_section_spans"]) == (23, 7)
           and sec["needs_destination_heading"] == ["p10-pav-verifier-telemetry"]
-          and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (411 + 112 + 53 + 15, 244 + 112 + 53 + 15)
-          and g["REACH_A"]["occurrences"]["total"] == 415 + 124 + 41 + 50 and g["REACH_B"]["occurrences"]["total"] == 41 + 248 + 124 + 50
-          and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 244 + 112 + 53 + 15
-          and d["REACH_A"]["occurrences"]["total"] == 607 + 145 + 41 + 50
-          # REACH-A counts the 41 moved-without-loss occurrences, REACH-B the 42 section-move ops; they were equal (42) until P5's signed
-          # plan_commit row removed one occurrence without removing a section move. The row-count bounds below still coincide.
-          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 41 + 248 + 145 + 50
-          and d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 248 + 145 + 50
+          and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (411 + 111 + 53 + 15, 244 + 111 + 53 + 15)
+          and g["REACH_A"]["occurrences"]["total"] == 415 + 123 + 38 + 50 and g["REACH_B"]["occurrences"]["total"] == 41 + 248 + 123 + 50
+          and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 244 + 111 + 53 + 15
+          and d["REACH_A"]["occurrences"]["total"] == 607 + 144 + 39 + 50
+          # REACH-A counts the 39 moved-without-loss occurrences, REACH-B the 42 section-move ops; they were equal (42) until P5's signed
+          # plan_commit row removed one occurrence without removing a section move, and P6's six literal-to-key Rewrites rows (listed in the
+          # policy map, still unsigned) took away two more and one vanishing occurrence. The row-count bounds below still coincide.
+          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 39 + 248 + 144 + 50
+          and d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 248 + 144 + 50
           and d["definitional_D17B"]["REACH_B"]["rows_upper_bound"] < d["REACH_B"]["rows_upper_bound"] < d["REACH_A"]["rows_upper_bound"],
           f"buckets={b} sections={sec} guaranteed={(g['REACH_A']['rows_upper_bound'], g['REACH_B']['rows_upper_bound'])} amended_A_occ={d['REACH_A']['occurrences']}")
 

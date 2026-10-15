@@ -64,6 +64,7 @@
    - If pass 1 succeeds, the router prunes the unused `re-plan` and pass 2 branch explicitly.
    - If pass 1 finds blocking issues, the router keeps the pre-created `re-plan` and pass 2 branch alive.
    - Maximum fresh-review passes: 2.
+   - Cap: `policy.plan_review_passes_max` (= 2).
    - Planner remains the only plan writer.
    - The existing inline `plan-review-gate` inside planner remains the final fail-closed boundary on each planner pass.
 

@@ -370,7 +370,8 @@
    "position": "after_anchor",
    "source": "plan P6 Prose: SKILL.md:977 call line (doubt_cycles_max)",
    "status": "drafted",
-   "text": "- First run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate doubt_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"` (N = the `Cycle:` of this cycle's task; in Task*-tool fallback mode, the `## Cycle` value of this dispatch's prompt, else the agent's echoed `Cycle number:`, never `telemetry.loop_counts`). `advance` → apply the bullet for the returned verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance per the `CYCLE_COMPLETE` hard-stop bullet. `human_checkpoint` with `reason: cap-reached` → treat it as `advance` (this gate has no ask block of its own). `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).\n"
+   "text": "- First run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate doubt_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"` (N = the `Cycle:` of this cycle's task; in Task*-tool fallback mode, the `## Cycle` value of this dispatch's prompt, else the agent's echoed `Cycle number:`, never `telemetry.loop_counts`). `advance` → apply the bullet for the returned verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance per the `CYCLE_COMPLETE` hard-stop bullet (advance once in total). `human_checkpoint` with `reason: cap-reached` → treat it as `advance` (this gate has no ask block of its own). `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).\n",
+   "note": "Built P6: '(advance once in total)' added (review Finding 6: the call line must not double-advance for CONFIRMED or DOUBT_THEATER); kept short because the enforced caps have zero headroom."
   },
   {
    "anchor": "**After doubt-verifier returns** (see `agents/doubt-verifier.md → ## Fix-Verify Contract`):",
@@ -382,7 +383,8 @@
    "position": "after_anchor",
    "source": "plan P6 Prose: SKILL.md:1045 call line (fix_verify_cycles_max)",
    "status": "drafted",
-   "text": "- First run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate fix_verify_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"` (after the contract-override check below has been applied; N = the `Cycle:` of the fix-verify task; in Task*-tool fallback mode, the `## Cycle` value of this dispatch's prompt). `advance` → apply the bullet for the returned (post-override) verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict (the 3-cycle hard stop that the cycle-counter paragraph inherits from `doubt_verify`). If `doubt_verify_gate` also fired on this phase, a capped verdict does not block phase exit under the stricter-verdict rule; the other gate's verdict still applies. `human_checkpoint` with `reason: cap-reached` → treat it as `advance` (this gate has no ask block of its own). `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).\n"
+   "text": "- First run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate fix_verify_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"` (after the contract-override check below has been applied; N = the `Cycle:` of the fix-verify task; in Task*-tool fallback mode, the `## Cycle` value of this dispatch's prompt). `advance` → apply the bullet for the returned (post-override) verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict (the 3-cycle hard stop that the cycle-counter paragraph inherits from `doubt_verify`; advance once in total). If `doubt_verify_gate` also fired on this phase, a capped verdict does not block phase exit under the stricter-verdict rule; the other gate's verdict still applies. `human_checkpoint` with `reason: cap-reached` → treat it as `advance` (this gate has no ask block of its own). `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).\n",
+   "note": "Built P6: 'advance once in total' added (review Finding 6: the call line must not double-advance for LOAD_BEARING); kept short because the enforced caps have zero headroom."
   },
   {
    "anchor": "Before creating a new remediation task:",
@@ -439,13 +441,13 @@
    "condition": "always",
    "file": "skills/craftflow-router/references/remediation-and-research.md",
    "id": "p6-rr-fallback-pass-identity",
-   "note": "Plan review in fallback mode has no `plan-review-gap-N` task, so the pass number the gate check needs has no carrier. Drafted text: P6 confirms the field name against agents/plan-gap-reviewer.md.",
+   "note": "Built P6: agents/plan-gap-reviewer.md defines no pass input, so the sentence names no prompt field; the router knows N from which dispatch it just made.",
    "op": "insert",
    "phase": "P6",
    "position": "before_anchor",
    "source": "Review Pass 3 Disposition Finding 5 (build advisory, P6 prose): the Task*-tool fallback paragraphs never tell the router to put the cycle in the dispatch prompt",
    "status": "drafted",
-   "text": "In Task*-tool fallback mode there is no `plan-review-gap-N` task: N is 1 for the first fresh review and 2 for the one after `re-plan`, and the `plan-gap-reviewer` dispatch prompt states it as `Pass: N`.\n\n"
+   "text": "In Task*-tool fallback mode there is no `plan-review-gap-N` task: N is 1 for the first fresh review and 2 for the one after `re-plan`.\n\n"
   },
   {
    "condition": "always",
@@ -455,7 +457,8 @@
    "phase": "P6",
    "source": "plan P6 Prose: SKILL.md:981 substitutions",
    "start_anchor": "- `CYCLE_COMPLETE: true` on cycle 3 → advance regardless of verdict (3-cycle hard stop)",
-   "text": "- `CYCLE_COMPLETE: true` on cycle `policy.doubt_cycles_max` (= 3) → advance regardless of verdict (`policy.doubt_cycles_max`-cycle hard stop)\n"
+   "text": "- `CYCLE_COMPLETE: true` on cycle `policy.doubt_cycles_max` (= 3) → advance regardless of verdict (`policy.doubt_cycles_max` (= 3)-cycle hard stop)\n",
+   "note": "Built P6: the second form keeps its (= 3) pin; the literal-to-key numeral guard counts both baseline 3s."
   },
   {
    "condition": "always",
@@ -491,11 +494,13 @@
    "condition": "always",
    "file": "skills/craftflow-router/references/plan-workflow.md",
    "id": "p6-sub-plan-review-passes",
-   "op": "replace",
    "phase": "P6",
-   "source": "plan P6 Prose: plan-workflow.md:66",
-   "start_anchor": "   - Maximum fresh-review passes: 2.",
-   "text": "   - Maximum fresh-review passes: `policy.plan_review_passes_max` (= 2).\n"
+   "source": "plan P6 Prose: plan-workflow.md:66 (inserted as a pin bullet, see note)",
+   "op": "insert",
+   "position": "after_anchor",
+   "anchor": "   - Maximum fresh-review passes: 2.",
+   "text": "   - Cap: `policy.plan_review_passes_max` (= 2).\n",
+   "note": "Built P6: the line stays verbatim and the pin is a new bullet below it. router-normative-allowlist.json names the unit 'maximum fresh-review passes: 2.' and the baseline_matches_ref and attack-8 tests need it present at both the baseline and the live tree, so the plan's literal-to-key substitution cannot be applied to this one line."
   },
   {
    "condition": "always",
@@ -537,7 +542,8 @@
    "position": "end_of_file",
    "source": "plan P6 Kernel: generated ### Policy table under section 14 (8 rows)",
    "status": "drafted",
-   "text": "\n### Policy table\n\nEffective policy (`config/policy.json` merged over the defaults), printed by `craftflow_policy.py --print-table`. Each value is enforced by the named script; the prose location keeps the rule text.\n\n| key | value | enforced by | prose location |\n|---|---|---|---|\n| `native_plan_mode` | `never` | `craftflow_pretooluse_guard.py` | § 14 EnterPlanMode rule |\n| `plan_commit` | `never` | `craftflow_pretooluse_bash_guard.py` | § 14 plan-artifact rule |\n| `memory_write` | `finalize-only` | `craftflow_pretooluse_guard.py` | § 13 |\n| `worktree_merge` | `require_clean_tree=true, lock_max_attempts=9, lock_sleep_seconds=5, copy_fallback_on_up_to_date=true` | `craftflow_worktree_finalize.py` | `references/worktree.md` |\n| `remediation_cycles_max` | `3` | `craftflow_gate_check.py` | § 14 remediation loop rule |\n| `doubt_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Doubt-Verify Dispatch Rule |\n| `fix_verify_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Fix-Verify Dispatch Rule |\n| `plan_review_passes_max` | `2` | `craftflow_gate_check.py` | `references/plan-workflow.md` |\n"
+   "text": "\n### Policy table\n\nEffective policy (`config/policy.json` merged over the defaults), printed by `craftflow_policy.py --print-table`. Each value is enforced by the named script; the prose location keeps the rule text.\n\n| key | value | enforced by | prose location |\n|---|---|---|---|\n| `native_plan_mode` | `never` | `craftflow_pretooluse_guard.py` | § 14 EnterPlanMode rule |\n| `plan_commit` | `never` | `craftflow_pretooluse_bash_guard.py` | § 14 plan-artifact rule |\n| `memory_write` | `finalize-only` | `craftflow_pretooluse_guard.py` | § 13 |\n| `worktree_merge` | `require_clean_tree=true, lock_max_attempts=9, lock_sleep_seconds=5, copy_fallback_on_up_to_date=true` | `craftflow_pretooluse_bash_guard.py` (clean tree) | § 5 |\n| `remediation_cycles_max` | `3` | `craftflow_gate_check.py` | § 14 remediation loop rule |\n| `doubt_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Doubt-Verify Dispatch Rule |\n| `fix_verify_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Fix-Verify Dispatch Rule |\n| `plan_review_passes_max` | `2` | `craftflow_gate_check.py` | `references/plan-workflow.md` |\n",
+   "note": "Built P6: references/worktree.md does not exist until P8 and the only live reader of worktree_merge is the P5 bash guard (require_clean_tree), so the row names that; kept short because the enforced caps have zero headroom."
   },
   {
    "condition": "always",
@@ -548,7 +554,8 @@
    "position": "end_of_file",
    "source": "plan P6 Kernel: documentation-only Loop caps table",
    "status": "drafted",
-   "text": "\n### Loop caps\n\nDocumentation of the hard stops. The operative text stays in the lines named in the last column.\n\n| gate | max | evaluation point | input | at-cap action | operative prose |\n|---|---|---|---|---|---|\n| `remediation_cycles_max` | 3 | before creating a REM-FIX task | `circuit_breaker` | ask the user | `references/remediation-and-research.md` \"Before creating a new remediation task\" |\n| `doubt_cycles_max` | 3 | after doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Doubt-Verify \"After doubt-verifier returns\" |\n| `fix_verify_cycles_max` | 3 | after the fix-verify doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Fix-Verify \"After doubt-verifier returns\" |\n| `plan_review_passes_max` | 2 | after a plan-gap-reviewer pass | pass N, verdict | pass 2 FINDINGS: clarification | `references/remediation-and-research.md` plan-gap-reviewer blocks |\n"
+   "text": "\n### Loop caps\n\nDocumentation of the hard stops. The operative text stays in the lines named in the last column.\n\n| gate | max | evaluation point | input | at-cap action | operative prose |\n|---|---|---|---|---|---|\n| `remediation_cycles_max` | 3 | before creating a REM-FIX task | `circuit_breaker` | ask the user | `remediation-and-research.md` \"Before creating a new remediation task\" |\n| `doubt_cycles_max` | 3 | after doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Doubt-Verify \"After doubt-verifier returns\" |\n| `fix_verify_cycles_max` | 3 | after the fix-verify doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Fix-Verify \"After doubt-verifier returns\" |\n| `plan_review_passes_max` | 2 | after a plan-gap-reviewer pass | pass N, verdict | pass 2 FINDINGS: clarification | `remediation-and-research.md` plan-gap-reviewer blocks |\n",
+   "note": "Built P6: the file name drops its references/ prefix (two cells); kept short because the enforced caps have zero headroom."
   },
   {
    "condition": "always",

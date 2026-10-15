@@ -172,13 +172,14 @@ Rules:
   - `reconcile`
   - `reasoning`
 - `pending_gate` is required whenever BUILD/PLAN/DEBUG is waiting on user clarification, scope selection, or persistence repair.
+- `loop_cap_check_failed` — `gate_check` gave no usable decision; ask the line in `SKILL.md` § 14 and apply no verdict until the user answers; on resume, re-ask it.
 - `circuit_breaker` is a persisted, queryable REM-FIX retry-budget state, deliberately separate
   from `telemetry` because it drives a routing decision (`telemetry` must never drive routing
   decisions per the rule above):
   - `remfix_count` — non-decreasing for the life of the workflow; incremented each time a new
     REM-FIX task is created for the workflow.
   - `broken` — boolean, default `false`; set `true` at most once per workflow, when
-    `remfix_count` reaches 3; never resets within that workflow. When `true`, the router asks the
+    `remfix_count` reaches `policy.remediation_cycles_max` (= 3); never resets within that workflow. When `true`, the router asks the
     user how to proceed before creating another REM-FIX task.
 - BUILD's worktree merge-safety guard uses 6 `pending_gate` values (canonical logic lives in
   `skills/craftflow-router/SKILL.md` → "### Worktree Isolation (BUILD Default)" step 4; this is a

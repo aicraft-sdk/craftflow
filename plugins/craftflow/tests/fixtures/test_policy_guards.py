@@ -439,7 +439,10 @@ def test_shipped_policy_keys():
     shipped = json.loads(POLICY_FILE.read_text())
     check("shipped_policy_has_native_plan_mode_never", shipped.get("native_plan_mode") == "never", f"{shipped}")
     check("shipped_policy_has_plan_commit_never", shipped.get("plan_commit") == "never", f"{shipped}")
-    check("shipped_policy_has_no_other_gate_keys", set(shipped) <= {"memory_write", "native_plan_mode", "plan_commit", "$comment"}, f"{sorted(shipped)}")
+    # P6 ships the four loop-cap keys with their gate_check reader (B6); worktree_merge waits for P7's four-key reader.
+    caps = {"remediation_cycles_max", "doubt_cycles_max", "fix_verify_cycles_max", "plan_review_passes_max"}
+    check("shipped_policy_has_no_other_gate_keys", set(shipped) <= {"memory_write", "native_plan_mode", "plan_commit", "$comment"} | caps
+          and "worktree_merge" not in shipped, f"{sorted(shipped)}")
 
 
 # --------------------------------------------------------------------------------------------------------------------

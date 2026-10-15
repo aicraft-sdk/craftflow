@@ -72,6 +72,12 @@ the original reach.
 
 | Baseline ID(s) or group | New IDs | Kind (pointer/dedupe/trigger/literal-to-key/xref/split/heading/group/section-move) | Justification | Equivalence note | Reviewed by | Evidence |
 |---|---|---|---|---|---|---|
+| 24a07e419821 | 6819ae575d1e | literal-to-key | P6 (BC-6, DD-13): the doubt cap is read from `policy.doubt_cycles_max` | Same sentence; `Max 3 cycles` becomes ``Max `policy.doubt_cycles_max` (= 3) cycles``. The value is pinned to `policy.json` by `prose_policy_values_match`; the sentence carries the unchanged cycle-counter text and the following reliability-gates paragraph (id b06c4c87a1a2) is its child. | <Name (YYYY-MM-DD)> | |
+| 2f4f92a0e475 | 37de4260b437 | literal-to-key | P6 (BC-6, DD-13): the :981 hard stop names the key | Same bullet; `on cycle 3` becomes ``on cycle `policy.doubt_cycles_max` (= 3)`` and `(3-cycle hard stop)` becomes ``(`policy.doubt_cycles_max` (= 3)-cycle hard stop)``. Deviation from the plan's listed text: the plan drops the `(= 3)` from the second form, but the literal-to-key numeral guard counts the two baseline `3`s, so both forms keep it (and both stay pinned to `policy.json` by `prose_policy_values_match`). Verdict, action and every other word are unchanged. | <Name (YYYY-MM-DD)> | |
+| 05d3056bc1b3 | c92db17d1160 | literal-to-key | P6 (BC-6, DD-13): the fix-verify cap is read from `policy.fix_verify_cycles_max` | Same paragraph; `Max 3 cycles` becomes ``Max `policy.fix_verify_cycles_max` (= 3) cycles``. | <Name (YYYY-MM-DD)> | |
+| d03c4122f72e | d8b2376cfc55 | literal-to-key | P6 (BC-6, DD-13): the remediation hard rule names `policy.remediation_cycles_max` | Same bullet; `more than 3 cycles` becomes ``more than `policy.remediation_cycles_max` (= 3) cycles``. | <Name (YYYY-MM-DD)> | |
+| 3427a4c99edb | febb68703aec | literal-to-key | P6 (BC-6, DD-13): the breaker trip threshold names `policy.remediation_cycles_max` | Same bullet; `remfix_count >= 3` becomes ``remfix_count >= policy.remediation_cycles_max` (= 3)``. The increment and the `broken = true` trip stay router-owned prose. | <Name (YYYY-MM-DD)> | |
+| 717929bbb2a0 | bcf8947ee763 | literal-to-key | P6 (BC-6, DD-13): the artifact policy describes the same threshold | Same list item; `remfix_count reaches 3` becomes ``remfix_count reaches `policy.remediation_cycles_max` (= 3)``. | <Name (YYYY-MM-DD)> | |
 
 ## Applicability
 
@@ -228,3 +234,23 @@ function bodies, indirect command names (`g=git; $g commit`), arrays, more than 
 | a01e2c640767 | native_plan_mode | craftflow_pretooluse_guard.py::_handle_enter_plan_mode | test_policy_guards.py::enterplanmode_denied_by_default | pending-prose-deletion | false | <Name (YYYY-MM-DD)> | |
 | c403449266e4 | native_plan_mode | craftflow_pretooluse_guard.py::_handle_enter_plan_mode | test_policy_guards.py::enterplanmode_denied_by_default | pending-prose-deletion | false | <Name (YYYY-MM-DD)> | |
 ```
+
+P6 (`craftflow_gate_check.py`, ADR-0073 BC-6, DD-13). Two things need a human signature before CI's inventory diff can pass:
+
+1. The six `literal-to-key` Rewrites rows already sit in `## Rewrites` with `<Name (YYYY-MM-DD)>` in `Reviewed by`; `--diff` reports
+   `rows_missing_review: 6` until a person signs them (and nothing else: `unmapped_removed: 0`, `row_errors: []`). One row deviates
+   from the plan's listed text and says so: `(3-cycle hard stop)` keeps its `(= 3)` pin, because the `literal-to-key` numeral guard counts
+   the two baseline `3`s in the :981 bullet (the plan's form drops one). `plan-workflow.md:66` ("Maximum fresh-review passes: 2.") is **not**
+   rewritten: `router-normative-allowlist.json` names that unit and both `baseline_matches_ref` and the attack-8 scratch emit need it
+   present, so the pin is a new bullet below it (no row needed).
+2. `8b95f8c74a2b` is `remediation-and-research.md:264`, "If count >= 2, run the cycle-cap gate before continuing". P6 deliberately does
+   not wire it: its `2` is a trigger on completed remediation tasks, not a cap value, and "cycle-cap gate" is defined nowhere else, so
+   mapping it would invent semantics (A9). Draft row for `## Policy-mapped deletions` (nothing is deleted; the unit is still present, so
+   the diff does not need it):
+
+```
+| 8b95f8c74a2b | remediation_cycles_max | craftflow_gate_check.py::run | test_router_policy_prose.py::rr_264_stays_verbatim_and_unwired | prose_retained | false | <Name (YYYY-MM-DD)> | |
+```
+
+After signing, regenerate `tests/fixtures/router-projection.json` (`craftflow_router_readset.py --project tests/fixtures/router-cut-plan.json --json`),
+because `reach_feasibility` counts the signed rows, and record a `projection_revisions` entry in `router-budget.json` (as P5 did).

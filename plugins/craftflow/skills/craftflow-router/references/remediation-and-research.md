@@ -25,12 +25,13 @@ budget is not reset just because the fix moved to a fresh task). `circuit_breake
 (boolean, default `false`) is the persisted, queryable trip state.
 
 Before creating a new remediation task:
+- First run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate remediation_cycles_max --point pre_create --wf {workflow_uuid} --project-root "$PROJECT_ROOT"`: `human_checkpoint` with `reason: cap-reached` → apply the first bullet below (ask the user); `proceed` → apply the second bullet; any other result → `loop_cap_check_failed` (`SKILL.md` § 14).
 - If `circuit_breaker.broken` is already `true` for this workflow, ask the user how to proceed
   before creating another REM-FIX task (same outcome as before — this is a persistence change,
   not a threshold or behavior change).
 - Otherwise, increment `circuit_breaker.remfix_count` by 1 (create the field at 1 if absent) as
   part of creating the new REM-FIX task, then set `circuit_breaker.broken = true` if
-  `circuit_breaker.remfix_count >= 3`.
+  `circuit_breaker.remfix_count >= policy.remediation_cycles_max` (= 3).
 
 ### Rule matrix
 
@@ -141,6 +142,10 @@ When planner returns `STATUS=PLAN_CREATED` or `STATUS=DECISION_RFC_CREATED`:
   - update the pre-created `plan-review-gap-2` task `plan:` line to `{plan_file}`
   - keep `planning_review_status=pending_review`
 - `planning_review_runs` counts only completed fresh-review passes with valid contract output. Invalid or malformed reviewer output must fail closed without consuming one of the two allowed passes.
+
+In Task*-tool fallback mode there is no `plan-review-gap-N` task: N is 1 for the first fresh review and 2 for the one after `re-plan`.
+
+After applying a block's `Increment planning_review_runs += 1` line, run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate plan_review_passes_max --point post_verdict --pass {N} --verdict {PASS|FINDINGS}`, where N is the pass of the returning `plan-review-gap-N` task; `proceed` → continue with that block; `human_checkpoint` with `reason: cap-reached` → the pass-2 `FINDINGS` block applies (`pending_gate=clarification`); any other result → `loop_cap_check_failed` (`SKILL.md` § 14).
 
 When `plan-gap-reviewer` pass 1 returns `PASS`:
 - Increment `planning_review_runs += 1`

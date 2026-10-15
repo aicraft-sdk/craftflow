@@ -1330,7 +1330,8 @@ def test_circuit_breaker_uses_persisted_non_telemetry_field_not_live_tasklist_co
     if "circuit_breaker.broken" not in remediation_content:
         fail(name, "missing circuit_breaker.broken field in remediation-and-research.md")
         return
-    if ">= 3" not in remediation_content:
+    # P6 (literal-to-key): the threshold is written `>= policy.remediation_cycles_max` (= 3); the pinned value is still 3.
+    if ">= 3" not in remediation_content and "remfix_count >= policy.remediation_cycles_max` (= 3)" not in remediation_content:
         fail(name, "missing the >=3 threshold (behavior must be unchanged, only persistence)")
         return
     if "telemetry.loop_counts.remfix" in remediation_content or "telemetry.circuit_broken" in remediation_content:

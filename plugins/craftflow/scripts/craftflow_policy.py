@@ -216,30 +216,32 @@ def enter_plan_mode_decision(native_plan_mode: Any, status: str) -> Tuple[str, s
     return "deny", "craftflow-policy: native_plan_mode=never —"
 
 
-def _leaves(node: Dict[str, Any], prefix: str = "") -> List[str]:
-    out: List[str] = []
-    for key, value in node.items():
-        out.extend(_leaves(value, f"{prefix}{key}.") if isinstance(value, dict) else [f"{prefix}{key}"])
-    return out
+# (key, enforced by, prose location): the kernel's `### Policy table` is printed from this and the effective policy.
+TABLE_ROWS = (
+    ("native_plan_mode", "`craftflow_pretooluse_guard.py`", "§ 14 EnterPlanMode rule"),
+    ("plan_commit", "`craftflow_pretooluse_bash_guard.py`", "§ 14 plan-artifact rule"),
+    ("memory_write", "`craftflow_pretooluse_guard.py`", "§ 13"),
+    ("worktree_merge", "`craftflow_pretooluse_bash_guard.py` (clean tree)", "§ 5"),
+    ("remediation_cycles_max", "`craftflow_gate_check.py`", "§ 14 remediation loop rule"),
+    ("doubt_cycles_max", "`craftflow_gate_check.py`", "§ 7 Doubt-Verify Dispatch Rule"),
+    ("fix_verify_cycles_max", "`craftflow_gate_check.py`", "§ 7 Fix-Verify Dispatch Rule"),
+    ("plan_review_passes_max", "`craftflow_gate_check.py`", "`references/plan-workflow.md`"),
+)
 
 
-def _allowed(spec: Dict[str, Any]) -> str:
-    if "const" in spec:
-        return f"only {json.dumps(spec['const'])}"
-    if "enum" in spec:
-        return "one of " + ", ".join(json.dumps(v) for v in spec["enum"])
-    return f"integer {spec.get('minimum')}-{spec.get('maximum')}"
+def _render(value: Any) -> str:
+    if isinstance(value, dict):
+        return ", ".join(f"{k}={_render(v)}" for k, v in value.items())
+    return value if isinstance(value, str) else json.dumps(value)
 
 
-def print_table() -> str:
-    """Markdown table of every leaf key with its default and allowed values (rendered from DEFAULTS and the schema)."""
-    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-    lines = ["| Key | Default | Allowed |", "|---|---|---|"]
-    for key in _leaves(DEFAULTS):
-        spec: Any = schema
-        for part in key.split("."):
-            spec = spec["properties"][part]
-        lines.append(f"| `{key}` | `{json.dumps(policy_value(DEFAULTS, key))}` | {_allowed(spec)} |")
+def print_table(policy: Optional[Dict[str, Any]] = None) -> str:
+    """Markdown Policy table of the EFFECTIVE policy (the file merged over DEFAULTS, so a key not shipped yet prints its default)."""
+    if policy is None:
+        policy = load_policy(log=False)[0]
+    lines = ["| key | value | enforced by | prose location |", "|---|---|---|---|"]
+    for key, enforced_by, prose in TABLE_ROWS:
+        lines.append(f"| `{key}` | `{_render(policy_value(policy, key))}` | {enforced_by} | {prose} |")
     return "\n".join(lines)
 
 

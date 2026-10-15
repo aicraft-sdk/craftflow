@@ -267,17 +267,38 @@ def test_cli_get_and_hash():
     check("cli_hash", digest.returncode == 0 and re.fullmatch(r"[0-9a-f]{64}", digest.stdout.strip()) is not None, f"out={digest.stdout!r}")
 
 
-def test_print_table_matches_defaults():
-    print("\n[--print-table]")
-    res = cli(["--print-table"])
+def render_value(value):
+    """How the kernel Policy table prints a value (independent of craftflow_policy): scalars raw, objects as key=value pairs."""
+    if isinstance(value, dict):
+        return ", ".join(f"{k}={render_value(v)}" for k, v in value.items())
+    return value if isinstance(value, str) else json.dumps(value)
+
+
+def policy_table_rows(text):
     rows = {}
-    for line in res.stdout.splitlines():
+    for line in text.splitlines():
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) >= 2 and cells[0].startswith("`"):
-            rows[cells[0].strip("`")] = cells[1]
-    want = {k: json.dumps(pol.policy_value(pol.DEFAULTS, k)) for k in leaves(pol.DEFAULTS)}
-    got = {k: v.strip("`") for k, v in rows.items()}
-    check("print_table_matches_defaults", res.returncode == 0 and got == want, f"rc={res.returncode} got={got} want={want}")
+        if len(cells) == 4 and cells[0].startswith("`"):
+            rows[cells[0].strip("`")] = cells
+    return rows
+
+
+def test_print_table_matches_defaults():
+    print("\n[--print-table: P6 renders the effective policy as key | value | enforced by | prose location]")
+    res = cli(["--print-table"])
+    lines = res.stdout.splitlines()
+    rows = policy_table_rows(res.stdout)
+    want = {k: render_value(v) for k, v in pol.DEFAULTS.items()}
+    got = {k: cells[1].strip("`") for k, cells in rows.items()}
+    check("print_table_header", lines[:2] == ["| key | value | enforced by | prose location |", "|---|---|---|---|"], str(lines[:2]))
+    check("print_table_matches_defaults", res.returncode == 0 and got == want and len(rows) == len(lines) - 2, f"rc={res.returncode} got={got} want={want}")
+    check("print_table_names_an_enforcer_and_prose_for_every_key", all(c[2] and c[3] for c in rows.values()), str(rows))
+    with tempfile.TemporaryDirectory() as tmp:
+        eff = cli(["--print-table"], make_root(tmp, b'{"doubt_cycles_max": 2}'))
+        bad = cli(["--print-table"], make_root(tmp + "/b", b"{corrupt"))
+    check("print_table_is_the_effective_policy", policy_table_rows(eff.stdout)["doubt_cycles_max"][1] == "`2`"
+          and policy_table_rows(eff.stdout)["fix_verify_cycles_max"][1] == "`3`" and eff.stderr == "", f"{eff.stdout!r} {eff.stderr!r}")
+    check("print_table_on_invalid_policy_prints_defaults", bad.returncode == 0 and policy_table_rows(bad.stdout)["doubt_cycles_max"][1] == "`3`", bad.stdout)
 
 
 def test_defaults_equal_prose_values():
@@ -652,9 +673,11 @@ def test_schema_leaf_keys_equal_defaults():
 def test_shipped_policy_is_exactly_p4_keys():
     print("\n[shipped config/policy.json]")
     shipped = json.loads((PLUGIN_ROOT / "config" / "policy.json").read_text(encoding="utf-8"))
-    # P5 widens the P4 pin: each phase ships only the keys whose reader it adds (B6). P6 adds the caps, P7 worktree_merge.
-    check("shipped_policy_only_memory_write", leaves(shipped) == {"memory_write", "native_plan_mode", "plan_commit"}
+    # Each phase ships only the keys whose reader it adds (B6): P5 added the plan keys, P6 adds the four caps, P7 adds worktree_merge.
+    caps = {"remediation_cycles_max": 3, "doubt_cycles_max": 3, "fix_verify_cycles_max": 3, "plan_review_passes_max": 2}
+    check("shipped_policy_only_memory_write", leaves(shipped) == {"memory_write", "native_plan_mode", "plan_commit"} | set(caps)
           and shipped["memory_write"] == "finalize-only" and shipped["native_plan_mode"] == "never" and shipped["plan_commit"] == "never"
+          and all(shipped[k] == v and type(shipped[k]) is int for k, v in caps.items())
           and shipped.get("$comment") == "craftflow gate policy; values mirror router prose (ADR-0073)", str(shipped))
     _, status, errors = pol.load_policy(PLUGIN_ROOT / "config" / "policy.json")
     check("shipped_policy_valid", status == "ok" and errors == [], f"status={status} errors={errors}")
