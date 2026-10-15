@@ -600,8 +600,12 @@ def test_m3_probe_budget():
     rc, out, err = run(BASH_GUARD, bash(cmd, repo), repo, path_prefix=str(shim))
     elapsed = time.monotonic() - started
     errs = events(repo, "plan_commit_probe_error")
-    check("m3_chained_commits_stay_inside_hook_timeout", rc == 0 and out == "" and elapsed < 9, f"rc={rc} elapsed={elapsed:.1f} out={out!r}")
-    check("m3_budget_exhaustion_is_logged", any(e.get("reason") == "budget" for e in errs), f"{errs}")
+    # cycle 4 (H-2): a probe that could not run because the budget was spent is "cannot verify" -> fail closed (a plan IS staged here)
+    skipped = events(repo, "policy_guard_skipped")
+    check("m3_chained_commits_stay_inside_hook_timeout_and_fail_closed", rc == 0 and decision(out)[0] == "deny" and elapsed < 9
+          and any(e.get("reason") in ("probe", "time") and e.get("denied") is True for e in skipped), f"rc={rc} elapsed={elapsed:.1f} out={out!r} skipped={skipped}")
+    check("m3_budget_exhaustion_is_logged", any(e.get("reason") == "budget" for e in errs) or any(e.get("reason") == "time" and e.get("denied") for e in skipped),
+          f"{errs} {skipped}")
     check("m3_allow_path_stays_silent", err == "", f"err={err!r}")
 
 
@@ -825,7 +829,7 @@ def test_budget_reserve_keeps_the_merge_probe_alive():
     (shim / "git").write_text(f'#!/bin/sh\nfor a in "$@"; do if [ "$a" = "diff" ]; then exec sleep 30; fi; done\nexec {real} "$@"\n')
     (shim / "git").chmod(0o755)
     started = time.monotonic()
-    rc, out, err = run(BASH_GUARD, bash("git commit -m a; git commit -m b; git commit -m c; git merge wf-x-abc", repo), repo, path_prefix=str(shim))
+    rc, out, err = run(BASH_GUARD, bash("git commit -m a; git commit -m b; git merge wf-x-abc", repo), repo, path_prefix=str(shim))
     check("budget_reserve_clean_tree_merge_not_denied_by_burnt_budget", rc == 0 and out == "" and err == "" and time.monotonic() - started < 9, f"rc={rc} out={out!r} err={err!r}")
 
 
@@ -906,6 +910,7 @@ def test_m2_clean_merge_is_not_denied_by_a_burnt_parse_budget():
     repo = make_merge_repo()
     inv = {"sub": "merge", "later": ["wf-x-abc"], "eff": str(repo), "dyn": False, "git_dir": None, "work_tree": None, "reason": ""}
     resolved = mod.resolve_main_root(repo)
+    mod._RUN_CACHE.clear()
     saved_env = (os.environ.get("CLAUDE_PROJECT_DIR"), os.environ.get("CLAUDE_PLUGIN_ROOT"))
     os.environ["CLAUDE_PROJECT_DIR"], os.environ["CLAUDE_PLUGIN_ROOT"] = str(repo), str(PLUGIN_ROOT)
     try:
@@ -916,6 +921,7 @@ def test_m2_clean_merge_is_not_denied_by_a_burnt_parse_budget():
         check("m2_clean_tree_with_spent_parse_budget_is_not_denied", clean is False and buf.getvalue() == "", f"clean={clean} out={buf.getvalue()!r}")
         check("m2_merge_probe_restores_the_parse_deadline", mod._PROBE_DEADLINE[0] is not None and mod._PROBE_DEADLINE[0] < time.monotonic())
         (repo / "dirty.txt").write_text("d\n")
+        mod._RUN_CACHE.clear()  # the merge result is cached per hook run; this is a new run
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             dirty = mod._merge_one(inv, resolved, "git merge wf-x-abc")
@@ -981,6 +987,162 @@ def test_group_heads_and_quoted_operators():
     _allowed("quoted_operator_text_is_not_a_command", "echo 'git add -f docs/plans/x.md; rm -rf .' > /dev/null", repo)
 
 
+# --------------------------------------------------------------------------------------------------------------------
+# REM-FIX cycle 4 (narrow, last): per-run work bounds, probe exhaustion, command-word keyed fail-closed, comments, heredocs
+# --------------------------------------------------------------------------------------------------------------------
+
+
+def _many_workflows(repo, count=441):
+    wf_dir = repo / ".craftflow" / "state" / "workflows"
+    wf_dir.mkdir(parents=True, exist_ok=True)
+    for idx in range(1, count + 1):
+        (wf_dir / f"wf-gen-{idx}.json").write_text(json.dumps({"workflow_uuid": f"wf-gen-{idx}", "status": "in_progress", "worktree_branch": f"wf-br-{idx}"}))
+
+
+def test_c4_per_run_work_is_bounded():
+    repo = make_repo()
+    _many_workflows(repo)
+    victim = scratch_dir("p5g-victim-")
+    for count in (200, 300):
+        rc, out, err, secs = _timed("git merge wf-br-1;" * count + f" rm -rf {victim}", repo)
+        check(f"c4_{count}_identical_merges_fast_and_destructive_deny_delivered", rc == 0 and secs < 4 and decision(out)[0] == "deny"
+              and ("worktree-confinement" in out or "escapes-cwd" in out), f"rc={rc} secs={secs:.2f} out={out[:200]!r}")
+    rc, out, err, secs = _timed("git merge wf-br-1;" * 900 + f" rm -rf {victim}", repo)
+    check("c4_900_identical_merges_fast_and_denied", rc == 0 and secs < 4 and decision(out)[0] == "deny", f"rc={rc} secs={secs:.2f} out={out[:160]!r}")
+    rc, out, err, secs = _timed("git add src;" * 900, repo)
+    check("c4_900_identical_adds_fast_and_allowed", rc == 0 and out == "" and err == "" and secs < 4, f"rc={rc} secs={secs:.2f} out={out[:120]!r}")
+    # distinct invocations are capped (50): exhausted -> fail closed under the command-word rule
+    rc, out, err, secs = _timed("".join(f"git add f{idx};" for idx in range(300)) + " git commit -m x", repo)
+    reasons = [e.get("reason") for e in events(repo, "policy_guard_skipped")]
+    check("c4_distinct_invocation_cap_fails_closed", rc == 0 and decision(out)[0] == "deny" and secs < 4 and "invocations" in reasons, f"secs={secs:.2f} reasons={reasons} out={out[:120]!r}")
+    # a merge status probe is shared by the run: a spent merge budget denies like a git error
+    import importlib
+    sys.path.insert(0, str(SCRIPTS))
+    mod = importlib.import_module("craftflow_pretooluse_bash_guard")
+    mod._PASS_STATE["probes"] = 0
+    results = [mod._git_lines(str(repo), "rev-parse", "--git-dir") for _ in range(mod._MAX_PROBES + 1)]
+    check("c4_probe_count_is_capped_and_reports_budget", results[-1] is None and mod._PROBE_STATE["reason"] == "budget" and all(r is not None for r in results[:-1]), f"{results[-2:]}")
+    check("c4_uncounted_probe_bypasses_the_cap", mod._git_lines(str(repo), "rev-parse", "--git-dir", counted=False) is not None)
+    mod._PASS_STATE["probes"] = 0
+
+
+def test_c4_probe_exhaustion_fails_closed():
+    staged = _staged_plan_repo()
+    _many_workflows(staged)
+    rc, out, err, secs = _timed("git add src;" * 600 + " git commit -m x", staged)
+    check("c4_600_adds_then_staged_commit_denied_fast", rc == 0 and decision(out)[0] == "deny" and secs < 4, f"rc={rc} secs={secs:.2f} out={out[:160]!r}")
+    other = make_repo()
+    rel = os.path.relpath(other, staged)
+    rc, out, err, secs = _timed(f"git -C {rel} commit -m y;" * 400 + " git commit -m x", staged)
+    check("c4_400_other_repo_commits_then_staged_commit_denied_fast", rc == 0 and decision(out)[0] == "deny" and secs < 4, f"rc={rc} secs={secs:.2f} out={out[:160]!r}")
+    # in-process: a commit probe that cannot run because the probe COUNT budget is spent is "cannot verify" -> deny, reason probe
+    import contextlib
+    import importlib
+    import io
+    sys.path.insert(0, str(SCRIPTS))
+    mod = importlib.import_module("craftflow_pretooluse_bash_guard")
+    clean = make_repo()
+    inv = {"sub": "commit", "later": ["-m", "x"], "eff": str(clean), "dyn": False, "git_dir": None, "work_tree": None, "reason": ""}
+    saved_env = (os.environ.get("CLAUDE_PROJECT_DIR"), os.environ.get("CLAUDE_PLUGIN_ROOT"))
+    os.environ["CLAUDE_PROJECT_DIR"], os.environ["CLAUDE_PLUGIN_ROOT"] = str(clean), str(PLUGIN_ROOT)
+    try:
+        mod._RUN_CACHE.clear()
+        mod._PASS_STATE["probes"] = mod._MAX_PROBES
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            denied = mod._plan_commit_one(inv, mod.resolve_main_root(clean), "git commit -m x", {})
+        skipped = events(clean, "policy_guard_skipped")
+        check("c4_spent_probe_count_fails_closed_with_reason_probe", denied is True and decision(buf.getvalue())[0] == "deny"
+              and any(e.get("reason") == "probe" and e.get("denied") is True for e in skipped), f"denied={denied} skipped={skipped}")
+    finally:
+        mod._PASS_STATE["probes"] = 0
+        mod._RUN_CACHE.clear()
+        for key, val in zip(("CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT"), saved_env):
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+    # an ordinary probe error (E27) keeps failing open: only a spent TIME budget fails closed
+    repo = make_repo(ignore_plans=False)
+    (repo / "docs" / "plans" / "x.md").write_text("changed\n")
+    git(repo, "add", "-f", "docs/plans/x.md")
+    shim = scratch_dir("p5g-shim-")
+    real = shutil.which("git")
+    (shim / "git").write_text(f'#!/bin/sh\nfor a in "$@"; do if [ "$a" = "diff" ]; then exit 128; fi; done\nexec {real} "$@"\n')
+    (shim / "git").chmod(0o755)
+    rc, out, err = run(BASH_GUARD, bash("git commit -m x", repo), repo, path_prefix=str(shim))
+    check("c4_ordinary_probe_error_still_fails_open", rc == 0 and out == "" and err == "", f"rc={rc} out={out!r} err={err!r}")
+
+
+def test_c4_fail_closed_is_keyed_on_command_words():
+    pad = "echo pad; " * 2000
+    repo = make_repo()
+    body = "line of a commit message\n" * 900
+    for label, cmd in (
+            ("heredoc_doc_writer", "cat > f <<'EOF'\n" + "git commit -m x\ngit add -f docs/plans/x.md\n" * 700 + "EOF\n"),
+            ("python_heredoc", "python3 - <<EOF\nprint('git commit')\n" + "x = 1\n" * 3000 + "EOF\n"),
+            ("diff_then_echo", "git diff; echo '<commit add update-index>'; " + pad),
+            ("prose_in_quotes", "echo \"run git commit later\" # " + "x" * 17000),
+            ("git_diff_only", "git diff " + "x" * 17000),
+            ("comment_mentions", "ls # git commit add " + "x" * 17000)):
+        rc, out, err, secs = _timed(cmd, repo)
+        check(f"c4_big_{label}_allowed", rc == 0 and out == "" and err == "" and len(cmd) > 16384 and secs < 3, f"len={len(cmd)} rc={rc} secs={secs:.2f} out={out[:160]!r}")
+    # a real big commit with a clean index is verified by the staged probe and allowed; with a plan staged it is denied
+    big_commit = "git commit -F - <<'EOF'\n" + "message line\n" * 1500 + "EOF\n"
+    rc, out, err, secs = _timed(big_commit, repo)
+    check("c4_big_commit_clean_index_allowed", rc == 0 and out == "" and len(big_commit) > 16384, f"len={len(big_commit)} out={out[:160]!r}")
+    staged = _staged_plan_repo()
+    rc, out, err, secs = _timed(big_commit, staged)
+    check("c4_big_commit_with_staged_plan_denied", rc == 0 and decision(out)[0] == "deny" and decision(out)[1].startswith("craftflow-policy: plan_commit —"), f"out={out[:200]!r}")
+    # add/stage/update-index cannot be verified by the staged probe: still denied when big
+    rc, out, err, secs = _timed("git add src/x.ts # " + "x" * 17000, repo)
+    check("c4_big_add_still_denied", rc == 0 and decision(out)[0] == "deny", f"out={out[:160]!r}")
+    for lead in ("env FOO=1 git add src/x.ts", "(git add src/x.ts)", "echo hi && git add src/x.ts", "sudo git add src/x.ts", "if true; then git add src/x.ts; fi"):
+        rc, out, err, secs = _timed(lead + " # " + "x" * 17000, repo)
+        check(f"c4_big_command_position_{lead.split()[0].strip('(')}_denied", rc == 0 and decision(out)[0] == "deny", f"lead={lead} out={out[:120]!r}")
+
+
+def test_c4_comments_are_comments():
+    repo = make_repo()
+    _denied("c4_apostrophe_in_comment_does_not_hide_the_next_line", "# don't do this\ngit add -f docs/plans/x.md", repo)
+    _denied("c4_comment_swallowing_next_line_does_not_hide_it", "echo hi # ok\ngit add -f docs/plans/x.md", repo)
+    _denied("c4_trailing_comment_with_quote", "git add -f docs/plans/x.md # it's fine", repo)
+    _allowed("c4_hash_inside_double_quotes_is_not_a_comment", 'echo "a # b"', repo)
+    _allowed("c4_hash_inside_double_quotes_keeps_the_rest", 'echo "a # b"; git add src/x.ts', repo)
+    _denied("c4_hash_in_quoted_pathspec_survives", "git add -f 'a#b' docs/plans/x.md", repo)
+    staged = _staged_plan_repo()
+    _denied("c4_commit_message_with_hash_still_probed", 'git commit -m "x#y"', staged)
+    _allowed("c4_commit_message_with_hash_clean_index", 'git commit -m "x#y"', repo)
+    _denied("c4_mid_word_hash_is_not_a_comment", "git add -f docs/plans/x.md#frag docs/plans/x.md", repo)
+
+
+def test_c4_unparseable_and_heredocs():
+    repo = make_repo()
+    staged = _staged_plan_repo()
+    rc, out, err = run(BASH_GUARD, bash('git commit -m "unterminated', staged), staged)
+    reasons = [e.get("reason") for e in events(staged, "policy_guard_skipped")]
+    check("c4_unbalanced_quote_naming_a_git_write_fails_closed", rc == 0 and decision(out)[0] == "deny" and "unparseable" in reasons, f"out={out[:160]!r} reasons={reasons}")
+    check("c4_unparseable_logged_as_dynamic", len(events(staged, "plan_commit_dynamic_allowed")) >= 1)
+    _allowed("c4_unbalanced_quote_without_git_write_allowed", 'echo "abc', repo)
+    _allowed("c4_heredoc_apostrophe_body_then_clean_commit_is_parsed", "cat > f <<EOF\nit's here\nEOF\ngit commit -m x", repo)
+    _denied("c4_heredoc_apostrophe_body_then_staged_commit_denied", "cat > f <<EOF\nit's here\nEOF\ngit commit -m x", staged)
+    _denied("c4_heredoc_body_does_not_hide_the_next_command", "cat <<'EOF' > f\ngit commit -m body\nEOF\ngit add -f docs/plans/x.md", repo)
+    _denied("c4_line_continuation_joins_words", "git add -f \\\ndocs/plans/x.md", repo)
+    _allowed("c4_heredoc_body_is_not_a_command", "cat <<EOF > f\ngit add -f docs/plans/x.md\nEOF", repo)
+    _denied("c4_unterminated_heredoc_does_not_swallow_the_rest", "echo $((1<<2))\ngit add -f docs/plans/x.md", repo)
+
+
+def test_c4_export_n_and_private_use_characters():
+    managed = make_repo()
+    elsewhere = scratch_dir("p5g-else-")
+    gd = f"{managed}/.git"
+    _allowed("c4_export_n_unexports", f"export GIT_DIR={gd}; export -n GIT_DIR; git add -f docs/plans/x.md", elsewhere, project=managed)
+    _denied("c4_plain_export_still_applies", f"export GIT_DIR={gd}; git add -f docs/plans/x.md", elsewhere, project=managed)
+    rc, out, err = run(BASH_GUARD, bash("echo '' ; git add -f docs/plans/x.md", managed), managed)
+    check("c4_private_use_chars_in_command_fail_closed_for_git_writes", rc == 0 and decision(out)[0] == "deny", f"out={out[:160]!r}")
+    _allowed("c4_private_use_chars_without_git_write_allowed", "echo '' ; ls", managed)
+
+
 def main():
     try:
         for fn in (test_shipped_policy_keys, enterplanmode_denied_by_default, test_plan_commit_table, plan_commit_staged_probe_denies,
@@ -994,7 +1156,9 @@ def main():
                    test_rm3_merge_peels_and_pull_value_options, test_budget_reserve_keeps_the_merge_probe_alive,
                    test_nh1_long_merge_tokens_are_bounded, test_nh2_big_commands_fail_closed_when_they_name_git_writes,
                    test_m2_clean_merge_is_not_denied_by_a_burnt_parse_budget, test_m1_static_exports_resolve_like_env_prefix,
-                   test_m3_status_formats_imply_dry_run, test_group_heads_and_quoted_operators):
+                   test_m3_status_formats_imply_dry_run, test_group_heads_and_quoted_operators,
+                   test_c4_per_run_work_is_bounded, test_c4_probe_exhaustion_fails_closed, test_c4_fail_closed_is_keyed_on_command_words,
+                   test_c4_comments_are_comments, test_c4_unparseable_and_heredocs, test_c4_export_n_and_private_use_characters):
             print(fn.__name__)
             try:
                 fn()

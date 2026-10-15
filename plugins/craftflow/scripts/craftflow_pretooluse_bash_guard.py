@@ -1875,10 +1875,16 @@ def is_wf_branch_merge(args: list, wf_branches, pull: bool = False) -> str:
     return ""
 
 
-def _git_lines(top: str, *args, reserve: float = 0.0):
+def _git_lines(top: str, *args, reserve: float = 0.0, counted: bool = True):
     """Output lines of a bounded git probe, or None when it errored, timed out, git is missing, or the shared per-run probe
-    budget (minus `reserve`) is spent (`_PROBE_STATE["reason"]` then says `budget` instead of `error`)."""
+    budget (minus `reserve`) or the per-run probe count is spent (`_PROBE_STATE["reason"]` then says `budget` instead of
+    `error`). `counted=False` (the merge status probe, which has its own deadline) skips the count."""
     limit = _PROBE_TIMEOUT_SECONDS
+    if counted:
+        _PASS_STATE["probes"] += 1
+        if _PASS_STATE["probes"] > _MAX_PROBES:
+            _PROBE_STATE["reason"] = "budget"
+            return None
     if _PROBE_DEADLINE[0] is not None:
         limit = min(limit, _PROBE_DEADLINE[0] - time.monotonic() - reserve)
         if limit <= 0:
@@ -2010,10 +2016,10 @@ def _git_invocations(command: str, cwd: str, depth: int = 0, dynamic_in: bool = 
                         found.append(_marker("dynamic exported GIT_DIR/GIT_WORK_TREE", here))
                     else:
                         shell_env[key] = value
-        elif name == "unset":
+        elif name == "unset" or (name == "export" and any(tok.startswith("-") and "n" in tok[1:] for tok in rest)):
             if not isolated:
                 for tok in rest:
-                    shell_env.pop(tok, None)
+                    shell_env.pop(tok.partition("=")[0], None)
         elif name in ("cd", "pushd", "popd"):
             targets = [tok for tok in rest if tok == "-" or not tok.startswith("-")]
             if isolated:
@@ -2040,23 +2046,31 @@ def _git_invocations(command: str, cwd: str, depth: int = 0, dynamic_in: bool = 
 
 
 def _live_artifact_paths(data: dict, main_root) -> set:
-    """Top-relative `plan_file` / `design_file` of the live workflow artifact (anchored to main_root, never bare)."""
+    """Top-relative `plan_file` / `design_file` of the live workflow artifact (anchored to main_root, never bare). Cached per run."""
+    key = ("artifact", str(main_root))
+    if key in _RUN_CACHE:
+        return _RUN_CACHE[key]
     try:
         payload = latest_live_workflow_payload(data.get("session_id"), project_root=main_root)
     except Exception as exc:  # unreadable artifacts must not break the guard; log and treat as none
         log_event("plugin_pretooluse_bash_guard", {"event": "pretool_guard_parse_error", "command_name": "plan_commit_artifact_lookup", "error": repr(exc)})
-        return set()
+        payload = {}
     paths = set()
-    for key in ("plan_file", "design_file"):
-        value = payload.get(key)
+    for field in ("plan_file", "design_file"):
+        value = payload.get(field)
         if isinstance(value, str) and value:
             rel = os.path.relpath(value, str(main_root)) if os.path.isabs(value) else os.path.normpath(value)
             if not (rel == ".." or rel.startswith("../")):
                 paths.add(rel.replace(os.sep, "/"))
+    _RUN_CACHE[key] = paths
     return paths
 
 
 def _wf_branches(main_root) -> set:
+    """`worktree_branch` of every workflow artifact under main_root. The scan runs once per hook run."""
+    key = ("branches", str(main_root))
+    if key in _RUN_CACHE:
+        return _RUN_CACHE[key]
     branches = set()
     for artifact in sorted((Path(main_root) / ".craftflow" / "state" / "workflows").glob("*.json")):
         try:
@@ -2065,6 +2079,7 @@ def _wf_branches(main_root) -> set:
             continue
         if isinstance(branch, str) and branch:
             branches.add(branch)
+    _RUN_CACHE[key] = branches
     return branches
 
 
@@ -2158,15 +2173,19 @@ def _explode_punct(token: str) -> list:
 
 def _split_units(command: str) -> list:
     """[(tokens, operator_before, operator_after)] like `split_subcommands`, but keeping the control operators so a `cd`
-    inside a pipeline or background segment (a subshell) can be told apart from one that persists. Operators inside quotes are
-    masked first (see `_mask_quoted`), so tokens come back MASKED: only `_resolve_unit` unmasks them. Stops at the probe
-    deadline and marks the pass exhausted."""
+    inside a pipeline or background segment (a subshell) can be told apart from one that persists. Tokens come back MASKED
+    (see `_scan_shell`); only `_resolve_unit` unmasks them. Stops at the probe deadline and marks the pass exhausted. An
+    unbalanced quote, or no units at all, in a command whose text names a git write at a command position marks the pass
+    exhausted as `unparseable` (the caller then fails closed)."""
     try:
-        lexer = shlex.shlex(_mask_quoted(command), posix=True, punctuation_chars="();<>|&\n")
+        lexer = shlex.shlex(_scan_shell(command)[0], posix=True, punctuation_chars="();<>|&\n")
         lexer.whitespace_split = True
         lexer.whitespace = lexer.whitespace.replace("\n", "")
+        lexer.commenters = ""  # comments were already removed by _scan_shell; shlex must not drop a mid-word `#`
         tokens = list(lexer)
     except ValueError:
+        if _git_write_words(command):
+            _PASS_STATE["exhausted"] = _PASS_STATE["exhausted"] or "unparseable"
         return []
     units, current, before = [], [], None
     for token in [piece for raw in tokens for piece in _explode_punct(raw)]:
@@ -2181,6 +2200,8 @@ def _split_units(command: str) -> list:
             current.append(token)
     if current:
         units.append((current, before, None))
+    if not units and _git_write_words(command):
+        _PASS_STATE["exhausted"] = _PASS_STATE["exhausted"] or "unparseable"
     return units
 
 
@@ -2285,18 +2306,22 @@ def _plan_commit_one(inv, resolved, command, data) -> bool:
     if dynamic:
         log_event("plan_commit_dynamic_allowed", {"command": command[:_LOG_COMMAND_CHARS], "reason": "dynamic pathspec"})
     probe_paths = []
+    budget_spent = False
     if not violations and sub == "commit":
         for args in ([("--cached",)] + ([()] if (all_flag or explicit) else [])):
             listed = _git_lines(top_s, "diff", "--name-only", "-z", "--no-renames", *args)
             if listed is None:
                 log_event("plan_commit_probe_error", {"command": command[:_LOG_COMMAND_CHARS], "probe": " ".join(args) or "worktree",
                                                       "reason": _PROBE_STATE["reason"]})
+                budget_spent = budget_spent or _PROBE_STATE["reason"] == "budget"
                 continue
             probe_paths.extend(rel for rel in listed if _rel_protected(rel, False, False, extra))
     hits = violations + probe_paths
     if not hits:
-        return False
-    policy, status, _errors = load_policy()
+        # A commit probe that could not run because the time/count budget was spent cannot be verified: fail closed. An ordinary
+        # probe error (git missing, not a repo, exit 128) keeps failing open with its log line.
+        return _unverifiable_deny(command, "probe", True) if budget_spent else False
+    policy, status = _policy_cached()
     value = policy_value(policy, "plan_commit")
     if value == "allow" and status != "invalid":
         return False
@@ -2316,17 +2341,22 @@ def _merge_one(inv, resolved, command) -> bool:
     branch = is_wf_branch_merge(inv["later"], _wf_branches(main_root), pull=inv["sub"] == "pull")
     if not branch:
         return False
-    policy, status, _errors = load_policy()
+    policy, status = _policy_cached()
     if policy_value(policy, "worktree_merge.require_clean_tree") is not True:
         return False
-    # The status probe gets its own fresh deadline: a parse or commit-probe budget already spent must not turn a clean tree into
-    # a deny (`dirty is None`). A genuine git error or timeout still denies.
-    saved_deadline = _PROBE_DEADLINE[0]
-    _PROBE_DEADLINE[0] = time.monotonic() + _PROBE_TIMEOUT_SECONDS
-    try:
-        dirty = _git_lines(str(top), "status", "--porcelain", "-z")
-    finally:
-        _PROBE_DEADLINE[0] = saved_deadline
+    # ONE status-probe budget (its own 2 s deadline, separate from the parse and commit-probe budget) and one result per
+    # repository for the whole run. A genuine git error, or a spent merge budget, denies.
+    key = ("dirty", str(top))
+    if key not in _RUN_CACHE:
+        if "merge_deadline" not in _RUN_CACHE:
+            _RUN_CACHE["merge_deadline"] = time.monotonic() + _PROBE_TIMEOUT_SECONDS
+        saved_deadline = _PROBE_DEADLINE[0]
+        _PROBE_DEADLINE[0] = _RUN_CACHE["merge_deadline"]
+        try:
+            _RUN_CACHE[key] = _git_lines(str(top), "status", "--porcelain", "-z", counted=False)
+        finally:
+            _PROBE_DEADLINE[0] = saved_deadline
+    dirty = _RUN_CACHE[key]
     if dirty is not None and not dirty:
         return False
     log_event("worktree_merge_dirty_denied", {"policy_key": "worktree_merge.require_clean_tree", "policy_status": status,
@@ -2365,7 +2395,7 @@ _MAX_CWD_CHARS = 4096
 _MAX_REF_TOKEN_CHARS = 256  # a branch name is never longer; longer tokens are not workflow branches (and are not regex-scanned)
 
 
-_PASS_STATE = {"exhausted": "", "units": 0}
+_PASS_STATE = {"exhausted": "", "units": 0, "probes": 0, "mask": True}
 
 
 _MASKED_CHARS = "();<>|&\n"
@@ -2384,42 +2414,19 @@ _FAIL_CLOSED_MERGE_WORDS = frozenset(("merge", "pull"))
 
 
 def _um(text: str) -> str:
-    """Restore the operator characters `_mask_quoted` hid inside quotes."""
-    return text.translate(_UNMASK_TABLE)
+    """Restore the operator characters `_scan_shell` hid inside quotes (a no-op when masking was off for this run)."""
+    return text.translate(_UNMASK_TABLE) if _PASS_STATE["mask"] else text
 
 
-def _mask_quoted(command: str) -> str:
-    """Replace every shell operator character that sits inside quotes (or behind a backslash) with a private-use character, so
-    the tokenizer cannot mistake a quoted `;` `&&` `)` for an operator. `_um` undoes it. One linear pass. A command that already
-    contains those private-use characters is returned unchanged (nothing is masked, nothing would be restored wrongly)."""
-    if any(0xE000 <= ord(ch) <= 0xE000 + len(_MASKED_CHARS) for ch in command):
-        return command
-    out, quote, pos, size = [], "", 0, len(command)
-    while pos < size:
-        ch = command[pos]
-        if ch == "\\" and quote != "'" and pos + 1 < size:
-            out.append(ch)
-            out.append(command[pos + 1].translate(_MASK_TABLE))
-            pos += 2
-            continue
-        if quote:
-            if ch == quote:
-                quote = ""
-                out.append(ch)
-            else:
-                out.append(ch.translate(_MASK_TABLE))
-        else:
-            if ch in "'\"":
-                quote = ch
-            out.append(ch)
-        pos += 1
-    return "".join(out)
 
 
 def _exported_git_vars(name: str, rest: list) -> list:
     """[(KEY, value or None)] for the GIT_DIR / GIT_WORK_TREE words of `export ...` / `declare -x ...` / `typeset -x ...`
-    (None: no value given). `declare` / `typeset` without -x do not export, so they yield nothing."""
-    if name != "export" and not any(tok.startswith("-") and "x" in tok[1:] for tok in rest):
+    (None: no value given). `declare` / `typeset` without -x do not export, and `export -n` un-exports: both yield nothing."""
+    flags = [tok for tok in rest if tok.startswith("-") and "=" not in tok]
+    if name != "export" and not any("x" in tok[1:] for tok in flags):
+        return []
+    if name == "export" and any("n" in tok[1:] for tok in flags):
         return []
     out = []
     for tok in rest:
@@ -2429,24 +2436,184 @@ def _exported_git_vars(name: str, rest: list) -> list:
     return out
 
 
-def _fail_closed(command: str, cwd: str, reason: str) -> bool:
-    """The policy pass was skipped or exhausted (`size`, `units`, `path`, `time`). In a managed project, a command whose text
-    names `git` followed by add/stage/commit/update-index (or merge/pull together with a workflow branch name) cannot be
-    verified, so it is DENIED (`plan_commit` allow turns this off, like every plan_commit deny). Anything else stays allowed.
-    Always logs `policy_guard_skipped` (with `denied`) in a managed project. True when a deny was emitted."""
-    _top, main_root, managed = resolve_main_root(cwd)
+def _fail_closed(command: str, cwd: str, reason: str, data: dict) -> bool:
+    """The policy pass was skipped or exhausted (`size`, `units`, `path`, `time`, `invocations`, `unparseable`, `unmaskable`). In a
+    managed project, a command that has `git` at a COMMAND position followed by add/stage/commit/update-index (merge/pull only
+    together with a workflow branch name in the text) cannot be verified, so it is DENIED (`plan_commit` allow turns this off).
+    Prose, quoted strings, comments and heredoc bodies never count. For `size` alone, a command whose only git write is `commit`
+    is verified by one bounded `git diff --cached` probe and denied only when a protected path is staged (or the probe fails).
+    Always logs `policy_guard_skipped` in a managed project. True when a deny was emitted."""
+    top, main_root, managed = resolve_main_root(cwd)
     if not managed:
         return False
-    denied = False
-    first = re.search(r"\bgit\b", command)
-    if first:
-        words = set(re.findall(r"\b(add|stage|commit|merge|pull|update-index)\b", command[first.end():]))
-        hit = bool(words & _FAIL_CLOSED_PLAN_WORDS)
-        if not hit and words & _FAIL_CLOSED_MERGE_WORDS:
-            hit = any(branch in command for branch in _wf_branches(main_root))
-        if hit:
-            policy, status, _errors = load_policy()
-            denied = not (policy_value(policy, "plan_commit") == "allow" and status != "invalid")
+    if reason in ("unparseable", "unmaskable"):
+        log_event("plan_commit_dynamic_allowed", {"command": command[:_LOG_COMMAND_CHARS], "reason": f"{reason} command"})
+    words = _git_write_words(command)
+    plan_words = words & _FAIL_CLOSED_PLAN_WORDS
+    hit = bool(plan_words)
+    if not hit and words & _FAIL_CLOSED_MERGE_WORDS:
+        hit = any(branch in command for branch in _wf_branches(main_root))
+    if hit and reason == "size" and plan_words == {"commit"}:
+        saved_deadline = _PROBE_DEADLINE[0]
+        _PROBE_DEADLINE[0] = time.monotonic() + _PROBE_TIMEOUT_SECONDS
+        try:
+            staged = _git_lines(str(top), "diff", "--cached", "--name-only", "-z", "--no-renames", counted=False)
+        finally:
+            _PROBE_DEADLINE[0] = saved_deadline
+        if staged is not None:
+            extra = _live_artifact_paths(data, main_root)
+            hit = any(_rel_protected(rel, False, False, extra) for rel in staged)
+    return _unverifiable_deny(command, reason, hit)
+
+
+_MAX_WRITE_INVOCATIONS = 50  # distinct git-write invocations one run will process; more is "exhausted" (fail closed)
+
+
+_MAX_PROBES = 20  # git probes (commit diff probes) one run may start
+
+
+_RUN_CACHE: dict = {}  # per hook run: policy, workflow branches, live artifact paths, merge probe deadline and results
+
+
+def _scan_shell(command: str) -> tuple:
+    """One linear pass over the raw command text. Returns (lex_text, scan_text).
+
+    lex_text feeds the tokenizer: shell operator characters inside quotes or behind a backslash are masked with private-use
+    characters (`_um` undoes it), comments (an unquoted `#` at a word start, to end of line) are dropped, `\\<newline>` joins
+    lines, and heredoc redirects plus their bodies are removed (a body is only dropped when its terminator line exists, so an
+    arithmetic `1<<2` cannot swallow the rest of the command).
+
+    scan_text feeds the cheap command-word scan: quoted contents, comments and heredoc bodies are blanked, operators stay."""
+    mask = _PASS_STATE["mask"]
+    lex: list = []
+    scan: list = []
+    size, pos, quote, word_start, pending = len(command), 0, "", True, []
+
+    def hide(ch: str) -> str:
+        return ch.translate(_MASK_TABLE) if mask else ch
+
+    while pos < size:
+        ch = command[pos]
+        if quote:
+            if ch == "\\" and quote == '"' and pos + 1 < size:
+                lex.append(ch)
+                lex.append(hide(command[pos + 1]))
+                scan.append("  ")
+                pos += 2
+                continue
+            if ch == quote:
+                quote = ""
+                lex.append(ch)
+                scan.append(ch)
+            else:
+                lex.append(hide(ch))
+                scan.append(" ")
+            pos += 1
+            word_start = False
+            continue
+        if ch == "\\" and pos + 1 < size:
+            nxt = command[pos + 1]
+            if nxt == "\n":
+                scan.append(" ")
+            else:
+                lex.append(ch)
+                lex.append(hide(nxt))
+                scan.append("  ")
+            pos += 2
+            word_start = False
+            continue
+        if ch in "'\"":
+            quote = ch
+            lex.append(ch)
+            scan.append(ch)
+            pos += 1
+            word_start = False
+            continue
+        if ch == "#" and word_start:
+            while pos < size and command[pos] != "\n":
+                pos += 1
+            continue
+        if ch == "<" and command.startswith("<<", pos) and not command.startswith("<<<", pos):
+            probe, tabs = pos + 2, False
+            if probe < size and command[probe] == "-":
+                tabs, probe = True, probe + 1
+            while probe < size and command[probe] in " \t":
+                probe += 1
+            if probe < size and command[probe] in "'\"":
+                close = command.find(command[probe], probe + 1)
+                close = size if close < 0 else close
+                delim, probe = command[probe + 1:close], min(close + 1, size)
+            else:
+                close = probe
+                while close < size and command[close] not in " \t\n;&|()<>":
+                    close += 1
+                delim, probe = command[probe:close].replace("\\", ""), close
+            if delim and not delim.isdigit():
+                pending.append((delim, tabs))
+                pos, word_start = probe, True
+                continue
+        if ch == "\n":
+            lex.append(ch)
+            scan.append(ch)
+            pos += 1
+            while pending:
+                delim, tabs = pending.pop(0)
+                scan_pos = pos
+                while scan_pos < size:
+                    end = command.find("\n", scan_pos)
+                    line = command[scan_pos: size if end < 0 else end]
+                    scan_pos = size if end < 0 else end + 1
+                    if (line.lstrip("\t") if tabs else line) == delim:
+                        pos = scan_pos
+                        break
+            word_start = True
+            continue
+        lex.append(ch)
+        scan.append(ch)
+        pos += 1
+        word_start = ch.isspace() or ch in ";&|()<>"
+    return "".join(lex), "".join(scan)
+
+
+def _git_write_words(command: str) -> set:
+    """Pure, linear. The watched subcommand words (add stage commit merge pull update-index) that follow a `git` standing at a
+    COMMAND position (start of a segment, after an operator, group word or wrapper), judged on text with quoted strings,
+    comments and heredoc bodies blanked. Prose that merely mentions `git commit` yields nothing."""
+    found: set = set()
+    for segment in re.split(r"[;&|\n(){}]+", _scan_shell(command)[1]):
+        words = segment.split()
+        start = 0
+        while start < len(words) and words[start] in _GROUP_TOKENS:
+            start += 1
+        words = words[start:]
+        if not words:
+            continue
+        first = os.path.basename(words[0])
+        if first == "git":
+            git_at = 0
+        elif first in _WRAPPER_VALUE_OPTS or "=" in words[0]:
+            git_at = next((pos for pos, word in enumerate(words[:12]) if os.path.basename(word) == "git"), -1)
+            if git_at < 0:
+                continue
+        else:
+            continue
+        found.update(word for word in words[git_at + 1:] if word in _WATCHED_SUBCOMMANDS)
+    return found
+
+
+def _policy_cached() -> tuple:
+    """(policy, status), loaded once per hook run."""
+    if "policy" not in _RUN_CACHE:
+        policy, status, _errors = load_policy()
+        _RUN_CACHE["policy"] = (policy, status)
+    return _RUN_CACHE["policy"]
+
+
+def _unverifiable_deny(command: str, reason: str, hit: bool) -> bool:
+    """Log `policy_guard_skipped` and, when `hit`, DENY (`plan_commit` allow turns the deny off; an invalid policy keeps it).
+    True when a deny was emitted."""
+    policy, status = _policy_cached()
+    denied = hit and not (policy_value(policy, "plan_commit") == "allow" and status != "invalid")
     log_event("policy_guard_skipped", {"reason": reason, "denied": denied, "chars": len(command), "command": command[:_LOG_COMMAND_CHARS]})
     if denied:
         prefix = "craftflow-policy: plan_commit —" if status != "invalid" else "craftflow-policy: policy-invalid —"
@@ -2488,35 +2655,52 @@ def _merge_check(inv, command, cache) -> bool:
 
 def _policy_guards(command: str, cwd: str, data: dict) -> bool:
     """True when a policy deny was emitted. Claude Code only: Cursor payloads return at once (DD-12). Above the size cap, past
-    the unit / path / time limits, the pass is exhausted and fails CLOSED for commands that name git writes (`_fail_closed`);
-    constructs it merely cannot follow fail open with a log line."""
+    the unit / invocation / path / time limits, or when the text cannot be parsed or masked, the pass is exhausted and fails
+    CLOSED for commands that name a git write at a command position (`_fail_closed`); constructs it merely cannot follow fail
+    open with a log line. Per-run work is bounded: distinct git-write invocations, probes, and the shared deadline."""
     if is_cursor_host():
         return False
-    _PASS_STATE["exhausted"], _PASS_STATE["units"] = "", 0
+    _PASS_STATE.update({"exhausted": "", "units": 0, "probes": 0, "mask": True})
+    _RUN_CACHE.clear()
     if len(command) > _POLICY_MAX_COMMAND_CHARS:
-        return _fail_closed(command, cwd, "size")
+        return _fail_closed(command, cwd, "size", data)
+    if any(0xE000 <= ord(ch) <= 0xE000 + len(_MASKED_CHARS) for ch in command):
+        _PASS_STATE["mask"] = False
+        return _fail_closed(command, cwd, "unmaskable", data)
     if not ("git" in command or "$" in command or "`" in command):
         return False
     _PROBE_DEADLINE[0] = time.monotonic() + _PROBE_BUDGET_SECONDS
     cache: dict = {}
     parsed_watched = False
+    seen: set = set()
     for inv in _git_invocations(command, cwd):
         sub = inv["sub"]
         if sub == "?skipped":
             continue
+        if _over_deadline():
+            _PASS_STATE["exhausted"] = _PASS_STATE["exhausted"] or "time"
+            break
         if sub == "?dynamic":
             if _resolve_cached(cache, inv["eff"])[2]:
                 log_event("plan_commit_dynamic_allowed", {"command": command[:_LOG_COMMAND_CHARS], "reason": inv["reason"]})
-        elif sub in ("add", "stage", "commit", "update-index"):
-            parsed_watched = True
-            if _plan_commit_check(inv, command, data, cache):
-                return True
-        elif sub in ("merge", "pull"):
-            parsed_watched = True
+            continue
+        if sub not in ("add", "stage", "commit", "update-index", "merge", "pull"):
+            continue
+        parsed_watched = True
+        key = (sub, tuple(inv["later"]), inv["eff"], inv["git_dir"], inv["work_tree"], inv["dyn"])
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(seen) > _MAX_WRITE_INVOCATIONS:
+            _PASS_STATE["exhausted"] = _PASS_STATE["exhausted"] or "invocations"
+            break
+        if sub in ("merge", "pull"):
             if not inv["dyn"] and _merge_check(inv, command, cache):
                 return True
+        elif _plan_commit_check(inv, command, data, cache):
+            return True
     if _PASS_STATE["exhausted"]:
-        return _fail_closed(command, cwd, _PASS_STATE["exhausted"])
+        return _fail_closed(command, cwd, _PASS_STATE["exhausted"], data)
     reason = _opaque_reason(command, parsed_watched)
     if reason and _resolve_cached(cache, cwd)[2]:
         log_event("plan_commit_dynamic_allowed", {"command": command[:_LOG_COMMAND_CHARS], "reason": reason})

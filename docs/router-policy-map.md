@@ -214,8 +214,11 @@ command names, `-C`/`cd`/`--git-dir`/`--work-tree` values or `sh -c` strings, `c
 here-documents and here-strings, `python3 -c`-style interpreter strings, command substitution that names git, `xargs` / `find -exec`
 pathspecs supplied elsewhere, and an unwrapper that gives up past its depth or iteration cap (each logged as
 `plan_commit_dynamic_allowed` with its reason). The pass is bounded (16 KB of command text, 2000 units, a 4 KB cwd, 5 s); when it
-is skipped or exhausted, a command whose text names `git` followed by add/stage/commit/update-index (or merge/pull with a workflow
-branch name) is DENIED in a managed project (fail closed, `policy_guard_skipped` with `denied: true`), and any other command is allowed.
+is skipped or exhausted (also: 50 distinct git-write invocations, a spent commit-probe budget, an unparseable or unmaskable
+command), a command with `git` at a command position followed by add/stage/commit/update-index (or merge/pull with a workflow
+branch name) is DENIED in a managed project (fail closed, `policy_guard_skipped` with `denied: true`; prose, quoted strings, comments
+and heredoc bodies do not count), and any other command is allowed. Still accepted gaps: `case` statements, more than 8 nested
+wrapper levels, numeric-delimiter `<<` forms.
 
 ```
 | f41d16afa416 | plan_commit | craftflow_pretooluse_bash_guard.py::plan_pathspec_violations | test_policy_guards.py::plan_commit_staged_probe_denies | deleted | false | <Name (YYYY-MM-DD)> | |

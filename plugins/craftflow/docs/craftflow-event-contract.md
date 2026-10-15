@@ -410,10 +410,15 @@ The permit record the pretooluse guard already logs for a finalize-permitted mem
 
 - Emitter: `scripts/craftflow_pretooluse_bash_guard.py` (`_policy_guards`).
 - Trigger: the policy pass was skipped or exhausted: `reason: "size"` (over 16 KB of command text), `"units"` (over 2000 command
-  units), `"path"` (a tracked cwd over 4 KB) or `"time"` (the shared 5 s deadline passed while parsing). Logged only in a managed project.
-- Outcome: when the text names `git` followed by add/stage/commit/update-index (or merge/pull together with a workflow branch name),
-  the command is DENIED (`denied: true`, reason prefix `craftflow-policy: plan_commit —`, "split it into smaller commands"); `plan_commit: allow`,
-  Cursor payloads and unmanaged projects are not denied. Any other command is allowed (`denied: false`).
+  units), `"path"` (a tracked cwd over 4 KB), `"time"` (the shared 5 s deadline passed), `"invocations"` (over 50 distinct git-write
+  invocations), `"probe"` (a commit probe could not run because the time or count budget was spent), `"unparseable"` (unbalanced
+  quote or no parsable unit in a command that names a git write) or `"unmaskable"` (the text already contains U+E000-E007).
+  Logged only in a managed project.
+- Outcome: when the text has `git` at a COMMAND position followed by add/stage/commit/update-index (or merge/pull together with a
+  workflow branch name; quoted strings, comments and heredoc bodies never count), the command is DENIED (`denied: true`, reason prefix
+  `craftflow-policy: plan_commit —`, "split it into smaller commands"); `plan_commit: allow`, Cursor payloads and unmanaged projects are
+  not denied. For `size` alone, a command whose only git write is `commit` is verified by one bounded `git diff --cached` probe and
+  denied only when a protected path is staged (or the probe fails). Any other command is allowed (`denied: false`).
 - Payload: `reason`, `denied`, `chars` and `command` (capped at 300 characters).
 
 ### Log event: `worktree_merge_dirty_denied`
