@@ -51,6 +51,7 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parent
 STALENESS_SCRIPT = SCRIPTS_DIR / "craftflow_worktree_lock_staleness.py"
 COPY_FALLBACK_SCRIPT = SCRIPTS_DIR / "craftflow_worktree_copy_fallback.py"
+FINALIZE_SCRIPT = SCRIPTS_DIR / "craftflow_worktree_finalize.py"
 
 
 def run(cmd, cwd) -> subprocess.CompletedProcess:
@@ -1129,6 +1130,67 @@ def scenario_copy_fallback_untracked_top_level_directory() -> None:
         )
 
 
+def _finalize_scene(tmp: str):
+    """A scratch repo with one auto_created worktree and its workflow artifact, for the finalize end-to-end scenarios."""
+    root = Path(tmp).resolve() / "repo"
+    init_repo(root)
+    (root / ".gitignore").write_text(".claude/\n.craftflow/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-q", "-m", "ignore state")
+    wf, branch = "wf-e2e-20261016-000000-0a1b2c3d", "wf-e2e-0a1b2c3d"
+    worktree_path = root / ".claude" / "worktrees" / "e2e-0a1b2c3d"
+    result = git(root, "worktree", "add", str(worktree_path), "-b", branch)
+    require(result.returncode == 0, f"finalize_end_to_end: worktree add failed: {result.stderr}")
+    artifact = root / ".craftflow" / "state" / "workflows" / f"{wf}.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(json.dumps({"workflow_uuid": wf, "worktree_mode": "auto_created", "worktree_path": str(worktree_path),
+                                    "worktree_branch": branch, "pending_gate": None}))
+    return root, wf, branch, worktree_path, artifact
+
+
+def _run_finalize(root: Path, wf: str) -> dict:
+    proc = subprocess.run([sys.executable, str(FINALIZE_SCRIPT), "--wf", wf, "--project-root", str(root)], capture_output=True, text=True)
+    require(proc.returncode == 0, f"finalize exited {proc.returncode}: {proc.stderr} {proc.stdout}")
+    lines = proc.stdout.splitlines()
+    require(len(lines) == 1, f"finalize must print exactly one JSON line, got {lines!r}")
+    return json.loads(lines[0])
+
+
+def scenario_finalize_end_to_end_merge() -> None:
+    """The composed script, default policy, real repo: lock -> clean tree -> real merge -> cleanup -> merged_and_removed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root, wf, branch, worktree_path, artifact = _finalize_scene(tmp)
+        (worktree_path / "feature.txt").write_text("from the worktree\n")
+        git(worktree_path, "add", "feature.txt")
+        git(worktree_path, "commit", "-q", "-m", "feature")
+
+        out = _run_finalize(root, wf)
+
+        require(out["outcome"] == "merged_and_removed" and out["pending_gate"] is None, f"finalize_end_to_end_merge: got {out}")
+        require((root / "feature.txt").read_text() == "from the worktree\n", "finalize_end_to_end_merge: merged content must land in the main tree")
+        require(not worktree_path.exists(), "finalize_end_to_end_merge: worktree must be removed")
+        require(git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}").returncode != 0, "finalize_end_to_end_merge: branch must be deleted")
+        require(not (root / ".claude" / "worktrees" / ".merge.lock").exists(), "finalize_end_to_end_merge: lock must be released")
+        require(json.loads(artifact.read_text())["worktree_mode"] == "merged_and_removed", "finalize_end_to_end_merge: artifact must record the merge")
+
+
+def scenario_finalize_end_to_end_copy_fallback() -> None:
+    """Uncommitted worktree edits: `git merge` says "Already up to date", the copy-fallback script lands them, cleanup follows."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root, wf, branch, worktree_path, artifact = _finalize_scene(tmp)
+        (worktree_path / "uncommitted.txt").write_text("never committed\n")
+        (worktree_path / "README.md").write_text("edited, never committed\n")
+
+        out = _run_finalize(root, wf)
+
+        require(out["outcome"] == "merged_and_removed", f"finalize_end_to_end_copy_fallback: got {out}")
+        require((root / "uncommitted.txt").read_text() == "never committed\n" and (root / "README.md").read_text() == "edited, never committed\n",
+                "finalize_end_to_end_copy_fallback: the uncommitted worktree changes must land in the main tree")
+        require(not worktree_path.exists(), "finalize_end_to_end_copy_fallback: worktree must be removed")
+        require(len(git(root, "status", "--porcelain").stdout.splitlines()) == 2, "finalize_end_to_end_copy_fallback: the copy must stay uncommitted")
+        require(not (root / ".claude" / "worktrees" / ".merge.lock").exists(), "finalize_end_to_end_copy_fallback: lock must be released")
+
+
 SCENARIOS = {
     # Guard-sequence properties (P1/P3)
     "dirty_main_tree": scenario_dirty_main_tree,
@@ -1161,11 +1223,14 @@ SCENARIOS = {
     "copy_fallback_absolute_symlink_rewritten": scenario_copy_fallback_absolute_symlink_rewritten,
     "copy_fallback_chained_symlink_preserved": scenario_copy_fallback_chained_symlink_preserved,
     "copy_fallback_untracked_top_level_directory": scenario_copy_fallback_untracked_top_level_directory,
+    # craftflow_worktree_finalize.py composing both scripts end to end (P7)
+    "finalize_end_to_end_merge": scenario_finalize_end_to_end_merge,
+    "finalize_end_to_end_copy_fallback": scenario_finalize_end_to_end_copy_fallback,
 }
 
 
 def main() -> int:
-    for path in (STALENESS_SCRIPT, COPY_FALLBACK_SCRIPT):
+    for path in (STALENESS_SCRIPT, COPY_FALLBACK_SCRIPT, FINALIZE_SCRIPT):
         if not path.exists():
             print(f"FAIL: required guard script not found: {path}", file=sys.stderr)
             return 1

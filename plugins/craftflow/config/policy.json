@@ -6,5 +6,11 @@
   "doubt_cycles_max": 3,
   "fix_verify_cycles_max": 3,
   "plan_review_passes_max": 2,
+  "worktree_merge": {
+    "require_clean_tree": true,
+    "lock_max_attempts": 9,
+    "lock_sleep_seconds": 5,
+    "copy_fallback_on_up_to_date": true
+  },
   "$comment": "craftflow gate policy; values mirror router prose (ADR-0073)"
 }

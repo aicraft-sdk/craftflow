@@ -210,6 +210,8 @@ Excluded tests. `tests/fixtures/router_test_enumerate.py` flags a test when its 
 - Not listed: fx::test_gate_check.py::test_doubt_grid — runs `craftflow_gate_check.py` against scratch artifacts; `SKILL.md` appears only in a progress line, so no router prose is asserted.
 - Not listed: fx::test_gate_check.py::test_fix_verify_grid — runs `craftflow_gate_check.py` against scratch artifacts; `SKILL.md` appears only in a progress line, so no router prose is asserted.
 - Not listed: fx::test_gate_check.py::test_b4_differential_against_baseline_prose — models the BASELINE_SHA verdict bullets as in-memory action sets and compares them with `craftflow_gate_check.py` output; it reads no router file.
+- Not listed: fx::test_worktree_finalize.py::test_script_hygiene — scans the finalize script's own string literals for router paths (PP-2) and its policy_value calls; it reads no router file.
+- Not listed: fx::test_worktree_finalize.py::test_exit_criteria_dark_and_policy_shipped — P7's dark-state exit criterion (SKILL.md must not name the finalize script yet) and the shipped `worktree_merge` policy; the absence check is retargeted by P8 when the router starts calling the script, and asserts no runtime router prose.
 
 
 Failure messages of the corpus-wide tests still say "SKILL.md missing ..." because rewording `fail(name, ...)` lines would break the P1 assertion-count proof; the Kind column, not the message, says what a test reads.

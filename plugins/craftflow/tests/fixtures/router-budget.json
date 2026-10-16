@@ -1,14 +1,15 @@
 {
   "baseline_ref": "0439c33932463d257b881ce50f136ab7661c0a39",
-  "measured_at_sha": "02c3fd56789c632958ab2a1e7d7958fd9971ef89",
-  "last_phase": "P6",
+  "measured_at_sha": "69ddbf351c5a509f3a8003e3817ce9bd6f29aeb0",
+  "last_phase": "P7",
   "merged_phases": [
     "P2",
     "P2C",
     "P3",
     "P4",
     "P5",
-    "P6"
+    "P6",
+    "P7"
   ],
   "conditions": {
     "difference_17": true,

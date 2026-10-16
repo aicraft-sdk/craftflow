@@ -397,9 +397,9 @@ def test_merge_guard():
     (shim / "git").chmod(0o755)
     rc, out, _ = run(BASH_GUARD, bash("git merge wf-x-abc", repo), repo, path_prefix=str(shim))
     check("worktree_merge_status_error_denied", rc == 0 and decision(out)[0] == "deny", f"out={out!r}")
-    # the shipped policy.json has no worktree_merge key in P5: the default (true) applies
+    # P7 ships worktree_merge (all four keys, at their defaults); the guard still reads require_clean_tree, and an absent key still falls back to true (below)
     shipped = json.loads(POLICY_FILE.read_text())
-    check("worktree_merge_reads_default_when_key_absent", "worktree_merge" not in shipped, f"shipped keys={sorted(shipped)}")
+    check("worktree_merge_shipped_policy_equals_default", shipped.get("worktree_merge", {}).get("require_clean_tree") is True, f"shipped keys={sorted(shipped)}")
     (repo / "dirty.txt").write_text("d\n")
     rc, out, _ = run(BASH_GUARD, bash("git merge wf-x-abc", repo), repo, plugin=plugin_copy({"native_plan_mode": "never"}))
     check("worktree_merge_default_applies_without_key", rc == 0 and decision(out)[0] == "deny", f"out={out!r}")
@@ -439,10 +439,10 @@ def test_shipped_policy_keys():
     shipped = json.loads(POLICY_FILE.read_text())
     check("shipped_policy_has_native_plan_mode_never", shipped.get("native_plan_mode") == "never", f"{shipped}")
     check("shipped_policy_has_plan_commit_never", shipped.get("plan_commit") == "never", f"{shipped}")
-    # P6 ships the four loop-cap keys with their gate_check reader (B6); worktree_merge waits for P7's four-key reader.
+    # P6 ships the four loop-cap keys with their gate_check reader (B6); P7 ships worktree_merge with craftflow_worktree_finalize.py's four-key reader.
     caps = {"remediation_cycles_max", "doubt_cycles_max", "fix_verify_cycles_max", "plan_review_passes_max"}
-    check("shipped_policy_has_no_other_gate_keys", set(shipped) <= {"memory_write", "native_plan_mode", "plan_commit", "$comment"} | caps
-          and "worktree_merge" not in shipped, f"{sorted(shipped)}")
+    check("shipped_policy_has_no_other_gate_keys", set(shipped) <= {"memory_write", "native_plan_mode", "plan_commit", "worktree_merge", "$comment"} | caps,
+          f"{sorted(shipped)}")
 
 
 # --------------------------------------------------------------------------------------------------------------------

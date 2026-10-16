@@ -185,7 +185,55 @@ baseline against the previous one shows only the intended shape change.
 
 ## Worktree finalize equivalence
 
-Empty until the worktree-finalize phase (P7/P8) records its step-by-step equivalence.
+P7 (`craftflow_worktree_finalize.py`, ADR-0073 BC-7, dark: SKILL.md does not call it until P8). The script ports SKILL.md step 4a-4e
+(`SKILL.md:392-727@BASELINE_SHA`) in the prose order. No `## Policy-mapped deletions` row is written yet: the prose is not
+deleted until P8, which adds the group row `SKILL.md:392-727@BASELINE_SHA` -> `worktree_merge` | `craftflow_worktree_finalize.py::main` |
+`test_worktree_finalize.py` (all) | `deleted`, to be signed by a person. The table below is the branch-to-test mapping the P8
+doubt-verifier checks the prose against. Every test name is in `tests/fixtures/test_worktree_finalize.py`.
+
+| Step-4 branch (baseline prose) | Finalize code (`scripts/craftflow_worktree_finalize.py`) | Test |
+|---|---|---|
+| 4a guard: `worktree_mode != "auto_created"` skips the step | `finalize` -> `skipped_not_auto_created` | `skipped_when_mode_null` |
+| 4a guard: empty `worktree_path` -> `{"event":"worktree_path_missing"}`, skip | `finalize` -> `legacy_event` + `worktree_path_missing` | `path_missing_event_skip` |
+| 4a guard: empty `worktree_branch` -> `{"event":"worktree_branch_missing"}`, skip | `finalize` -> `legacy_event` + `worktree_branch_missing` | `branch_missing_event_skip` |
+| 4a: `PROJECT_ROOT` = three `dirname`s of `worktree_path`, never `git rev-parse --show-toplevel` | `merge_root = Path(wp).parent.parent.parent`; `details.root_mismatch` when it differs from `--project-root` | `root_mismatch_detail`, `no_root_mismatch_key_when_roots_agree` |
+| 4b: `mkdir` lock, metadata `{workflow_uuid, worktree_path, acquired_at}` | `acquire_lock` | `lock_metadata_has_three_fields_while_held` |
+| 4b: attempts 9, sleep 5 (now `policy.worktree_merge.*`) | `policy_value(policy, "worktree_merge.lock_max_attempts")`, `lock_sleep_seconds` | `policy_values_are_read` |
+| 4b: reclaim on `STALE_WORKTREE_GONE*` / `STALE_INACTIVE*` / `SELF_RECLAIM*`, no attempt consumed | `acquire_lock` (`RECLAIM`, `continue`) | `corrupt_metadata_reclaims`, `self_lock_worktree_gone_reclaims`, `reclaim_does_not_consume_an_attempt` |
+| 4b: TOCTOU, delete only if `METADATA_BEFORE == METADATA_AFTER` and non-empty | `acquire_lock` (`read_metadata` before and after) | `metadata_changed_between_reads_no_reclaim` |
+| 4b: a same-workflow lock with a live worktree is not reclaimed | the staleness script decides; finalize waits | `self_lock_live_worktree_waits` |
+| 4b: any other decision (CONTENDED*, LOCK_READ_ERROR*, GIT_WORKTREE_LIST_ERROR*, empty, garbled) waits | `acquire_lock` | `lock_contended_live_stranger`, `unrecognized_decision_holder_unknown` |
+| 4c: holder `CONTENDED <uuid>` -> the uuid | `holder_of` | `lock_contended_live_stranger` |
+| 4c: holder `CONTENDED_UNKNOWN_HOLDER` or an unrecognized decision -> `unknown` | `holder_of` | `contended_unknown_holder_is_unknown`, `unrecognized_decision_holder_unknown` |
+| 4c: holder `LOCK_READ_ERROR <class>` -> the class and the local-error message | `holder_of` + `MESSAGES["locked_local_error"]` | `lock_read_error_holder_is_exception_class` |
+| 4c: holder `GIT_WORKTREE_LIST_ERROR <class>` -> same treatment | `holder_of` | `git_worktree_list_error_template` |
+| 4c: nothing touched, stop before memory-finalize | `conclude(..., gate="worktree_merge_locked")` | `no_side_effects_on_gate_outcomes` |
+| 4d: `git status --porcelain` non-empty -> release lock, `worktree_dirty_main_tree` | `merge_and_clean` | `dirty_main_tree_releases_lock` |
+| 4d: `git status` itself fails -> treated as dirty | `merge_and_clean` | `status_failure_is_dirty` |
+| 4e: `MERGE_EXIT == 0` and "Already up to date" -> copy-fallback script | `merge_and_clean` (`COPY_FALLBACK`) | `up_to_date_copy_fallback_ok_cleans_up` |
+| 4e: copy-fallback exit != 0 -> release lock, `worktree_copy_fallback_failed`, worktree and branch kept | `merge_and_clean` | `copy_fallback_failure_partial_apply_gate` |
+| 4e: `MERGE_EXIT == 0` otherwise -> a real merge | `merge_and_clean` | `real_merge_cleans_up`, `real_merge_divergent_creates_merge_commit` |
+| 4e: `MERGE_EXIT != 0` and "CONFLICT" -> release lock, `worktree_merge_conflict`, worktree and branch kept | `merge_and_clean` | `conflict_gate_keeps_worktree` |
+| 4e: `MERGE_EXIT != 0` otherwise -> `worktree_merge_unrecognized_failure`, copy-fallback not run | `merge_and_clean` | `unrecognized_merge_failure` |
+| cleanup: `git worktree remove {path} --force` fails -> `worktree_cleanup_failed`, branch kept | `merge_and_clean` | `worktree_remove_failure` |
+| cleanup: `git branch -d {branch}` fails -> `worktree_cleanup_failed`, `worktree_mode` unchanged | `merge_and_clean` | `branch_delete_refusal` |
+| cleanup: both succeed -> `worktree_mode = merged_and_removed`, release lock (a release error is not fatal) | `merge_and_clean`, `release_lock` | `real_merge_cleans_up`, `release_lock_error_nonfatal` |
+| Safety: a resume with a worktree `pending_gate` re-enters from 4a | the call is idempotent from the top | `resume_after_locked_reenters`, `resume_after_cleanup_failure_completes`, `rerun_after_success_skipped` |
+| (new, BC-7 item 12) success clears only a worktree `pending_gate` | `Ctx.conclude` (`GATES`) | `success_clears_only_worktree_pending_gate` |
+| (new, BC-7 items 1-2) corrupt artifact -> exit 3; invalid policy -> nothing touched | `read_artifact`, `load_policy` | `artifact_corrupt_exit_3`, `policy_invalid_touches_nothing` |
+| (new, PP-4) one JSON line, 12-value enum, `pending_gate` iff a gate outcome | `Ctx.conclude` | `exactly_one_json_line_enum`, `every_outcome_is_exercised` |
+
+Deliberate differences from the baseline prose, each visible in the tests (none changes which branch a given git/lock state takes):
+
+1. `policy_invalid` and `artifact_unreadable` are new outcomes (BC-7 items 1 and 2); the prose had no policy and no artifact read.
+2. The conflict gate message is new wording ("`git merge {branch}` stopped with merge conflicts ..."): the baseline only says "ask user to resolve before memory-finalize" and gives no text. The `$PROJECT_ROOT` placeholder in the other messages is kept verbatim.
+3. A `worktree_branch` that starts with `-` is treated as `worktree_branch_missing` (git would read it as an option). The prose guard only covered null or empty.
+4. A reclaim whose lock directory cannot be removed falls through to the wait path instead of looping (`rm -rf` could fail forever in the bash loop).
+5. `GIT_WORKTREE_LIST_ERROR NonZeroExit(rc=N): <stderr>` is recorded whole as the holder, so the message names the real local cause (the staleness script's own contract); the launch-failure form records the class name, as the prose says.
+6. `git merge` runs with `GIT_MERGE_AUTOEDIT=no` so a real merge never waits on an editor; every git call uses `git -C <MERGE_ROOT>`.
+7. The conflict gate is excluded from the PP-4 byte-equal `git status --porcelain` clause: the `git merge` attempt itself leaves its conflict state in the main tree, as step 4e always did, for the user to resolve. The branch ref and the worktree listing are still compared. The partial-apply copy-fallback gate is excluded by BC-7.
+8. An unexpected exception inside the merge section releases the held lock and propagates (traceback, non-zero exit, no JSON line); the router reads that as `worktree_merge_unrecognized_failure` (Difference 6).
+9. The post-attempt sleep still follows the last failed attempt (the bash loop slept 5 s after each attempt, including the last).
 
 ## Pending human signature
 

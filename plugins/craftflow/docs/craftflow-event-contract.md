@@ -446,6 +446,17 @@ The permit record the pretooluse guard already logs for a finalize-permitted mem
 {"ts": "2026-10-15T12:00:00Z", "event": "gate_check", "wf": "wf-example-20261015-120000-0a1b2c3d", "gate": "doubt_cycles_max", "point": "post_verdict", "count": 3, "max": 3, "allow": false, "action": "advance", "reason": "cap-reached", "policy_status": "ok"}
 ```
 
+### Log event: `worktree_finalize`
+
+- Emitter: `scripts/craftflow_worktree_finalize.py` (`Ctx.conclude`, through its local `log_event`), once per run that reaches an outcome. It is not a hook event: the line is appended to the workflow's `{wf}.events.jsonl` (under `flock`, creating the file but never the directory), not to `craftflow-hook-events.log`. Dark in P7: nothing in the router prose calls the script yet.
+- Trigger: a finalize run ends in one of its 12 outcomes (`merged_and_removed`, `skipped_not_auto_created`, `worktree_path_missing`, `worktree_branch_missing`, `worktree_merge_locked`, `worktree_dirty_main_tree`, `worktree_copy_fallback_failed`, `worktree_merge_conflict`, `worktree_merge_unrecognized_failure`, `worktree_cleanup_failed`, `policy_invalid`, `artifact_unreadable`). A usage error (exit 2) writes nothing. The two skip guards also append the legacy one-field events `worktree_path_missing` and `worktree_branch_missing` (`ts`, `wf`) first, as the step-4a prose says.
+- Fail-open: an append failure (for example an unreadable artifact with no `workflows/` directory) never changes the outcome. The printed JSON then carries `details.event_error` and the exit code is unchanged.
+- Payload: `ts`, `wf`, `outcome`, `pending_gate` (non-null exactly for the 7 gate outcomes), `worktree_mode` and `details` (merge root, branch and worktree path, plus per-outcome fields such as `holder`, `decision`, `dirty_status`, `copy_fallback_output`, `merge_output`, `worktree_remove_output`, `branch_delete_output`, `failing_command`, `root_mismatch`, `release_lock_error`; text values are clipped to 2000 chars). Informational only: no gate reads it back.
+
+```json
+{"ts": "2026-10-16T12:00:00Z", "event": "worktree_finalize", "wf": "wf-example-20261016-120000-0a1b2c3d", "outcome": "worktree_dirty_main_tree", "pending_gate": "worktree_dirty_main_tree", "worktree_mode": "auto_created", "details": {"merge_root": "/repo", "dirty_status": " M README.md"}}
+```
+
 ## Keeping this doc honest
 
 `scripts/verify-craftflow-event-contract.mjs` (`pnpm run verify:event-contract`) asserts

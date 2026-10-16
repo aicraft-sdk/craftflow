@@ -675,7 +675,9 @@ def test_shipped_policy_is_exactly_p4_keys():
     shipped = json.loads((PLUGIN_ROOT / "config" / "policy.json").read_text(encoding="utf-8"))
     # Each phase ships only the keys whose reader it adds (B6): P5 added the plan keys, P6 adds the four caps, P7 adds worktree_merge.
     caps = {"remediation_cycles_max": 3, "doubt_cycles_max": 3, "fix_verify_cycles_max": 3, "plan_review_passes_max": 2}
+    worktree = {"require_clean_tree": True, "lock_max_attempts": 9, "lock_sleep_seconds": 5, "copy_fallback_on_up_to_date": True}
     check("shipped_policy_only_memory_write", leaves(shipped) == {"memory_write", "native_plan_mode", "plan_commit"} | set(caps)
+          | {f"worktree_merge.{k}" for k in worktree} and shipped.get("worktree_merge") == worktree
           and shipped["memory_write"] == "finalize-only" and shipped["native_plan_mode"] == "never" and shipped["plan_commit"] == "never"
           and all(shipped[k] == v and type(shipped[k]) is int for k, v in caps.items())
           and shipped.get("$comment") == "craftflow gate policy; values mirror router prose (ADR-0073)", str(shipped))

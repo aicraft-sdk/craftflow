@@ -1,0 +1,23 @@
+#!/bin/sh
+# Test shim for test_worktree_finalize.py: a `git` that fails on demand, so a failure that real git will not produce on
+# a healthy scratch repo (`git status` erroring, `git branch -d` refusing after a clean merge) can be exercised through
+# the real finalize script. Put this directory first on PATH and set:
+#   CRAFTFLOW_GIT_SHIM_REAL_GIT   absolute path of the real git (required)
+#   CRAFTFLOW_GIT_SHIM_FAIL       a substring of the argument line (a leading `-C <dir>` is ignored for the match);
+#                                 a command whose arguments contain it prints "shim: refused" to stderr and exits 1.
+#                                 Empty or unset = pass through.
+real="${CRAFTFLOW_GIT_SHIM_REAL_GIT:?CRAFTFLOW_GIT_SHIM_REAL_GIT is required}"
+if [ "$1" = "-C" ] && [ "$#" -ge 2 ]; then
+  line="$3 $4 $5 $6 $7 $8"
+else
+  line="$*"
+fi
+if [ -n "${CRAFTFLOW_GIT_SHIM_FAIL:-}" ]; then
+  case "$line" in
+    *"$CRAFTFLOW_GIT_SHIM_FAIL"*)
+      echo "shim: refused: git $*" >&2
+      exit 1
+      ;;
+  esac
+fi
+exec "$real" "$@"
