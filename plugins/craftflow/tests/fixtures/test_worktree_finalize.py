@@ -31,6 +31,10 @@ Branch-to-test table (step 4 branch -> test name):
   cleanup: success + release     -> real_merge_cleans_up, release_lock_error_nonfatal
   resume / rerun                 -> resume_after_locked_reenters, resume_after_cleanup_failure_completes, rerun_after_success_skipped,
                                     success_clears_only_worktree_pending_gate
+  remediation 2 (P7 remfix 2)    -> untracked_work_survives_show_untracked_files_no, resume_after_exit_4_recovers_as_already_merged,
+                                    resume_after_branch_delete_failure_completes_without_traceback, worktree_path_must_be_absolute_and_in_root (now a gate),
+                                    worktree_path_spellings_derive_the_same_root, merge_killed_by_signal_says_state_unknown,
+                                    skip_clears_a_stale_worktree_gate_only_when_merged
   policy / artifact              -> policy_invalid_touches_nothing, policy_values_are_read, artifact_corrupt_exit_3, root_mismatch_fails_closed,
                                     concurrent_artifact_write_flock, policy_is_read_after_the_4a_guards
   remediation (P7 remfix)        -> lock_released_once_foreign_lock_survives, release_requires_ownership, artifact_persisted_before_lock_release,
@@ -257,7 +261,7 @@ MSG_LOCK_ERR = "Failed to evaluate the merge lock due to a local error ("
 MSG_DIRTY = "The main tree has uncommitted changes this BUILD did not make"
 MSG_STATUS_FAILED = "`git status --porcelain` failed in the main tree"
 MSG_WT_DIRTY = "The merge succeeded, but the worktree `"
-MSG_PATH_INVALID = "Worktree finalize skipped: worktree_path (`"
+MSG_PATH_INVALID = "Worktree finalize refused: worktree_path (`"
 MSG_STATE_UNKNOWN = "`git merge wf-fin-ab12cd34` did not finish"
 MSG_COPY = "The copy-fallback script failed while applying the worktree's uncommitted changes to the main tree: `"
 MSG_UNREC = "`git merge wf-fin-ab12cd34` failed with an error this router does not recognize"
@@ -773,7 +777,7 @@ def test_root_mismatch_fails_closed(tmp):
     s.wfdir, s.artifact_path, s.events_path = wfdir, wfdir / f"{s.wf}.json", wfdir / f"{s.wf}.events.jsonl"
     before = s.snapshot()
     res = s.run(root=other)
-    expect("root_mismatch", s, res, "worktree_path_missing", MSG_PATH_INVALID, gate=None)
+    expect("root_mismatch", s, res, "worktree_merge_unrecognized_failure", MSG_PATH_INVALID)
     mismatch = res.details.get("root_mismatch") or {}
     check("root_mismatch:detail", mismatch.get("merge_root") == str(s.root) and mismatch.get("project_root") == str(other), f"details={res.details}")
     check("root_mismatch:nothing_touched", s.snapshot() == before and s.wt.exists() and s.branch_exists() and not (s.root / "feature.txt").exists()
@@ -782,17 +786,37 @@ def test_root_mismatch_fails_closed(tmp):
 
 @tmpscene
 def test_worktree_path_must_be_absolute_and_in_root(tmp):
+    """R3/R4: a non-empty path that is not `<root>/.claude/worktrees/<name>` is a GATE (the work may be stranded), never a silent skip."""
+    deep = Path(tmp).resolve()
     for label, value in (("relative", "repo/.claude/worktrees/fin-ab12cd34"), ("dot_relative", "./.claude/worktrees/fin-ab12cd34"),
-                         ("leading_dash", "-C/../../x"), ("too_shallow", "/x")):
+                         ("leading_dash", "-C/../../x"), ("too_shallow", "/x"), ("dotdot", "{wt_parent}/../worktrees/fin-ab12cd34"),
+                         ("wrong_depth_name", "{root}/src/deep/fin-ab12cd34"), ("not_a_name", "{root}/.claude/worktrees"),
+                         ("too_deep", "{root}/.claude/worktrees/a/b")):
         s = Scene(_sub(tmp, label))
         art = s.artifact()
-        art["worktree_path"] = value
+        art["worktree_path"] = value.format(root=s.root, wt_parent=s.wt.parent)
         s.artifact_path.write_text(json.dumps(art))
         before = s.snapshot()
         res = s.run()
-        expect(f"path_{label}", s, res, "worktree_path_missing", MSG_PATH_INVALID, gate=None)
+        expect(f"path_{label}", s, res, "worktree_merge_unrecognized_failure", MSG_PATH_INVALID)
         check(f"path_{label}:untouched", s.snapshot() == before and s.wt.exists() and s.branch_exists() and not s.lock.exists(), "something was touched")
-    check("path_invalid:legacy_event", any(e.get("event") == "worktree_path_missing" for e in s.events()), f"events={s.events()}")
+        check(f"path_{label}:says_stranded", "Nothing was merged or removed" in res.data.get("message", ""), res.data.get("message", "")[:300])
+    del deep
+
+
+@tmpscene
+def test_worktree_path_spellings_derive_the_same_root(tmp):
+    """R4: `<wt>/`, `<root>/.claude/./worktrees/t`, `<wt>/.` normalise to the one shape, so the root three dirnames up is the real root."""
+    for label, tail in (("trailing_slash", "{wt}/"), ("dot_segment", "{root}/.claude/./worktrees/fin-ab12cd34"), ("trailing_dot", "{wt}/."),
+                        ("double_slash", "{root}/.claude//worktrees/fin-ab12cd34")):
+        s = Scene(_sub(tmp, label))
+        s.commit_in_worktree()
+        art = s.artifact()
+        art["worktree_path"] = tail.format(root=s.root, wt=s.wt)
+        s.artifact_path.write_text(json.dumps(art))
+        res = s.run()
+        expect(f"spelling_{label}", s, res, "merged_and_removed", MSG_OK, gate=None, mode="merged_and_removed")
+        check(f"spelling_{label}:merged", (s.root / "feature.txt").exists() and not s.wt.exists() and not s.branch_exists(), "merge or cleanup did not happen")
 
 
 @tmpscene
@@ -1058,7 +1082,7 @@ def test_dirty_worktree_is_never_discarded(tmp):
     real = fin._git
 
     def flaky(args, cwd, env=None):
-        if args == ["status", "--porcelain"] and Path(cwd) == s3.wt:
+        if args[:2] == ["status", "--porcelain"] and Path(cwd) == s3.wt:
             return 128, "fatal: not a git repository"
         return real(args, cwd, env) if env is not None else real(args, cwd)
 
@@ -1341,6 +1365,103 @@ def test_no_side_effects_on_gate_outcomes(tmp):
           and res.data.get("outcome") == "worktree_merge_conflict", res.stdout[:200])
 
 
+@tmpscene
+def test_untracked_work_survives_show_untracked_files_no(tmp):
+    """R1: `status.showUntrackedFiles=no` must not hide untracked worktree files from the cleanup guard (`remove --force` would delete them)."""
+    s = Scene(tmp)
+    s.commit_in_worktree()
+    cfg = git(s.root, "config", "status.showUntrackedFiles", "no")
+    check("untracked_no:setup", cfg.returncode == 0, cfg.stderr)
+    (s.wt / "precious.txt").write_text("untracked work\n")
+    res = s.run()
+    expect("untracked_no", s, res, "worktree_cleanup_failed", MSG_WT_DIRTY)
+    check("untracked_no:file_survives", s.wt.exists() and s.branch_exists() and (s.wt / "precious.txt").read_text() == "untracked work\n",
+          "the untracked file was removed or the worktree is gone")
+    check("untracked_no:status_names_file", "precious.txt" in res.details.get("worktree_status", ""), f"details={res.details}")
+
+
+@tmpscene
+def test_resume_after_exit_4_recovers_as_already_merged(tmp):
+    """R2: the worktree and branch are gone but the artifact still says auto_created (exit-4 artifact write failure): recover, do not dead-end."""
+    for label, stale_gate in (("no_gate", None), ("stale_gate", "worktree_cleanup_failed")):
+        s = Scene(_sub(tmp, label))
+        s.commit_in_worktree()
+        first = s.run()
+        check(f"recover_{label}:setup", first.data.get("outcome") == "merged_and_removed" and not s.wt.exists() and not s.branch_exists(), first.stdout[:300])
+        art = s.artifact()
+        art["worktree_mode"], art["pending_gate"] = "auto_created", stale_gate  # what a failed artifact write leaves behind
+        s.artifact_path.write_text(json.dumps(art))
+        res = s.run()
+        expect(f"recover_{label}", s, res, "merged_and_removed", MSG_OK, gate=None, mode="merged_and_removed")
+        check(f"recover_{label}:says_recovered", res.details.get("recovered") is True and "recovered" in res.data.get("message", ""), res.stdout[:400])
+        check(f"recover_{label}:main_untouched", (s.root / "feature.txt").exists(), "merged file vanished")
+    s2 = Scene(_sub(tmp, "dirty_main"))  # recovery must not be blocked by an unrelated dirty main tree: nothing is merged on this path
+    s2.commit_in_worktree()
+    s2.run()
+    art = s2.artifact()
+    art["worktree_mode"] = "auto_created"
+    s2.artifact_path.write_text(json.dumps(art))
+    (s2.root / "unrelated.txt").write_text("someone else's edit\n")
+    res2 = s2.run()
+    check("recover_dirty_main:recovers", res2.data.get("outcome") == "merged_and_removed" and (s2.root / "unrelated.txt").exists(), res2.stdout[:300])
+
+
+@tmpscene
+def test_resume_after_branch_delete_failure_completes_without_traceback(tmp):
+    """R2: `git branch -d` failed after the worktree was removed; the resume (branch present, worktree gone) must finish, not traceback."""
+    s = Scene(tmp)
+    s.commit_in_worktree()
+    first = s.run(env=s.shim_env("branch -d"))
+    check("branch_resume:setup", first.data.get("outcome") == "worktree_cleanup_failed" and not s.wt.exists() and s.branch_exists(), first.stdout[:300])
+    second = s.run()
+    check("branch_resume:no_traceback", "Traceback" not in second.stderr, second.stderr[-400:])
+    expect("branch_resume", s, second, "merged_and_removed", MSG_OK, gate=None, mode="merged_and_removed")
+    check("branch_resume:branch_gone", not s.branch_exists(), "branch still present")
+    s2 = Scene(_sub(tmp, "persistent"))  # the delete keeps failing: a clean gate, never a traceback
+    s2.commit_in_worktree()
+    s2.run(env=s2.shim_env("branch -d"))
+    again = s2.run(env=s2.shim_env("branch -d"))
+    check("branch_resume:persistent_failure_is_a_gate", again.rc == 0 and "Traceback" not in again.stderr and again.data.get("outcome") == "worktree_cleanup_failed",
+          f"rc={again.rc} stderr={again.stderr[-300:]} stdout={again.stdout[:300]}")
+
+
+@tmpscene
+def test_merge_killed_by_signal_says_state_unknown(tmp):
+    """R5: a negative return code is a signal death; the merge may have applied, so never say 'nothing has been merged'."""
+    s = Scene(tmp)
+    s.commit_in_worktree()
+    real = fin._git
+
+    def killed(args, cwd, env=None):
+        if args[:1] == ["merge"]:
+            return -9, ""
+        return real(args, cwd, env) if env is not None else real(args, cwd)
+
+    fin._git = killed
+    try:
+        code, line = fin.run(s.argv())
+    finally:
+        fin._git = real
+    data = json.loads(line)
+    check("signal_kill:state_unknown", data["outcome"] == "worktree_merge_unrecognized_failure" and data["message"].startswith(MSG_STATE_UNKNOWN)
+          and "Nothing has been merged" not in data["message"] and s.wt.exists() and s.branch_exists(), data["message"][:300])
+
+
+@tmpscene
+def test_skip_clears_a_stale_worktree_gate_only_when_merged(tmp):
+    """Advisory: a prior run's worktree gate left behind a successful-but-unrecorded finish is cleared when mode is merged_and_removed."""
+    s = Scene(tmp, mode="merged_and_removed", pending_gate="worktree_cleanup_failed")
+    res = s.run()
+    expect("skip_clears_stale", s, res, "skipped_not_auto_created", MSG_SKIP, gate=None, mode="merged_and_removed")
+    check("skip_clears_stale:cleared", s.artifact()["pending_gate"] is None, f"pending_gate={s.artifact()['pending_gate']!r}")
+    s2 = Scene(_sub(tmp, "foreign"), mode="merged_and_removed", pending_gate="clarification")
+    r2 = s2.run()
+    check("skip_clears_stale:foreign_kept", r2.data.get("outcome") == "skipped_not_auto_created" and s2.artifact()["pending_gate"] == "clarification", r2.stdout[:300])
+    s3 = Scene(_sub(tmp, "other_mode"), mode=None, pending_gate="worktree_cleanup_failed")
+    r3 = s3.run()
+    check("skip_clears_stale:other_mode_kept", r3.data.get("outcome") == "skipped_not_auto_created" and s3.artifact()["pending_gate"] == "worktree_cleanup_failed", r3.stdout[:300])
+
+
 # ---- totality, hygiene -------------------------------------------------------------------------------------------------------
 
 def test_exactly_one_json_line_enum():
@@ -1368,7 +1489,7 @@ def test_script_hygiene():
     src = SCRIPT.read_text(encoding="utf-8")
     tree = ast.parse(src, feature_version=(3, 9))
     check("hygiene:py39", True)
-    check("hygiene:line_budget", len(src.splitlines()) <= 520, f"{len(src.splitlines())} lines")  # 450 at P7; 520 after the remfix (lock ownership, write failure, worktree guard)
+    check("hygiene:line_budget", len(src.splitlines()) <= 540, f"{len(src.splitlines())} lines")  # 450 at P7; 520 after remfix 1 (lock ownership, write failure, worktree guard); 540 after remfix 2 (path shape, resume recovery)
     literals = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
     bad = [t for t in literals if "craftflow-router" in t or "_shared" in t or "router-protocol" in t]
     check("hygiene:pp2_no_prose_path", not bad, f"literals={bad[:3]}")
@@ -1412,7 +1533,10 @@ def main():
                test_dirty_worktree_is_never_discarded, test_git_runs_in_the_c_locale, test_git_worktree_remove_uses_double_dash,
                test_lock_metadata_write_failure_fails_closed, test_merge_timeout_says_state_unknown, test_exception_propagation_releases_lock,
                test_paths_with_spaces, test_reclaim_loop_terminates_when_rmtree_fails, test_policy_is_read_after_the_4a_guards,
-               test_no_side_effects_on_gate_outcomes,
+               test_no_side_effects_on_gate_outcomes, test_worktree_path_spellings_derive_the_same_root,
+               test_untracked_work_survives_show_untracked_files_no, test_resume_after_exit_4_recovers_as_already_merged,
+               test_resume_after_branch_delete_failure_completes_without_traceback, test_merge_killed_by_signal_says_state_unknown,
+               test_skip_clears_a_stale_worktree_gate_only_when_merged,
                test_exactly_one_json_line_enum, test_every_outcome_is_exercised, test_script_hygiene, test_exit_criteria_dark_and_policy_shipped):
         try:
             fn()
