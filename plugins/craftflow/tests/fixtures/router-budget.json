@@ -150,7 +150,7 @@
       "from_projection_sha256": "8a0f281e664b6912dafb24b7f563af42e8aeeedf097bf7391ab1347c4390cba2",
       "to_projection_sha256": "49f42699c1988afd1b3133bd075680d796148418c247b8d664c31b3c23b68fba",
       "fits_enforced_caps": true,
-      "decided_by": "pending-David",
+      "decided_by": "David",
       "cause": "P6 gate_check: six unsigned literal-to-key Rewrites rows join the policy map (reach_feasibility counts them), and cut-plan rows carry the as-built text where the drafts could not be applied or needed a fix (the :981 bullet keeps its (= 3) pin; the worktree_merge Policy table cell names the P5 bash guard; the plan-review fallback sentence names no prompt field; both verify call lines add 'advance once in total'; the Loop caps table drops the references/ prefix; plan-workflow.md:66 stays literal with a pin bullet below it); REM-FIX r1 (P6 gate review): the plan-review call line gains --wf and --project-root plus an increment-already-applied note, the doubt and fix-verify call lines drop the dead cap-reached clause and advance regardless of verdict (Difference 33), the ask line says 'no further counter'; kernel and read-set bytes net down; enforced caps unchanged and still fit"
     }
   ],
