@@ -1416,7 +1416,7 @@ def test_resume_after_branch_delete_failure_completes_without_traceback(tmp):
     check("branch_resume:setup", first.data.get("outcome") == "worktree_cleanup_failed" and not s.wt.exists() and s.branch_exists(), first.stdout[:300])
     second = s.run()
     check("branch_resume:no_traceback", "Traceback" not in second.stderr, second.stderr[-400:])
-    expect("branch_resume", s, second, "merged_and_removed", MSG_OK, gate=None, mode="merged_and_removed")
+    expect("branch_resume", s, second, "merged_and_removed", "Branch merged and deleted, but no worktree directory was present", gate=None, mode="merged_and_removed")
     check("branch_resume:branch_gone", not s.branch_exists(), "branch still present")
     s2 = Scene(_sub(tmp, "persistent"))  # the delete keeps failing: a clean gate, never a traceback
     s2.commit_in_worktree()
@@ -1470,19 +1470,58 @@ def _listed_prunable(s):
 
 @tmpscene
 def test_prunable_missing_worktree_is_completed(tmp):
-    """P8 step 0: the worktree directory was deleted by hand but git still lists it (prunable): finalize must complete in one run
-    (nothing on disk to lose), not die in copy-fallback or the worktree status check."""
-    for label, commit in (("merge", True), ("up_to_date", False)):
-        s = Scene(_sub(tmp, label))
-        if commit:
-            s.commit_in_worktree()
-        shutil.rmtree(str(s.wt))
-        check(f"prunable_{label}:setup", _listed_prunable(s), git(s.root, "worktree", "list", "--porcelain").stdout)
-        res = s.run()
-        check(f"prunable_{label}:no_traceback", "Traceback" not in res.stderr and "FileNotFoundError" not in res.stdout, res.stderr[-300:] + res.stdout[:300])
-        expect(f"prunable_{label}", s, res, "merged_and_removed", MSG_OK, gate=None, mode="merged_and_removed")
-        check(f"prunable_{label}:cleaned", not s.branch_exists() and str(s.wt) not in git(s.root, "worktree", "list", "--porcelain").stdout, "branch or registration left")
-        check(f"prunable_{label}:merged_file", (s.root / "feature.txt").exists() == commit, f"feature.txt exists={(s.root / 'feature.txt').exists()}")
+    """P8 step 0 + remfix HIGH-1: the worktree directory was deleted by hand but git still lists it (prunable). Finalize must never traceback,
+    and must not report a plain merged_and_removed when nothing was merged: a committed branch merges (success, worktree_absent=true); an
+    up-to-date branch with no directory is a worktree_cleanup_failed gate that says nothing was applied and touches nothing."""
+    s = Scene(_sub(tmp, "merge"))
+    s.commit_in_worktree()
+    shutil.rmtree(str(s.wt))
+    check("prunable_merge:setup", _listed_prunable(s), git(s.root, "worktree", "list", "--porcelain").stdout)
+    res = s.run()
+    check("prunable_merge:no_traceback", "Traceback" not in res.stderr and "FileNotFoundError" not in res.stdout, res.stderr[-300:] + res.stdout[:300])
+    expect("prunable_merge", s, res, "merged_and_removed", MSG_OK, gate=None, mode="merged_and_removed")
+    check("prunable_merge:cleaned", not s.branch_exists() and str(s.wt) not in git(s.root, "worktree", "list", "--porcelain").stdout, "branch or registration left")
+    check("prunable_merge:merged_file", (s.root / "feature.txt").exists(), "feature.txt missing")
+    check("prunable_merge:worktree_absent_detail", res.details.get("worktree_absent") is True, res.stdout[:300])
+    s2 = Scene(_sub(tmp, "up_to_date"))
+    shutil.rmtree(str(s2.wt))
+    check("prunable_up_to_date:setup", _listed_prunable(s2), git(s2.root, "worktree", "list", "--porcelain").stdout)
+    res2 = s2.run()
+    check("prunable_up_to_date:no_traceback", "Traceback" not in res2.stderr, res2.stderr[-300:])
+    expect("prunable_up_to_date", s2, res2, "worktree_cleanup_failed", "No worktree directory was present at")
+    check("prunable_up_to_date:says_nothing_applied", "nothing from it was applied" in res2.data.get("message", ""), res2.data.get("message", "")[:300])
+    check("prunable_up_to_date:worktree_absent_detail", res2.details.get("worktree_absent") is True, res2.stdout[:300])
+    check("prunable_up_to_date:untouched", s2.branch_exists() and _listed_prunable(s2), "branch or registration was removed by a gate")
+
+
+@tmpscene
+def test_gone_worktree_resume_uses_a_distinct_message(tmp):
+    """remfix HIGH-1: worktree removed earlier (git no longer lists it), branch still present and fully merged: success, but the message and
+    details must say no worktree directory was present, not the plain 'Worktree merged and removed.'"""
+    s = Scene(tmp)
+    s.commit_in_worktree()
+    s.run(env=s.shim_env("branch -d"))  # merge + worktree removal happen, the branch delete fails
+    res = s.run()
+    expect("gone_resume", s, res, "merged_and_removed", "Branch merged and deleted, but no worktree directory was present", gate=None, mode="merged_and_removed")
+    check("gone_resume:detail", res.details.get("worktree_absent") is True, res.stdout[:300])
+
+
+@tmpscene
+def test_stat_error_on_worktree_path_gates_not_absent(tmp):
+    """remfix LOW: only ENOENT means absent. Any other lstat error (permissions...) must gate, never be read as 'no directory'."""
+    s = Scene(tmp)
+    s.commit_in_worktree()
+    check("stat_error:enoent_is_absent", fin.path_present(str(s.tmp / "nope")) is False and fin.path_present(str(s.wt)) is True, "path_present basics")
+    real = fin.path_present
+    fin.path_present = lambda wp: (_ for _ in ()).throw(PermissionError(13, "Permission denied"))
+    try:
+        code, line = fin.run(s.argv())
+    finally:
+        fin.path_present = real
+    data = json.loads(line)
+    check("stat_error:gate", code == 0 and data.get("outcome") == "worktree_cleanup_failed" and data.get("pending_gate") == "worktree_cleanup_failed", line[:300])
+    check("stat_error:message", "could not be inspected" in data.get("message", "") and "PermissionError" in data.get("message", ""), data.get("message", "")[:300])
+    check("stat_error:untouched", s.wt.exists() and s.branch_exists() and not s.lock.exists() and not (s.root / "feature.txt").exists(), "worktree, branch or lock changed")
 
 
 @tmpscene
@@ -1524,7 +1563,7 @@ def test_script_hygiene():
     src = SCRIPT.read_text(encoding="utf-8")
     tree = ast.parse(src, feature_version=(3, 9))
     check("hygiene:py39", True)
-    check("hygiene:line_budget", len(src.splitlines()) <= 550, f"{len(src.splitlines())} lines")  # 450 at P7; 520 after remfix 1 (lock ownership, write failure, worktree guard); 540 after remfix 2 (path shape, resume recovery); 550 after P8 step 0 (prunable worktree)
+    check("hygiene:line_budget", len(src.splitlines()) <= 580, f"{len(src.splitlines())} lines")  # 450 at P7; 520 after remfix 1 (lock ownership, write failure, worktree guard); 540 after remfix 2 (path shape, resume recovery); 550 after P8 step 0 (prunable worktree); 580 after P8 remfix (absent-worktree gate, lstat handling)
     literals = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
     bad = [t for t in literals if "craftflow-router" in t or "_shared" in t or "router-protocol" in t]
     check("hygiene:pp2_no_prose_path", not bad, f"literals={bad[:3]}")
@@ -1548,6 +1587,29 @@ def test_exit_criteria_dark_and_policy_shipped():
     check("wired:worktree_md_has_a_row_for_every_outcome", ENUM <= outcomes, f"missing rows: {sorted(ENUM - outcomes)}")
     check("wired:worktree_md_covers_exit_4_and_lock_release_failed", "Exit 4" in worktree_md and "lock_release_failed" in worktree_md and "non-zero exit or unparseable" in worktree_md,
           "exit 4, lock_release_failed or the Difference 6 row is missing")
+    # remfix: assert the CELLS of the table (outcome | pending_gate | action | message source), not just the first column
+    table = {}
+    for line in worktree_md.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")] if line.startswith("| ") else []
+        if len(cells) == 4 and cells[0] not in ("outcome", "---"):
+            table[cells[0].strip("`")] = cells
+    bad_gate = [o for o in sorted(ENUM) if o in table and o not in ("artifact_unreadable",)
+                and table[o][1].strip("`") != (o if o in GATES else "null")]
+    check("wired:table_pending_gate_cell_matches_the_script", not bad_gate, f"rows whose pending_gate cell disagrees: {bad_gate}")
+    check("wired:table_gate_rows_stop_and_resume", all("stop before memory-finalize" in table[o][2] or o in ("policy_invalid",) for o in GATES if o in table),
+          "a gate row lacks 'stop before memory-finalize'")
+    last = next((v for k, v in table.items() if k.startswith("non-zero exit or unparseable")), None)
+    check("wired:last_row_widened", last is not None and all(t in last[0] for t in ("exit not in {0, 3, 4}", "not exactly one JSON line", "`outcome` missing", "`artifact_unreadable`"))
+          and last[1].strip("`") == "worktree_merge_unrecognized_failure", f"last row cells: {last}")
+    check("wired:last_row_checks_orphaned_lock_and_merge_abort", last is not None and ".merge.lock" in last[2] and "git merge --abort" in last[2] and "orphaned" in last[2], f"action cell: {last and last[2]}")
+    check("wired:call_names_timeout_and_project_root", "600000 ms" in worktree_md and "PROJECT_ROOT` the worktree was created under" in worktree_md, "timeout or project-root sentence missing")
+    check("wired:read_trigger_names_policy_invalid", "policy_invalid" in skill.split("<!-- readmap:begin -->")[1].split("<!-- readmap:end -->")[0] and "policy_invalid" in worktree_md.split("## Safety")[1],
+          "read-map trigger or Safety paragraph does not name policy_invalid")
+    check("wired:safety_keeps_create_and_resume_rules", all(t in worktree_md for t in ("Worktree creates are idempotent", "re-use `worktree_path` from the artifact", "If `worktree_path` is null despite")), "Safety paragraph lost a baseline sentence")
+    check("wired:worktree_path_invalid_message_names_the_root", "PROJECT_ROOT passed to finalize" in fin.MESSAGES["worktree_path_invalid"], "message does not mention a project-root mismatch")
+    bullet = worktree_md.split("  - `worktree_merge_unrecognized_failure`")[1].split("  - `worktree_cleanup_failed`")[0]
+    check("wired:gate_summary_bullet_names_unknown_merge_state_and_refused_path", "merge_state_unknown" in bullet and "refused `worktree_path`" in bullet and "might have been applied" in bullet,
+          f"unrecognized_failure bullet: {bullet[:300]}")
     shipped = json.loads((PLUGIN_ROOT / "config" / "policy.json").read_text(encoding="utf-8"))
     check("policy_shipped:worktree_merge", shipped.get("worktree_merge") == {"require_clean_tree": True, "lock_max_attempts": 9, "lock_sleep_seconds": 5,
                                                                           "copy_fallback_on_up_to_date": True}, f"shipped={shipped.get('worktree_merge')}")
@@ -1580,7 +1642,7 @@ def main():
                test_untracked_work_survives_show_untracked_files_no, test_resume_after_exit_4_recovers_as_already_merged,
                test_resume_after_branch_delete_failure_completes_without_traceback, test_merge_killed_by_signal_says_state_unknown,
                test_skip_clears_a_stale_worktree_gate_only_when_merged, test_prunable_missing_worktree_is_completed,
-               test_message_does_not_claim_a_removal_that_did_not_happen,
+               test_gone_worktree_resume_uses_a_distinct_message, test_stat_error_on_worktree_path_gates_not_absent, test_message_does_not_claim_a_removal_that_did_not_happen,
                test_exactly_one_json_line_enum, test_every_outcome_is_exercised, test_script_hygiene, test_exit_criteria_dark_and_policy_shipped):
         try:
             fn()

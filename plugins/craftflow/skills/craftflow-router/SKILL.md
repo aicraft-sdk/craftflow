@@ -40,7 +40,7 @@ Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset
 | stage | remediation or research is triggered | `references/remediation-and-research.md` | ALL | - | no |
 | stage | phase exit | `references/context-boundary.md` | BUILD, PLAN | - | yes |
 | stage | first agent dispatch effort lookup (SKILL.md § Effort Dispatch Rule) | `references/fast-path.md` | PLAN, DEBUG, REVIEW | - | yes |
-| stage | after final-phase verifier PASS (BUILD, worktree_mode == auto_created) or resume with a worktree pending_gate | `references/worktree.md` | BUILD | - | yes |
+| stage | final-phase verifier PASS (BUILD, worktree_mode == auto_created); BUILD resume with auto_created or any worktree pending_gate (incl. policy_invalid) | `references/worktree.md` | BUILD | - | yes |
 <!-- readmap:end -->
 
 ## 1. Intent Routing
@@ -415,7 +415,6 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
 
 4. After `integration-verifier` PASS on the final phase and before memory-finalize: when
    `worktree_mode == "auto_created"`, read `references/worktree.md` and run its finalize call.
-   (Steps 1-3 above create the worktree.)
 
 ### DEBUG preparation
 

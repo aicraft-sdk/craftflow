@@ -137,7 +137,7 @@
     "projection_sha256": "5b27b389a30d7205e0c07a231d218d1fd2ae16958c99fe919ca7879d84d9f832",
     "cause": "P2C: Difference 17 dropped (D17-A, reach_amendment null) and REACH-B adopted as the reach option; caps are the guaranteed effective tier of router-projection.json, exact values, ratchet-only afterwards"
   },
-  "projection_sha256": "5cc4cabab0dcaf32674d629fb8c4f517b8e83b1498feb54f7b8275ebefdffa6e",
+  "projection_sha256": "c9a3ba5a7d9304356f714c71cbf199e7aaee1472247bdc1107560b46c3373cde",
   "projection_revisions": [
     {
       "phase": "P5",
@@ -158,10 +158,10 @@
     {
       "phase": "P8",
       "from_projection_sha256": "49f42699c1988afd1b3133bd075680d796148418c247b8d664c31b3c23b68fba",
-      "to_projection_sha256": "5cc4cabab0dcaf32674d629fb8c4f517b8e83b1498feb54f7b8275ebefdffa6e",
+      "to_projection_sha256": "c9a3ba5a7d9304356f714c71cbf199e7aaee1472247bdc1107560b46c3373cde",
       "fits_enforced_caps": true,
       "decided_by": "pending-David",
-      "cause": "P8 wires craftflow_worktree_finalize.py: SKILL.md step 4 (about 25 K) becomes a 3-line pointer; new stage file references/worktree.md (BUILD, happy path) holds the finalize call, a row for every outcome (adds exit 4, details.lock_release_failed, the refused worktree_path and the Difference 6 row, which the draft cut-plan row lacked), the Safety paragraph and the moved worktree gate summary; one read-map row is added. The cut-plan P8 rows carry the as-built worktree.md text and the gate-summary opener names \"formerly SKILL.md step 4\" (the xref guard counts the numeral). The projection also counts 13 unsigned P8 rows (4 xref and 5 pointer Rewrites, 3 Applicability, 1 Read-map widening) and the unsigned group row stays in Pending human signature, so reach_feasibility is unchanged until David signs. decided_by is pending-David: David must decide this revision; enforced caps unchanged."
+      "cause": "P8 wires craftflow_worktree_finalize.py: SKILL.md step 4 (about 25 K) becomes a 3-line pointer; new stage file references/worktree.md (BUILD, happy path) holds the finalize call, a row for every outcome (adds exit 4, details.lock_release_failed, the refused worktree_path and the Difference 6 row, which the draft cut-plan row lacked), the Safety paragraph and the moved worktree gate summary; one read-map row is added. The cut-plan P8 rows carry the as-built worktree.md text and the gate-summary opener names \"formerly SKILL.md step 4\" (the xref guard counts the numeral). The projection also counts 14 unsigned P8 rows (4 xref and 5 pointer Rewrites, 4 Applicability, 1 Read-map widening) and the unsigned group row stays in Pending human signature, so reach_feasibility is unchanged until David signs. decided_by is pending-David: David must decide this revision; enforced caps unchanged. REM-FIX r1 (P8 doubt cycle 1 and hunter): the Safety paragraph (baseline id 25eae49eb760) stays whole in worktree.md and is now covered by its own Rewrites row plus an Applicability row (BUILD@happy_path_stage) instead of hiding in the draft group deleted row (65 ids now); the read-map trigger makes worktree.md readable on every BUILD resume with auto_created and names policy_invalid; worktree.md gains the absent-worktree gate text, the exit-code and orphaned-lock checks and the Bash timeout. The kernel stays 3 B under its ceiling (the step 4 pointer drops its \"(Steps 1-3 above create the worktree.)\" aside to pay for the longer trigger), so no ceiling is raised. Keeping the create and null-path sentences in the kernel was measured and rejected: +346 B pushes the projection past enforced_caps (kernel 34531 vs 34202), which only David can change. decided_by stays pending-David."
     }
   ],
   "enforce": false,

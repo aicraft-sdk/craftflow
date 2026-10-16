@@ -20,6 +20,6 @@
     {"file": "skills/craftflow-router/references/remediation-and-research.md", "class": "stage", "workflows": ["ALL"], "trigger": "remediation or research is triggered", "happy_path": false},
     {"file": "skills/craftflow-router/references/context-boundary.md", "class": "stage", "workflows": ["BUILD", "PLAN"], "trigger": "phase exit", "happy_path": true},
     {"file": "skills/craftflow-router/references/fast-path.md", "class": "stage", "workflows": ["PLAN", "DEBUG", "REVIEW"], "trigger": "first agent dispatch effort lookup (SKILL.md § Effort Dispatch Rule)", "happy_path": true},
-    {"file": "skills/craftflow-router/references/worktree.md", "class": "stage", "workflows": ["BUILD"], "trigger": "after final-phase verifier PASS (BUILD, worktree_mode == auto_created) or resume with a worktree pending_gate", "happy_path": true}
+    {"file": "skills/craftflow-router/references/worktree.md", "class": "stage", "workflows": ["BUILD"], "trigger": "final-phase verifier PASS (BUILD, worktree_mode == auto_created); BUILD resume with auto_created or any worktree pending_gate (incl. policy_invalid)", "happy_path": true}
   ]
 }

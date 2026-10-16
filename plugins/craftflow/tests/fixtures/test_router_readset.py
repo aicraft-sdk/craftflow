@@ -1141,7 +1141,7 @@ def test_signing_burden_buckets_are_disjoint_on_every_tier() -> None:
             bad[name] = (parts, v["unmapped_removed"], v["unreachable"], v["reach_lost_occurrences"])
     g, d = tiers["guaranteed"]["signing_burden"]["buckets"], tiers["conditional_if_reach_amended"]["signing_burden"]["buckets"]
     check("signing_burden_buckets_are_disjoint_on_every_tier",
-          not bad and g["moved_without_loss"]["occurrences"] == 32 and d["moved_without_loss"]["occurrences"] == 33
+          not bad and g["moved_without_loss"]["occurrences"] == 30 and d["moved_without_loss"]["occurrences"] == 31
           and g["in_place_narrowed"]["occurrences"] == 0 and d["in_place_narrowed"]["occurrences"] == 192,
           f"bad={bad} guaranteed_mwl={g['moved_without_loss']} amended_mwl={d['moved_without_loss']} in_place={d['in_place_narrowed']}")
 
@@ -1162,15 +1162,15 @@ def test_signing_burden_counts_rows_not_occurrences() -> None:
           and (sec["partial_spans_without_heading"], sec["multi_section_spans"]) == (23, 7)
           and sec["needs_destination_heading"] == ["p10-pav-verifier-telemetry"]
           and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (411 + 111 + 53 + 14, 244 + 111 + 53 + 14)
-          and g["REACH_A"]["occurrences"]["total"] == 415 + 123 + 32 + 48 and g["REACH_B"]["occurrences"]["total"] == 41 + 248 + 123 + 48
+          and g["REACH_A"]["occurrences"]["total"] == 415 + 123 + 30 + 48 and g["REACH_B"]["occurrences"]["total"] == 41 + 248 + 123 + 48
           and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 244 + 111 + 53 + 14
-          and d["REACH_A"]["occurrences"]["total"] == 607 + 144 + 33 + 48
+          and d["REACH_A"]["occurrences"]["total"] == 607 + 144 + 31 + 48
           # REACH-A counts the 39 moved-without-loss occurrences, REACH-B the 42 section-move ops; they were equal (42) until P5's signed
           # plan_commit row removed one occurrence without removing a section move, and P6's six literal-to-key Rewrites rows (listed in the
           # policy map, still unsigned) took away two more and one vanishing occurrence. P8's thirteen unsigned rows (the gate summary, its bullets, the
           # Safety paragraph, one widening row for worktree.md) took six more moved-without-loss occurrences and one widening file (two pairs) away:
-          # 38 to 32, 15 files / 50 pairs to 14 / 48. The row-count bounds below still coincide.
-          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 33 + 248 + 144 + 48
+          # 38 to 32, 15 files / 50 pairs to 14 / 48. The P8 remediation added an Applicability row for the Safety paragraph (it used to hide in the draft group row), which takes its two occurrences out of moved-without-loss: 32 to 30. The row-count bounds below still coincide.
+          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 31 + 248 + 144 + 48
           and d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 248 + 144 + 48
           and d["definitional_D17B"]["REACH_B"]["rows_upper_bound"] < d["REACH_B"]["rows_upper_bound"] < d["REACH_A"]["rows_upper_bound"],
           f"buckets={b} sections={sec} guaranteed={(g['REACH_A']['rows_upper_bound'], g['REACH_B']['rows_upper_bound'])} amended_A_occ={d['REACH_A']['occurrences']}")

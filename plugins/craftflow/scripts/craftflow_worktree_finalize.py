@@ -58,12 +58,21 @@ MESSAGES = {
     "worktree_path_invalid": ("Worktree finalize refused: worktree_path (`{worktree_path}`) is not `<project root>/.claude/worktrees/<name>` (absolute, no `..`, "
                               "under this project's root), so it was not trusted. Nothing was merged or removed, and any work committed in that worktree "
                               "is still where it was. Repair worktree_path in the workflow artifact (or merge and remove the worktree by hand), then resume "
-                              "this workflow."),
+                              "this workflow. If the path looks right, the PROJECT_ROOT passed to finalize is not the root the worktree was created under: "
+                              "pass that root."),
     "worktree_branch_missing": "Worktree finalize skipped: worktree_branch is missing or invalid in the workflow artifact, so nothing was merged or removed.",
     "artifact_unreadable": "The workflow artifact is missing or unreadable ({error}), so worktree finalize touched nothing. Repair or restore it, then resume this workflow.",
     "policy_invalid": "config/policy.json is invalid, so worktree finalize touched nothing. Fix the policy file (first error: {error}), then resume this workflow to retry.",
     "merged_recovered": ("Worktree merged and removed (recovered: the branch and the worktree were already gone, so an earlier run is taken to have "
                          "finished the merge and cleanup but not recorded it; this run only recorded it)."),
+    "merged_absent": ("Branch merged and deleted, but no worktree directory was present (removed earlier), so nothing from a worktree directory was "
+                      "applied by this run; the branch held nothing the main tree lacked."),
+    "absent_nothing_merged": ("No worktree directory was present at `{worktree_path}` (git still lists it as prunable) and `git merge {worktree_branch}` had "
+                              "nothing to merge, so nothing from it was applied. Any uncommitted work that lived in that directory is gone. Nothing was removed: "
+                              "the registration and the branch are untouched. Inspect `git log {worktree_branch}` in `$PROJECT_ROOT`; once you have confirmed "
+                              "nothing is lost, run `git worktree prune` and `git branch -D {worktree_branch}`, then resume this workflow (it records the finish)."),
+    "worktree_stat_failed": ("The worktree path `{worktree_path}` could not be inspected (`{stat_error}`), so whether it exists is unknown. Nothing was merged "
+                             "or removed. Fix the filesystem or permission problem, then resume this workflow to retry."),
     "locked": ("Another BUILD workflow ({holder}) currently holds the merge lock. Wait for it to finish, then resume this workflow to retry. "
                "If that workflow is actually dead (not just slow), you can manually delete `.claude/worktrees/.merge.lock` and resume "
                + DASH + " only after confirming it isn't still running."),
@@ -267,7 +276,7 @@ class Ctx:
         if lock_dir is not None:
             release_lock(self, lock_dir)
         keys = ("holder", "copy_fallback_output", "worktree_branch", "merge_output", "worktree_path", "worktree_remove_output", "branch_delete_output",
-                "error", "dirty_status", "worktree_status")
+                "error", "dirty_status", "worktree_status", "stat_error")
         message = MESSAGES[template].format(**{k: self.vals.get(k, "") for k in keys})
         if "artifact_write_error" in self.details:
             message += (f" WARNING: the workflow artifact could not be updated ({self.details['artifact_write_error']}), so this outcome is NOT recorded: "
@@ -437,9 +446,18 @@ def gate(ctx: Ctx, lock_dir: Path, outcome: str, template: Optional[str] = None)
     return ctx.conclude(outcome, template or outcome, gate=outcome, lock_dir=lock_dir)  # persists the gate, then releases
 
 
-def worktree_gone(wp: str, merge_root: Path) -> bool:
+def path_present(wp: str) -> bool:
+    """lstat: True when something is at `wp`, False only for ENOENT; any other error (permissions, ENOTDIR, ELOOP...) raises OSError so the caller gates."""
+    try:
+        os.lstat(wp)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def worktree_gone(wp: str, merge_root: Path, present: bool) -> bool:
     """True only when the directory is absent AND git no longer lists it; any doubt (a git failure) is False."""
-    if os.path.lexists(wp):
+    if present:
         return False
     rc, listing = _git(["worktree", "list", "--porcelain"], merge_root)
     if rc != 0:
@@ -449,8 +467,14 @@ def worktree_gone(wp: str, merge_root: Path) -> bool:
 
 
 def merge_and_clean(ctx: Ctx, lock_dir: Path, merge_root: Path, wp: str, branch: str, require_clean: bool, copy_fallback: bool) -> Tuple[int, str]:
-    gone = worktree_gone(wp, merge_root)
-    on_disk = os.path.lexists(wp)  # False for a gone worktree and for a prunable one (directory deleted by hand, git still lists it): nothing on disk to lose
+    try:
+        on_disk = path_present(wp)  # False for a gone worktree and for a prunable one (directory deleted by hand, git still lists it): nothing on disk to lose
+    except OSError as exc:
+        ctx.note("stat_error", f"{type(exc).__name__}: {exc}")
+        return gate(ctx, lock_dir, "worktree_cleanup_failed", "worktree_stat_failed")
+    gone = worktree_gone(wp, merge_root, on_disk)
+    if not on_disk:
+        ctx.details["worktree_absent"] = True
     if gone and _git(["rev-parse", "--verify", "-q", f"refs/heads/{branch}"], merge_root)[0] == 1:
         # resume after an exit-4 artifact write (or a lost write): nothing is left to merge or clean, so record it; nothing in the main tree is touched
         ctx.details["recovered"] = True
@@ -461,8 +485,11 @@ def merge_and_clean(ctx: Ctx, lock_dir: Path, merge_root: Path, wp: str, branch:
             ctx.note("dirty_status", dirty)
             return gate(ctx, lock_dir, "worktree_dirty_main_tree", "main_status_failed" if rc != 0 else None)
     rc, merge_output = _git(["merge", branch], merge_root, {"GIT_MERGE_AUTOEDIT": "no"})  # 4e
+    up_to_date = rc == 0 and "Already up to date" in merge_output
     applied = False  # True once copy-fallback has carried the worktree's uncommitted edits into the main tree
-    if rc == 0 and "Already up to date" in merge_output:
+    if up_to_date:
+        if not on_disk and not gone:  # prunable: no commit was merged and there is no directory to carry over, so "merged_and_removed" would claim work that never landed
+            return gate(ctx, lock_dir, "worktree_cleanup_failed", "absent_nothing_merged")
         if copy_fallback and on_disk:
             try:
                 proc = subprocess.run([sys.executable, str(COPY_FALLBACK), wp, str(merge_root)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -485,7 +512,7 @@ def merge_and_clean(ctx: Ctx, lock_dir: Path, merge_root: Path, wp: str, branch:
             ctx.note("branch_delete_output", out)
             ctx.note("failing_command", "git branch -d")
             return gate(ctx, lock_dir, "worktree_cleanup_failed", "cleanup_branch_gone")
-        return ctx.conclude("merged_and_removed", "merged_and_removed", merged=True, lock_dir=lock_dir)
+        return ctx.conclude("merged_and_removed", "merged_absent" if up_to_date else "merged_and_removed", merged=True, lock_dir=lock_dir)
     if on_disk and not applied:  # deliberate deviation from the prose (which discards): `--force` below must never throw away uncommitted worktree edits
         # --untracked-files=all and --ignore-submodules=none: a user's status.showUntrackedFiles=no / ignore config must not hide work from `remove --force`
         rc, status_out = _git(["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"], Path(wp))

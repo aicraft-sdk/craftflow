@@ -365,26 +365,26 @@
    "condition": "always",
    "file": "skills/craftflow-router/SKILL.md",
    "id": "p6-call-line-doubt",
+   "note": "Built P6: '(advance once in total)' added (review Finding 6). Difference 33 (REM-FIX r1): the advance no longer depends on the agent emitting CYCLE_COMPLETE; a REFUTED verdict at cycle 3 with CYCLE_COMPLETE false or missing still advances (PP-5 cell refuted_cycle_3_without_cycle_complete_advances). The dead 'human_checkpoint cap-reached -> advance' clause is deleted: this gate returns only proceed or advance.",
    "op": "insert",
    "phase": "P6",
    "position": "after_anchor",
    "source": "plan P6 Prose: SKILL.md:977 call line (doubt_cycles_max)",
    "status": "drafted",
-   "text": "- First run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate doubt_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"` (N = the `Cycle:` of this cycle's task; in Task*-tool fallback mode, the `## Cycle` value of this dispatch's prompt, else the agent's echoed `Cycle number:`, never `telemetry.loop_counts`). `advance` → apply the bullet for the returned verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict, as the hard-stop bullet does (advance once in total). `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).\n",
-   "note": "Built P6: '(advance once in total)' added (review Finding 6). Difference 33 (REM-FIX r1): the advance no longer depends on the agent emitting CYCLE_COMPLETE; a REFUTED verdict at cycle 3 with CYCLE_COMPLETE false or missing still advances (PP-5 cell refuted_cycle_3_without_cycle_complete_advances). The dead 'human_checkpoint cap-reached -> advance' clause is deleted: this gate returns only proceed or advance."
+   "text": "- First run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate doubt_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"` (N = the `Cycle:` of this cycle's task; in Task*-tool fallback mode, the `## Cycle` value of this dispatch's prompt, else the agent's echoed `Cycle number:`, never `telemetry.loop_counts`). `advance` → apply the bullet for the returned verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict, as the hard-stop bullet does (advance once in total). `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).\n"
   },
   {
    "anchor": "**After doubt-verifier returns** (see `agents/doubt-verifier.md → ## Fix-Verify Contract`):",
    "condition": "always",
    "file": "skills/craftflow-router/SKILL.md",
    "id": "p6-call-line-fixverify",
+   "note": "Built P6: 'advance once in total' added (review Finding 6). Difference 33 (REM-FIX r1): advance is unconditional on the verdict and on any CYCLE_COMPLETE flag; the dead 'human_checkpoint cap-reached' clause is deleted; the hard stop is keyed to `policy.fix_verify_cycles_max`.",
    "op": "insert",
    "phase": "P6",
    "position": "after_anchor",
    "source": "plan P6 Prose: SKILL.md:1045 call line (fix_verify_cycles_max)",
    "status": "drafted",
-   "text": "- First run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate fix_verify_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"` (after the contract-override check below has been applied; N = the `Cycle:` of the fix-verify task; in Task*-tool fallback mode, the `## Cycle` value of this dispatch's prompt). `advance` → apply the bullet for the returned (post-override) verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict (the `policy.fix_verify_cycles_max` hard stop that the cycle-counter paragraph inherits from `doubt_verify`; advance once in total). If `doubt_verify_gate` also fired on this phase, a capped verdict does not block phase exit under the stricter-verdict rule; the other gate's verdict still applies. `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).\n",
-   "note": "Built P6: 'advance once in total' added (review Finding 6). Difference 33 (REM-FIX r1): advance is unconditional on the verdict and on any CYCLE_COMPLETE flag; the dead 'human_checkpoint cap-reached' clause is deleted; the hard stop is keyed to `policy.fix_verify_cycles_max`."
+   "text": "- First run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate fix_verify_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"` (after the contract-override check below has been applied; N = the `Cycle:` of the fix-verify task; in Task*-tool fallback mode, the `## Cycle` value of this dispatch's prompt). `advance` → apply the bullet for the returned (post-override) verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict (the `policy.fix_verify_cycles_max` hard stop that the cycle-counter paragraph inherits from `doubt_verify`; advance once in total). If `doubt_verify_gate` also fired on this phase, a capped verdict does not block phase exit under the stricter-verdict rule; the other gate's verdict still applies. `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).\n"
   },
   {
    "anchor": "Before creating a new remediation task:",
@@ -403,13 +403,13 @@
    "condition": "always",
    "file": "skills/craftflow-router/references/remediation-and-research.md",
    "id": "p6-rr-call-line-planreview",
+   "note": "Built P6 REM-FIX r1 (R1): the call now carries --wf and --project-root, which the script requires (it exited 2 without them); the increment already applied before the call, so a failed check must not re-apply it. Cycle 2: the guard covers every path (cap-reached continues after the pass-2 FINDINGS increment line; a proceed or advance reply must not repeat the increment).",
    "op": "insert",
    "phase": "P6",
    "position": "before_anchor",
    "source": "plan P6 Prose: one sentence before the 'When plan-gap-reviewer pass 1 returns PASS' line (remediation-and-research.md:145)",
    "status": "drafted",
-   "text": "After applying a block's `Increment planning_review_runs += 1` line, run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate plan_review_passes_max --point post_verdict --pass {N} --verdict {PASS|FINDINGS} --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"`, where N is the pass of the returning `plan-review-gap-N` task; `proceed` → continue with that block; `human_checkpoint` with `reason: cap-reached` → continue with the pass-2 `FINDINGS` block after its increment line (`pending_gate=clarification`); any other result → `loop_cap_check_failed` (`SKILL.md` § 14; the increment above already applied: a `proceed` or `advance` reply must not repeat it).\n\n",
-   "note": "Built P6 REM-FIX r1 (R1): the call now carries --wf and --project-root, which the script requires (it exited 2 without them); the increment already applied before the call, so a failed check must not re-apply it. Cycle 2: the guard covers every path (cap-reached continues after the pass-2 FINDINGS increment line; a proceed or advance reply must not repeat the increment)."
+   "text": "After applying a block's `Increment planning_review_runs += 1` line, run `python3 \"$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py\" --gate plan_review_passes_max --point post_verdict --pass {N} --verdict {PASS|FINDINGS} --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"`, where N is the pass of the returning `plan-review-gap-N` task; `proceed` → continue with that block; `human_checkpoint` with `reason: cap-reached` → continue with the pass-2 `FINDINGS` block after its increment line (`pending_gate=clarification`); any other result → `loop_cap_check_failed` (`SKILL.md` § 14; the increment above already applied: a `proceed` or `advance` reply must not repeat it).\n\n"
   },
   {
    "anchor": "**After doubt-verifier returns:**",
@@ -454,12 +454,12 @@
    "condition": "always",
    "file": "skills/craftflow-router/SKILL.md",
    "id": "p6-sub-doubt-cycle-complete",
+   "note": "Built P6: the second form keeps its (= 3) pin; the literal-to-key numeral guard counts both baseline 3s.",
    "op": "replace",
    "phase": "P6",
    "source": "plan P6 Prose: SKILL.md:981 substitutions",
    "start_anchor": "- `CYCLE_COMPLETE: true` on cycle 3 → advance regardless of verdict (3-cycle hard stop)",
-   "text": "- `CYCLE_COMPLETE: true` on cycle `policy.doubt_cycles_max` (= 3) → advance regardless of verdict (`policy.doubt_cycles_max` (= 3)-cycle hard stop)\n",
-   "note": "Built P6: the second form keeps its (= 3) pin; the literal-to-key numeral guard counts both baseline 3s."
+   "text": "- `CYCLE_COMPLETE: true` on cycle `policy.doubt_cycles_max` (= 3) → advance regardless of verdict (`policy.doubt_cycles_max` (= 3)-cycle hard stop)\n"
   },
   {
    "condition": "always",
@@ -492,16 +492,16 @@
    "text": "- Never let a remediation loop run more than `policy.remediation_cycles_max` (= 3) cycles without a human checkpoint. Drift accumulates silently in long chains.\n"
   },
   {
+   "anchor": "   - Maximum fresh-review passes: 2.",
    "condition": "always",
    "file": "skills/craftflow-router/references/plan-workflow.md",
    "id": "p6-sub-plan-review-passes",
-   "phase": "P6",
-   "source": "plan P6 Prose: plan-workflow.md:66 (inserted as a pin bullet, see note)",
+   "note": "Built P6: the line stays verbatim and the pin is a new bullet below it. router-normative-allowlist.json names the unit 'maximum fresh-review passes: 2.' and the baseline_matches_ref and attack-8 tests need it present at both the baseline and the live tree, so the plan's literal-to-key substitution cannot be applied to this one line.",
    "op": "insert",
+   "phase": "P6",
    "position": "after_anchor",
-   "anchor": "   - Maximum fresh-review passes: 2.",
-   "text": "   - Cap: `policy.plan_review_passes_max` (= 2).\n",
-   "note": "Built P6: the line stays verbatim and the pin is a new bullet below it. router-normative-allowlist.json names the unit 'maximum fresh-review passes: 2.' and the baseline_matches_ref and attack-8 tests need it present at both the baseline and the live tree, so the plan's literal-to-key substitution cannot be applied to this one line."
+   "source": "plan P6 Prose: plan-workflow.md:66 (inserted as a pin bullet, see note)",
+   "text": "   - Cap: `policy.plan_review_passes_max` (= 2).\n"
   },
   {
    "condition": "always",
@@ -538,25 +538,25 @@
    "condition": "always",
    "file": "skills/craftflow-router/SKILL.md",
    "id": "p6-kernel-policy-table",
+   "note": "Built P6: references/worktree.md does not exist until P8 and the only live reader of worktree_merge is the P5 bash guard (require_clean_tree), so the row names that; kept short because the enforced caps have zero headroom.",
    "op": "insert",
    "phase": "P6",
    "position": "end_of_file",
    "source": "plan P6 Kernel: generated ### Policy table under section 14 (8 rows)",
    "status": "drafted",
-   "text": "\n### Policy table\n\nEffective policy (`config/policy.json` merged over the defaults), printed by `craftflow_policy.py --print-table`. Each value is enforced by the named script; the prose location keeps the rule text.\n\n| key | value | enforced by | prose location |\n|---|---|---|---|\n| `native_plan_mode` | `never` | `craftflow_pretooluse_guard.py` | § 14 EnterPlanMode rule |\n| `plan_commit` | `never` | `craftflow_pretooluse_bash_guard.py` | § 14 plan-artifact rule |\n| `memory_write` | `finalize-only` | `craftflow_pretooluse_guard.py` | § 13 |\n| `worktree_merge` | `require_clean_tree=true, lock_max_attempts=9, lock_sleep_seconds=5, copy_fallback_on_up_to_date=true` | `craftflow_pretooluse_bash_guard.py` (clean tree) | § 5 |\n| `remediation_cycles_max` | `3` | `craftflow_gate_check.py` | § 14 remediation loop rule |\n| `doubt_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Doubt-Verify Dispatch Rule |\n| `fix_verify_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Fix-Verify Dispatch Rule |\n| `plan_review_passes_max` | `2` | `craftflow_gate_check.py` | `references/plan-workflow.md` |\n",
-   "note": "Built P6: references/worktree.md does not exist until P8 and the only live reader of worktree_merge is the P5 bash guard (require_clean_tree), so the row names that; kept short because the enforced caps have zero headroom."
+   "text": "\n### Policy table\n\nEffective policy (`config/policy.json` merged over the defaults), printed by `craftflow_policy.py --print-table`. Each value is enforced by the named script; the prose location keeps the rule text.\n\n| key | value | enforced by | prose location |\n|---|---|---|---|\n| `native_plan_mode` | `never` | `craftflow_pretooluse_guard.py` | § 14 EnterPlanMode rule |\n| `plan_commit` | `never` | `craftflow_pretooluse_bash_guard.py` | § 14 plan-artifact rule |\n| `memory_write` | `finalize-only` | `craftflow_pretooluse_guard.py` | § 13 |\n| `worktree_merge` | `require_clean_tree=true, lock_max_attempts=9, lock_sleep_seconds=5, copy_fallback_on_up_to_date=true` | `craftflow_pretooluse_bash_guard.py` (clean tree) | § 5 |\n| `remediation_cycles_max` | `3` | `craftflow_gate_check.py` | § 14 remediation loop rule |\n| `doubt_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Doubt-Verify Dispatch Rule |\n| `fix_verify_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Fix-Verify Dispatch Rule |\n| `plan_review_passes_max` | `2` | `craftflow_gate_check.py` | `references/plan-workflow.md` |\n"
   },
   {
    "condition": "always",
    "file": "skills/craftflow-router/SKILL.md",
    "id": "p6-kernel-loop-caps-table",
+   "note": "Built P6: the file name drops its references/ prefix (two cells); kept short because the enforced caps have zero headroom.",
    "op": "insert",
    "phase": "P6",
    "position": "end_of_file",
    "source": "plan P6 Kernel: documentation-only Loop caps table",
    "status": "drafted",
-   "text": "\n### Loop caps\n\nDocumentation of the hard stops. The operative text stays in the lines named in the last column.\n\n| gate | max | evaluation point | input | at-cap action | operative prose |\n|---|---|---|---|---|---|\n| `remediation_cycles_max` | 3 | before creating a REM-FIX task | `circuit_breaker` | ask the user | `remediation-and-research.md` \"Before creating a new remediation task\" |\n| `doubt_cycles_max` | 3 | after doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Doubt-Verify \"After doubt-verifier returns\" |\n| `fix_verify_cycles_max` | 3 | after the fix-verify doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Fix-Verify \"After doubt-verifier returns\" |\n| `plan_review_passes_max` | 2 | after a plan-gap-reviewer pass | pass N, verdict | pass 2 FINDINGS: clarification | `remediation-and-research.md` plan-gap-reviewer blocks |\n",
-   "note": "Built P6: the file name drops its references/ prefix (two cells); kept short because the enforced caps have zero headroom."
+   "text": "\n### Loop caps\n\nDocumentation of the hard stops. The operative text stays in the lines named in the last column.\n\n| gate | max | evaluation point | input | at-cap action | operative prose |\n|---|---|---|---|---|---|\n| `remediation_cycles_max` | 3 | before creating a REM-FIX task | `circuit_breaker` | ask the user | `remediation-and-research.md` \"Before creating a new remediation task\" |\n| `doubt_cycles_max` | 3 | after doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Doubt-Verify \"After doubt-verifier returns\" |\n| `fix_verify_cycles_max` | 3 | after the fix-verify doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Fix-Verify \"After doubt-verifier returns\" |\n| `plan_review_passes_max` | 2 | after a plan-gap-reviewer pass | pass N, verdict | pass 2 FINDINGS: clarification | `remediation-and-research.md` plan-gap-reviewer blocks |\n"
   },
   {
    "condition": "always",
@@ -589,7 +589,7 @@
    "position": "new_file",
    "source": "plan P8 Files: references/worktree.md (When, The call, outcome table with every outcome incl. exit 4, the Difference 6 row, :397 sentence, :727 Safety paragraph). Real text as built in P8.",
    "status": "drafted",
-   "text": "# Worktree finalize (BUILD)\n\nRead this after `integration-verifier` returns PASS on the final phase and before memory-finalize, when `worktree_mode == \"auto_created\"`, and on resume when `pending_gate` holds a worktree gate.\n\nImmediately before this step (and immediately before memory-finalize when no worktree exists), run the clean-state check per `references/harness-self-checks.md § Clean-State Check` and fold any findings AND any skipped (unscannable) entries into the deferred memory notes.\n\n## The finalize call\n\n`python3 \"$CRAFTFLOW_SCRIPTS/craftflow_worktree_finalize.py\" --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"` prints one JSON line `{\"outcome\",\"pending_gate\",\"message\",\"worktree_mode\",\"details\"}`. Finalize does everything step 4 used to: the merge lock, the clean-tree check, `git merge`, the copy fallback, the worktree and branch cleanup, and the artifact write (`worktree_mode`, `pending_gate`), composing `craftflow_worktree_lock_staleness.py` and `craftflow_worktree_copy_fallback.py`; `craftflow_worktree_merge_guard_check.py` is its proof harness, not a runtime step. Do none of it by hand.\n\nExit code 0: act on `outcome` (table below). Exit 3: outcome `artifact_unreadable`. Exit 4: the outcome is real but finalize could not write the workflow artifact (`details.artifact_write_error`); treat it as NOT a success, whatever the outcome says: do not continue to memory-finalize, show `message` verbatim (it ends with a WARNING), ask the user to repair the workflow artifact (set `worktree_mode` and `pending_gate` to match the outcome), then resume. Any other exit code (exit 2 is a usage error) or no parseable JSON line: last row.\n\n## Outcomes\n\n| outcome | pending_gate | router action | message source |\n|---|---|---|---|\n| `merged_and_removed` | `null` | continue to doc-sync/memory-finalize; finalize already set `worktree_mode: \"merged_and_removed\"` and cleared a stale worktree `pending_gate`, so write neither; `details.recovered` means an earlier run finished and only the record was missing; if `details.lock_release_failed` is set, show the WARNING in `message` (delete `.claude/worktrees/.merge.lock` by hand before the next BUILD) and still continue | message |\n| `skipped_not_auto_created` | `null` | continue to memory-finalize (nothing to merge) | message |\n| `worktree_path_missing` | `null` | continue on the main tree; finalize already logged the event | event |\n| `worktree_branch_missing` | `null` | continue on the main tree; finalize already logged the event | event |\n| `worktree_merge_locked` | `worktree_merge_locked` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `worktree_dirty_main_tree` | `worktree_dirty_main_tree` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `worktree_merge_conflict` | `worktree_merge_conflict` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `worktree_merge_unrecognized_failure` | `worktree_merge_unrecognized_failure` | stop before memory-finalize; show `message` verbatim (it also covers a `worktree_path` finalize refused as not `<project root>/.claude/worktrees/<name>`: repair it in the artifact, then resume); resume re-runs the call | message |\n| `worktree_copy_fallback_failed` | `worktree_copy_fallback_failed` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `worktree_cleanup_failed` | `worktree_cleanup_failed` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `policy_invalid` | `policy_invalid` | stop; fix `config/policy.json`; resume re-runs the call | message |\n| `artifact_unreadable` | none (exit 3) | stop; repair or restore the workflow artifact; resume | message |\n| non-zero exit or unparseable | `worktree_merge_unrecognized_failure` | persist `pending_gate: worktree_merge_unrecognized_failure`, say finalize returned no outcome, ask the user to inspect `git status` in `$PROJECT_ROOT` and the events log, stop | none |\n\nGate rows stop before memory-finalize and show `message` verbatim; resuming re-runs the call. A gate has already persisted its `pending_gate` and released the merge lock it held (the message says what was left in place); `details.lock_release_failed` on a gate means the lock directory is still there and must be deleted by hand.\n\n## Safety\n\nSafety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: \"auto_created\"` already set, re-use `worktree_path` from the artifact rather than creating a new worktree. If `worktree_path` is null despite `worktree_mode: \"auto_created\"`, treat as fallback and proceed with main tree. If a resume finds `pending_gate` set to `worktree_merge_locked`, `worktree_dirty_main_tree`, `worktree_merge_conflict`, `worktree_merge_unrecognized_failure`, `worktree_copy_fallback_failed`, or `worktree_cleanup_failed`, re-enter this step by calling finalize again (the old step 4a) — none of these gates require any bespoke resume branch beyond the generic resume algorithm in `SKILL.md`'s `## 4. Resume And Hydration`.\n\n"
+   "text": "# Worktree finalize (BUILD)\n\nRead this after `integration-verifier` returns PASS on the final phase and before memory-finalize, when `worktree_mode == \"auto_created\"`, and on every BUILD resume that finds `worktree_mode == \"auto_created\"` or a `pending_gate` holding any worktree gate, including `policy_invalid`. A resume before the final-phase PASS takes only the Safety rules below and does not run the call.\n\nImmediately before this step (and immediately before memory-finalize when no worktree exists), run the clean-state check per `references/harness-self-checks.md § Clean-State Check` and fold any findings AND any skipped (unscannable) entries into the deferred memory notes.\n\n## The finalize call\n\n`python3 \"$CRAFTFLOW_SCRIPTS/craftflow_worktree_finalize.py\" --wf {workflow_uuid} --project-root \"$PROJECT_ROOT\"` (pass the `PROJECT_ROOT` the worktree was created under; a different root is refused as `worktree_path_invalid`) with a Bash `timeout` of 600000 ms (the default 120 s can kill a slow merge midway). It prints one JSON line `{\"outcome\",\"pending_gate\",\"message\",\"worktree_mode\",\"details\"}`. Finalize does everything step 4 used to: the merge lock, the clean-tree check, `git merge`, the copy fallback, the worktree and branch cleanup, and the artifact write (`worktree_mode`, `pending_gate`), composing `craftflow_worktree_lock_staleness.py` and `craftflow_worktree_copy_fallback.py`; `craftflow_worktree_merge_guard_check.py` is its proof harness, not a runtime step. Do none of it by hand.\n\nExit code 0: act on `outcome` (table below). Exit 3: outcome `artifact_unreadable`. Exit 4: the outcome is real but finalize could not write the workflow artifact (`details.artifact_write_error`); treat it as NOT a success, whatever the outcome says: do not continue to memory-finalize, show `message` verbatim (it ends with a WARNING), ask the user to repair the workflow artifact (set `worktree_mode` and `pending_gate` to match the outcome), then resume. Any other exit code (exit 2 is a usage error) or no parseable JSON line: last row.\n\n## Outcomes\n\n| outcome | pending_gate | router action | message source |\n|---|---|---|---|\n| `merged_and_removed` | `null` | continue to doc-sync/memory-finalize; finalize already set `worktree_mode: \"merged_and_removed\"` and cleared a stale worktree `pending_gate`, so write neither; `details.recovered` means an earlier run finished and only the record was missing; if `details.lock_release_failed` is set, show the WARNING in `message` (delete `.claude/worktrees/.merge.lock` by hand before the next BUILD) and still continue; if `details.worktree_absent` is set, no worktree directory was present: show `message` and add that to the deferred memory notes | message |\n| `skipped_not_auto_created` | `null` | continue to memory-finalize (nothing to merge) | message |\n| `worktree_path_missing` | `null` | continue on the main tree; finalize already logged the event | event |\n| `worktree_branch_missing` | `null` | continue on the main tree; finalize already logged the event | event |\n| `worktree_merge_locked` | `worktree_merge_locked` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `worktree_dirty_main_tree` | `worktree_dirty_main_tree` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `worktree_merge_conflict` | `worktree_merge_conflict` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `worktree_merge_unrecognized_failure` | `worktree_merge_unrecognized_failure` | stop before memory-finalize; show `message` verbatim (it also covers a `worktree_path` finalize refused as not `<project root>/.claude/worktrees/<name>` or as under a different project root than the `PROJECT_ROOT` passed: repair it in the artifact or pass the right root, then resume); resume re-runs the call | message |\n| `worktree_copy_fallback_failed` | `worktree_copy_fallback_failed` | stop before memory-finalize; show `message` verbatim; resume re-runs the call | message |\n| `worktree_cleanup_failed` | `worktree_cleanup_failed` | stop before memory-finalize; show `message` verbatim (it also covers a worktree directory that is absent with nothing to merge, or whose path could not be inspected); resume re-runs the call | message |\n| `policy_invalid` | `policy_invalid` | stop; fix `config/policy.json`; resume re-runs the call | message |\n| `artifact_unreadable` | none (exit 3) | stop; repair or restore the workflow artifact; resume | message |\n| non-zero exit or unparseable (also: exit not in {0, 3, 4}; stdout not exactly one JSON line; `outcome` missing or not in this table; exit 0 with `artifact_unreadable`, or exit 3 with any other outcome) | `worktree_merge_unrecognized_failure` | persist `pending_gate: worktree_merge_unrecognized_failure`, say finalize returned no usable outcome, ask the user to inspect `git status` in `$PROJECT_ROOT` (run `git merge --abort` if a merge is in progress), check whether `.claude/worktrees/.merge.lock` is orphaned (delete it only after confirming no other BUILD is running), and read the events log; stop | none |\n\nGate rows stop before memory-finalize and show `message` verbatim; resuming re-runs the call. A gate has already persisted its `pending_gate` and released the merge lock it held (the message says what was left in place); `details.lock_release_failed` on a gate means the lock directory is still there and must be deleted by hand.\n\n## Safety\n\nSafety: Worktree creates are idempotent in the event log. If a resume finds `worktree_mode: \"auto_created\"` already set, re-use `worktree_path` from the artifact rather than creating a new worktree. If `worktree_path` is null despite `worktree_mode: \"auto_created\"`, treat as fallback and proceed with main tree. If a resume finds `pending_gate` set to `worktree_merge_locked`, `worktree_dirty_main_tree`, `worktree_merge_conflict`, `worktree_merge_unrecognized_failure`, `worktree_copy_fallback_failed`, `worktree_cleanup_failed`, or `policy_invalid`, re-enter this step by calling finalize again (the old step 4a) — none of these gates require any bespoke resume branch beyond the generic resume algorithm in `SKILL.md`'s `## 4. Resume And Hydration`.\n\n## Worktree gate summary\n\n- BUILD's worktree merge-safety guard uses 6 `pending_gate` values (canonical logic, formerly `SKILL.md` step 4, lives in\n  `scripts/craftflow_worktree_finalize.py`; the outcome table above is the router contract; this is a\n  summary, not a duplicate of the logic):\n  - `worktree_merge_conflict` — a real textual git merge conflict. Ask the user to resolve it in\n    the main tree, then resume.\n  - `worktree_merge_locked` — another BUILD workflow currently holds\n    `.claude/worktrees/.merge.lock`, OR the lock's metadata could not be read due to a real\n    filesystem/permission error, OR the local `git worktree list` check itself failed (distinct\n    conditions — see the holder in the finalize `message`). Wait for the other workflow to finish, fix the underlying\n    filesystem/permission/environment issue, or confirm the lock is actually dead before manually\n    clearing it, then resume.\n  - `worktree_dirty_main_tree` — the main tree had uncommitted changes at merge time that this\n    BUILD did not make. The user must commit, stash, or otherwise resolve them, then resume.\n  - `worktree_copy_fallback_failed` — the copy-fallback script (used when `git merge` reports\n    \"Already up to date\" because the worktree's changes were never committed) failed while\n    applying the worktree's uncommitted changes to the main tree; earlier files in the same run\n    may already have landed. The user must inspect `git status --porcelain` in the main tree and\n    resolve the underlying issue, then resume.\n  - `worktree_merge_unrecognized_failure` — `git merge` exited non-zero with output that is\n    neither \"Already up to date\" nor a conflict marker (e.g. an invalid ref, unrelated\n    histories). Nothing was merged; the worktree and branch are left untouched. Exceptions: with\n    `merge_state_unknown` (timeout or signal) the merge might have been applied midway, so read\n    `git status` first; a refused `worktree_path` (outside the project root's `.claude/worktrees/`)\n    means nothing ran at all. The user must inspect the error and resolve the underlying issue, then resume.\n  - `worktree_cleanup_failed` — after a successful merge or copy-fallback, either\n    `git worktree remove --force` or `git branch -d` failed (e.g. the worktree is busy/locked, or\n    the branch is not fully merged — a real correctness signal). Also when the worktree directory is\n    absent and the branch had nothing to merge (nothing from it was applied; `git worktree prune` and\n    `git branch -D` once confirmed), or when the worktree path fails to stat. The user must resolve the\n    underlying issue, then resume to retry cleanup.\n"
   },
   {
    "condition": "always",
@@ -600,7 +600,7 @@
    "phase": "P8",
    "source": "plan P8 Modify SKILL.md: replace :392-727 with a 3-line pointer",
    "start_anchor": "4. After `integration-verifier` returns PASS on the final phase and BEFORE memory-finalize, run",
-   "text": "4. After `integration-verifier` PASS on the final phase and before memory-finalize: when\n   `worktree_mode == \"auto_created\"`, read `references/worktree.md` and run its finalize call.\n   (Steps 1-3 above create the worktree.)\n"
+   "text": "4. After `integration-verifier` PASS on the final phase and before memory-finalize: when\n   `worktree_mode == \"auto_created\"`, read `references/worktree.md` and run its finalize call.\n"
   },
   {
    "condition": "always",
@@ -637,7 +637,7 @@
     "class": "stage",
     "file": "skills/craftflow-router/references/worktree.md",
     "happy_path": true,
-    "trigger": "after final-phase verifier PASS (BUILD, worktree_mode == auto_created) or resume with a worktree pending_gate",
+    "trigger": "final-phase verifier PASS (BUILD, worktree_mode == auto_created); BUILD resume with auto_created or any worktree pending_gate (incl. policy_invalid)",
     "workflows": [
      "BUILD"
     ]
@@ -1577,6 +1577,7 @@
    "dst": "hooks/README.md",
    "dst_header": "\n## Hook policy (moved from the router artifact policy)\n\n",
    "end_anchor": "- Optional accelerator MCPs are user-configured in Claude Code. CRAFTFLOW assumes the names `brightdata` and `octocode` if they are available, but must degrade to built-in research paths when they are absent.",
+   "feasibility": "requires reach-model amendment (P2C D17-B)",
    "id": "p11-artifact-hook-policy",
    "op": "move",
    "phase": "P11",
@@ -1584,12 +1585,12 @@
    "source": "plan P11 Files: hook policy (:261-277) moves to hooks/README.md with a pointer (Difference 17 only)",
    "src": "skills/craftflow-router/references/workflow-artifact-and-hook-policy.md",
    "start_anchor": "Hook policy:",
-   "status": "drafted",
-   "feasibility": "requires reach-model amendment (P2C D17-B)"
+   "status": "drafted"
   },
   {
    "condition": "difference_17",
    "end_anchor": "- That reference contains the verbatim artifact schema, event log contract, hook policy, and gate wording extracted from the prior router monolith. Treat it as load-bearing orchestration law, not optional background.",
+   "feasibility": "requires reach-model amendment (P2C D17-B)",
    "file": "skills/craftflow-router/SKILL.md",
    "id": "p11-d17-kernel-2a-trigger",
    "op": "replace",
@@ -1597,12 +1598,12 @@
    "source": "plan P11 Difference 17: narrow the read trigger in kernel section 2a (replace row)",
    "start_anchor": "- Before workflow creation, artifact mutation, hook policy changes, or resume logic that depends on artifact fields, immediately read `references/workflow-artifact-and-hook-policy.md`.",
    "status": "drafted",
-   "text": "- Read `references/workflow-artifact-and-hook-policy.md` before resume logic that depends on artifact fields, before a hook-policy change, before writing an artifact field the router has not written before, and after the first post-agent artifact update of a session.\n- That reference holds the verbatim artifact schema, event log contract and gate wording. Treat it as load-bearing orchestration law.\n",
-   "feasibility": "requires reach-model amendment (P2C D17-B)"
+   "text": "- Read `references/workflow-artifact-and-hook-policy.md` before resume logic that depends on artifact fields, before a hook-policy change, before writing an artifact field the router has not written before, and after the first post-agent artifact update of a session.\n- That reference holds the verbatim artifact schema, event log contract and gate wording. Treat it as load-bearing orchestration law.\n"
   },
   {
    "action": "update",
    "condition": "difference_17",
+   "feasibility": "requires reach-model amendment (P2C D17-B)",
    "id": "p11-d17-readmap-artifact-policy",
    "match": {
     "class": "start",
@@ -1615,8 +1616,7 @@
     "happy_path": true,
     "trigger": "before resume artifact logic / hook policy change / unnamed artifact field write / first post-agent artifact update"
    },
-   "source": "plan P11 Difference 17: start -> stage with the narrower trigger",
-   "feasibility": "requires reach-model amendment (P2C D17-B)"
+   "source": "plan P11 Difference 17: start -> stage with the narrower trigger"
   },
   {
    "condition": "always",
@@ -1732,59 +1732,59 @@
    "text": "    - Re-verify PASS → set `chain_tail_task_id = re_verify_task_id`, then run the Learn-Distill Gate and Skill-Distill Gate (identical gate checks, identical `TaskCreate` shape, identical `chain_tail_task_id` update rule as described in `build-graph-fast.md` → `### BUILD task graph — fast path` — `remediation_history` is now populated by this escalation cycle, so the Learn-Distill Gate fires) BEFORE creating the Memory Update task, then proceed to memory-finalize\n"
   },
   {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
    "id": "p11-mr-resolve-root-1a",
-   "phase": "P11",
    "op": "replace",
-   "condition": "always",
-   "status": "drafted",
-   "file": "skills/craftflow-router/SKILL.md",
+   "phase": "P11",
+   "source": "manual-review claim: the shared Resolve Project Root section still contains the 1a multi-repo branch (SKILL.md:39-41)",
    "start_anchor": "check, the `1a.` multi-repo branch with its dedicated resolver script, and the",
-   "text": "check, the `1a.` multi-repo branch (resolver in `router-protocol-multirepo.md`), and the\n",
-   "source": "manual-review claim: the shared Resolve Project Root section still contains the 1a multi-repo branch (SKILL.md:39-41)"
+   "status": "drafted",
+   "text": "check, the `1a.` multi-repo branch (resolver in `router-protocol-multirepo.md`), and the\n"
   },
   {
-   "id": "p11-mr-skill-distill-kernel",
-   "phase": "P11",
-   "op": "replace",
    "condition": "always",
-   "status": "drafted",
    "file": "skills/craftflow-router/SKILL.md",
+   "id": "p11-mr-skill-distill-kernel",
+   "op": "replace",
+   "phase": "P11",
+   "source": "manual-review claim: the Skill-Distill Approval Flow is reachable as the section the sentence names (SKILL.md:161)",
    "start_anchor": "- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (§ 8) is carved out as a de",
-   "text": "- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (`skill-distill-approval.md`) is carved out as a de\n",
-   "source": "manual-review claim: the Skill-Distill Approval Flow is reachable as the section the sentence names (SKILL.md:161)"
+   "status": "drafted",
+   "text": "- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (`skill-distill-approval.md`) is carved out as a de\n"
   },
   {
-   "id": "p11-mr-skill-distill-fast-path",
-   "phase": "P11",
-   "op": "replace",
    "condition": "always",
-   "status": "drafted",
    "file": "skills/craftflow-router/references/fast-path.md",
+   "id": "p11-mr-skill-distill-fast-path",
+   "op": "replace",
+   "phase": "P11",
+   "source": "manual-review claim: SKILL.md section 8 still holds the Skill-Distill Approval Flow (fast-path.md:97)",
    "start_anchor": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`craftflow-router/SKILL.md` § 8) — `AskUserQuestion` with Approve / Approve + register in SKILL_HINTS / Reject / Defer — before proceeding to `memory-finalize`. Append `skill_proposed` to the event log, then `skill_promoted` or `skill_rejected` once the user's choice is executed (no event for Defer — the candidate is unchanged). Under `JUST_GO=true`, this gate is a de facto REVERT-class gate (fail-closed default `Defer`) — see `SKILL.md` § 8's JUST_GO carve-out; never auto-select Approve or Approve + SKILL_HINTS.",
-   "text": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`_shared/skill-distill-approval.md`) — `AskUserQuestion` with Approve / Approve + register in SKILL_HINTS / Reject / Defer — before proceeding to `memory-finalize`. Append `skill_proposed` to the event log, then `skill_promoted` or `skill_rejected` once the user's choice is executed (no event for Defer — the candidate is unchanged). Under `JUST_GO=true`, this gate is a de facto REVERT-class gate (fail-closed default `Defer`) — see that file's JUST_GO carve-out; never auto-select Approve or Approve + SKILL_HINTS.\n",
-   "source": "manual-review claim: SKILL.md section 8 still holds the Skill-Distill Approval Flow (fast-path.md:97)"
+   "status": "drafted",
+   "text": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`_shared/skill-distill-approval.md`) — `AskUserQuestion` with Approve / Approve + register in SKILL_HINTS / Reject / Defer — before proceeding to `memory-finalize`. Append `skill_proposed` to the event log, then `skill_promoted` or `skill_rejected` once the user's choice is executed (no event for Defer — the candidate is unchanged). Under `JUST_GO=true`, this gate is a de facto REVERT-class gate (fail-closed default `Defer`) — see that file's JUST_GO carve-out; never auto-select Approve or Approve + SKILL_HINTS.\n"
   },
   {
-   "id": "p11-mr-skill-distill-build-graph",
-   "phase": "P11",
-   "op": "replace",
    "condition": "always",
-   "status": "drafted",
    "file": "skills/craftflow-router/references/build-graph-standard.md",
+   "id": "p11-mr-skill-distill-build-graph",
+   "op": "replace",
+   "phase": "P11",
+   "source": "manual-review claim: SKILL.md section 8 still holds the Skill-Distill Approval Flow (build-workflow.md:143, moved by p11-bw-graph-standard)",
    "start_anchor": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`SKILL.md` § 8) before Memory Update proceeds.",
-   "text": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`_shared/skill-distill-approval.md`) before Memory Update proceeds.\n",
-   "source": "manual-review claim: SKILL.md section 8 still holds the Skill-Distill Approval Flow (build-workflow.md:143, moved by p11-bw-graph-standard)"
+   "status": "drafted",
+   "text": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`_shared/skill-distill-approval.md`) before Memory Update proceeds.\n"
   },
   {
-   "id": "p11-mr-standard-graph-above",
-   "phase": "P11",
-   "op": "replace",
    "condition": "always",
-   "status": "drafted",
    "file": "skills/craftflow-router/references/build-graph-fast.md",
+   "id": "p11-mr-standard-graph-above",
+   "op": "replace",
+   "phase": "P11",
+   "source": "manual-review claim: the standard BUILD task graph above holds the Learn-Distill and Skill-Distill gate text (build-workflow.md:189, moved by p11-bw-graph-fast)",
    "start_anchor": "Track `chain_tail_task_id` starting as `verifier_task_id` (no doc-sync on fast path). Apply the SAME Learn-Distill Gate and Skill-Distill Gate described above in the standard BUILD task graph — identical gate checks, identical `phase:learn-distill` / `phase:skill-distill` `TaskCreate` shape, identical `chain_tail_task_id` update rule — the only difference is the starting chain tail (`verifier_task_id` here vs `doc_sync_task_id` in standard BUILD). On a clean fast-path pass, `remediation_history` is empty so the Learn-Distill Gate never fires (see `fast-path.md`'s own Learn-Distill Gate note); the Skill-Distill Gate is independent of `remediation_history` and can still fire on a clean fast-path pass if the ledger has an eligible candidate. On an escalated fast path (verifier FAIL → reviewer/hunter/REM-FIX → re-verify), `remediation_history` is populated and `learn-distill` runs exactly like standard BUILD.",
-   "text": "Track `chain_tail_task_id` starting as `verifier_task_id` (no doc-sync on fast path). Apply the SAME Learn-Distill Gate and Skill-Distill Gate described in `build-graph-standard.md` — identical gate checks, identical `phase:learn-distill` / `phase:skill-distill` `TaskCreate` shape, identical `chain_tail_task_id` update rule — the only difference is the starting chain tail (`verifier_task_id` here vs `doc_sync_task_id` in standard BUILD). On a clean fast-path pass, `remediation_history` is empty so the Learn-Distill Gate never fires (see `fast-path.md`'s own Learn-Distill Gate note); the Skill-Distill Gate is independent of `remediation_history` and can still fire on a clean fast-path pass if the ledger has an eligible candidate. On an escalated fast path (verifier FAIL → reviewer/hunter/REM-FIX → re-verify), `remediation_history` is populated and `learn-distill` runs exactly like standard BUILD.\n",
-   "source": "manual-review claim: the standard BUILD task graph above holds the Learn-Distill and Skill-Distill gate text (build-workflow.md:189, moved by p11-bw-graph-fast)"
+   "status": "drafted",
+   "text": "Track `chain_tail_task_id` starting as `verifier_task_id` (no doc-sync on fast path). Apply the SAME Learn-Distill Gate and Skill-Distill Gate described in `build-graph-standard.md` — identical gate checks, identical `phase:learn-distill` / `phase:skill-distill` `TaskCreate` shape, identical `chain_tail_task_id` update rule — the only difference is the starting chain tail (`verifier_task_id` here vs `doc_sync_task_id` in standard BUILD). On a clean fast-path pass, `remediation_history` is empty so the Learn-Distill Gate never fires (see `fast-path.md`'s own Learn-Distill Gate note); the Skill-Distill Gate is independent of `remediation_history` and can still fire on a clean fast-path pass if the ledger has an eligible candidate. On an escalated fast path (verifier FAIL → reviewer/hunter/REM-FIX → re-verify), `remediation_history` is populated and `learn-distill` runs exactly like standard BUILD.\n"
   },
   {
    "action": "add",

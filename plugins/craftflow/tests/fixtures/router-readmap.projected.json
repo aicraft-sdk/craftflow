@@ -136,7 +136,7 @@
    "workflows": [
     "BUILD"
    ],
-   "trigger": "after final-phase verifier PASS (BUILD, worktree_mode == auto_created) or resume with a worktree pending_gate",
+   "trigger": "final-phase verifier PASS (BUILD, worktree_mode == auto_created); BUILD resume with auto_created or any worktree pending_gate (incl. policy_invalid)",
    "happy_path": true
   },
   {
