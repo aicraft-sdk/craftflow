@@ -290,7 +290,7 @@ def _sub(tmp, name):
 
 @tmpscene
 def test_path_missing_event_skip(tmp):
-    for label, value in (("empty", ""), ("whitespace", "   "), ("null", None)):
+    for label, value in (("empty", ""), ("null", None)):  # whitespace-only is a non-empty path we cannot trust: a gate, see test_worktree_path_must_be_absolute_and_in_root
         s = Scene(_sub(tmp, label), artifact={"workflow_uuid": "x", "worktree_mode": "auto_created", "worktree_path": value,
                                               "worktree_branch": "wf-fin-ab12cd34", "pending_gate": None})
         before = s.snapshot()
@@ -791,7 +791,7 @@ def test_worktree_path_must_be_absolute_and_in_root(tmp):
     for label, value in (("relative", "repo/.claude/worktrees/fin-ab12cd34"), ("dot_relative", "./.claude/worktrees/fin-ab12cd34"),
                          ("leading_dash", "-C/../../x"), ("too_shallow", "/x"), ("dotdot", "{wt_parent}/../worktrees/fin-ab12cd34"),
                          ("wrong_depth_name", "{root}/src/deep/fin-ab12cd34"), ("not_a_name", "{root}/.claude/worktrees"),
-                         ("too_deep", "{root}/.claude/worktrees/a/b")):
+                         ("too_deep", "{root}/.claude/worktrees/a/b"), ("whitespace", "   "), ("tab_newline", " \t\n")):
         s = Scene(_sub(tmp, label))
         art = s.artifact()
         art["worktree_path"] = value.format(root=s.root, wt_parent=s.wt.parent)
@@ -1462,6 +1462,40 @@ def test_skip_clears_a_stale_worktree_gate_only_when_merged(tmp):
     check("skip_clears_stale:other_mode_kept", r3.data.get("outcome") == "skipped_not_auto_created" and s3.artifact()["pending_gate"] == "worktree_cleanup_failed", r3.stdout[:300])
 
 
+def _listed_prunable(s):
+    listing = git(s.root, "worktree", "list", "--porcelain").stdout
+    return "prunable" in listing and str(s.wt) in listing
+
+
+@tmpscene
+def test_prunable_missing_worktree_is_completed(tmp):
+    """P8 step 0: the worktree directory was deleted by hand but git still lists it (prunable): finalize must complete in one run
+    (nothing on disk to lose), not die in copy-fallback or the worktree status check."""
+    for label, commit in (("merge", True), ("up_to_date", False)):
+        s = Scene(_sub(tmp, label))
+        if commit:
+            s.commit_in_worktree()
+        shutil.rmtree(str(s.wt))
+        check(f"prunable_{label}:setup", _listed_prunable(s), git(s.root, "worktree", "list", "--porcelain").stdout)
+        res = s.run()
+        check(f"prunable_{label}:no_traceback", "Traceback" not in res.stderr and "FileNotFoundError" not in res.stdout, res.stderr[-300:] + res.stdout[:300])
+        expect(f"prunable_{label}", s, res, "merged_and_removed", MSG_OK, gate=None, mode="merged_and_removed")
+        check(f"prunable_{label}:cleaned", not s.branch_exists() and str(s.wt) not in git(s.root, "worktree", "list", "--porcelain").stdout, "branch or registration left")
+        check(f"prunable_{label}:merged_file", (s.root / "feature.txt").exists() == commit, f"feature.txt exists={(s.root / 'feature.txt').exists()}")
+
+
+@tmpscene
+def test_message_does_not_claim_a_removal_that_did_not_happen(tmp):
+    """P8 step 0 advisory: the path is well formed but names a worktree that is not there; a branch-delete failure must not say 'the worktree was removed'."""
+    s = Scene(tmp)
+    s.commit_in_worktree()
+    git(s.root, "worktree", "remove", "--force", str(s.wt))  # the worktree is already gone, the branch is not
+    res = s.run(env=s.shim_env("branch -d"))
+    check("no_false_removal:gate", res.data.get("outcome") == "worktree_cleanup_failed" and res.data.get("pending_gate") == "worktree_cleanup_failed", res.stdout[:300])
+    check("no_false_removal:message", "worktree was removed" not in res.data.get("message", "") and "git branch -d wf-fin-ab12cd34" in res.data.get("message", ""),
+          res.data.get("message", "")[:300])
+
+
 # ---- totality, hygiene -------------------------------------------------------------------------------------------------------
 
 def test_exactly_one_json_line_enum():
@@ -1489,7 +1523,7 @@ def test_script_hygiene():
     src = SCRIPT.read_text(encoding="utf-8")
     tree = ast.parse(src, feature_version=(3, 9))
     check("hygiene:py39", True)
-    check("hygiene:line_budget", len(src.splitlines()) <= 540, f"{len(src.splitlines())} lines")  # 450 at P7; 520 after remfix 1 (lock ownership, write failure, worktree guard); 540 after remfix 2 (path shape, resume recovery)
+    check("hygiene:line_budget", len(src.splitlines()) <= 550, f"{len(src.splitlines())} lines")  # 450 at P7; 520 after remfix 1 (lock ownership, write failure, worktree guard); 540 after remfix 2 (path shape, resume recovery); 550 after P8 step 0 (prunable worktree)
     literals = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
     bad = [t for t in literals if "craftflow-router" in t or "_shared" in t or "router-protocol" in t]
     check("hygiene:pp2_no_prose_path", not bad, f"literals={bad[:3]}")
@@ -1536,7 +1570,8 @@ def main():
                test_no_side_effects_on_gate_outcomes, test_worktree_path_spellings_derive_the_same_root,
                test_untracked_work_survives_show_untracked_files_no, test_resume_after_exit_4_recovers_as_already_merged,
                test_resume_after_branch_delete_failure_completes_without_traceback, test_merge_killed_by_signal_says_state_unknown,
-               test_skip_clears_a_stale_worktree_gate_only_when_merged,
+               test_skip_clears_a_stale_worktree_gate_only_when_merged, test_prunable_missing_worktree_is_completed,
+               test_message_does_not_claim_a_removal_that_did_not_happen,
                test_exactly_one_json_line_enum, test_every_outcome_is_exercised, test_script_hygiene, test_exit_criteria_dark_and_policy_shipped):
         try:
             fn()

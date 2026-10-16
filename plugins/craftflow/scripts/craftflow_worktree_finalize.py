@@ -95,6 +95,10 @@ MESSAGES = {
     "cleanup_worktree": ("The merge/copy-fallback succeeded, but `git worktree remove {worktree_path} --force` failed: `{worktree_remove_output}`. "
                          "The worktree and its branch are still present and untouched. Resolve the underlying issue (e.g. a process still holding a "
                          "handle inside the worktree), then resume this workflow to retry cleanup."),
+    "cleanup_branch_gone": ("The merge succeeded and no worktree is registered or present at `{worktree_path}` (removed earlier, or it never existed), but "
+                            "`git branch -d {worktree_branch}` failed: `{branch_delete_output}`. This can mean the branch is not fully merged " + DASH + " a real "
+                            "correctness signal, not a cosmetic failure. Inspect `git log {worktree_branch}` in `$PROJECT_ROOT`, resolve the discrepancy (or delete "
+                            "the branch manually with `git branch -D` once you've confirmed nothing is lost), then resume this workflow to retry cleanup."),
     "cleanup_branch": ("The merge/copy-fallback succeeded and the worktree was removed, but `git branch -d {worktree_branch}` failed: "
                        "`{branch_delete_output}`. This can mean the branch is not fully merged " + DASH + " a real correctness signal, not a cosmetic failure. "
                        "Inspect `git log {worktree_branch}` in `$PROJECT_ROOT`, resolve the discrepancy (or delete the branch manually with `git branch -D` "
@@ -389,7 +393,7 @@ def finalize(ctx: Ctx, policy_file: Optional[str], runner: StalenessRunner) -> T
         stale = ctx.mode == "merged_and_removed" and art.get("pending_gate") in GATES  # a gate a failed earlier write left behind; only this combination
         return ctx.conclude("skipped_not_auto_created", "skipped_not_auto_created", clear_stale=stale)
     wp, branch = art.get("worktree_path"), art.get("worktree_branch")
-    if not isinstance(wp, str) or not wp.strip():
+    if not isinstance(wp, str) or not wp:  # whitespace-only is a non-empty path we cannot trust: the shape gate below, like any other bad path
         ctx.legacy_event("worktree_path_missing")
         return ctx.conclude("worktree_path_missing", "worktree_path_missing")
     if not isinstance(branch, str) or not branch.strip() or branch.startswith("-"):  # a dash branch would be read by git as an option
@@ -446,6 +450,7 @@ def worktree_gone(wp: str, merge_root: Path) -> bool:
 
 def merge_and_clean(ctx: Ctx, lock_dir: Path, merge_root: Path, wp: str, branch: str, require_clean: bool, copy_fallback: bool) -> Tuple[int, str]:
     gone = worktree_gone(wp, merge_root)
+    on_disk = os.path.lexists(wp)  # False for a gone worktree and for a prunable one (directory deleted by hand, git still lists it): nothing on disk to lose
     if gone and _git(["rev-parse", "--verify", "-q", f"refs/heads/{branch}"], merge_root)[0] == 1:
         # resume after an exit-4 artifact write (or a lost write): nothing is left to merge or clean, so record it; nothing in the main tree is touched
         ctx.details["recovered"] = True
@@ -458,7 +463,7 @@ def merge_and_clean(ctx: Ctx, lock_dir: Path, merge_root: Path, wp: str, branch:
     rc, merge_output = _git(["merge", branch], merge_root, {"GIT_MERGE_AUTOEDIT": "no"})  # 4e
     applied = False  # True once copy-fallback has carried the worktree's uncommitted edits into the main tree
     if rc == 0 and "Already up to date" in merge_output:
-        if copy_fallback and not gone:
+        if copy_fallback and on_disk:
             try:
                 proc = subprocess.run([sys.executable, str(COPY_FALLBACK), wp, str(merge_root)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       universal_newlines=True, errors="replace", timeout=GIT_TIMEOUT)
@@ -479,9 +484,9 @@ def merge_and_clean(ctx: Ctx, lock_dir: Path, merge_root: Path, wp: str, branch:
         if rc != 0:
             ctx.note("branch_delete_output", out)
             ctx.note("failing_command", "git branch -d")
-            return gate(ctx, lock_dir, "worktree_cleanup_failed", "cleanup_branch")
+            return gate(ctx, lock_dir, "worktree_cleanup_failed", "cleanup_branch_gone")
         return ctx.conclude("merged_and_removed", "merged_and_removed", merged=True, lock_dir=lock_dir)
-    if not applied:  # deliberate deviation from the prose (which discards): `--force` below must never throw away uncommitted worktree edits
+    if on_disk and not applied:  # deliberate deviation from the prose (which discards): `--force` below must never throw away uncommitted worktree edits
         # --untracked-files=all and --ignore-submodules=none: a user's status.showUntrackedFiles=no / ignore config must not hide work from `remove --force`
         rc, status_out = _git(["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"], Path(wp))
         if rc != 0 or status_out:
