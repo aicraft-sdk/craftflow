@@ -32,10 +32,19 @@
       "name": "Worktree merge guard scenarios pass",
       "mode": "proof",
       "given": "Real scratch git repos simulate every distinct outcome of craftflow_worktree_lock_staleness.py's decide() (self-reclaim gated on positive worktree-death proof, the still-live-worktree no-reclaim negative control, stale-worktree-gone, age-based stale-inactive including both the missing-metadata.json and corrupt-JSON variants, plain contention, the benign fresh-lock-no-metadata race, a lock-metadata read error, and both the launch-failure and non-zero-exit forms of a git-worktree-list failure) and of craftflow_worktree_copy_fallback.py's apply_copy_fallback() (a combined Added/Modified/Deleted/Renamed-with-space exercise, an AA conflict rejection, an RD missing-rename-source rejection, a preserved working symlink, a rewritten absolute symlink, a preserved chained symlink, and a brand-new untracked top-level directory), plus the broader dirty-tree and merge-conflict guard-sequence properties",
-      "when": "The harness subprocess-invokes the real craftflow_worktree_lock_staleness.py and craftflow_worktree_copy_fallback.py scripts (the exact files SKILL.md step 4 shells out to) against each scenario",
-      "then": "Each scenario resolves to the documented gate/outcome from skills/craftflow-router/SKILL.md step 4",
+      "when": "The harness subprocess-invokes the real craftflow_worktree_lock_staleness.py and craftflow_worktree_copy_fallback.py scripts (the exact files craftflow_worktree_finalize.py, which replaced SKILL.md step 4, shells out to) against each scenario",
+      "then": "Each scenario resolves to the documented gate/outcome from skills/craftflow-router/references/worktree.md (formerly SKILL.md step 4)",
       "command": "python3 plugins/craftflow/scripts/craftflow_worktree_merge_guard_check.py",
       "expected": "Worktree merge guard check exits 0"
+    },
+    {
+      "name": "Worktree finalize outcomes pass",
+      "mode": "proof",
+      "given": "Real scratch git repos exercise every one of the 12 outcomes of craftflow_worktree_finalize.py (merge, copy-fallback, conflict, dirty main tree, lock contention and reclaim, cleanup failures, an unreadable artifact, an invalid policy, a prunable worktree whose directory is gone, a resume after an unrecorded finish) together with the single-JSON-line and pending_gate contract",
+      "when": "The harness runs the finalize fixture runner",
+      "then": "Every outcome resolves to the documented pending_gate and worktree_mode, and the runner exits cleanly",
+      "command": "python3 plugins/craftflow/tests/fixtures/test_worktree_finalize.py",
+      "expected": "Fixture runner exits 0"
     },
     {
       "name": "Latency audit reads fixture telemetry",

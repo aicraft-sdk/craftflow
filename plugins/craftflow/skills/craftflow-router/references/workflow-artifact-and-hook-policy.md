@@ -181,32 +181,8 @@ Rules:
   - `broken` — boolean, default `false`; set `true` at most once per workflow, when
     `remfix_count` reaches `policy.remediation_cycles_max` (= 3); never resets within that workflow. When `true`, the router asks the
     user how to proceed before creating another REM-FIX task.
-- BUILD's worktree merge-safety guard uses 6 `pending_gate` values (canonical logic lives in
-  `skills/craftflow-router/SKILL.md` → "### Worktree Isolation (BUILD Default)" step 4; this is a
-  summary, not a duplicate of the logic):
-  - `worktree_merge_conflict` — a real textual git merge conflict. Ask the user to resolve it in
-    the main tree, then resume.
-  - `worktree_merge_locked` — another BUILD workflow currently holds
-    `.claude/worktrees/.merge.lock`, OR the lock's metadata could not be read due to a real
-    filesystem/permission error, OR the local `git worktree list` check itself failed (distinct
-    conditions — see step 4c). Wait for the other workflow to finish, fix the underlying
-    filesystem/permission/environment issue, or confirm the lock is actually dead before manually
-    clearing it, then resume.
-  - `worktree_dirty_main_tree` — the main tree had uncommitted changes at merge time that this
-    BUILD did not make. The user must commit, stash, or otherwise resolve them, then resume.
-  - `worktree_copy_fallback_failed` — the copy-fallback script (used when `git merge` reports
-    "Already up to date" because the worktree's changes were never committed) failed while
-    applying the worktree's uncommitted changes to the main tree; earlier files in the same run
-    may already have landed. The user must inspect `git status --porcelain` in the main tree and
-    resolve the underlying issue, then resume.
-  - `worktree_merge_unrecognized_failure` — `git merge` exited non-zero with output that is
-    neither "Already up to date" nor a conflict marker (e.g. an invalid ref, unrelated
-    histories). Nothing was merged; the worktree and branch are left untouched. The user must
-    inspect the error and resolve the underlying issue, then resume.
-  - `worktree_cleanup_failed` — after a successful merge or copy-fallback, either
-    `git worktree remove --force` or `git branch -d` failed (e.g. the worktree is busy/locked, or
-    the branch is not fully merged — a real correctness signal). The user must resolve the
-    underlying issue, then resume to retry cleanup.
+- Worktree merge gates (`worktree_merge_*`, `worktree_dirty_main_tree`, `worktree_copy_fallback_failed`, `worktree_cleanup_failed`) are summarized in `references/worktree.md`.
+- `policy_invalid` — `config/policy.json` failed validation; the finalize call touched nothing. Fix the file, then resume.
 - `status_history` and `remediation_history` are append-only summaries of major router decisions.
 
 v10 router gates:

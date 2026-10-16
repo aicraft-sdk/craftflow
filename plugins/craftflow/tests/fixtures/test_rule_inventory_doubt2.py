@@ -81,22 +81,23 @@ def test_r1_intro_paragraph_not_ending_in_colon() -> None:
 
 
 def test_r1_real_skill_4e_branch_swap_e2e() -> None:
-    head = "      - **If `COPY_FALLBACK_EXIT != 0`**"
-    tail = "      - **If `COPY_FALLBACK_EXIT == 0`**"
-    stop = "      - **If `MERGE_EXIT == 0` AND"
+    """P8 moved Worktree Isolation step 4 (the original target, its `COPY_FALLBACK_EXIT` branches) out of SKILL.md, and its prose is now
+    policy-mapped to `craftflow_worktree_finalize.py`, so swapping branches inside it is no longer guarded text. The same attack runs on the
+    next real nested branch structure: `## Resolve Project Root` step 1a of the shared protocol, where the `NO_REPO_FOUND` item (and its
+    children) is pushed one level deeper so it nests under the `AMBIGUOUS` item instead of beside it."""
+    head = "     - **`NO_REPO_FOUND`**"
+    stop = "(Host-specific note: both hosts run this exact algorithm"
     with tempfile.TemporaryDirectory() as tmp:
         root = d.scratch(tmp)
         control, _ = d.real_diff(root)
-        text = (root / K).read_text(encoding="utf-8")
-        a, b = text.index(head), text.index(tail)
-        c = text.index(stop, b)
-        success = text[b:c]
-        children_start = text.index("        - Release the lock", a)
-        swapped = text[:children_start] + success + text[children_start:b] + text[c:]
-        (root / K).write_text(swapped, encoding="utf-8")
+        lines = (root / d.PROTO).read_text(encoding="utf-8").split("\n")
+        a = next(i for i, x in enumerate(lines) if x.startswith(head))
+        c = next(i for i in range(a, len(lines)) if lines[i].startswith(stop))
+        nested = [("  " + x) if x.strip() else x for x in lines[a:c]]
+        (root / d.PROTO).write_text("\n".join(lines[:a] + nested + lines[c:]), encoding="utf-8")
         r, res = d.real_diff(root)
     check("R1 control: the unmodified scratch copy passes", control.returncode == 0, control.stdout[-200:] + control.stderr[-200:])
-    check("R1 e2e: SKILL.md 4e `COPY_FALLBACK_EXIT == 0` item moved above the failure children fails closed",
+    check("R1 e2e: router-protocol.md step 1a `NO_REPO_FOUND` item nested under the `AMBIGUOUS` item fails closed",
           r.returncode == 1 and res.get("unmapped_removed", 0) >= 1, f"rc={r.returncode} {res} {r.stderr[-200:]}")
 
 

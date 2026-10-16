@@ -119,8 +119,8 @@ def test_b2_units_record_branch_context() -> None:
 # ------------------------------------------------------------------------------------------------ real SKILL.md e2e
 
 
-def _lines_of(root: Path) -> List[str]:
-    return (root / K).read_text(encoding="utf-8").split("\n")
+def _lines_of(root: Path, rel: str = K) -> List[str]:
+    return (root / rel).read_text(encoding="utf-8").split("\n")
 
 
 def _fence_span(lines: List[str], needle: str) -> Tuple[int, int]:
@@ -130,36 +130,41 @@ def _fence_span(lines: List[str], needle: str) -> Tuple[int, int]:
     return start, end
 
 
-def _run(root: Path, lines: List[str]):
-    (root / K).write_text("\n".join(lines), encoding="utf-8")
+def _run(root: Path, lines: List[str], rel: str = K):
+    (root / rel).write_text("\n".join(lines), encoding="utf-8")
     return d.real_diff(root)
 
 
 def test_b1_real_skill_branch_delete_move_e2e() -> None:
+    """P8 retarget (see test_r1_real_skill_4e_branch_swap_e2e): step 4's branch-delete items left SKILL.md, so the attack moves a real failure
+    branch of `## Resolve Project Root` in the shared protocol: the `RESOLVE_EXIT != 0` item is lifted out from under step 1a and placed
+    before the `TOPLEVEL_EXIT != 0` item one level up."""
     with tempfile.TemporaryDirectory() as tmp:
         root = d.scratch(tmp)
         control, _ = d.real_diff(root)
-        lines = _lines_of(root)
-        a = next(i for i, x in enumerate(lines) if x.strip().startswith("- **If `BRANCH_DELETE_EXIT != 0`**"))
-        b = next(i for i, x in enumerate(lines) if x.strip().startswith("- **If `BRANCH_DELETE_EXIT == 0`**"))
-        dest = next(i for i, x in enumerate(lines) if x.strip().startswith("- **If `WORKTREE_REMOVE_EXIT != 0`**"))
+        lines = _lines_of(root, d.PROTO)
+        a = next(i for i, x in enumerate(lines) if x.strip().startswith("- **If `RESOLVE_EXIT != 0`**"))
+        b = next(i for i in range(a + 1, len(lines)) if lines[i].strip().startswith("- **Otherwise**, parse the outcome"))
+        dest = next(i for i, x in enumerate(lines) if x.strip().startswith("- **If `TOPLEVEL_EXIT != 0`**"))
         seg = [x[2:] if x.startswith("  ") else x for x in lines[a:b]]
         moved = lines[:dest] + seg + lines[dest:a] + lines[b:]
-        r, res = _run(root, moved)
+        r, res = _run(root, moved, d.PROTO)
     check("B1 e2e control: the unmodified scratch copy passes", control.returncode == 0, control.stdout[-200:])
-    check("B1 e2e: the branch-delete failure item moved before `git branch -d` fails closed",
+    check("B1 e2e: the `RESOLVE_EXIT != 0` failure item moved before the `TOPLEVEL_EXIT != 0` item fails closed",
           r.returncode == 1 and res.get("unmapped_removed", 0) >= 1, f"rc={r.returncode} {res} {r.stderr[-200:]}")
 
 
 def test_b2_real_skill_fence_swap_e2e() -> None:
+    """P8 retarget: the `git merge` / copy-fallback fences of step 4 left SKILL.md; the same fence swap runs on the two fences of
+    `## Resolve Project Root` step 1 and 1a (`git rev-parse --show-toplevel` and the `CRAFTFLOW_INSTALL` resolver call)."""
     with tempfile.TemporaryDirectory() as tmp:
         root = d.scratch(tmp)
-        lines = _lines_of(root)
-        m0, m1 = _fence_span(lines, "MERGE_OUTPUT=$(git merge")
-        c0, c1 = _fence_span(lines, "COPY_FALLBACK_OUTPUT=$(python3")
+        lines = _lines_of(root, d.PROTO)
+        m0, m1 = _fence_span(lines, "PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)")
+        c0, c1 = _fence_span(lines, "CRAFTFLOW_INSTALL=$(python3")
         swapped = lines[:m0] + lines[c0:c1 + 1] + lines[m1 + 1:c0] + lines[m0:m1 + 1] + lines[c1 + 1:]
-        r, res = _run(root, swapped)
-    check("B2 e2e: the `git merge` fence swapped with the copy-fallback fence fails closed",
+        r, res = _run(root, swapped, d.PROTO)
+    check("B2 e2e: the `git rev-parse` fence swapped with the resolver-call fence fails closed",
           r.returncode == 1 and res.get("unmapped_removed", 0) >= 1, f"rc={r.returncode} {res} {r.stderr[-200:]}")
 
 

@@ -63,11 +63,11 @@ def test_classifier() -> None:
           str(drills.classify("hook::t_x", 10, rows)))
 
 
-def test_drill_set_is_the_fourteen_planned_moves() -> None:
+def test_drill_set_is_the_thirteen_remaining_moves() -> None:
     want = {"p9_memfin", "p9_memfin_pointer", "p9_fallback_labels", "p10_parent", "p10_resume", "p10_0a", "p10_section3",
-            "p10_worktree13", "p10_postagent", "p10_memload_5a", "p11_proto_split", "p11_build_split", "p8_step4", "p11_hookpolicy"}
+            "p10_worktree13", "p10_postagent", "p10_memload_5a", "p11_proto_split", "p11_build_split", "p11_hookpolicy"}
     have = {n for n in drills.DRILLS if n != "control"}
-    check("DRILLS holds exactly the fourteen drills", have == want, f"missing={sorted(want - have)} extra={sorted(have - want)}")
+    check("DRILLS holds exactly the thirteen drills (the p8_step4 drill retired when P8 moved step 4)", have == want, f"missing={sorted(want - have)} extra={sorted(have - want)}")
 
 
 def test_every_drill_applies_and_moves_text() -> None:
@@ -156,8 +156,8 @@ def test_cli_help_and_list_do_not_run_drills() -> None:
           helped.returncode == 0 and "--jobs" in helped.stdout and "--drills" in helped.stdout and time.time() - start < 30,
           f"rc={helped.returncode} out={helped.stdout[:80]!r} err={helped.stderr[:120]!r}")
     names = [line.split("\t")[0] for line in listed.stdout.splitlines()]
-    check("--list prints control, the fourteen drills and the variants without running any",
-          listed.returncode == 0 and len(names) == 1 + 14 + len(drills.VARIANTS), f"rc={listed.returncode} names={names} err={listed.stderr[:120]!r}")
+    check("--list prints control, the thirteen drills and the variants without running any",
+          listed.returncode == 0 and len(names) == 1 + 13 + len(drills.VARIANTS), f"rc={listed.returncode} names={names} err={listed.stderr[:120]!r}")
 
 
 def test_drills_end_to_end(selected: List[str], jobs: int) -> None:
@@ -181,7 +181,7 @@ def test_drills_end_to_end(selected: List[str], jobs: int) -> None:
 
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description="Relocation-drill guard for the router tests: self-tests plus every planned section move.")
-    ap.add_argument("--drills", default="", help="comma-separated drill names to run end to end (default: all fourteen)")
+    ap.add_argument("--drills", default="", help="comma-separated drill names to run end to end (default: all thirteen)")
     ap.add_argument("--list", action="store_true", help="print the drills and variants, run nothing")
     ap.add_argument("--jobs", type=int, default=drills.default_jobs(), help="drills run in parallel (default min(4, cpus // 2))")
     args = ap.parse_args(argv)
@@ -196,7 +196,7 @@ def main(argv: List[str]) -> int:
         return 2
     test_owner_parser()
     test_classifier()
-    test_drill_set_is_the_fourteen_planned_moves()
+    test_drill_set_is_the_thirteen_remaining_moves()
     test_every_drill_applies_and_moves_text()
     test_duplicate_heading_variants_are_rejected()
     test_timing_tests_and_control_failures_are_not_violations()

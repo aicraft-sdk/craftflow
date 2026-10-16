@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Executable proof for the BUILD worktree merge-safety guard (SKILL.md step 4,
-"### Worktree Isolation (BUILD Default)"). Exercises the REAL guard scripts --
+"""Executable proof for the BUILD worktree merge-safety guard (formerly SKILL.md step 4,
+"### Worktree Isolation (BUILD Default)"; since P8 run by craftflow_worktree_finalize.py,
+which the router calls from references/worktree.md). Exercises the REAL guard scripts --
 craftflow_worktree_lock_staleness.py and craftflow_worktree_copy_fallback.py --
 via subprocess, against real scratch git repositories.
 
@@ -35,7 +36,7 @@ main tree gates before any merge; a real merge conflict releases the lock;
 the dirty-tree gate runs BEFORE the copy-fallback path, proven against the
 real copy-fallback implementation rather than an absent one).
 
-This subprocess-invokes the exact same files SKILL.md step 4 shells out to --
+This subprocess-invokes the exact same files craftflow_worktree_finalize.py (the script SKILL.md step 4 delegates to) shells out to --
 there is no ported/re-implemented copy of either algorithm to drift from.
 """
 import importlib.util

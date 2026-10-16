@@ -267,7 +267,6 @@ KNOWN = [
     (SK, "risk_keyword_scan — keyword table", "fast-path.md", 1),
     (SK, "fix-verify contract", "agents/doubt-verifier.md", 1),
     (SK, "8. post-agent validation", "SKILL.md", 2),
-    (AP, "worktree isolation (build default)", "skills/craftflow-router/SKILL.md", 1),
     (HSC, "build task graph", "build-workflow.md", 1),
     (HSC, "fast path escalation", "build-workflow.md", 1),
     (HSC, "review task graph", "review-workflow.md", 1),

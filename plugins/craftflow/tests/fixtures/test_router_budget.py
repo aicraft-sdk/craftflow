@@ -980,8 +980,9 @@ def test_adr_discloses_the_rem_fix_4_findings() -> None:
     check("adr_discloses_the_rem_fix_4_findings",
           all(n in text for n in need) and "`unmapped_removed 576`" not in text and "`unmapped_removed 787`" not in text
           and "unmapped_removed 581" in text and "unmapped_removed 794" in text
-          # 591 / 424 at REM-FIX 4 (the ADR keeps those figures as history); P6's six literal-to-key Rewrites rows take one vanishing id away
-          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (590, 423),
+          # 591 / 424 at REM-FIX 4 (the ADR keeps those figures as history); P6's six literal-to-key Rewrites rows take one vanishing id away,
+          # and P8's thirteen listed rows (one of them a widening row for worktree.md) take one widening file away: 590 / 423 to 589 / 422
+          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (589, 422),
           f"missing={[n for n in need if n not in text]}")
 
 

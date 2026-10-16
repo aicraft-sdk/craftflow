@@ -55,6 +55,7 @@ import ast
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1536,9 +1537,17 @@ def test_script_hygiene():
 
 
 def test_exit_criteria_dark_and_policy_shipped():
-    print("\n[exit criteria: dark, policy shipped]")
+    print("\n[exit criteria: wired through worktree.md, policy shipped]")
+    # P7 pinned "dark" (SKILL.md never names the script). P8 wires it: the kernel only points to references/worktree.md, which holds the call line.
     skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
-    check("dark:skill_md_does_not_call_finalize", "craftflow_worktree_finalize" not in skill, "SKILL.md already references the finalize script")
+    worktree_md = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "worktree.md").read_text(encoding="utf-8")
+    check("wired:skill_md_points_to_worktree_md", "`references/worktree.md`" in skill and "git merge {worktree_branch}" not in skill, "SKILL.md does not delegate step 4")
+    check("wired:worktree_md_has_the_dd9_call", 'python3 "$CRAFTFLOW_SCRIPTS/craftflow_worktree_finalize.py" --wf {workflow_uuid} --project-root "$PROJECT_ROOT"' in worktree_md,
+          "worktree.md lacks the DD-9 call line with --wf and --project-root")
+    outcomes = set(re.findall(r"^\| `([a-z_]+)` \|", worktree_md, re.M))
+    check("wired:worktree_md_has_a_row_for_every_outcome", ENUM <= outcomes, f"missing rows: {sorted(ENUM - outcomes)}")
+    check("wired:worktree_md_covers_exit_4_and_lock_release_failed", "Exit 4" in worktree_md and "lock_release_failed" in worktree_md and "non-zero exit or unparseable" in worktree_md,
+          "exit 4, lock_release_failed or the Difference 6 row is missing")
     shipped = json.loads((PLUGIN_ROOT / "config" / "policy.json").read_text(encoding="utf-8"))
     check("policy_shipped:worktree_merge", shipped.get("worktree_merge") == {"require_clean_tree": True, "lock_max_attempts": 9, "lock_sleep_seconds": 5,
                                                                           "copy_fallback_on_up_to_date": True}, f"shipped={shipped.get('worktree_merge')}")

@@ -417,6 +417,7 @@ def main() -> int:
         "references/review-workflow.md",
         "references/plan-workflow.md",
         "references/remediation-and-research.md",
+        "references/worktree.md",
         "## 12. Chain Execution Loop",
         "## 13. Memory Finalization",
         "## 14. Hard Rules",
@@ -461,6 +462,7 @@ def main() -> int:
         "craftflow_worktree_lock_staleness.py",
         "craftflow_worktree_copy_fallback.py",
         "craftflow_worktree_merge_guard_check.py",
+        "craftflow_worktree_finalize.py",
     ]
     for heading in required_router_surface_text:
         if heading not in router_surface:
@@ -471,12 +473,8 @@ def main() -> int:
             "## 2a. Workflow Artifact And Hook Policy",
             "Artifact schema must include:",
             "Hook policy:",
-            "worktree_merge_locked",
-            "worktree_dirty_main_tree",
-            "worktree_merge_conflict",
-            "worktree_copy_fallback_failed",
-            "worktree_merge_unrecognized_failure",
-            "worktree_cleanup_failed",
+            "references/worktree.md",
+            "policy_invalid",
         ),
         ROUTER_BUILD_REFERENCE: (
             "### BUILD preparation",

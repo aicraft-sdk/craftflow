@@ -214,7 +214,7 @@ def d_p10_worktree13(t: Tree) -> None:
     lines = _read(t.skill)
     ws, _ = span(lines, "### Worktree Isolation (BUILD Default)")
     first = line_index(lines, "1. At BUILD start", ws)
-    step4 = line_index(lines, "4. After `integration-verifier` returns PASS", first)
+    step4 = line_index(lines, "4. After `integration-verifier` PASS on the final phase", first)  # P8 reworded the step-4 pointer
     steps = cut(t.skill, first, step4, ["(Steps 1-3: see `references/build-workflow.md`.)", ""])
     # SKILL.md keeps `### Worktree Isolation (BUILD Default)` (steps 4+), so the moved steps get a different heading.
     put(t.refs / "build-workflow.md", fpd + ["### Worktree isolation steps 1-3", ""] + steps)
@@ -227,20 +227,6 @@ def d_p11_proto_split(t: Tree) -> None:
     e = line_index(lines, "(Host-specific note: both hosts run this exact algorithm", s)
     block = cut(t.protocol, s, e, ["   **1a.** Multi-repo workspace root resolution: see `_shared/router-protocol-multirepo.md`.", ""])
     put(t.shared / "router-protocol-multirepo.md", block, "# Multi-repo workspace root resolution (step 1a)")
-
-
-def d_p8_step4(t: Tree) -> None:
-    """P8: Worktree Isolation step 4 (SKILL.md) and the `pending_gate` policy bullet move to references/worktree.md."""
-    lines = _read(t.skill)
-    ws, we = span(lines, "### Worktree Isolation (BUILD Default)")
-    step4 = line_index(lines, "4. After `integration-verifier` returns PASS", ws)
-    block = cut(t.skill, step4, we, ["4. After `integration-verifier` returns PASS: read `references/worktree.md` and follow its merge-safety steps.", ""])
-    policy_path = t.refs / "workflow-artifact-and-hook-policy.md"
-    plines = _read(policy_path)
-    s = line_index(plines, "- BUILD's worktree merge-safety guard uses 6")
-    e = line_index(plines, "- `status_history` and `remediation_history`", s)
-    policy = cut(policy_path, s, e, ["- BUILD's worktree merge-safety guard `pending_gate` values: see `references/worktree.md`."])
-    put(t.refs / "worktree.md", block + [""] + policy, "# Worktree merge safety (P8)")
 
 
 def d_p11_hookpolicy(t: Tree) -> None:
@@ -394,7 +380,6 @@ DRILLS: Dict[str, Tuple[int, str, Callable[[Tree], None]]] = {
     "p10_0a": (10, "## 0a body -> references/workflow-start.md, trigger stays under ## 0a", d_p10_0a),
     "p10_section3": (10, "## 3 Task Metadata Contract -> references/workflow-start.md", d_p10_section3),
     "p10_worktree13": (10, "Fast Path Detection + Worktree steps 1-3 -> references/build-workflow.md", d_p10_worktree13),
-    "p8_step4": (8, "Worktree Isolation step 4 + `pending_gate` policy bullet (:182-207) -> references/worktree.md", d_p8_step4),
     "p11_hookpolicy": (11, "`Hook policy:` block (:261-277) -> hooks/README.md (outside the corpus)", d_p11_hookpolicy),
     "p11_proto_split": (11, "step 1a -> _shared/router-protocol-multirepo.md", d_p11_proto_split),
     "p11_build_split": (11, "build-workflow.md -> graph-standard / graph-fast / escalation", d_p11_build_split),

@@ -1552,6 +1552,11 @@ def test_worktree_isolation_reuses_project_root_no_duplicate_resolution() -> Non
     if "TOPLEVEL_EXIT=$?" in section:
         fail(name, "Worktree Isolation section still contains its own TOPLEVEL_EXIT assignment")
         return
+    # P8: step 4 moved to references/worktree.md; it must not resolve the root a second time either
+    worktree_md = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "worktree.md").read_text(encoding="utf-8")
+    if "git rev-parse --show-toplevel" in worktree_md or "craftflow_resolve_workspace_root.py" in worktree_md:
+        fail(name, "references/worktree.md resolves the project root a second time")
+        return
     ok(name)
 
 
@@ -2847,18 +2852,38 @@ def test_worktree_isolation_resolver_gated_on_toplevel_failure() -> None:
 
 
 def test_worktree_isolation_step_4a_derives_from_worktree_path() -> None:
+    # P8 retarget: step 4a's `dirname` nesting moved into craftflow_worktree_finalize.py, which derives MERGE_ROOT three parents up
+    # from worktree_path (worktree_path -> {project_root}/.claude/worktrees/{worktree_dir}, so its great-grandparent is the root).
     name = "router/worktree-isolation-step-4a-no-reredirive"
-    skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
     content = _router_corpus_text()
-    # NOTE: current code nests `dirname` three levels deep (worktree_path ->
-    # {project_root}/.claude/worktrees/{worktree_dir}, so its great-grandparent is
-    # PROJECT_ROOT) -- deeper than this plan's original two-level literal, confirmed by
-    # reading the live file rather than trusting the stale plan text.
-    if 'PROJECT_ROOT=$(dirname "$(dirname "$(dirname "{worktree_path}")")")' not in content:
-        fail(name, "step 4a no longer derives PROJECT_ROOT from worktree_path via nested dirname")
+    script = (SCRIPTS / "craftflow_worktree_finalize.py").read_text(encoding="utf-8")
+    worktree_md = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "worktree.md").read_text(encoding="utf-8")
+    if "return norm.parent.parent.parent, str(norm)" not in script or "Path(wp).parent.parent.parent" not in script:
+        fail(name, "craftflow_worktree_finalize.py no longer derives MERGE_ROOT three parents up from worktree_path")
+        return
+    if "git rev-parse --show-toplevel" in worktree_md:
+        fail(name, "references/worktree.md re-derives the root with `git rev-parse --show-toplevel`")
         return
     if "PROJECT_ROOT=$(git rev-parse --show-toplevel)" in content:
         fail(name, "a bare, unconditional `PROJECT_ROOT=$(git rev-parse --show-toplevel)` re-derivation still exists")
+        return
+    ok(name)
+
+
+def test_kernel_step4_delegates_to_finalize() -> None:
+    name = "router/kernel-step4-delegates-to-finalize"
+    kernel = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    worktree_md = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "worktree.md"
+    body = worktree_md.read_text(encoding="utf-8") if worktree_md.is_file() else ""
+    if "references/worktree.md" not in kernel:
+        fail(name, "SKILL.md does not point to references/worktree.md")
+        return
+    for gone in ("git merge {worktree_branch}", "COPY_FALLBACK_OUTPUT=$(", "BRANCH_DELETE_OUTPUT=$("):
+        if gone in kernel:
+            fail(name, f"SKILL.md still carries step 4's `{gone}`; the finalize script owns it (steps 1-3 may still name the exit-code pattern)")
+            return
+    if "craftflow_worktree_finalize.py" not in body:
+        fail(name, "references/worktree.md does not name craftflow_worktree_finalize.py")
         return
     ok(name)
 
@@ -28320,6 +28345,7 @@ def main() -> int:
     test_reliability_gates_script_present()
     test_worktree_isolation_resolver_gated_on_toplevel_failure()
     test_worktree_isolation_step_4a_derives_from_worktree_path()
+    test_kernel_step4_delegates_to_finalize()
     test_section_0_precedes_memory_load()
     test_memory_load_anchored_to_project_root()
     test_parent_workflow_creation_anchored_to_project_root()

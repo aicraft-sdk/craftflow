@@ -101,7 +101,7 @@ def _seed_gates() -> list:
             "maturity": "experimental",
             "invariant": (
                 "Before any worktree branch is merged or copy-fallback-applied into "
-                "$PROJECT_ROOT (SKILL.md Worktree Isolation step 4d->4e), the main tree's "
+                "$PROJECT_ROOT (craftflow_worktree_finalize.py, formerly SKILL.md Worktree Isolation step 4d->4e), the main tree's "
                 "clean-tree check must gate first; a real merge conflict must release the "
                 "merge lock and leave the worktree intact for the user to resolve, never "
                 "silently discard work."

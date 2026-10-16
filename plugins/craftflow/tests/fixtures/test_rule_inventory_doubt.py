@@ -26,6 +26,7 @@ SCRIPT = PLUGIN_ROOT / "scripts" / "craftflow_rule_inventory.py"
 BASELINE = HERE / "router-rule-inventory.baseline.json"
 POLICY_MAP = PLUGIN_ROOT.parents[1] / "docs" / "router-policy-map.md"
 SKILL = "skills/craftflow-router/SKILL.md"
+PROTO = "skills/_shared/router-protocol.md"
 REFS = "skills/craftflow-router/references/"
 K, FP, RR = SKILL, REFS + "fast-path.md", REFS + "remediation-and-research.md"
 BW, PW = REFS + "build-workflow.md", REFS + "plan-workflow.md"
@@ -170,8 +171,22 @@ def test_d3_attack8_self_referential_baseline_e2e() -> None:
         fx.mkdir()
         for name in ("router-readmap.baseline.json", "router-normative-allowlist.json", "router-rule-inventory.baseline.json"):
             shutil.copy(HERE / name, fx / name)
+        # A runtime file added after the baseline (P8: references/worktree.md) is not in the frozen baseline map, and `--emit` refuses a corpus
+        # file the map does not name: this scratch map gets the live map's rows for such files (the emit is what the attack forges, not the map).
+        frozen = json.loads((fx / "router-readmap.baseline.json").read_text(encoding="utf-8"))
+        live = json.loads((root / "config" / "router-readmap.json").read_text(encoding="utf-8"))
+        named = {e["file"] for e in frozen["files"]}
+        frozen["files"] += [e for e in live["files"] if e["file"] not in named]
+        (fx / "router-readmap.baseline.json").write_text(json.dumps(frozen), encoding="utf-8")
         edit(root, K, "- Never spawn Memory Update as a sub-agent.\n", "")
         edit(root, K, "- Never use an unscoped task lookup in critical paths.\n", "")
+        # Likewise, a baseline allowlist entry whose text left the corpus (P8 moved step 4 out of SKILL.md) makes `--emit` refuse with
+        # `allowlist_unmatched`; this scratch allowlist drops the entries the edited tree no longer matches.
+        allow_path = fx / "router-normative-allowlist.json"
+        gone = set(inv.build_inventory(inv.cor.read_corpus(root), frozen, inv.load_allowlist(allow_path))["allowlist_unmatched"])
+        allow = json.loads(allow_path.read_text(encoding="utf-8"))
+        allow["entries"] = [e for e in allow["entries"] if e["text"] not in gone]
+        allow_path.write_text(json.dumps(allow), encoding="utf-8")
         forced = cli("--emit", "--force", "--plugin-root", root, "--readmap-baseline", fx / "router-readmap.baseline.json",
                      "--allowlist", fx / "router-normative-allowlist.json", "--out", fx / "router-rule-inventory.baseline.json")
         (fx / "router-rule-inventory.baseline.json").unlink()

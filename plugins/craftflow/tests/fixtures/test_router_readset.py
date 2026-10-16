@@ -1141,7 +1141,7 @@ def test_signing_burden_buckets_are_disjoint_on_every_tier() -> None:
             bad[name] = (parts, v["unmapped_removed"], v["unreachable"], v["reach_lost_occurrences"])
     g, d = tiers["guaranteed"]["signing_burden"]["buckets"], tiers["conditional_if_reach_amended"]["signing_burden"]["buckets"]
     check("signing_burden_buckets_are_disjoint_on_every_tier",
-          not bad and g["moved_without_loss"]["occurrences"] == 38 and d["moved_without_loss"]["occurrences"] == 39
+          not bad and g["moved_without_loss"]["occurrences"] == 32 and d["moved_without_loss"]["occurrences"] == 33
           and g["in_place_narrowed"]["occurrences"] == 0 and d["in_place_narrowed"]["occurrences"] == 192,
           f"bad={bad} guaranteed_mwl={g['moved_without_loss']} amended_mwl={d['moved_without_loss']} in_place={d['in_place_narrowed']}")
 
@@ -1157,19 +1157,21 @@ def test_signing_burden_counts_rows_not_occurrences() -> None:
     gd = g["definitional_D17B"]
     sec = g["section_move_rows"]
     check("signing_burden_counts_rows_not_occurrences",
-          b["vanishing"] == {"occurrences": 123, "ids": 111} and b["widening"] == {"pairs": 50, "files": 15}
+          b["vanishing"] == {"occurrences": 123, "ids": 111} and b["widening"] == {"pairs": 48, "files": 14}
           and (sec["ops"], sec["rows_low"], sec["rows_high_headed_spans"], sec["rows_upper_bound"]) == (41, 41, 49, 53)
           and (sec["partial_spans_without_heading"], sec["multi_section_spans"]) == (23, 7)
           and sec["needs_destination_heading"] == ["p10-pav-verifier-telemetry"]
-          and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (411 + 111 + 53 + 15, 244 + 111 + 53 + 15)
-          and g["REACH_A"]["occurrences"]["total"] == 415 + 123 + 38 + 50 and g["REACH_B"]["occurrences"]["total"] == 41 + 248 + 123 + 50
-          and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 244 + 111 + 53 + 15
-          and d["REACH_A"]["occurrences"]["total"] == 607 + 144 + 39 + 50
+          and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (411 + 111 + 53 + 14, 244 + 111 + 53 + 14)
+          and g["REACH_A"]["occurrences"]["total"] == 415 + 123 + 32 + 48 and g["REACH_B"]["occurrences"]["total"] == 41 + 248 + 123 + 48
+          and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 244 + 111 + 53 + 14
+          and d["REACH_A"]["occurrences"]["total"] == 607 + 144 + 33 + 48
           # REACH-A counts the 39 moved-without-loss occurrences, REACH-B the 42 section-move ops; they were equal (42) until P5's signed
           # plan_commit row removed one occurrence without removing a section move, and P6's six literal-to-key Rewrites rows (listed in the
-          # policy map, still unsigned) took away two more and one vanishing occurrence. The row-count bounds below still coincide.
-          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 39 + 248 + 144 + 50
-          and d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 248 + 144 + 50
+          # policy map, still unsigned) took away two more and one vanishing occurrence. P8's thirteen unsigned rows (the gate summary, its bullets, the
+          # Safety paragraph, one widening row for worktree.md) took six more moved-without-loss occurrences and one widening file (two pairs) away:
+          # 38 to 32, 15 files / 50 pairs to 14 / 48. The row-count bounds below still coincide.
+          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 33 + 248 + 144 + 48
+          and d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 248 + 144 + 48
           and d["definitional_D17B"]["REACH_B"]["rows_upper_bound"] < d["REACH_B"]["rows_upper_bound"] < d["REACH_A"]["rows_upper_bound"],
           f"buckets={b} sections={sec} guaranteed={(g['REACH_A']['rows_upper_bound'], g['REACH_B']['rows_upper_bound'])} amended_A_occ={d['REACH_A']['occurrences']}")
 
@@ -1189,6 +1191,22 @@ def test_bias_notes_carry_the_residue() -> None:
           and f"{split['drops_to_0']['bytes']:,} B" in notes[1] and f"{split['drops_workflow_or_variant']['bytes']:,} B" in notes[1]
           and (split["drops_to_0"]["bytes"], split["drops_workflow_or_variant"]["bytes"]) == (32881, 32762) and "notes" not in partial["bias"],
           f"notes={notes} hsc={hsc}")
+
+
+def test_worktree_md_is_stage_and_mapped() -> None:
+    """P8: references/worktree.md is a BUILD-only happy-path stage file in the live read map, the kernel points to it and its
+    finalize call carries the DD-9 form with --wf and --project-root; step 4's baseline bash is gone from the kernel."""
+    rm = rs.load_map(LIVE_MAP)
+    rows = [e for e in rm["files"] if e["file"] == REF + "worktree.md"]
+    wt = PLUGIN_ROOT / REF / "worktree.md"
+    body = wt.read_text(encoding="utf-8") if wt.is_file() else ""
+    skill = (PLUGIN_ROOT / SKILL).read_text(encoding="utf-8")
+    mapped = (len(rows) == 1 and rows[0]["class"] == "stage" and rows[0]["workflows"] == ["BUILD"] and rows[0]["happy_path"] is True
+              and "worktree_mode == auto_created" in rows[0]["trigger"] and "pending_gate" in rows[0]["trigger"])
+    call = 'python3 "$CRAFTFLOW_SCRIPTS/craftflow_worktree_finalize.py" --wf {workflow_uuid} --project-root "$PROJECT_ROOT"'
+    check("worktree_md_is_stage_and_mapped",
+          mapped and "`references/worktree.md`" in skill and call in body and "Clean-State Check" in body,
+          f"rows={rows} file_exists={wt.is_file()} kernel_points={'references/worktree.md' in skill} call_in_body={call in body}")
 
 
 def main() -> int:
