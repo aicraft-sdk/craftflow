@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.32.0] - 2026-10-16
+
+### Features
+
+- policy-backed loop-cap gate_check at existing decision points
+
+### Fixes
+
+- plan-review gate_check guard covers cap-reached, proceed and advance after the increment
+- gate_check REM-FIX r1 - plan-review call carries --wf/--project-root, doubt advance is unconditional, event records reason and policy_status, bounded --cycle/--pass
+
+### Documentation
+
+- sign P6 Rewrites rows and projection revision
+
+### Tests
+
+- B4 sentinel counts signed rewrites as reworded occurrences
+
 ## [1.31.0] - 2026-10-15
 
 ### Features
