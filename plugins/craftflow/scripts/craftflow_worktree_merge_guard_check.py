@@ -1191,6 +1191,24 @@ def scenario_finalize_end_to_end_copy_fallback() -> None:
         require(not (root / ".claude" / "worktrees" / ".merge.lock").exists(), "finalize_end_to_end_copy_fallback: lock must be released")
 
 
+def scenario_finalize_end_to_end_dirty_worktree_kept() -> None:
+    """A committed change plus an uncommitted edit: the commit merges, the edit must not be thrown away by `worktree remove --force`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root, wf, branch, worktree_path, artifact = _finalize_scene(tmp)
+        (worktree_path / "feature.txt").write_text("committed\n")
+        git(worktree_path, "add", "feature.txt")
+        git(worktree_path, "commit", "-q", "-m", "feature")
+        (worktree_path / "late-edit.txt").write_text("never committed\n")
+
+        out = _run_finalize(root, wf)
+
+        require(out["outcome"] == "worktree_cleanup_failed" and out["pending_gate"] == "worktree_cleanup_failed", f"finalize_end_to_end_dirty_worktree_kept: got {out}")
+        require((root / "feature.txt").read_text() == "committed\n", "finalize_end_to_end_dirty_worktree_kept: the committed work must have merged")
+        require((worktree_path / "late-edit.txt").read_text() == "never committed\n", "finalize_end_to_end_dirty_worktree_kept: the uncommitted edit must survive")
+        require(git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}").returncode == 0, "finalize_end_to_end_dirty_worktree_kept: the branch must be kept")
+        require(not (root / ".claude" / "worktrees" / ".merge.lock").exists(), "finalize_end_to_end_dirty_worktree_kept: lock must be released")
+
+
 SCENARIOS = {
     # Guard-sequence properties (P1/P3)
     "dirty_main_tree": scenario_dirty_main_tree,
@@ -1226,6 +1244,7 @@ SCENARIOS = {
     # craftflow_worktree_finalize.py composing both scripts end to end (P7)
     "finalize_end_to_end_merge": scenario_finalize_end_to_end_merge,
     "finalize_end_to_end_copy_fallback": scenario_finalize_end_to_end_copy_fallback,
+    "finalize_end_to_end_dirty_worktree_kept": scenario_finalize_end_to_end_dirty_worktree_kept,
 }
 
 

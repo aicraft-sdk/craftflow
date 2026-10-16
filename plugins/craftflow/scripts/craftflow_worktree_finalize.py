@@ -8,11 +8,14 @@ Order (the prose order, unchanged): load the artifact (flock) -> policy -> auto_
 re-read before a reclaim, a reclaim costs no attempt) -> clean-tree check -> `git merge` -> "Already up to date" falls back to
 craftflow_worktree_copy_fallback.py -> `git worktree remove --force` -> `git branch -d` -> mode merged_and_removed, lock released.
 
-Prints exactly one sorted-key JSON line {outcome, pending_gate, message, worktree_mode, details} and exits 0 (3 for an unreadable
-artifact, 2 for a usage error). `outcome` is one of 12 values; `pending_gate` is set exactly for the 7 gate outcomes and is written
-to the artifact under `<artifact>.lock`. A gate outcome touches neither the worktree nor the branch; it releases the lock it held
-and never undoes what the merge attempt itself did in the main tree (a conflict stays for the user; copy-fallback may be a partial
-apply). The `worktree_finalize` event goes to `{wf}.events.jsonl` under flock. An unexpected exception releases a held lock and
+Prints exactly one sorted-key JSON line {outcome, pending_gate, message, worktree_mode, details} and exits 0 (2 for a usage error,
+3 for an unreadable artifact, 4 when the outcome is real but the artifact write failed: the router must not read exit 4 as success
+and must repair the artifact before it resumes). `outcome` is one of 12 values; `pending_gate` is set exactly for the 7 gate outcomes
+and is written to the artifact under `<artifact>.lock`, BEFORE the merge lock is released. A gate outcome touches neither the
+worktree nor the branch; it releases the lock it held (at most once per run, and only while the lock is still this workflow's) and
+never undoes what the merge attempt itself did in the main tree (a conflict stays for the user; copy-fallback may be a partial
+apply). `details.lock_release_failed` (plus a message warning) means the lock directory is still there and must be deleted by hand.
+The `worktree_finalize` event goes to `{wf}.events.jsonl` under flock. An unexpected exception releases a held lock and
 propagates (non-zero exit, no JSON line); the router reads that as `worktree_merge_unrecognized_failure`.
 Python 3.9 compatible; stdlib plus craftflow_policy. It reads no router prose.
 """
@@ -40,15 +43,19 @@ COPY_FALLBACK = HERE / "craftflow_worktree_copy_fallback.py"
 GATES = ("worktree_merge_locked", "worktree_dirty_main_tree", "worktree_copy_fallback_failed", "worktree_merge_conflict",
          "worktree_merge_unrecognized_failure", "worktree_cleanup_failed", "policy_invalid")
 RECLAIM = ("STALE_WORKTREE_GONE", "STALE_INACTIVE", "SELF_RECLAIM")
-LOCAL_ERRORS = ("LOCK_READ_ERROR", "GIT_WORKTREE_LIST_ERROR")
+LOCAL_ERRORS = ("LOCK_READ_ERROR", "LOCK_WRITE_ERROR", "GIT_WORKTREE_LIST_ERROR")
 WF_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 GIT_TIMEOUT = 600
+C_LOCALE = {"LC_ALL": "C", "LANGUAGE": "C"}  # "Already up to date" and "CONFLICT" are matched as English text
 DASH = "—"
 MESSAGES = {
     "merged_and_removed": "Worktree merged and removed.",
     "skipped_not_auto_created": "Worktree finalize skipped: worktree_mode is not auto_created (nothing to merge).",
     "worktree_path_missing": "Worktree finalize skipped: worktree_path is missing or empty in the workflow artifact, so nothing was merged or removed.",
+    "worktree_path_invalid": ("Worktree finalize skipped: worktree_path (`{worktree_path}`) is not an absolute path to a worktree directly under this project's "
+                              ".claude/worktrees, so nothing was merged or removed. Repair worktree_path in the workflow artifact (or merge and remove "
+                              "the worktree by hand), then resume this workflow."),
     "worktree_branch_missing": "Worktree finalize skipped: worktree_branch is missing or invalid in the workflow artifact, so nothing was merged or removed.",
     "artifact_unreadable": "The workflow artifact is missing or unreadable ({error}), so worktree finalize touched nothing. Repair or restore it, then resume this workflow.",
     "policy_invalid": "config/policy.json is invalid, so worktree finalize touched nothing. Fix the policy file (first error: {error}), then resume this workflow to retry.",
@@ -56,7 +63,7 @@ MESSAGES = {
                "If that workflow is actually dead (not just slow), you can manually delete `.claude/worktrees/.merge.lock` and resume "
                + DASH + " only after confirming it isn't still running."),
     "locked_local_error": ("Failed to evaluate the merge lock due to a local error (`{holder}`) " + DASH + " this is NOT evidence of another live workflow. "
-                           "For `LOCK_READ_ERROR`, check filesystem permissions on `.claude/worktrees/.merge.lock`; for `GIT_WORKTREE_LIST_ERROR`, "
+                           "For `LOCK_READ_ERROR` or `LOCK_WRITE_ERROR`, check filesystem permissions on `.claude/worktrees/.merge.lock`; for `GIT_WORKTREE_LIST_ERROR`, "
                            "confirm `git` is on `PATH` and runnable. Then resume this workflow to retry."),
     "worktree_dirty_main_tree": ("The main tree has uncommitted changes this BUILD did not make (likely a concurrent DEBUG/PLAN/REVIEW session, or an "
                                  "unrelated manual edit). Commit, stash, or otherwise resolve those changes, then resume this workflow to retry the merge."),
@@ -65,11 +72,21 @@ MESSAGES = {
                                       "Run `git status --porcelain` in the main tree to see exactly what applied before resuming. Resolve the underlying "
                                       "issue (e.g. a filesystem/permission problem, or a genuine conflict/rename edge case the script refused to guess on), "
                                       "then resume this workflow to retry."),
+    "main_status_failed": ("`git status --porcelain` failed in the main tree (`{dirty_status}`), so it cannot be confirmed clean. Nothing has been merged. "
+                           "Fix git or repository access in `$PROJECT_ROOT`, then resume this workflow to retry the merge."),
     "worktree_merge_conflict": ("`git merge {worktree_branch}` stopped with merge conflicts. Resolve the conflicts in `$PROJECT_ROOT` (the worktree and "
                                 "branch have been kept), then resume this workflow to retry."),
     "worktree_merge_unrecognized_failure": ("`git merge {worktree_branch}` failed with an error this router does not recognize as either 'already up to date' "
                                             "or a merge conflict: `{merge_output}`. Nothing has been merged, and the worktree/branch have not been touched. "
                                             "Inspect the error above, resolve the underlying issue in `$PROJECT_ROOT`, then resume this workflow to retry."),
+    "merge_state_unknown": ("`git merge {worktree_branch}` did not finish (`{merge_output}`), so the merge state is UNKNOWN: it may have been interrupted midway. "
+                            "Inspect `git status` and `git log` in `$PROJECT_ROOT` (run `git merge --abort` if a merge is in progress), then resume "
+                            "this workflow to retry. The worktree and branch have not been touched."),
+    "cleanup_dirty": ("The merge succeeded, but the worktree `{worktree_path}` still has uncommitted or untracked changes that were not applied to the main "
+                      "tree (`{worktree_status}`). Nothing was removed: the worktree and its branch are untouched. Commit them in the worktree or discard "
+                      "them deliberately, then resume this workflow to retry cleanup."),
+    "cleanup_status_failed": ("The merge succeeded, but `git status --porcelain` failed in the worktree `{worktree_path}` (`{worktree_status}`), so it cannot be "
+                              "confirmed free of uncommitted changes. Nothing was removed. Resolve the underlying issue, then resume this workflow."),
     "cleanup_worktree": ("The merge/copy-fallback succeeded, but `git worktree remove {worktree_path} --force` failed: `{worktree_remove_output}`. "
                          "The worktree and its branch are still present and untouched. Resolve the underlying issue (e.g. a process still holding a "
                          "handle inside the worktree), then resume this workflow to retry cleanup."),
@@ -113,8 +130,9 @@ def _sleep(seconds: int) -> None:
 
 
 def _git(args: List[str], cwd: Path, env: Optional[Dict[str, str]] = None) -> Tuple[int, str]:
-    """(exit code, stdout+stderr with trailing newlines stripped, like `$(git ... 2>&1)`). A launch failure is exit 127."""
+    """(exit code, stdout+stderr with trailing newlines stripped, like `$(git ... 2>&1)`). A launch failure or the timeout is exit 127."""
     environ = dict(os.environ)
+    environ.update(C_LOCALE)
     environ.update(env or {})
     try:
         proc = subprocess.run(["git", "-C", str(cwd), *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True,
@@ -125,7 +143,8 @@ def _git(args: List[str], cwd: Path, env: Optional[Dict[str, str]] = None) -> Tu
 
 
 def default_staleness_runner(meta_path: str, project_root: str, wf: str) -> str:
-    """The real staleness script, today's argv. Anything but a clean run gives "" (an unrecognized decision: wait, never reclaim)."""
+    """The real staleness script, today's argv. Its stdout is the decision whatever its exit code; a launch failure or the timeout gives ""
+    (an unrecognized decision, like any text acquire_lock does not match: wait, never reclaim)."""
     try:
         proc = subprocess.run([sys.executable, str(STALENESS), meta_path, project_root, wf], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               universal_newlines=True, errors="replace", timeout=120)
@@ -174,11 +193,18 @@ def update_artifact(path: Path, mutate: Callable[[Dict[str, Any]], None]) -> Non
         data = _parse_artifact(path)
         mutate(data)
         tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(str(tmp), str(path))
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(str(tmp), str(path))
+        except BaseException:  # never leave the temp file behind; the original artifact is untouched
+            try:
+                os.unlink(str(tmp))
+            except OSError:
+                pass
+            raise
 
 
 def log_event(name: str, payload: Dict[str, Any], path: Path) -> None:
@@ -203,14 +229,18 @@ class Ctx:
         self.details: Dict[str, Any] = {}
         self.mode: Any = None
         self.vals: Dict[str, str] = {}
+        self.released = False  # the merge lock is released at most once per run
+        self.lock_created = False  # this run created the lock directory
 
     def note(self, key: str, value: Any) -> None:
         self.details[key] = clip(value) if isinstance(value, str) else value
         if isinstance(value, str):
             self.vals[key] = clip(value)
 
-    def conclude(self, outcome: str, template: str, *, gate: Optional[str] = None, merged: bool = False, code: int = 0) -> Tuple[int, str]:
-        """Persist, log and build the single output line."""
+    def conclude(self, outcome: str, template: str, *, gate: Optional[str] = None, merged: bool = False, code: int = 0,
+                 lock_dir: Optional[Path] = None) -> Tuple[int, str]:
+        """Persist, then release `lock_dir` (BC-7 item 12: artifact first), log and build the single output line. An artifact write
+        failure is exit 4 plus a message warning; the outcome and worktree_mode stay what really happened."""
         mode = "merged_and_removed" if merged else self.mode
         try:
             if gate is not None:
@@ -223,8 +253,17 @@ class Ctx:
                 update_artifact(self.artifact_path, done)
         except (OSError, ValueError) as exc:
             self.details["artifact_write_error"] = clip(f"{type(exc).__name__}: {exc}", 200)
-        message = MESSAGES[template].format(**{k: self.vals.get(k, "") for k in ("holder", "copy_fallback_output", "worktree_branch", "merge_output",
-                                                                               "worktree_path", "worktree_remove_output", "branch_delete_output", "error")})
+            code = code or 4
+        if lock_dir is not None:
+            release_lock(self, lock_dir)
+        keys = ("holder", "copy_fallback_output", "worktree_branch", "merge_output", "worktree_path", "worktree_remove_output", "branch_delete_output",
+                "error", "dirty_status", "worktree_status")
+        message = MESSAGES[template].format(**{k: self.vals.get(k, "") for k in keys})
+        if "artifact_write_error" in self.details:
+            message += (f" WARNING: the workflow artifact could not be updated ({self.details['artifact_write_error']}), so this outcome is NOT recorded: "
+                        "repair the artifact (set worktree_mode and pending_gate to match this outcome) before resuming. Exit code 4.")
+        if self.details.get("lock_release_failed"):
+            message += " WARNING: the merge lock could not be released; delete `.claude/worktrees/.merge.lock` by hand before the next BUILD."
         out = {"outcome": outcome, "pending_gate": gate, "message": message, "worktree_mode": mode, "details": self.details}
         try:
             log_event("worktree_finalize", {"wf": self.wf, "outcome": outcome, "pending_gate": gate, "worktree_mode": mode, "details": self.details},
@@ -261,10 +300,13 @@ def acquire_lock(ctx: Ctx, lock_dir: Path, wp: str, merge_root: Path, attempts: 
         except OSError:  # held (FileExistsError) or not creatable: the staleness decision below tells which; fail closed either way
             pass
         else:
+            ctx.lock_created = True
             try:
-                meta.write_text(json.dumps({"workflow_uuid": ctx.wf, "worktree_path": wp, "acquired_at": now()}, separators=(",", ":")))
-            except OSError as exc:
-                ctx.note("lock_metadata_error", f"{type(exc).__name__}: {exc}")
+                _write_meta(meta, json.dumps({"workflow_uuid": ctx.wf, "worktree_path": wp, "acquired_at": now()}, separators=(",", ":")))
+            except OSError as exc:  # a lock nobody can identify can never be reclaimed: drop it and report a local error
+                _drop_lock(ctx, lock_dir)
+                ctx.released = True
+                return False, f"LOCK_WRITE_ERROR {type(exc).__name__}"
             return True, decision
         before = read_metadata(meta)
         decision = runner(str(meta), str(merge_root), ctx.wf)
@@ -289,13 +331,35 @@ def read_metadata(meta: Path) -> str:
         return ""
 
 
-def release_lock(ctx: Ctx, lock_dir: Path) -> None:
+def _write_meta(meta: Path, text: str) -> None:
+    meta.write_text(text)
+
+
+def _drop_lock(ctx: Ctx, lock_dir: Path) -> None:
     try:
         _rmtree(lock_dir)
     except FileNotFoundError:
         pass
-    except OSError as exc:  # self-detecting through the next workflow's contention path: not fatal
+    except OSError as exc:  # the next workflow sees a stale lock; this run must say so loudly (message warning + details)
         ctx.note("release_lock_error", f"{type(exc).__name__}: {exc}")
+        ctx.details["lock_release_failed"] = True
+
+
+def release_lock(ctx: Ctx, lock_dir: Path) -> None:
+    """At most once per run, and only while the lock is still ours: a lock now held by another workflow is left alone."""
+    if ctx.released:
+        return
+    ctx.released = True
+    try:
+        owner = json.loads(read_metadata(lock_dir / "metadata.json")).get("workflow_uuid")
+    except (ValueError, AttributeError):
+        owner = None
+    if owner is not None and owner != ctx.wf:
+        ctx.note("release_lock_skipped", f"the lock is now held by {clip(owner, 80)}")
+        return
+    if owner is None and not ctx.lock_created:
+        return
+    _drop_lock(ctx, lock_dir)
 
 
 def finalize(ctx: Ctx, policy_file: Optional[str], runner: StalenessRunner) -> Tuple[int, str]:
@@ -305,6 +369,23 @@ def finalize(ctx: Ctx, policy_file: Optional[str], runner: StalenessRunner) -> T
         ctx.note("error", str(exc))
         return ctx.conclude("artifact_unreadable", "artifact_unreadable", code=3)
     ctx.mode = art.get("worktree_mode")
+    if ctx.mode != "auto_created":  # the prose's first guard: the policy is read only where a step uses it (after the 4a guards)
+        return ctx.conclude("skipped_not_auto_created", "skipped_not_auto_created")
+    wp, branch = art.get("worktree_path"), art.get("worktree_branch")
+    if not isinstance(wp, str) or not wp.strip():
+        ctx.legacy_event("worktree_path_missing")
+        return ctx.conclude("worktree_path_missing", "worktree_path_missing")
+    if not isinstance(branch, str) or not branch.strip() or branch.startswith("-"):  # a dash branch would be read by git as an option
+        ctx.legacy_event("worktree_branch_missing")
+        return ctx.conclude("worktree_branch_missing", "worktree_branch_missing")
+    ctx.note("worktree_path", wp)
+    ctx.note("worktree_branch", branch)
+    merge_root = Path(wp).parent.parent.parent  # never `git rev-parse --show-toplevel`: worktree_path is <root>/.claude/worktrees/<dir>
+    ctx.note("merge_root", str(merge_root))
+    if not os.path.isabs(wp) or os.path.realpath(str(merge_root)) != os.path.realpath(ctx.project_root):  # fail closed: a path git would resolve elsewhere
+        ctx.details["root_mismatch"] = {"merge_root": str(merge_root), "project_root": ctx.project_root}
+        ctx.legacy_event("worktree_path_missing")
+        return ctx.conclude("worktree_path_missing", "worktree_path_invalid")
     policy, status, errors = load_policy(Path(policy_file) if policy_file else None, log=False)
     if status == "invalid":
         ctx.note("policy_status", status)
@@ -315,21 +396,6 @@ def finalize(ctx: Ctx, policy_file: Optional[str], runner: StalenessRunner) -> T
     attempts = policy_value(policy, "worktree_merge.lock_max_attempts")
     sleep_s = policy_value(policy, "worktree_merge.lock_sleep_seconds")
     copy_fallback = policy_value(policy, "worktree_merge.copy_fallback_on_up_to_date")
-    if ctx.mode != "auto_created":
-        return ctx.conclude("skipped_not_auto_created", "skipped_not_auto_created")
-    wp, branch = art.get("worktree_path"), art.get("worktree_branch")
-    if not isinstance(wp, str) or not wp.strip():
-        ctx.legacy_event("worktree_path_missing")
-        return ctx.conclude("worktree_path_missing", "worktree_path_missing")
-    if not isinstance(branch, str) or not branch.strip() or branch.startswith("-"):  # a dash branch would be read by git as an option
-        ctx.legacy_event("worktree_branch_missing")
-        return ctx.conclude("worktree_branch_missing", "worktree_branch_missing")
-    merge_root = Path(wp).parent.parent.parent  # never `git rev-parse --show-toplevel`: worktree_path is <root>/.claude/worktrees/<dir>
-    ctx.note("merge_root", str(merge_root))
-    ctx.note("worktree_path", wp)
-    ctx.note("worktree_branch", branch)
-    if os.path.realpath(str(merge_root)) != os.path.realpath(ctx.project_root):
-        ctx.details["root_mismatch"] = {"merge_root": str(merge_root), "project_root": ctx.project_root}
     lock_dir = merge_root / ".claude" / "worktrees" / ".merge.lock"
     acquired, decision = acquire_lock(ctx, lock_dir, wp, merge_root, attempts, sleep_s, runner)
     if not acquired:
@@ -340,13 +406,12 @@ def finalize(ctx: Ctx, policy_file: Optional[str], runner: StalenessRunner) -> T
     try:
         return merge_and_clean(ctx, lock_dir, merge_root, wp, branch, require_clean, copy_fallback)
     except BaseException:
-        release_lock(ctx, lock_dir)  # never leave the lock held behind a crash
+        release_lock(ctx, lock_dir)  # never leave the lock held behind a crash (a no-op when this run already released it)
         raise
 
 
 def gate(ctx: Ctx, lock_dir: Path, outcome: str, template: Optional[str] = None) -> Tuple[int, str]:
-    release_lock(ctx, lock_dir)
-    return ctx.conclude(outcome, template or outcome, gate=outcome)
+    return ctx.conclude(outcome, template or outcome, gate=outcome, lock_dir=lock_dir)  # persists the gate, then releases
 
 
 def merge_and_clean(ctx: Ctx, lock_dir: Path, merge_root: Path, wp: str, branch: str, require_clean: bool, copy_fallback: bool) -> Tuple[int, str]:
@@ -354,8 +419,9 @@ def merge_and_clean(ctx: Ctx, lock_dir: Path, merge_root: Path, wp: str, branch:
         rc, dirty = _git(["status", "--porcelain"], merge_root)
         if rc != 0 or dirty:
             ctx.note("dirty_status", dirty)
-            return gate(ctx, lock_dir, "worktree_dirty_main_tree")
+            return gate(ctx, lock_dir, "worktree_dirty_main_tree", "main_status_failed" if rc != 0 else None)
     rc, merge_output = _git(["merge", branch], merge_root, {"GIT_MERGE_AUTOEDIT": "no"})  # 4e
+    applied = False  # True once copy-fallback has carried the worktree's uncommitted edits into the main tree
     if rc == 0 and "Already up to date" in merge_output:
         if copy_fallback:
             try:
@@ -367,12 +433,19 @@ def merge_and_clean(ctx: Ctx, lock_dir: Path, merge_root: Path, wp: str, branch:
             if fb_rc != 0:  # partial apply is possible: the worktree and branch stay as the source of truth
                 ctx.note("copy_fallback_output", fb_out)
                 return gate(ctx, lock_dir, "worktree_copy_fallback_failed")
+            applied = True
     elif rc != 0:
         ctx.note("merge_output", merge_output)
         if "CONFLICT" in merge_output:  # the conflict state is left in the main tree for the user to resolve
             return gate(ctx, lock_dir, "worktree_merge_conflict")
-        return gate(ctx, lock_dir, "worktree_merge_unrecognized_failure")
-    rc, out = _git(["worktree", "remove", wp, "--force"], merge_root)
+        return gate(ctx, lock_dir, "worktree_merge_unrecognized_failure", "merge_state_unknown" if rc == 127 else None)  # 127: launch failure or timeout
+    if not applied:  # deliberate deviation from the prose (which discards): `--force` below must never throw away uncommitted worktree edits
+        rc, status_out = _git(["status", "--porcelain"], Path(wp))
+        if rc != 0 or status_out:
+            ctx.note("worktree_status", status_out)
+            ctx.note("failing_command", "git status (worktree)")
+            return gate(ctx, lock_dir, "worktree_cleanup_failed", "cleanup_status_failed" if rc != 0 else "cleanup_dirty")
+    rc, out = _git(["worktree", "remove", "--force", "--", wp], merge_root)
     if rc != 0:
         ctx.note("worktree_remove_output", out)
         ctx.note("failing_command", "git worktree remove")
@@ -382,8 +455,7 @@ def merge_and_clean(ctx: Ctx, lock_dir: Path, merge_root: Path, wp: str, branch:
         ctx.note("branch_delete_output", out)
         ctx.note("failing_command", "git branch -d")
         return gate(ctx, lock_dir, "worktree_cleanup_failed", "cleanup_branch")
-    release_lock(ctx, lock_dir)
-    return ctx.conclude("merged_and_removed", "merged_and_removed", merged=True)
+    return ctx.conclude("merged_and_removed", "merged_and_removed", merged=True, lock_dir=lock_dir)  # artifact first, then the lock
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:

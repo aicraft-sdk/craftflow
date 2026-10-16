@@ -31,8 +31,16 @@ Branch-to-test table (step 4 branch -> test name):
   cleanup: success + release     -> real_merge_cleans_up, release_lock_error_nonfatal
   resume / rerun                 -> resume_after_locked_reenters, resume_after_cleanup_failure_completes, rerun_after_success_skipped,
                                     success_clears_only_worktree_pending_gate
-  policy / artifact              -> policy_invalid_touches_nothing, policy_values_are_read, artifact_corrupt_exit_3, root_mismatch_detail,
-                                    concurrent_artifact_write_flock
+  policy / artifact              -> policy_invalid_touches_nothing, policy_values_are_read, artifact_corrupt_exit_3, root_mismatch_fails_closed,
+                                    concurrent_artifact_write_flock, policy_is_read_after_the_4a_guards
+  remediation (P7 remfix)        -> lock_released_once_foreign_lock_survives, release_requires_ownership, artifact_persisted_before_lock_release,
+                                    artifact_write_failure_success_path, artifact_write_failure_gate_path, artifact_write_failure_cleans_tmp,
+                                    dirty_worktree_is_never_discarded, git_runs_in_the_c_locale, worktree_path_must_be_absolute_and_in_root,
+                                    git_worktree_remove_uses_double_dash, release_failure_is_loud, lock_metadata_write_failure_fails_closed,
+                                    merge_timeout_says_state_unknown, exception_propagation_releases_lock, paths_with_spaces,
+                                    reclaim_loop_terminates_when_rmtree_fails
+
+Exit codes asserted: 0, 2 (usage), 3 (artifact unreadable), 4 (artifact write failed, outcome real).
 
 Run: python3 tests/fixtures/test_worktree_finalize.py
 Prints `Results: N passed, M failed`; exits 1 on any failure.
@@ -247,6 +255,10 @@ MSG_SKIP = "Worktree finalize skipped: worktree_mode is not auto_created"
 MSG_LOCKED = "Another BUILD workflow ("
 MSG_LOCK_ERR = "Failed to evaluate the merge lock due to a local error ("
 MSG_DIRTY = "The main tree has uncommitted changes this BUILD did not make"
+MSG_STATUS_FAILED = "`git status --porcelain` failed in the main tree"
+MSG_WT_DIRTY = "The merge succeeded, but the worktree `"
+MSG_PATH_INVALID = "Worktree finalize skipped: worktree_path (`"
+MSG_STATE_UNKNOWN = "`git merge wf-fin-ab12cd34` did not finish"
 MSG_COPY = "The copy-fallback script failed while applying the worktree's uncommitted changes to the main tree: `"
 MSG_UNREC = "`git merge wf-fin-ab12cd34` failed with an error this router does not recognize"
 MSG_REMOVE = "The merge/copy-fallback succeeded, but `git worktree remove "
@@ -358,10 +370,25 @@ def test_lock_contended_live_stranger(tmp):
     check("lock_contended_live_stranger:no_merge", not (s.root / "feature.txt").exists(), "merged while contended")
 
 
+SKIPS = []  # tests that could not run here; reported as SKIP, never counted as passes
+
+
+def skip(name, reason):
+    SKIPS.append(name)
+    print(f"  SKIP: {name}: {reason}")
+
+
 @tmpscene
 def test_lock_read_error_holder_is_exception_class(tmp):
+    # Emulated without non-root: the decision the staleness script prints for an unreadable metadata.json.
+    e = Scene(_sub(tmp, "emulated"))
+    assert try_acquire_lock(e.lock, "wf-holder", str(e.wt))
+    code, line = fin.run(e.argv(), staleness_runner=lambda m, r, w: "LOCK_READ_ERROR PermissionError")
+    data = json.loads(line)
+    check("lock_read_error_emulated:holder_and_template", data["outcome"] == "worktree_merge_locked" and data["details"]["holder"] == "PermissionError"
+          and data["message"].startswith(MSG_LOCK_ERR + "`PermissionError`)"), line[:300])
     if hasattr(os, "geteuid") and os.geteuid() == 0:
-        ok("lock_read_error_holder_is_exception_class:skipped_as_root")
+        skip("lock_read_error_holder_is_exception_class:real_chmod", "running as root: chmod 000 does not stop root")
         return
     s = Scene(tmp)
     s.lock.mkdir()
@@ -491,7 +518,7 @@ def test_lock_metadata_has_three_fields_while_held(tmp):
     real = fin._git
 
     def spy(args, cwd, env=None):
-        if "status" in args:
+        if "status" in args and Path(cwd) == s.root:  # the main-tree check (the worktree check comes later)
             seen.append(json.loads((s.lock / "metadata.json").read_text()))
         return real(args, cwd, env) if env is not None else real(args, cwd)
 
@@ -526,7 +553,8 @@ def test_status_failure_is_dirty(tmp):
     s = Scene(tmp)
     s.commit_in_worktree()
     res = s.run(env=s.shim_env("status --porcelain"))
-    expect("status_failure_is_dirty", s, res, "worktree_dirty_main_tree", MSG_DIRTY)
+    expect("status_failure_is_dirty", s, res, "worktree_dirty_main_tree", MSG_STATUS_FAILED)  # still fails closed, but the message says the status ran and failed
+    check("status_failure_is_dirty:not_claimed_dirty", "uncommitted changes this BUILD did not make" not in res.data.get("message", ""), res.data.get("message", "")[:160])
     check("status_failure_is_dirty:error_recorded", "shim: refused" in res.details.get("dirty_status", ""), f"details={res.details}")
     check("status_failure_is_dirty:no_merge", not (s.root / "feature.txt").exists() and s.wt.exists(), "merged or removed after a failed status")
 
@@ -571,7 +599,8 @@ def test_up_to_date_copy_fallback_ok_cleans_up(tmp):
 @tmpscene
 def test_hyphenated_up_to_date_is_not_special_cased_e32(tmp):
     """E32 (documented, deferred): git < 2.17 prints "Already up-to-date." and bypasses the copy-fallback, exactly as the prose does.
-    Finalize must not quietly fix it in P7 (drift)."""
+    Finalize must not special-case the hyphenated text in P7 (drift). What it now does differ on (deliberately, H1): the worktree's
+    uncommitted edit is no longer discarded by `worktree remove --force`; the uncommitted-worktree guard gates the cleanup instead."""
     s = Scene(tmp)
     (s.wt / "uncommitted.txt").write_text("never committed\n")
     real = fin._git
@@ -587,7 +616,10 @@ def test_hyphenated_up_to_date_is_not_special_cased_e32(tmp):
     finally:
         fin._git = real
     data = json.loads(line)
-    check("e32_hyphenated_not_special_cased", data["outcome"] == "merged_and_removed" and not (s.root / "uncommitted.txt").exists(), line[:250])
+    check("e32_hyphenated_not_special_cased", data["outcome"] == "worktree_cleanup_failed" and not (s.root / "uncommitted.txt").exists()
+          and data["details"].get("copy_fallback_output") is None, line[:250])
+    check("e32_uncommitted_edit_survives_in_worktree", (s.wt / "uncommitted.txt").read_text() == "never committed\n" and s.branch_exists(), "the edit was discarded")
+    shutil.rmtree(s.lock, ignore_errors=True)
 
 
 @tmpscene
@@ -730,7 +762,8 @@ def test_artifact_corrupt_exit_3(tmp):
 
 
 @tmpscene
-def test_root_mismatch_detail(tmp):
+def test_root_mismatch_fails_closed(tmp):
+    """M1: a worktree_path whose derived MERGE_ROOT is not --project-root is never merged or removed (it used to run, with only a detail)."""
     s = Scene(tmp)
     s.commit_in_worktree()
     other = Path(tmp).resolve() / "elsewhere"
@@ -738,11 +771,28 @@ def test_root_mismatch_detail(tmp):
     wfdir.mkdir(parents=True)
     shutil.move(str(s.artifact_path), str(wfdir / f"{s.wf}.json"))
     s.wfdir, s.artifact_path, s.events_path = wfdir, wfdir / f"{s.wf}.json", wfdir / f"{s.wf}.events.jsonl"
+    before = s.snapshot()
     res = s.run(root=other)
-    expect("root_mismatch", s, res, "merged_and_removed", MSG_OK, gate=None, mode="merged_and_removed")
+    expect("root_mismatch", s, res, "worktree_path_missing", MSG_PATH_INVALID, gate=None)
     mismatch = res.details.get("root_mismatch") or {}
     check("root_mismatch:detail", mismatch.get("merge_root") == str(s.root) and mismatch.get("project_root") == str(other), f"details={res.details}")
-    check("root_mismatch:merged_in_derived_root", (s.root / "feature.txt").exists(), "the merge did not run against MERGE_ROOT")
+    check("root_mismatch:nothing_touched", s.snapshot() == before and s.wt.exists() and s.branch_exists() and not (s.root / "feature.txt").exists()
+          and not s.lock.exists(), "the merge ran or the worktree was removed against a mismatching root")
+
+
+@tmpscene
+def test_worktree_path_must_be_absolute_and_in_root(tmp):
+    for label, value in (("relative", "repo/.claude/worktrees/fin-ab12cd34"), ("dot_relative", "./.claude/worktrees/fin-ab12cd34"),
+                         ("leading_dash", "-C/../../x"), ("too_shallow", "/x")):
+        s = Scene(_sub(tmp, label))
+        art = s.artifact()
+        art["worktree_path"] = value
+        s.artifact_path.write_text(json.dumps(art))
+        before = s.snapshot()
+        res = s.run()
+        expect(f"path_{label}", s, res, "worktree_path_missing", MSG_PATH_INVALID, gate=None)
+        check(f"path_{label}:untouched", s.snapshot() == before and s.wt.exists() and s.branch_exists() and not s.lock.exists(), "something was touched")
+    check("path_invalid:legacy_event", any(e.get("event") == "worktree_path_missing" for e in s.events()), f"events={s.events()}")
 
 
 @tmpscene
@@ -804,7 +854,8 @@ def test_events_file_created_and_appended(tmp):
 
 
 @tmpscene
-def test_release_lock_error_nonfatal(tmp):
+def test_release_failure_is_loud(tmp):
+    """M2: the work is done (exit 0, outcome unchanged), but a lock that could not be released is a distinct field plus a message warning."""
     s = Scene(tmp)
     s.commit_in_worktree()
     real = fin._rmtree
@@ -818,8 +869,415 @@ def test_release_lock_error_nonfatal(tmp):
     finally:
         fin._rmtree = real
     data = json.loads(line)
-    check("release_lock_error:nonfatal", code == 0 and data["outcome"] == "merged_and_removed" and "release denied" in data["details"].get("release_lock_error", ""), line[:300])
+    check("release_failure:outcome_unchanged", code == 0 and data["outcome"] == "merged_and_removed" and s.artifact()["worktree_mode"] == "merged_and_removed", line[:300])
+    check("release_failure:distinct_field", data["details"].get("lock_release_failed") is True and "release denied" in data["details"].get("release_lock_error", ""), line[:300])
+    check("release_failure:message_warns", data["message"].startswith(MSG_OK) and "WARNING: the merge lock could not be released" in data["message"]
+          and ".claude/worktrees/.merge.lock" in data["message"], data["message"][:300])
+    check("release_failure:lock_left_behind", s.lock.exists(), "lock should still exist when release failed")
     shutil.rmtree(s.lock, ignore_errors=True)
+    # a clean run carries neither the field nor the warning
+    s2 = Scene(_sub(tmp, "clean"))
+    s2.commit_in_worktree()
+    clean = s2.run()
+    check("release_failure:absent_when_clean", "lock_release_failed" not in clean.details and "WARNING" not in clean.data["message"], clean.stdout[:300])
+
+
+@tmpscene
+def test_lock_released_once_foreign_lock_survives(tmp):
+    """R1/H3: a crash AFTER the gate released the lock must not delete a lock another workflow took in the meantime."""
+    s = Scene(_sub(tmp, "after_gate"))
+    (s.root / "README.md").write_text("dirty\n")  # gate: worktree_dirty_main_tree releases the lock inside conclude
+    real = fin.log_event
+
+    def foreign_then_boom(name, payload, path):
+        s.lock.mkdir()
+        (s.lock / "metadata.json").write_text(json.dumps({"workflow_uuid": "wf-foreign-9999", "worktree_path": str(s.wt), "acquired_at": iso()}))
+        raise RuntimeError("log exploded")
+
+    fin.log_event = foreign_then_boom
+    raised = None
+    try:
+        fin.run(s.argv())
+    except RuntimeError as exc:
+        raised = exc
+    finally:
+        fin.log_event = real
+    check("lock_once:exception_propagates", raised is not None and "log exploded" in str(raised), f"raised={raised!r}")
+    check("lock_once:foreign_lock_survives", json.loads((s.lock / "metadata.json").read_text())["workflow_uuid"] == "wf-foreign-9999", "the foreign lock was deleted")
+
+
+@tmpscene
+def test_release_requires_ownership(tmp):
+    s = Scene(tmp)
+    ctx = fin.Ctx(s.wf, str(s.root))
+    ctx.lock_created = True
+    s.lock.mkdir()
+    (s.lock / "metadata.json").write_text(json.dumps({"workflow_uuid": "wf-someone-else"}))
+    fin.release_lock(ctx, s.lock)  # a fresh Ctx (flag unset) is still refused: ownership, not just the flag
+    check("ownership:foreign_lock_kept", s.lock.exists() and "release_lock_skipped" in ctx.details, f"details={ctx.details}")
+    shutil.rmtree(s.lock)
+    # unreadable metadata + not created by this run: left alone; created by this run: removed
+    for created, expect_exists in ((False, True), (True, False)):
+        c = fin.Ctx(s.wf, str(s.root))
+        c.lock_created = created
+        s.lock.mkdir(exist_ok=True)
+        (s.lock / "metadata.json").write_text("{garbled")
+        fin.release_lock(c, s.lock)
+        check(f"ownership:unreadable_created_{created}", s.lock.exists() == expect_exists, f"exists={s.lock.exists()}")
+        shutil.rmtree(s.lock, ignore_errors=True)
+    # the same Ctx never releases twice
+    c = fin.Ctx(s.wf, str(s.root))
+    c.lock_created = True
+    s.lock.mkdir()
+    (s.lock / "metadata.json").write_text(json.dumps({"workflow_uuid": s.wf}))
+    fin.release_lock(c, s.lock)
+    s.lock.mkdir()
+    (s.lock / "metadata.json").write_text(json.dumps({"workflow_uuid": s.wf}))  # even a lock that LOOKS ours again
+    fin.release_lock(c, s.lock)
+    check("ownership:second_release_is_a_noop", s.lock.exists(), "the second release removed the lock")
+
+
+@tmpscene
+def test_artifact_persisted_before_lock_release(tmp):
+    """R2: BC-7 item 12 - update the artifact first, then release the lock."""
+    s = Scene(tmp)
+    s.commit_in_worktree()
+    real = fin._rmtree
+    seen = []
+
+    def spy(path):
+        seen.append(s.artifact()["worktree_mode"])
+        real(path)
+
+    fin._rmtree = spy
+    try:
+        code, line = fin.run(s.argv())
+    finally:
+        fin._rmtree = real
+    check("persist_then_release:success", seen == ["merged_and_removed"], f"artifact mode at release time={seen} line={line[:200]}")
+    s2 = Scene(_sub(tmp, "gate"))
+    (s2.root / "README.md").write_text("dirty\n")
+    seen2 = []
+
+    def spy2(path):
+        seen2.append(s2.artifact()["pending_gate"])
+        real(path)
+
+    fin._rmtree = spy2
+    try:
+        fin.run(s2.argv())
+    finally:
+        fin._rmtree = real
+    check("persist_then_release:gate", seen2 == ["worktree_dirty_main_tree"], f"pending_gate at release time={seen2}")
+
+
+def _failing_update(message):
+    def boom(path, mutate):
+        raise OSError(message)
+    return boom
+
+
+@tmpscene
+def test_artifact_write_failure_success_path(tmp):
+    """H2: the merge and cleanup happened but the artifact says auto_created: exit 4 and a warning, never a clean success."""
+    s = Scene(tmp)
+    s.commit_in_worktree()
+    real = fin.update_artifact
+    fin.update_artifact = _failing_update("disk full")
+    try:
+        code, line = fin.run(s.argv())
+    finally:
+        fin.update_artifact = real
+    data = json.loads(line)
+    check("write_failure_success:exit_4", code == 4, f"code={code} line={line[:200]}")
+    check("write_failure_success:outcome_is_what_happened", data["outcome"] == "merged_and_removed" and data["worktree_mode"] == "merged_and_removed"
+          and not s.wt.exists(), line[:300])
+    check("write_failure_success:visible", "disk full" in data["details"]["artifact_write_error"] and "WARNING: the workflow artifact could not be updated" in data["message"]
+          and "Exit code 4" in data["message"], data["message"][:400])
+    check("write_failure_success:artifact_unchanged", s.artifact()["worktree_mode"] == "auto_created", "artifact should be untouched")
+    check("write_failure_success:lock_released", not s.lock.exists(), "lock should still be released")
+    ev = [e for e in s.events() if e.get("event") == "worktree_finalize"]
+    check("write_failure_success:event_carries_error", bool(ev) and "artifact_write_error" in ev[-1]["details"], f"events={ev}")
+
+
+@tmpscene
+def test_artifact_write_failure_gate_path(tmp):
+    s = Scene(tmp)
+    (s.root / "README.md").write_text("dirty\n")
+    real = fin.update_artifact
+    fin.update_artifact = _failing_update("read-only file system")
+    try:
+        code, line = fin.run(s.argv())
+    finally:
+        fin.update_artifact = real
+    data = json.loads(line)
+    check("write_failure_gate:exit_4", code == 4 and data["outcome"] == "worktree_dirty_main_tree" and data["pending_gate"] == "worktree_dirty_main_tree", f"code={code} line={line[:250]}")
+    check("write_failure_gate:visible", "read-only file system" in data["details"]["artifact_write_error"] and "Exit code 4" in data["message"], data["message"][:300])
+    check("write_failure_gate:artifact_has_no_gate", s.artifact()["pending_gate"] is None and not s.lock.exists(), f"artifact={s.artifact()}")
+
+
+@tmpscene
+def test_artifact_write_failure_cleans_tmp(tmp):
+    s = Scene(tmp)
+    real = os.replace
+
+    def boom(src, dst):
+        raise OSError("replace refused")
+
+    os.replace = boom
+    try:
+        try:
+            fin.update_artifact(s.artifact_path, lambda art: art.__setitem__("pending_gate", "x"))
+            raised = None
+        except OSError as exc:
+            raised = exc
+    finally:
+        os.replace = real
+    left = [p.name for p in s.wfdir.iterdir() if ".tmp-" in p.name]
+    check("write_failure_tmp:raised_and_cleaned", raised is not None and left == [], f"raised={raised!r} left={left}")
+    check("write_failure_tmp:artifact_intact", s.artifact()["pending_gate"] is None, f"artifact={s.artifact()}")
+
+
+@tmpscene
+def test_dirty_worktree_is_never_discarded(tmp):
+    """H1: committed work plus uncommitted and untracked edits - the merge lands the commit, the edits would be lost to `remove --force`."""
+    s = Scene(tmp)
+    s.commit_in_worktree()
+    (s.wt / "README.md").write_text("edited after the commit, never committed\n")
+    (s.wt / "scratch.txt").write_text("untracked\n")
+    res = s.run()
+    expect("dirty_worktree", s, res, "worktree_cleanup_failed", MSG_WT_DIRTY)
+    check("dirty_worktree:says_uncommitted", "uncommitted or untracked changes" in res.data["message"] and "scratch.txt" in res.details.get("worktree_status", ""), res.stdout[:400])
+    check("dirty_worktree:nothing_removed", s.wt.exists() and s.branch_exists() and (s.wt / "scratch.txt").read_text() == "untracked\n"
+          and (s.wt / "README.md").read_text() == "edited after the commit, never committed\n", "the worktree edits were touched")
+    check("dirty_worktree:failing_command", res.details.get("failing_command") == "git status (worktree)", f"details={res.details}")
+    check("dirty_worktree:merge_landed", (s.root / "feature.txt").exists(), "the committed work should have merged before the guard")
+    # a worktree whose status cannot be read fails closed with its own wording
+    s3 = Scene(_sub(tmp, "statusfail"))
+    s3.commit_in_worktree()
+    real = fin._git
+
+    def flaky(args, cwd, env=None):
+        if args == ["status", "--porcelain"] and Path(cwd) == s3.wt:
+            return 128, "fatal: not a git repository"
+        return real(args, cwd, env) if env is not None else real(args, cwd)
+
+    fin._git = flaky
+    try:
+        code, line = fin.run(s3.argv())
+    finally:
+        fin._git = real
+    d3 = json.loads(line)
+    check("dirty_worktree:status_failure_closed", d3["outcome"] == "worktree_cleanup_failed" and d3["message"].startswith("The merge succeeded, but `git status --porcelain` failed in the worktree")
+          and s3.wt.exists(), line[:300])
+    # copy-fallback that DID apply the edits: the worktree may go (existing behaviour, unchanged)
+    s4 = Scene(_sub(tmp, "applied"))
+    (s4.wt / "applied.txt").write_text("carried over\n")
+    r4 = s4.run()
+    check("dirty_worktree:applied_by_fallback_still_removed", r4.data.get("outcome") == "merged_and_removed" and (s4.root / "applied.txt").exists() and not s4.wt.exists(), r4.stdout[:300])
+
+
+@tmpscene
+def test_git_runs_in_the_c_locale(tmp):
+    s = Scene(tmp)
+    calls = []
+    real_run = subprocess.run
+
+    def spy(cmd, *a, **kw):
+        if cmd and cmd[0] == "git":
+            calls.append(kw.get("env") or {})
+        return real_run(cmd, *a, **kw)
+
+    old = {k: os.environ.get(k) for k in ("LC_ALL", "LANGUAGE", "LANG")}
+    os.environ.update({"LC_ALL": "de_DE.UTF-8", "LANGUAGE": "de", "LANG": "de_DE.UTF-8"})
+    fin.subprocess.run = spy
+    try:
+        fin._git(["status", "--porcelain"], s.root)
+    finally:
+        fin.subprocess.run = real_run
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    check("c_locale:every_git_call", len(calls) == 1 and calls[0].get("LC_ALL") == "C" and calls[0].get("LANGUAGE") == "C", f"envs={[{k: e.get(k) for k in ('LC_ALL', 'LANGUAGE')} for e in calls]}")
+    # end to end under a non-English environment: the outcome must not depend on the user's locale
+    s2 = Scene(_sub(tmp, "e2e"))
+    s2.commit_in_worktree()
+    (s2.wt / "late.txt").write_text("uncommitted\n")
+    res = s2.run(env={"LANG": "de_DE.UTF-8", "LC_ALL": "de_DE.UTF-8", "LANGUAGE": "de"})
+    check("c_locale:non_english_env_still_guards", res.data.get("outcome") == "worktree_cleanup_failed" and (s2.wt / "late.txt").exists(), res.stdout[:300])
+    s3 = Scene(_sub(tmp, "e2e_ok"))
+    s3.commit_in_worktree()
+    ok_res = s3.run(env={"LANG": "fr_FR.UTF-8", "LC_ALL": "fr_FR.UTF-8", "LANGUAGE": "fr"})
+    check("c_locale:non_english_env_merges", ok_res.data.get("outcome") == "merged_and_removed", ok_res.stdout[:300])
+
+
+@tmpscene
+def test_git_worktree_remove_uses_double_dash(tmp):
+    s = Scene(tmp)
+    s.commit_in_worktree()
+    seen = []
+    real = fin._git
+
+    def spy(args, cwd, env=None):
+        if args[:2] == ["worktree", "remove"]:
+            seen.append(args)
+        return real(args, cwd, env) if env is not None else real(args, cwd)
+
+    fin._git = spy
+    try:
+        code, line = fin.run(s.argv())
+    finally:
+        fin._git = real
+    check("remove_double_dash", seen == [["worktree", "remove", "--force", "--", str(s.wt)]] and json.loads(line)["outcome"] == "merged_and_removed", f"seen={seen}")
+
+
+@tmpscene
+def test_lock_metadata_write_failure_fails_closed(tmp):
+    """M3: a lock directory with no identifying metadata can never be reclaimed - drop it and report a local error."""
+    s = Scene(tmp)
+    s.commit_in_worktree()
+    real = fin._write_meta
+
+    def boom(meta, text):
+        raise OSError("no space left")
+
+    fin._write_meta = boom
+    try:
+        code, line = fin.run(s.argv())
+    finally:
+        fin._write_meta = real
+    data = json.loads(line)
+    check("meta_write_failure:gate_and_local_error", code == 0 and data["outcome"] == "worktree_merge_locked" and data["pending_gate"] == "worktree_merge_locked"
+          and data["message"].startswith(MSG_LOCK_ERR + "`OSError`)") and data["details"]["holder"] == "OSError", line[:300])
+    check("meta_write_failure:lock_dropped_nothing_merged", not s.lock.exists() and s.wt.exists() and not (s.root / "feature.txt").exists(), "lock left behind or merge ran")
+    check("meta_write_failure:artifact_gate", s.artifact()["pending_gate"] == "worktree_merge_locked", f"artifact={s.artifact()}")
+
+
+@tmpscene
+def test_merge_timeout_says_state_unknown(tmp):
+    """M4: rc 127 is a launch failure or the 600 s timeout; the merge may have half-run, so never say 'nothing has been merged'."""
+    s = Scene(tmp)
+    s.commit_in_worktree()
+    real = fin._git
+
+    def timed_out(args, cwd, env=None):
+        if args[:1] == ["merge"]:
+            return 127, "TimeoutExpired: Command '['git', 'merge']' timed out after 600 seconds"
+        return real(args, cwd, env) if env is not None else real(args, cwd)
+
+    fin._git = timed_out
+    try:
+        code, line = fin.run(s.argv())
+    finally:
+        fin._git = real
+    data = json.loads(line)
+    check("merge_timeout:state_unknown", data["outcome"] == "worktree_merge_unrecognized_failure" and data["message"].startswith(MSG_STATE_UNKNOWN)
+          and "UNKNOWN" in data["message"] and "Nothing has been merged" not in data["message"] and s.wt.exists() and s.branch_exists(), data["message"][:300])
+    s2 = Scene(_sub(tmp, "plain"))
+    git(s2.root, "branch", "-m", s2.branch, "gone")
+    plain = s2.run()
+    check("merge_timeout:ordinary_failure_keeps_wording", "Nothing has been merged" in plain.data.get("message", ""), plain.data.get("message", "")[:200])
+
+
+@tmpscene
+def test_exception_propagation_releases_lock(tmp):
+    """M5: an unexpected exception inside the merge section releases the held lock and propagates (no JSON line, no gate written)."""
+    s = Scene(tmp)
+    s.commit_in_worktree()
+    real = fin._git
+
+    def exploding(args, cwd, env=None):
+        if args[:1] == ["merge"]:
+            raise RuntimeError("merge exploded")
+        return real(args, cwd, env) if env is not None else real(args, cwd)
+
+    fin._git = exploding
+    raised = None
+    try:
+        fin.run(s.argv())
+    except RuntimeError as exc:
+        raised = exc
+    finally:
+        fin._git = real
+    check("exception:propagates_and_lock_released", raised is not None and "merge exploded" in str(raised) and not s.lock.exists(), f"raised={raised!r} lock={s.lock.exists()}")
+    check("exception:nothing_persisted", s.artifact()["pending_gate"] is None and s.artifact()["worktree_mode"] == "auto_created" and s.wt.exists(), f"artifact={s.artifact()}")
+    # and a foreign lock is never touched by that cleanup path
+    s2 = Scene(_sub(tmp, "foreign"))
+
+    def foreign_then_boom(args, cwd, env=None):
+        if args[:1] == ["merge"]:
+            shutil.rmtree(s2.lock)  # our lock vanished and another workflow took it
+            s2.lock.mkdir()
+            (s2.lock / "metadata.json").write_text(json.dumps({"workflow_uuid": "wf-foreign-1234"}))
+            raise RuntimeError("boom")
+        return real(args, cwd, env) if env is not None else real(args, cwd)
+
+    fin._git = foreign_then_boom
+    try:
+        fin.run(s2.argv())
+    except RuntimeError:
+        pass
+    finally:
+        fin._git = real
+    check("exception:foreign_lock_survives", s2.lock.exists() and json.loads((s2.lock / "metadata.json").read_text())["workflow_uuid"] == "wf-foreign-1234", "foreign lock deleted")
+
+
+@tmpscene
+def test_paths_with_spaces(tmp):
+    s = Scene(_sub(tmp, "a dir with spaces"))
+    s.commit_in_worktree()
+    (s.wt / "spaced name.txt").write_text("x\n")
+    git(s.wt, "add", "spaced name.txt")
+    git(s.wt, "commit", "-q", "-m", "spaced")
+    res = s.run()
+    expect("paths_with_spaces", s, res, "merged_and_removed", MSG_OK, gate=None, mode="merged_and_removed")
+    check("paths_with_spaces:merged", (s.root / "spaced name.txt").exists() and not s.wt.exists() and not s.branch_exists(), "merge or cleanup did not run")
+    s2 = Scene(_sub(tmp, "spaced fallback dir"))
+    (s2.wt / "uncommitted file.txt").write_text("y\n")
+    r2 = s2.run()
+    check("paths_with_spaces:copy_fallback", r2.data.get("outcome") == "merged_and_removed" and (s2.root / "uncommitted file.txt").exists(), r2.stdout[:300])
+
+
+@tmpscene
+def test_reclaim_loop_terminates_when_rmtree_fails(tmp):
+    """A reclaim whose lock directory cannot be removed falls through to the wait path (it must not spin)."""
+    s = Scene(tmp)
+    assert try_acquire_lock(s.lock, "wf-dead", str(s.root / "gone"))
+    real = fin._rmtree
+    calls = []
+
+    def stuck(path):
+        raise OSError("cannot remove")
+
+    def runner(meta, root, wf):
+        calls.append(1)
+        return "STALE_INACTIVE wf-dead"
+
+    fin._rmtree = stuck
+    try:
+        code, line = fin.run(s.argv(), staleness_runner=runner)
+    finally:
+        fin._rmtree = real
+    data = json.loads(line)
+    check("reclaim_terminates", data["outcome"] == "worktree_merge_locked" and len(calls) == 2 and s.lock.exists(), f"calls={len(calls)} line={line[:200]}")
+
+
+@tmpscene
+def test_policy_is_read_after_the_4a_guards(tmp):
+    """The prose has no policy: its guards (mode, path, branch) run first, so a broken policy gates only a run that would use it."""
+    bad = b"{broken"
+    for label, mode, expected in (("mode_null", None, "skipped_not_auto_created"), ("merged", "merged_and_removed", "skipped_not_auto_created")):
+        s = Scene(_sub(tmp, label), mode=mode, policy=bad)
+        res = s.run()
+        expect(f"policy_after_guards_{label}", s, res, expected, MSG_SKIP, gate=None, mode=mode)
+    s = Scene(_sub(tmp, "nopath"), policy=bad, artifact={"workflow_uuid": "x", "worktree_mode": "auto_created", "worktree_path": "", "worktree_branch": "b", "pending_gate": None})
+    res = s.run()
+    check("policy_after_guards:path_missing_first", res.data.get("outcome") == "worktree_path_missing", res.stdout[:200])
+    s = Scene(_sub(tmp, "armed"), policy=bad)
+    res = s.run()
+    check("policy_after_guards:invalid_gates_a_real_run", res.data.get("outcome") == "policy_invalid" and res.data.get("pending_gate") == "policy_invalid", res.stdout[:200])
 
 
 @tmpscene
@@ -910,7 +1368,7 @@ def test_script_hygiene():
     src = SCRIPT.read_text(encoding="utf-8")
     tree = ast.parse(src, feature_version=(3, 9))
     check("hygiene:py39", True)
-    check("hygiene:line_budget", len(src.splitlines()) <= 450, f"{len(src.splitlines())} lines")
+    check("hygiene:line_budget", len(src.splitlines()) <= 520, f"{len(src.splitlines())} lines")  # 450 at P7; 520 after the remfix (lock ownership, write failure, worktree guard)
     literals = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
     bad = [t for t in literals if "craftflow-router" in t or "_shared" in t or "router-protocol" in t]
     check("hygiene:pp2_no_prose_path", not bad, f"literals={bad[:3]}")
@@ -919,7 +1377,7 @@ def test_script_hygiene():
     check("hygiene:reads_all_four_worktree_merge_keys", calls == {"worktree_merge.require_clean_tree", "worktree_merge.lock_max_attempts",
           "worktree_merge.lock_sleep_seconds", "worktree_merge.copy_fallback_on_up_to_date"}, f"calls={sorted(calls)}")
     check("hygiene:no_shell_true", "shell=True" not in src, "shell=True present")
-    check("hygiene:no_reclaim_loop_without_exit", "lock_dir.exists()" in src or "exists()" in src, "reclaim must not spin when the lock dir cannot be removed")
+    # the old `"exists()" in src` string match was vacuous; the reclaim loop is tested behaviourally in test_reclaim_loop_terminates_when_rmtree_fails
 
 
 def test_exit_criteria_dark_and_policy_shipped():
@@ -947,8 +1405,14 @@ def main():
                test_hyphenated_up_to_date_is_not_special_cased_e32, test_copy_fallback_failure_partial_apply_gate, test_conflict_gate_keeps_worktree, test_unrecognized_merge_failure,
                test_worktree_remove_failure, test_branch_delete_refusal, test_resume_after_locked_reenters,
                test_resume_after_cleanup_failure_completes, test_rerun_after_success_skipped, test_success_clears_only_worktree_pending_gate,
-               test_artifact_corrupt_exit_3, test_root_mismatch_detail, test_no_root_mismatch_key_when_roots_agree, test_concurrent_artifact_write_flock,
-               test_events_file_created_and_appended, test_release_lock_error_nonfatal, test_usage_errors_exit_2, test_no_side_effects_on_gate_outcomes,
+               test_artifact_corrupt_exit_3, test_root_mismatch_fails_closed, test_worktree_path_must_be_absolute_and_in_root, test_no_root_mismatch_key_when_roots_agree,
+               test_concurrent_artifact_write_flock, test_events_file_created_and_appended, test_release_failure_is_loud, test_usage_errors_exit_2,
+               test_lock_released_once_foreign_lock_survives, test_release_requires_ownership, test_artifact_persisted_before_lock_release,
+               test_artifact_write_failure_success_path, test_artifact_write_failure_gate_path, test_artifact_write_failure_cleans_tmp,
+               test_dirty_worktree_is_never_discarded, test_git_runs_in_the_c_locale, test_git_worktree_remove_uses_double_dash,
+               test_lock_metadata_write_failure_fails_closed, test_merge_timeout_says_state_unknown, test_exception_propagation_releases_lock,
+               test_paths_with_spaces, test_reclaim_loop_terminates_when_rmtree_fails, test_policy_is_read_after_the_4a_guards,
+               test_no_side_effects_on_gate_outcomes,
                test_exactly_one_json_line_enum, test_every_outcome_is_exercised, test_script_hygiene, test_exit_criteria_dark_and_policy_shipped):
         try:
             fn()
@@ -962,7 +1426,7 @@ def main():
         print(f"\nResults: {_passes} passed, {len(_errors)} failed", file=sys.stderr)
         print("FAIL", file=sys.stderr)
         return 1
-    print(f"Results: {_passes} passed, 0 failed")
+    print(f"Results: {_passes} passed, 0 failed" + (f", {len(SKIPS)} skipped ({', '.join(SKIPS)})" if SKIPS else ""))
     print("PASS")
     return 0
 
