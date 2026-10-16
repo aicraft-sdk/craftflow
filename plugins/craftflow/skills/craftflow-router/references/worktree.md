@@ -36,7 +36,7 @@ Safety: Worktree creates are idempotent in the event log. If a resume finds `wor
 
 ## Worktree gate summary
 
-- BUILD's worktree merge-safety guard uses 6 `pending_gate` values (canonical logic, formerly `SKILL.md` step 4, lives in
+- BUILD's worktree merge-safety guard uses 7 `pending_gate` values: the 6 below plus `policy_invalid` (a refused or invalid policy, see the outcome table) (canonical logic, formerly `SKILL.md` step 4, lives in
   `scripts/craftflow_worktree_finalize.py`; the outcome table above is the router contract; this is a
   summary, not a duplicate of the logic):
   - `worktree_merge_conflict` — a real textual git merge conflict. Ask the user to resolve it in
@@ -63,6 +63,6 @@ Safety: Worktree creates are idempotent in the event log. If a resume finds `wor
   - `worktree_cleanup_failed` — after a successful merge or copy-fallback, either
     `git worktree remove --force` or `git branch -d` failed (e.g. the worktree is busy/locked, or
     the branch is not fully merged — a real correctness signal). Also when the worktree directory is
-    absent and the branch had nothing to merge (nothing from it was applied; `git worktree prune` and
+    absent and the branch had nothing to merge (nothing further could be taken from it; inspect `git log` to see whether the branch was already merged, then `git worktree prune` and
     `git branch -D` once confirmed), or when the worktree path fails to stat. The user must resolve the
     underlying issue, then resume to retry cleanup.

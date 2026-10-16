@@ -68,8 +68,8 @@ MESSAGES = {
     "merged_absent": ("Branch merged and deleted, but no worktree directory was present (removed earlier), so nothing from a worktree directory was "
                       "applied by this run; the branch held nothing the main tree lacked."),
     "absent_nothing_merged": ("No worktree directory was present at `{worktree_path}` (git still lists it as prunable) and `git merge {worktree_branch}` had "
-                              "nothing to merge, so nothing from it was applied. Any uncommitted work that lived in that directory is gone. Nothing was removed: "
-                              "the registration and the branch are untouched. Inspect `git log {worktree_branch}` in `$PROJECT_ROOT`; once you have confirmed "
+                              "nothing to merge, so nothing further could be taken from it. Any uncommitted work that lived in that directory is gone. Nothing was removed: "
+                              "the registration and the branch are untouched. Inspect `git log {worktree_branch}` in `$PROJECT_ROOT` to see whether the branch was already merged; once you have confirmed "
                               "nothing is lost, run `git worktree prune` and `git branch -D {worktree_branch}`, then resume this workflow (it records the finish)."),
     "worktree_stat_failed": ("The worktree path `{worktree_path}` could not be inspected (`{stat_error}`), so whether it exists is unknown. Nothing was merged "
                              "or removed. Fix the filesystem or permission problem, then resume this workflow to retry."),

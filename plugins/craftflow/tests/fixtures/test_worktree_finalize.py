@@ -1472,7 +1472,7 @@ def _listed_prunable(s):
 def test_prunable_missing_worktree_is_completed(tmp):
     """P8 step 0 + remfix HIGH-1: the worktree directory was deleted by hand but git still lists it (prunable). Finalize must never traceback,
     and must not report a plain merged_and_removed when nothing was merged: a committed branch merges (success, worktree_absent=true); an
-    up-to-date branch with no directory is a worktree_cleanup_failed gate that says nothing was applied and touches nothing."""
+    up-to-date branch with no directory is a worktree_cleanup_failed gate that hedges (nothing further could be taken; the branch may already be merged) and touches nothing."""
     s = Scene(_sub(tmp, "merge"))
     s.commit_in_worktree()
     shutil.rmtree(str(s.wt))
@@ -1489,7 +1489,9 @@ def test_prunable_missing_worktree_is_completed(tmp):
     res2 = s2.run()
     check("prunable_up_to_date:no_traceback", "Traceback" not in res2.stderr, res2.stderr[-300:])
     expect("prunable_up_to_date", s2, res2, "worktree_cleanup_failed", "No worktree directory was present at")
-    check("prunable_up_to_date:says_nothing_applied", "nothing from it was applied" in res2.data.get("message", ""), res2.data.get("message", "")[:300])
+    msg2 = res2.data.get("message", "")
+    check("prunable_up_to_date:hedged_message",
+          "nothing further could be taken from it" in msg2 and "whether the branch was already merged" in msg2 and "was applied" not in msg2, msg2[:400])
     check("prunable_up_to_date:worktree_absent_detail", res2.details.get("worktree_absent") is True, res2.stdout[:300])
     check("prunable_up_to_date:untouched", s2.branch_exists() and _listed_prunable(s2), "branch or registration was removed by a gate")
 

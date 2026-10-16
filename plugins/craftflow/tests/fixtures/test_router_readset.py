@@ -1204,6 +1204,10 @@ def test_worktree_md_is_stage_and_mapped() -> None:
     mapped = (len(rows) == 1 and rows[0]["class"] == "stage" and rows[0]["workflows"] == ["BUILD"] and rows[0]["happy_path"] is True
               and "worktree_mode == auto_created" in rows[0]["trigger"] and "pending_gate" in rows[0]["trigger"])
     call = 'python3 "$CRAFTFLOW_SCRIPTS/craftflow_worktree_finalize.py" --wf {workflow_uuid} --project-root "$PROJECT_ROOT"'
+    resume_clause = "resume with auto_created"
+    kernel_row = next((ln for ln in skill.splitlines() if ln.startswith("| stage |") and "references/worktree.md" in ln), "")
+    pinned = bool(rows) and resume_clause in rows[0]["trigger"] and resume_clause in kernel_row
+    check("worktree_md_resume_trigger_pinned", pinned, f"map_trigger={rows[0]['trigger'] if rows else None!r} kernel_row={kernel_row[:200]!r}")
     check("worktree_md_is_stage_and_mapped",
           mapped and "`references/worktree.md`" in skill and call in body and "Clean-State Check" in body,
           f"rows={rows} file_exists={wt.is_file()} kernel_points={'references/worktree.md' in skill} call_in_body={call in body}")
