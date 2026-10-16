@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.33.0] - 2026-10-16
+
+### Features
+
+- craftflow_worktree_finalize.py composes lock-staleness and copy-fallback (unwired)
+
+### Fixes
+
+- worktree_finalize gates untracked work under showUntrackedFiles=no, recovers an already-merged resume and gates an invalid worktree_path
+- worktree_finalize releases the lock once, persists before release, never discards uncommitted worktree edits
+
 ## [1.32.0] - 2026-10-16
 
 ### Features
