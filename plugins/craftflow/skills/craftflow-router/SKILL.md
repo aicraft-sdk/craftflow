@@ -97,7 +97,7 @@ This section's content is inherently Claude-only vocabulary (`task_tools_availab
 `skills/_shared/router-protocol.md`, regardless of whether `## 0.`'s own project-root resolution
 algorithm is shared or host-specific.
 
-When `capabilities.task_tools_available == false`, or any router-owned native Task* call fails mid-session, read `references/task-tool-fallback.md` now and apply its per-site rule wherever this document or a reference calls `TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate`.
+When `capabilities.task_tools_available == false`, or any router-owned native Task* call fails mid-session, read `references/task-tool-fallback.md` now and apply its per-site rule at every `TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` call site.
 
 ## 2. Memory Load And Template Validation
 
@@ -233,6 +233,8 @@ After memory load:
 ```text
 TaskList()
 ```
+
+In task-tool fallback mode (`references/task-tool-fallback.md → ## Resume fallback`), skip `TaskList()` and resume from the workflow artifact.
 
 Hydration rules:
 - Find active parent workflow tasks by subject prefix `CRAFTFLOW BUILD:`, `CRAFTFLOW DEBUG:`, `CRAFTFLOW REVIEW:`, `CRAFTFLOW PLAN:`.
@@ -596,10 +598,10 @@ TaskCreate({
 })
 ```
 
-In fallback mode include `## Cycle` N (per-phase, from 1) in the `craftflow:doubt-verifier` dispatch prompt; there is no `Cycle:` task line for the agent to read.
+In task-tool fallback mode (`references/task-tool-fallback.md`) include `## Cycle` N (per-phase, from 1) in the `craftflow:doubt-verifier` dispatch prompt; there is no `Cycle:` task line for the agent to read.
 
 **After doubt-verifier returns:**
-- First run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate doubt_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root "$PROJECT_ROOT"` (N = the `Cycle:` of this cycle's task; in fallback mode, the `## Cycle` value of this dispatch's prompt, else the agent's echoed `Cycle number:`, never `telemetry.loop_counts`). `advance` → apply the bullet for the returned verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict, as the hard-stop bullet does (advance once in total). `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).
+- First run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate doubt_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root "$PROJECT_ROOT"` (N = the `Cycle:` of this cycle's task; in task-tool fallback mode (`references/task-tool-fallback.md`), the `## Cycle` value of this dispatch's prompt, else the agent's echoed `Cycle number:`, never `telemetry.loop_counts`). `advance` → apply the bullet for the returned verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict, as the hard-stop bullet does (advance once in total). `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).
 - `DOUBT_VERDICT: CONFIRMED` → advance phase cursor, continue workflow
 - `DOUBT_VERDICT: REFUTED` → create REM-FIX task (same as normal verification failure), increment loop counter
 - `DOUBT_VERDICT: DOUBT_THEATER` → log event, skip further doubt cycles, advance to Memory Update with advisory note
@@ -655,10 +657,10 @@ TaskCreate({
 })
 ```
 
-In fallback mode include `## Cycle` N (per-phase, from 1) in the fix-verify dispatch prompt too; there is no `Cycle:` task line to read.
+In task-tool fallback mode (`references/task-tool-fallback.md`) include `## Cycle` N (per-phase, from 1) in the fix-verify dispatch prompt too; there is no `Cycle:` task line to read.
 
 **After doubt-verifier returns** (see `agents/doubt-verifier.md → ## Fix-Verify Contract`):
-- First run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate fix_verify_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root "$PROJECT_ROOT"` (after the contract-override check below has been applied; N = the `Cycle:` of the fix-verify task; in fallback mode, the `## Cycle` value of this dispatch's prompt). `advance` → apply the bullet for the returned (post-override) verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict (the `policy.fix_verify_cycles_max` hard stop that the cycle-counter paragraph inherits from `doubt_verify`; advance once in total). If `doubt_verify_gate` also fired on this phase, a capped verdict does not block phase exit under the stricter-verdict rule; the other gate's verdict still applies. `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).
+- First run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate fix_verify_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root "$PROJECT_ROOT"` (after the contract-override check below has been applied; N = the `Cycle:` of the fix-verify task; in task-tool fallback mode (`references/task-tool-fallback.md`), the `## Cycle` value of this dispatch's prompt). `advance` → apply the bullet for the returned (post-override) verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict (the `policy.fix_verify_cycles_max` hard stop that the cycle-counter paragraph inherits from `doubt_verify`; advance once in total). If `doubt_verify_gate` also fired on this phase, a capped verdict does not block phase exit under the stricter-verdict rule; the other gate's verdict still applies. `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).
 - `FIX_VERDICT: LOAD_BEARING` → advance phase cursor, continue workflow.
 - `FIX_VERDICT: NOT_LOAD_BEARING` or `SIBLING_FOUND` → create a REM-FIX task (same shape as any
   other verification failure — `origin:router`, `phase:fix-verify`), increment
@@ -703,6 +705,7 @@ Timing telemetry is measurement only. It must never bypass gates, phase exit, or
 **Router-owned timestamp instrumentation:**
 - When dispatching an agent task, append `"agent_started"` to the event log with `"ts": "{iso_now}"` before invoking the agent.
 - When capturing agent output, append `"agent_completed"` to the event log with `"ts": "{iso_now}"`.
+- `{iso_now}` is UTC ISO-8601; omit the field if no clock.
 
 **Legacy path (Claude Code task metrics):**
 - If Claude Code exposes task duration metrics via `TaskGet()`, use those as the primary source.
@@ -994,6 +997,8 @@ is presented via `AskUserQuestion` exactly as the shared doc describes; unlike C
 7. Repeat until all tasks in the active `wf:` are completed.
 ```
 
+In task-tool fallback mode, step 1 and agent-completion steps 1-3 follow the matching sections of `references/task-tool-fallback.md`. Memory task (step 3): read `references/memory-finalize.md`.
+
 ### After every agent completion
 
 Pre-check before processing agent output:
@@ -1046,8 +1051,6 @@ Shared with Cursor — canonical text lives in
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
 "Verifier Findings Handoff".
 
-Memory finalization runs when the memory task is runnable: read `references/memory-finalize.md` and follow it (it also holds the single copy of the Memory Update task instructions).
-
 ## 14. Hard Rules
 
 - Router must run in the main Claude Code session, never inside a sub-agent.
@@ -1072,13 +1075,13 @@ Memory finalization runs when the memory task is runnable: read `references/memo
 
 ### Policy table
 
-Effective policy (`config/policy.json` merged over the defaults), printed by `craftflow_policy.py --print-table`. Each value is enforced by the named script; the prose location keeps the rule text.
+Printed by `craftflow_policy.py --print-table`; each value is enforced by the named script and the prose location keeps the rule text.
 
 | key | value | enforced by | prose location |
 |---|---|---|---|
 | `native_plan_mode` | `never` | `craftflow_pretooluse_guard.py` | § 14 EnterPlanMode rule |
 | `plan_commit` | `never` | `craftflow_pretooluse_bash_guard.py` | § 14 plan-artifact rule |
-| `memory_write` | `finalize-only` | `craftflow_pretooluse_guard.py` | § 13 |
+| `memory_write` | `finalize-only` | `craftflow_pretooluse_guard.py` | `references/memory-finalize.md → ## 13. Memory Finalization` |
 | `worktree_merge` | `require_clean_tree=true, lock_max_attempts=9, lock_sleep_seconds=5, copy_fallback_on_up_to_date=true` | `craftflow_pretooluse_bash_guard.py` (clean tree) | § 5 |
 | `remediation_cycles_max` | `3` | `craftflow_gate_check.py` | § 14 remediation loop rule |
 | `doubt_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Doubt-Verify Dispatch Rule |
@@ -1087,7 +1090,7 @@ Effective policy (`config/policy.json` merged over the defaults), printed by `cr
 
 ### Loop caps
 
-Documentation of the hard stops. The operative text stays in the lines named in the last column.
+Hard stops. Operative text: the last column.
 
 | gate | max | evaluation point | input | at-cap action | operative prose |
 |---|---|---|---|---|---|

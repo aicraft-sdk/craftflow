@@ -991,6 +991,10 @@ def test_reach_feasibility_block_is_in_the_projection() -> None:
                  and sb(v)["buckets"]["widening"]["pairs"] == v["readmap_widened"] and sb(v)["section_move_rows"]["ops"] > 0 and "formula" in sb(v)
                  and v["variant_split"]["units"] <= v["reach_loss_split"][classes[2]]["units"] for v in tiers.values())
     penalty = g["reach_a_kernel_penalty_bytes"] == 3913 and g["single_token_units"] == 1 and "reach_a_kernel_penalty_bytes" in block["note"]
+    # HAND-PINNED NUMBERS (here, in reach_loss_split_pins_the_covered_first_numbers, signing_burden_buckets_are_disjoint_on_every_tier and
+    # signing_burden_counts_rows_not_occurrences): they are copied from a `--project` run and must be re-derived after ANY change to the
+    # router text, the cut plan or the policy map. The P9 remediation re-derived them on its final text and none moved, because the added
+    # pointer, xref and Applicability rows relate ids the projection already counted.
     # 167 / 88 / 160 and 415 before P9; P9's drafted rows (the section 13 move and the fallback, dedupe and context rows) are read by the projection's diff
     pinned = [g["reach_loss_split"][c]["units"] for c in classes] == [166, 87, 160] and g["reach_lost_occurrences"] == 413
     check("reach_feasibility_block_is_in_the_projection",

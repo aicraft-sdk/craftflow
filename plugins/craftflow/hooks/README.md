@@ -140,7 +140,7 @@ project's real workflow corpus — see
 `docs/2026-07-29-craftflow-skill-distillation-threshold-calibration-decision.md`.
 
 Phase 4 adds anti-rot maintenance to `--prune`, also wired unconditionally into
-`SKILL.md § 13. Memory Finalization` immediately after `--observe` (both run on every workflow,
+`references/memory-finalize.md → ## 13. Memory Finalization` immediately after `--observe` (both run on every workflow,
 independent of `SKILL_DISTILL: skip`): stale `candidate` entries (>90 days, no new evidence) are
 removed outright; `rejected` entries are left untouched as permanent tombstones; and `promoted`
 entries are never removed or status-changed, but are checked for rot (missing/blank

@@ -51,7 +51,7 @@ Parse stdout `{"findings": [...], "skipped": [...]}`.
 - `findings != []` → add one `[Deferred]: clean-state-check: {pattern} at {file}:{line}` line
   per finding directly into the SAME workflow-scoped `activeContext.md` write that this
   memory-finalize task already performs (via the `deferred` `MEMORY_NOTES` routing in
-  `SKILL.md` § 13) — never a separate write, never a blocking gate.
+  `references/memory-finalize.md → ## 13. Memory Finalization`) — never a separate write, never a blocking gate.
 - `skipped != []` → fold skipped entries into that SAME deferred-note write, one
   `[Deferred]: clean-state-check: could not scan {file} ({error})` line per skipped entry.
   This is the one signal that distinguishes "clean" from "couldn't tell" — never silently

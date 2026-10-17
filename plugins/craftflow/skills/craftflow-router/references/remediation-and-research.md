@@ -143,7 +143,7 @@ When planner returns `STATUS=PLAN_CREATED` or `STATUS=DECISION_RFC_CREATED`:
   - keep `planning_review_status=pending_review`
 - `planning_review_runs` counts only completed fresh-review passes with valid contract output. Invalid or malformed reviewer output must fail closed without consuming one of the two allowed passes.
 
-In Task*-tool fallback mode there is no `plan-review-gap-N` task: N is 1 for the first fresh review and 2 for the one after `re-plan`.
+In task-tool fallback mode (`references/task-tool-fallback.md`) there is no `plan-review-gap-N` task: N is 1 for the first fresh review and 2 for the one after `re-plan`.
 
 After applying a block's `Increment planning_review_runs += 1` line, run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate plan_review_passes_max --point post_verdict --pass {N} --verdict {PASS|FINDINGS} --wf {workflow_uuid} --project-root "$PROJECT_ROOT"`, where N is the pass of the returning `plan-review-gap-N` task; `proceed` → continue with that block; `human_checkpoint` with `reason: cap-reached` → continue with the pass-2 `FINDINGS` block after its increment line (`pending_gate=clarification`); any other result → `loop_cap_check_failed` (`SKILL.md` § 14; the increment above already applied: a `proceed` or `advance` reply must not repeat it).
 

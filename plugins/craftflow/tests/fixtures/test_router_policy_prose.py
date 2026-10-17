@@ -258,8 +258,9 @@ def test_call_lines_define_every_action():
           rr.index("--gate plan_review_passes_max") < rr.index("When `plan-gap-reviewer` pass 1 returns `PASS`:")
           and rr.count("craftflow_gate_check.py") == 2, f"mentions={rr.count('craftflow_gate_check.py')}")
     check("fallback_mode_carries_the_cycle_and_pass_identity",
-          "In fallback mode include `## Cycle` N" in kernel and kernel.count("In fallback mode include `## Cycle` N") == 2
-          and "N is 1 for the first fresh review and 2 for the one after `re-plan`" in rr, "")
+          # P9 remediation (MED-4): the kernel names the mode "task-tool fallback mode (references/task-tool-fallback.md)"
+          kernel.count("In task-tool fallback mode (`references/task-tool-fallback.md`) include `## Cycle` N") == 2
+          and "In task-tool fallback mode (`references/task-tool-fallback.md`) there is no `plan-review-gap-N` task: N is 1 for the first fresh review and 2 for the one after `re-plan`" in rr, "")
     # every call line must parse with the real CLI once its placeholders are filled in (wiring, not wording)
     fill = {"{N}": "1", "{workflow_uuid}": "wf-x", '"$PROJECT_ROOT"': "/p", "{PASS|FINDINGS}": "PASS"}
     bad = []

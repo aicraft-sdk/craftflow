@@ -704,10 +704,10 @@ In v1 Cursor Task-Dispatch Mode, the following Claude Code features are NOT supp
   directly instead of invoking `craftflow_memory_merge.py --apply` (the routing-table-driven,
   confidence-filtered, dedup-capped, retraction-aware, archive-first, atomic, permit-checked
   merge-and-write Claude Code's real memory-finalize task
-  runs, per `craftflow-router/SKILL.md` § 13 and every workflow reference file's
+  runs, per `craftflow-router/references/memory-finalize.md → ## 13. Memory Finalization` and every workflow reference file's
   `phase:memory-finalize` task description). Cursor's § 8 also skips the skill-candidate ledger
   `--observe`/`--prune` calls, the `.memory-finalize` permit-token guard, and the cross-workflow
-  promotion/DEBUG/PLAN-specific rules § 13 defines. This means Cursor-driven memory writes do not yet
+  promotion/DEBUG/PLAN-specific rules that `## 13. Memory Finalization` defines. This means Cursor-driven memory writes do not yet
   benefit from the 2026-08-07 safety-hardening commits (organic-content silent loss, duplicate
   accumulation, NaN/Infinity confidence bypass, section-discard bugs) that protect the Claude Code
   path. Deferred to v2 for the same reason as the items above: no Cursor Task-Dispatch equivalent has
@@ -1079,8 +1079,8 @@ finalization — see § 5's "Simplified execution model (v1 differences from Cla
 6. Update .craftflow/state/project/progress.md ## Completed (one-line summary), capped at the
    most recent 20 entries with the oldest archived to
    .craftflow/state/project/archive/completed-2026-08.md (matching Common Gotchas' cap+archive
-   discipline) -- without this cap, this section regrows unbounded (see craftflow-router/SKILL.md
-   § 13 for the full mechanism this simplified Cursor step defers to)
+   discipline) -- without this cap, this section regrows unbounded (see
+   `craftflow-router/references/memory-finalize.md → ## 13. Memory Finalization` for the full mechanism this simplified Cursor step defers to)
 7. Write final status to .craftflow/state/workflows/{wf_id}.json
 8. Append the workflow_completed event to .craftflow/state/workflows/{wf_id}.events.jsonl
    (the same file § 4 Step 4d created and § 5's execution loop appended to per phase) so

@@ -118,7 +118,7 @@ The playbook defines Nx workspace generators for scaffolding new projects. This 
 
 ## §8 — Craftflow memory anchors
 
-Craftflow memory lives under `.craftflow/state/project/` (`activeContext.md`, `patterns.md`, `progress.md`). These files are created and maintained by craftflow's own router/memory-finalize mechanism (see `craftflow-router/SKILL.md` § 13) — do not hand-author or seed them from this setup skill.
+Craftflow memory lives under `.craftflow/state/project/` (`activeContext.md`, `patterns.md`, `progress.md`). These files are created and maintained by craftflow's own router/memory-finalize mechanism (see `craftflow-router/references/memory-finalize.md → ## 13. Memory Finalization`) — do not hand-author or seed them from this setup skill.
 
 `CLAUDE.md` and `.claude/` are NEVER un-ignored.
 

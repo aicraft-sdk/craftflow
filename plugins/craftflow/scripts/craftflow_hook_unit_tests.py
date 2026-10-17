@@ -1227,6 +1227,138 @@ def test_router_task_tool_fallback_wired_through_resume_and_chain_loop() -> None
     ok(name)
 
 
+def test_router_task_tool_fallback_kernel_keeps_call_site_pointers() -> None:
+    # P9 remediation (MED-3, MED-4, LOW-6): the fallback paragraphs left the kernel, so each kernel site that used to
+    # carry one must still point the router at references/task-tool-fallback.md, in the words "task-tool fallback mode"
+    # (not the bare "fallback mode", which also names other fallbacks). The Stale true capability rule must keep its
+    # flip-and-log behavior in the moved file. The pointers use lowercase "task-tool fallback" so the plan's exit
+    # criterion (at most one literal "Task*-tool fallback" in SKILL.md) is unaffected.
+    name = "router/task-tool-fallback-kernel-call-site-pointers"
+    pointer = "task-tool fallback mode (`references/task-tool-fallback.md"
+    sites = (
+        ("### Doubt-Verify Dispatch Rule", pointer),
+        ("### Fix-Verify Dispatch Rule", pointer),
+    )
+    # Resume site: the pointer sits in the kernel's section 4 today and in references/resume.md once a later phase moves the
+    # section 4 body there, so look for it in either file instead of anchoring on a heading that stays in only one of them
+    corpus = router_corpus.read_corpus(PLUGIN_ROOT)
+    resume_texts = [corpus[k] for k in ("skills/craftflow-router/SKILL.md", "skills/craftflow-router/references/resume.md")
+                    if k in corpus]
+    if not any("`references/task-tool-fallback.md → ## Resume fallback`" in t for t in resume_texts):
+        fail(name, "neither SKILL.md nor references/resume.md points the resume site at `references/task-tool-fallback.md → ## Resume fallback`")
+        return
+    for heading, needle in sites:
+        section = _router_section_or_none(heading)
+        if section is None:
+            fail(name, f"could not locate {heading!r} in the router corpus")
+            return
+        if needle not in section:
+            fail(name, f"{heading} no longer points the router at references/task-tool-fallback.md ({needle!r} missing)")
+            return
+    # chain-loop site: one kernel paragraph (outside every ### heading, directly above "### After every agent completion")
+    # covers both the chain loop step 1 fallback and the agent-completion steps 1-3 fallback
+    chain = _router_section_or_none("## 12. Chain Execution Loop")
+    chain_intro = chain.split("\n### ", 1)[0] if chain else ""
+    if "task-tool fallback mode" not in chain_intro or "`references/task-tool-fallback.md`" not in chain_intro:
+        fail(name, "## 12 intro lost the chain-loop / agent-completion pointer to references/task-tool-fallback.md")
+        return
+    if "step 1 and agent-completion steps 1-3" not in chain_intro:
+        fail(name, "## 12 intro pointer no longer names both the chain loop step 1 and the agent-completion steps 1-3 fallbacks")
+        return
+    for heading in ("### Doubt-Verify Dispatch Rule", "### Fix-Verify Dispatch Rule"):
+        section = _router_section_or_none(heading) or ""
+        if section.count(pointer) < 2:
+            fail(name, f"{heading}: expected the pointer wording on both the dispatch note and the post-verdict gate bullet")
+            return
+        if " fallback mode" in section.replace("task-tool fallback mode", ""):
+            fail(name, f"{heading}: a bare 'fallback mode' remains; write 'task-tool fallback mode (references/task-tool-fallback.md)'")
+            return
+    if ("task-tool fallback mode (`references/task-tool-fallback.md`) there is no `plan-review-gap-N` task"
+            not in _router_corpus_text()):
+        fail(name, "remediation-and-research.md lost the 'task-tool fallback mode (references/task-tool-fallback.md)' wording at the plan-review-gap-N note")
+        return
+    stale = _router_section_or_none("## Stale true capability", "task-tool-fallback.md")
+    if stale is None:
+        fail(name, "task-tool-fallback.md lacks '## Stale true capability'")
+        return
+    for phrase in ("flip the in-context `capabilities.task_tools_available`", "from `true` to `false`", "Log the transition",
+                   "status_history", "`true -> false` mid-session", "Do not retry the same native call"):
+        if phrase not in stale:
+            fail(name, f"Stale true capability lost its flip-and-log rule text ({phrase!r} missing)")
+            return
+    ok(name)
+
+
+def test_router_kernel_agent_stamps_carry_utc_rule() -> None:
+    # P9 remediation (HIGH-1): the "ISO timestamps are always UTC" bullet moved to memory-finalize.md with the memory-phase
+    # compute bullets, but the dispatch-time agent_started / agent_completed stamps stay in the kernel and are written
+    # before memory-finalize is ever read, so the kernel must state the UTC rule beside them.
+    name = "router/kernel-agent-stamps-carry-utc-iso-rule"
+    skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    start = skill.find('append `"agent_started"`')
+    end = skill.find('append `"agent_completed"`')
+    if start < 0 or end < 0 or end < start:
+        fail(name, "kernel lost the agent_started / agent_completed stamping bullets")
+        return
+    block = skill[start:skill.find("\n\n", end)]
+    for needle in ("{iso_now}", "UTC ISO-8601", "omit the field if no clock"):
+        if needle not in block:
+            fail(name, f"kernel agent_started/agent_completed stamping bullets lack {needle!r}")
+            return
+    memfin = _router_section_or_none("## Memory-phase timing computation", "memory-finalize.md") or ""
+    if "ISO timestamps are always UTC" not in memfin:
+        fail(name, "memory-finalize.md lost the memory-phase 'ISO timestamps are always UTC' bullet")
+        return
+    ok(name)
+
+
+def test_router_memory_finalize_pointer_not_under_verifier_handoff() -> None:
+    # P9 remediation (reviewer LOW): the kernel pointer to memory-finalize.md used to sit under "### Verifier findings
+    # handoff", where it reads as part of that section. It belongs with the chain loop, outside every ### heading.
+    name = "router/memory-finalize-pointer-outside-verifier-handoff"
+    handoff = _router_section_or_none("### Verifier findings handoff")
+    chain = _router_section_or_none("## 12. Chain Execution Loop")
+    if handoff is None or chain is None:
+        fail(name, "could not locate '### Verifier findings handoff' or '## 12. Chain Execution Loop' in the router corpus")
+        return
+    if "memory-finalize.md" in handoff:
+        fail(name, "the memory-finalize pointer still sits under '### Verifier findings handoff'")
+        return
+    intro = chain.split("\n### ", 1)[0]
+    if "`references/memory-finalize.md`" not in intro:
+        fail(name, "## 12 intro (before its first ### heading) lacks the pointer to references/memory-finalize.md")
+        return
+    ok(name)
+
+
+_SECTION_13_REF_RE = re.compile(r"(?:§\s*13\b|\bSection\s+13\b)", re.IGNORECASE)
+
+
+def test_plugin_has_no_dangling_section_13_references() -> None:
+    # P9 remediation (doubt cycle 1): section 13 moved from SKILL.md into references/memory-finalize.md and the kernel
+    # no longer has a "## 13." heading, so an inbound "SKILL.md § 13" / "Section 13" reference points at nothing. Every
+    # inbound reference names `references/memory-finalize.md → ## 13. Memory Finalization` instead. Fixtures (baseline
+    # and plan history) and this test file are out of scope.
+    name = "plugin/no-dangling-section-13-references"
+    hits: "list[str]" = []
+    for sub in ("skills", "hooks", "scripts", "agents", "commands", "rules", "config"):
+        root = PLUGIN_ROOT / sub
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*")):
+            if (not path.is_file() or path.suffix not in (".md", ".mdc", ".py", ".json", ".sh")
+                    or "__pycache__" in path.parts or path.name == "craftflow_hook_unit_tests.py"):
+                continue
+            for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                if _SECTION_13_REF_RE.search(line):
+                    hits.append(f"{path.relative_to(PLUGIN_ROOT)}:{n}")
+    if hits:
+        fail(name, "dangling '§ 13' / 'Section 13' references (retarget to `references/memory-finalize.md → ## 13. Memory Finalization`): "
+                   + ", ".join(hits))
+        return
+    ok(name)
+
+
 def test_workflow_artifact_schema_documents_task_tools_available() -> None:
     name = "workflow-artifact-policy/capabilities-documents-task-tools-available"
     path = (
@@ -17193,7 +17325,7 @@ def test_skill_md_wires_project_tier_last_updated_and_completed_caps() -> None:
 def test_cursor_router_skill_md_wires_completed_cap() -> None:
     # Blast-radius scan (bug-investigator DEBUG): cursor-router/SKILL.md § 8
     # is a SEPARATE, independent memory-finalize routing list (not derived
-    # from craftflow-router/SKILL.md § 13) and had the identical undocumented
+    # from craftflow-router/references/memory-finalize.md ## 13) and had the identical undocumented
     # unbounded-append gap for project/progress.md ## Completed.
     name = "cursor-router/skill-md/wires-completed-cap"
     path = PLUGIN_ROOT / "skills" / "cursor-router" / "SKILL.md"
@@ -28683,6 +28815,10 @@ def main() -> int:
     print("[ craftflow-router: task-tool capability detection + fallback wiring (backlog item 10 Phase 5) ]")
     test_router_documents_task_tool_capability_detection()
     test_router_task_tool_fallback_wired_through_resume_and_chain_loop()
+    test_router_task_tool_fallback_kernel_keeps_call_site_pointers()
+    test_router_kernel_agent_stamps_carry_utc_rule()
+    test_router_memory_finalize_pointer_not_under_verifier_handoff()
+    test_plugin_has_no_dangling_section_13_references()
     test_workflow_artifact_schema_documents_task_tools_available()
     test_self_dispatch_guard_present_in_task_update_agents()
 
