@@ -1130,18 +1130,23 @@ def test_signing_burden_buckets_are_disjoint_on_every_tier() -> None:
     moved reach-lost + vanishing + moved-without-loss, each occurrence once. The old `unmapped_removed - (lost - unreachable)` counted the
     192 in-place narrowings of the if-amended tiers twice (once as reach-lost, once as moved without loss)."""
     tiers = full_projection()["reach_feasibility"]["tiers"]
+    # David signed (2026-10-17) the P8 rows, among them the 65-id worktree_merge group row. Its occurrences leave `unmapped_removed` (they are
+    # policy_mapped now) but the burden records still count them as reach-lost or vanishing, so the buckets now sum to `unmapped_removed` plus
+    # the occurrences already signed, and moved_without_loss (clamped at 0) is empty. Pinned per tier so the K1(a) double count still fails.
+    signed_overlap = {"conditional": 44, "conditional_if_reach_amended": 43, "effective": 44, "effective_without_infeasible_rows": 44,
+                      "guaranteed": 44, "with_contingencies": 44, "with_contingencies_if_reach_amended": 43}
     bad = {}
     for name, v in tiers.items():
         b = v["signing_burden"]["buckets"]
         moved = sum(b[k]["occurrences"] for k in ("moved_pure_2_to_1", "moved_drops_to_0", "moved_drops_workflow_or_variant"))
         parts = (b["in_place_narrowed"]["occurrences"], moved, b["vanishing"]["occurrences"], b["moved_without_loss"]["occurrences"])
-        if (sum(parts) != v["unmapped_removed"] or b["in_place_narrowed"]["occurrences"] != v["unreachable"]
+        if (sum(parts) != v["unmapped_removed"] + signed_overlap[name] or b["in_place_narrowed"]["occurrences"] != v["unreachable"]
                 or b["in_place_narrowed"]["occurrences"] + moved != v["reach_lost_occurrences"] or b["moved_without_loss"]["occurrences"] < 0
                 or b["widening"]["pairs"] != v["readmap_widened"]):
             bad[name] = (parts, v["unmapped_removed"], v["unreachable"], v["reach_lost_occurrences"])
     g, d = tiers["guaranteed"]["signing_burden"]["buckets"], tiers["conditional_if_reach_amended"]["signing_burden"]["buckets"]
     check("signing_burden_buckets_are_disjoint_on_every_tier",
-          not bad and g["moved_without_loss"]["occurrences"] == 30 and d["moved_without_loss"]["occurrences"] == 31
+          not bad and g["moved_without_loss"]["occurrences"] == 0 and d["moved_without_loss"]["occurrences"] == 0
           and g["in_place_narrowed"]["occurrences"] == 0 and d["in_place_narrowed"]["occurrences"] == 192,
           f"bad={bad} guaranteed_mwl={g['moved_without_loss']} amended_mwl={d['moved_without_loss']} in_place={d['in_place_narrowed']}")
 
@@ -1162,15 +1167,17 @@ def test_signing_burden_counts_rows_not_occurrences() -> None:
           and (sec["partial_spans_without_heading"], sec["multi_section_spans"]) == (23, 7)
           and sec["needs_destination_heading"] == ["p10-pav-verifier-telemetry"]
           and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (411 + 111 + 53 + 14, 244 + 111 + 53 + 14)
-          and g["REACH_A"]["occurrences"]["total"] == 415 + 123 + 30 + 48 and g["REACH_B"]["occurrences"]["total"] == 41 + 248 + 123 + 48
+          and g["REACH_A"]["occurrences"]["total"] == 415 + 123 + 0 + 48 and g["REACH_B"]["occurrences"]["total"] == 41 + 248 + 123 + 48
           and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 244 + 111 + 53 + 14
-          and d["REACH_A"]["occurrences"]["total"] == 607 + 144 + 31 + 48
+          and d["REACH_A"]["occurrences"]["total"] == 607 + 144 + 0 + 48
           # REACH-A counts the 39 moved-without-loss occurrences, REACH-B the 42 section-move ops; they were equal (42) until P5's signed
           # plan_commit row removed one occurrence without removing a section move, and P6's six literal-to-key Rewrites rows (listed in the
           # policy map, still unsigned) took away two more and one vanishing occurrence. P8's thirteen unsigned rows (the gate summary, its bullets, the
           # Safety paragraph, one widening row for worktree.md) took six more moved-without-loss occurrences and one widening file (two pairs) away:
           # 38 to 32, 15 files / 50 pairs to 14 / 48. The P8 remediation added an Applicability row for the Safety paragraph (it used to hide in the draft group row), which takes its two occurrences out of moved-without-loss: 32 to 30. The row-count bounds below still coincide.
-          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 31 + 248 + 144 + 48
+          # David's signature (2026-10-17) of the P8 rows left no unsigned moved-without-loss occurrence: 30 to 0 (31 to 0 if-amended), so
+          # REACH-A's occurrence totals lose exactly those (guaranteed 616 to 586, if-amended 830 to 799); the row-count bounds (589 / 422) do not move.
+          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 0 + 248 + 144 + 48
           and d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 248 + 144 + 48
           and d["definitional_D17B"]["REACH_B"]["rows_upper_bound"] < d["REACH_B"]["rows_upper_bound"] < d["REACH_A"]["rows_upper_bound"],
           f"buckets={b} sections={sec} guaranteed={(g['REACH_A']['rows_upper_bound'], g['REACH_B']['rows_upper_bound'])} amended_A_occ={d['REACH_A']['occurrences']}")

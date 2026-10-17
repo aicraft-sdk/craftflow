@@ -36,7 +36,7 @@ Safety: Worktree creates are idempotent in the event log. If a resume finds `wor
 
 ## Worktree gate summary
 
-- BUILD's worktree merge-safety guard uses 7 `pending_gate` values: the 6 below plus `policy_invalid` (a refused or invalid policy, see the outcome table) (canonical logic, formerly `SKILL.md` step 4, lives in
+- BUILD's worktree merge-safety guard uses the 6 `pending_gate` values below, plus `policy_invalid` (a refused or invalid policy, see the outcome table) (canonical logic, formerly `SKILL.md` step 4, lives in
   `scripts/craftflow_worktree_finalize.py`; the outcome table above is the router contract; this is a
   summary, not a duplicate of the logic):
   - `worktree_merge_conflict` — a real textual git merge conflict. Ask the user to resolve it in
