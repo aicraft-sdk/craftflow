@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.33.2] - 2026-10-17
+
+### Fixes
+
+- P9 remediation, retarget remaining section 13 references in anchors and hooks README
+- P9 remediation, retarget section 13 references and add task-tool fallback call-site pointers
+
+### Refactoring
+
+- single-copy Memory Update instructions and Task*-tool fallback reference
+
+### Documentation
+
+- sign P9 rows, manual-review entries and projection revision
+
+### Chores
+
+- re-stamp router-budget measured_at_sha to the P9 remediation commit
+
 ## [1.33.1] - 2026-10-17
 
 ### Fixes
