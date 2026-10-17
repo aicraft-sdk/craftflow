@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.33.1] - 2026-10-17
+
+### Fixes
+
+- P8 post-signature fixes
+- pin worktree.md resume trigger and hedge absent-worktree message
+- P8 remediation: finalize gates an absent worktree with nothing merged, worktree.md covers every non-success result, Safety paragraph keeps its own signed rows
+- worktree_finalize completes a prunable-but-missing worktree
+
+### Refactoring
+
+- router delegates worktree merge/cleanup to craftflow_worktree_finalize.py
+
+### Chores
+
+- re-stamp router-budget measured_at_sha to the P8 doubt-advisory commit
+- re-stamp router-budget measured_at_sha to the P8 remediation commit
+
 ## [1.33.0] - 2026-10-16
 
 ### Features
