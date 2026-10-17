@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Router relocation drills (P1 REM-FIX 3): simulate the plan's P9/P10/P11 section moves on scratch copies.
+"""Router relocation drills (P1 REM-FIX 3): simulate the plan's P10/P11 section moves on scratch copies.
+(The P8 and P9 drills retired when those phases made their moves for real.)
 
 Run: python3 tests/fixtures/router_relocation_drills.py [--drills a,b] [--list] [--jobs N] [--keep] [--verbose]
 (the `x_*` variants are probes the heading-uniqueness invariant must reject; they run only when named in --drills)
 
 For each drill the harness copies `tools/craftflow-plugin` (minus `ref-*`) to a temp dir, moves verbatim router sections
-between files the way the plan's P9/P10/P11 file lists do, runs the hook suite and the router-reading fixtures on the
+between files the way the plan's P10/P11 file lists do, runs the hook suite and the router-reading fixtures on the
 copy, and prints every failing test with its `router-test-anchors.md` row (`kind/owner`, or `UNCLASSIFIED`).
 A `control` run (no move) is executed first; whatever fails there is environmental (the copy is not a git checkout of
 the repo: ADR-exists tests, git-lock rule-inventory tests) and is subtracted from every drill.
@@ -16,7 +17,7 @@ A failure counts only when the same test PASSES on the control copy, FAILS in th
 Heading-uniqueness invariant (REM-FIX 4): every heading text occurs once across the runtime corpus (HEADING_DUP_ALLOWLIST
 freezes the pre-existing duplicates). A drill whose result repeats a heading, or grows an allowlisted one, is a violation
 and its suites are not run: a kernel pointer for a moved section must not be a heading with the moved text.
-Drills are single moves on the P1 tree, not cumulative P9 -> P10 -> P11 sequences (a cumulative mode is not implemented).
+Drills are single moves on the current tree, not cumulative P10 -> P11 sequences (a cumulative mode is not implemented).
 Temp dirs follow $TMPDIR (set it to keep the copies inside a given workspace). Python 3.9 stdlib.
 """
 from __future__ import annotations
@@ -165,14 +166,6 @@ def d_control(t: Tree) -> None:
     return None
 
 
-def d_p9_memfin(t: Tree) -> None:
-    """P9: `## 13. Memory Finalization` moves verbatim to references/memory-finalize.md; the kernel keeps a pointer."""
-    lines = _read(t.skill)
-    s, e = span(lines, "## 13. Memory Finalization")
-    block = cut(t.skill, s, e, ["Memory finalization: read `references/memory-finalize.md` when a memory task is runnable.", ""])
-    put(t.refs / "memory-finalize.md", block, "# Memory finalize (P9)")
-
-
 def d_p10_parent(t: Tree) -> None:
     """P10: `### Parent workflow creation` (SKILL.md § 6) moves to references/workflow-start.md."""
     lines = _read(t.skill)
@@ -254,58 +247,6 @@ def d_p11_build_split(t: Tree) -> None:
         put(t.refs / name, block)
 
 
-def d_p9_memfin_pointer(t: Tree) -> None:
-    """P9: `## 13.` moves verbatim; the kernel keeps a bold pointer line (not a heading) that names the section."""
-    lines = _read(t.skill)
-    s, e = span(lines, "## 13. Memory Finalization")
-    block = cut(t.skill, s, e, ["**Memory Finalization** (body): read `references/memory-finalize.md` when a memory task is runnable.", ""])
-    put(t.refs / "memory-finalize.md", block, "# Memory finalize (P9)")
-
-
-FALLBACK_LABELS = ("§4 Resume", "§6 Parent creation", "§6 Per-type task graphs", "§7 Dispatcher", "§7 Doubt-Verify", "§7 Fix-Verify",
-                   "§12 Chain loop step 1", "§12 After agent completion")
-FALLBACK_TRIGGER = ("When `capabilities.task_tools_available == false`, or any router-owned native Task* call fails mid-session, read "
-                    "`references/task-tool-fallback.md` now and apply its per-site rule wherever this document or a reference calls "
-                    "`TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate`.")
-
-
-def _fallback_sites(lines: List[str]) -> List[Tuple[int, int, List[str], str]]:
-    """(start, end, body, nearest heading above) for the eight Task*-tool fallback sites of SKILL.md, in file order."""
-    heads = rc.headings("\n".join(lines))
-    sites: List[Tuple[int, int, List[str], str]] = []
-    for i, line in enumerate(lines):
-        if line.startswith("**Task*-tool fallback"):
-            end = next((j for j in range(i, len(lines)) if not lines[j].strip()), len(lines))
-            above = [h for h in heads if h[0] < i]
-            sites.append((i, end, lines[i:end], above[-1][2] if above else ""))
-    s, e = span(lines, "### Task*-tool fallback for per-type task graphs and remediation/research task sites")
-    sites.append((s, e, lines[s + 1:e], lines[s].lstrip("# ")))
-    sites.sort(key=lambda x: x[0])
-    if len(sites) != len(FALLBACK_LABELS):
-        raise DrillError(f"expected {len(FALLBACK_LABELS)} Task*-tool fallback sites in SKILL.md, found {len(sites)}")
-    return sites
-
-
-def _move_fallbacks(t: Tree, heading_for: Callable[[str, str], str]) -> None:
-    lines = _read(t.skill)
-    sites = _fallback_sites(lines)
-    out = list(lines)
-    moved: List[str] = []
-    for start, end, _, _ in reversed(sites):
-        out[start:end] = [""]
-    for (_, _, body, source), label in zip(sites, FALLBACK_LABELS):
-        moved += [heading_for(label, source), ""] + body + [""]
-    s, e = span(out, "## 0a. Task Tool Capability Detection")
-    out[e:e] = [FALLBACK_TRIGGER, ""]
-    _write(t.skill, out)
-    put(t.refs / "task-tool-fallback.md", moved, "# Task*-tool fallback (P9)")
-
-
-def d_p9_fallback_labels(t: Tree) -> None:
-    """P9: the eight fallback paragraphs move to references/task-tool-fallback.md under the plan's `§n ...` labels; §0a gains the trigger."""
-    _move_fallbacks(t, lambda label, source: f"### {label}")
-
-
 def d_p10_postagent(t: Tree) -> None:
     """P10: `## 8. Post-Agent Validation` and `### After every agent completion` move to references/post-agent-validation.md."""
     lines = _read(t.skill)
@@ -350,29 +291,13 @@ def v_p10_memload_dup(t: Tree) -> None:
     put(t.refs / "memory-load-workspace.md", ["## 2. Memory Load And Template Validation", ""] + block, "# Memory load workspace")
 
 
-def v_p9_memfin_keep(t: Tree) -> None:
-    lines = _read(t.skill)
-    s, e = span(lines, "## 13. Memory Finalization")
-    block = cut(t.skill, s, e, ["## 13. Memory Finalization", "", "Read `references/memory-finalize.md` when a memory task is runnable.", ""])
-    put(t.refs / "memory-finalize.md", block, "# Memory finalize (P9)")
-
-
-def v_p9_fb_verbatim(t: Tree) -> None:
-    _move_fallbacks(t, lambda label, source: f"### {source}")
-
-
 # name -> (phase, one-line description, function)
 VARIANTS: Dict[str, Tuple[int, str, Callable[[Tree], None]]] = {
     "x_p10_memload_dup": (10, "variant: 5a move whose new file repeats `## 2.` (must be rejected)", v_p10_memload_dup),
-    "x_p9_memfin_keep": (9, "variant: kernel keeps the `## 13.` heading as the pointer (must be rejected)", v_p9_memfin_keep),
-    "x_p9_fb_verbatim": (9, "variant: fallback paragraphs placed under their source headings (must be rejected)", v_p9_fb_verbatim),
 }
 
 DRILLS: Dict[str, Tuple[int, str, Callable[[Tree], None]]] = {
     "control": (0, "no move (environmental baseline)", d_control),
-    "p9_memfin": (9, "## 13 Memory Finalization -> references/memory-finalize.md (plain pointer line)", d_p9_memfin),
-    "p9_memfin_pointer": (9, "## 13 -> references/memory-finalize.md, kernel keeps a bold non-heading pointer", d_p9_memfin_pointer),
-    "p9_fallback_labels": (9, "eight Task*-tool fallback paragraphs -> references/task-tool-fallback.md under `§n` labels", d_p9_fallback_labels),
     "p10_postagent": (10, "## 8 Post-Agent Validation + After every agent completion -> references/post-agent-validation.md", d_p10_postagent),
     "p10_memload_5a": (10, "## 2 step 5a + self-heal paragraph -> references/memory-load-workspace.md", d_p10_memload_5a),
     "p10_parent": (10, "### Parent workflow creation -> references/workflow-start.md", d_p10_parent),

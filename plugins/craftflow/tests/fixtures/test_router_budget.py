@@ -896,7 +896,9 @@ def test_adr_discloses_the_rem_fix_3_findings() -> None:
     need = ("## P2 REM-FIX 3 notes", "reach_a_kernel_penalty_bytes", "3,913 B", "reach_amendment", "167 / 88 / 160", "rewrite rows inside a moved section")
     split = [proj["reach_loss_split"][c]["units"] for c in ("pure_2_to_1_covered", "drops_to_0", "drops_workflow_or_variant")]
     check("adr_discloses_the_rem_fix_3_findings",
-          all(n in text for n in need) and "309 of them into happy-path files" not in text and split == [167, 88, 160]
+          # 167 / 88 / 160 at REM-FIX 3 (the ADR keeps that figure as history); P9's drafted rows (the section 13 move, the pointer, xref and dedupe rows)
+          # are read by the projection's policy-map diff and take one unit out of each of the first two buckets: 166 / 87 / 160
+          all(n in text for n in need) and "309 of them into happy-path files" not in text and split == [166, 87, 160]
           and proj["reach_a_kernel_penalty_bytes"] == 3913,
           f"missing={[n for n in need if n not in text]} split={split}")
 
@@ -982,7 +984,9 @@ def test_adr_discloses_the_rem_fix_4_findings() -> None:
           and "unmapped_removed 581" in text and "unmapped_removed 794" in text
           # 591 / 424 at REM-FIX 4 (the ADR keeps those figures as history); P6's six literal-to-key Rewrites rows take one vanishing id away,
           # and P8's thirteen listed rows (one of them a widening row for worktree.md) take one widening file away: 590 / 423 to 589 / 422
-          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (589, 422),
+          # and P9's drafted rows (the section 13 move, the pointer, xref and dedupe rows and the two widening rows for the new stage files)
+          # change the REACH-A upper bound once more: 589 / 422 to 588 / 422
+          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (588, 422),
           f"missing={[n for n in need if n not in text]}")
 
 

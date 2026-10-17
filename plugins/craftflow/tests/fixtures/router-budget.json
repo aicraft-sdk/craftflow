@@ -1,7 +1,7 @@
 {
   "baseline_ref": "0439c33932463d257b881ce50f136ab7661c0a39",
-  "measured_at_sha": "d40ec0c8c2576bcfab2af733236d0a48dad6774d",
-  "last_phase": "P8",
+  "measured_at_sha": "1e71974f676ce48b753292e651e847f062907eb0",
+  "last_phase": "P9",
   "merged_phases": [
     "P2",
     "P2C",
@@ -10,7 +10,8 @@
     "P5",
     "P6",
     "P7",
-    "P8"
+    "P8",
+    "P9"
   ],
   "conditions": {
     "difference_17": true,
@@ -18,15 +19,15 @@
   },
   "reach_amendment": null,
   "ceilings": {
-    "kernel_bytes": 109137,
+    "kernel_bytes": 85929,
     "protocol_bytes": 29315,
-    "reference_max_bytes": 32177,
+    "reference_max_bytes": 23944,
     "description_chars": 4014,
     "readset": {
-      "BUILD": 194956,
-      "PLAN": 180830,
-      "DEBUG": 160097,
-      "REVIEW": 158159
+      "BUILD": 162432,
+      "PLAN": 152940,
+      "DEBUG": 132231,
+      "REVIEW": 130293
     }
   },
   "ceiling_raises": [
@@ -137,7 +138,7 @@
     "projection_sha256": "5b27b389a30d7205e0c07a231d218d1fd2ae16958c99fe919ca7879d84d9f832",
     "cause": "P2C: Difference 17 dropped (D17-A, reach_amendment null) and REACH-B adopted as the reach option; caps are the guaranteed effective tier of router-projection.json, exact values, ratchet-only afterwards"
   },
-  "projection_sha256": "a39bbbf0d3ebfda53df1dae893568e7b1ba4ea493aaf6a67aab3073f84b4610a",
+  "projection_sha256": "a1d4a484e91dc4d98027f2038a1982c99756a39019b2a44d8e7e8af50715640e",
   "projection_revisions": [
     {
       "phase": "P5",
@@ -162,6 +163,14 @@
       "fits_enforced_caps": true,
       "decided_by": "David",
       "cause": "P8 wires craftflow_worktree_finalize.py: SKILL.md step 4 (about 25 K) becomes a 3-line pointer; new stage file references/worktree.md (BUILD, happy path) holds the finalize call, a row for every outcome (adds exit 4, details.lock_release_failed, the refused worktree_path and the Difference 6 row, which the draft cut-plan row lacked), the Safety paragraph and the moved worktree gate summary; one read-map row is added. The cut-plan P8 rows carry the as-built worktree.md text and the gate-summary opener names \"formerly SKILL.md step 4\" (the xref guard counts the numeral). The projection also counts 14 unsigned P8 rows (4 xref and 5 pointer Rewrites, 4 Applicability, 1 Read-map widening) and the unsigned group row stays in Pending human signature, so reach_feasibility was unchanged until David signed (2026-10-17); the signed rows then changed reach_feasibility and the pinned projection was regenerated. decided_by is David; enforced caps unchanged. REM-FIX r1 (P8 doubt cycle 1 and hunter): the Safety paragraph (baseline id 25eae49eb760) stays whole in worktree.md and is now covered by its own Rewrites row plus an Applicability row (BUILD@happy_path_stage) instead of hiding in the draft group deleted row (65 ids now); the read-map trigger makes worktree.md readable on every BUILD resume with auto_created and names policy_invalid; worktree.md gains the absent-worktree gate text, the exit-code and orphaned-lock checks and the Bash timeout. The kernel stays 3 B under its ceiling (the step 4 pointer drops its \"(Steps 1-3 above create the worktree.)\" aside to pay for the longer trigger), so no ceiling is raised. Keeping the create and null-path sentences in the kernel was measured and rejected: +346 B pushes the projection past enforced_caps (kernel 34531 vs 34202), which only David can change. decided_by is David (signed 2026-10-17)."
+    },
+    {
+      "phase": "P9",
+      "from_projection_sha256": "a39bbbf0d3ebfda53df1dae893568e7b1ba4ea493aaf6a67aab3073f84b4610a",
+      "to_projection_sha256": "a1d4a484e91dc4d98027f2038a1982c99756a39019b2a44d8e7e8af50715640e",
+      "fits_enforced_caps": true,
+      "decided_by": "pending-David",
+      "cause": "P9 dedup: SKILL.md section 13 (with its heading) and the memory-phase timing bullets (including the ISO-UTC bullet) move to the new stage file references/memory-finalize.md (all workflows, happy path); the five Memory Update TaskCreate descriptions (BUILD x2, PLAN, DEBUG, REVIEW) become pointers to its single '### Memory Update task instructions'; the eleven Task*-tool fallback paragraphs move to the new conditional stage file references/task-tool-fallback.md and section 0a gains the trigger; two read-map rows. The cut-plan P9 rows carry the as-built text: the section 13 heading moves with the body (the kernel keeps a plain pointer paragraph), the fallback file opens with a line that maps each section to its kernel site, the cross-reference edits use the single-code-span form 'SKILL.md -> ## heading' (the plan's table form does not resolve for numbered headings), the kernel's two 'Task*-tool fallback mode' phrases and its SKILL_DISTILL bullet are reworded to stay at most one 'Task*-tool fallback' mention and to name the moved file, and no kernel stub is kept (a stub in 'After every agent completion' would push post-agent-validation.md over the reference cap at P10). The projection's reach_feasibility reads the committed policy map, so it also counts the drafted, unsigned P9 rows (31 Rewrites, 25 Applicability, 2 Read-map widening); signing them can change it again and then needs its own revision entry. Full-plan projection stays under enforced_caps (kernel 34188 of 34202, reference max 19101 of 19101, BUILD/PLAN/DEBUG/REVIEW 98166/86939/74190/72252 of 98180/86940/74204/72266); no ceiling is raised. decided_by is pending-David."
     }
   ],
   "enforce": false,

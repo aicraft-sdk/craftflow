@@ -41,6 +41,8 @@ Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset
 | stage | phase exit | `references/context-boundary.md` | BUILD, PLAN | - | yes |
 | stage | first agent dispatch effort lookup (SKILL.md § Effort Dispatch Rule) | `references/fast-path.md` | PLAN, DEBUG, REVIEW | - | yes |
 | stage | final-phase verifier PASS (BUILD, worktree_mode == auto_created); BUILD resume with auto_created or any worktree pending_gate (incl. policy_invalid) | `references/worktree.md` | BUILD | - | yes |
+| stage | memory task runnable | `references/memory-finalize.md` | ALL | - | yes |
+| stage | task_tools_available == false or native Task* failure | `references/task-tool-fallback.md` | ALL | - | no |
 <!-- readmap:end -->
 
 ## 1. Intent Routing
@@ -94,6 +96,8 @@ This section's content is inherently Claude-only vocabulary (`task_tools_availab
 `ToolSearch`) and always lives here in `craftflow-router/SKILL.md`, never in
 `skills/_shared/router-protocol.md`, regardless of whether `## 0.`'s own project-root resolution
 algorithm is shared or host-specific.
+
+When `capabilities.task_tools_available == false`, or any router-owned native Task* call fails mid-session, read `references/task-tool-fallback.md` now and apply its per-site rule wherever this document or a reference calls `TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate`.
 
 ## 2. Memory Load And Template Validation
 
@@ -229,20 +233,6 @@ After memory load:
 ```text
 TaskList()
 ```
-
-**Task*-tool fallback:** when `capabilities.task_tools_available == false` (or still
-`"unknown"` — run `## 0a` first in that case, then re-evaluate), skip the `TaskList()` call
-above entirely. Identify the active workflow by finding the most recently updated live workflow
-artifact under `.craftflow/state/workflows/*.json` (by file modification time), applying the
-same never-unscoped-fallback safety rule this section already documents for `TaskList()`-derived
-resume — if more than one live artifact is ambiguous for the current conversation, do not resume
-without explicit user scoping. Reconstruct runnable phases from that artifact's
-`phase_status`/`phase_cursor`/`normalized_phases` fields plus the tail of the matching
-`.craftflow/state/workflows/{workflow_uuid}.events.jsonl`, instead of `TaskGet()`/`TaskList()`-
-derived task state. The Resume algorithm's steps 3-5 below and the Safety rules apply unchanged
-in spirit — substitute "read the workflow artifact + events.jsonl" everywhere those steps say
-"read tasks whose descriptions contain `wf:`". When `capabilities.task_tools_available == true`,
-this section runs exactly as documented today — no behavior change on that path.
 
 Hydration rules:
 - Find active parent workflow tasks by subject prefix `CRAFTFLOW BUILD:`, `CRAFTFLOW DEBUG:`, `CRAFTFLOW REVIEW:`, `CRAFTFLOW PLAN:`.
@@ -470,9 +460,6 @@ ID format: `wf-{slug}-{YYYYMMDD-HHMMSS}-{8hex}`.
 Slug = slugified git branch name (if a genuine feature branch, i.e. not main/master/develop/dev/trunk or a craftflow-generated `wf-`/`worktree-` branch) — otherwise slugified request text.
 The `iso_timestamp` from the helper is the authoritative creation timestamp — use it for any later `{iso_timestamp}` placeholder. `session_id_json` is a raw JSON fragment (a double-quoted string, or `null` when the session id is absent); paste it as-is where a JSON value is needed, and `session_id` is empty in that case. The project's `.craftflow/` directory must already exist (the `## 2.` memory-load step creates it); otherwise the mint fails with `Error:` and writes nothing.
 
-**Task*-tool fallback:** when `capabilities.task_tools_available == false`, skip step 2
-(`TaskCreate()`) entirely — there is no parent orchestration task to create; the artifact is already written by step 1.
-
 2. Create the parent workflow task with that UUID (after step 1, so the artifact exists first):
 
 ```text
@@ -512,27 +499,6 @@ Only create child tasks after the v10 artifact and state directory exist (step 1
 - DEBUG writes `[DEBUG-RESET: wf:{workflow_uuid}]`
 - PLAN writes `[PLAN-START: wf:{workflow_uuid}]`
 
-### Task*-tool fallback for per-type task graphs and remediation/research task sites
-
-Wherever any `TaskCreate()` call site in `references/build-workflow.md`,
-`references/debug-workflow.md`, `references/review-workflow.md`, `references/plan-workflow.md`,
-or `references/remediation-and-research.md` would create a child task, and
-`capabilities.task_tools_available == false`: skip that `TaskCreate()` call and instead append a
-`{phase}` entry with `status: "pending"` directly into the workflow artifact's `phase_status` map
-(and into `normalized_phases`, where the referenced block also populates that field) instead of
-calling `TaskCreate()`. This is the same fallback mechanism as the other `capabilities.task_tools_available == false` branches in this document (skip
-`TaskCreate()`, append the equivalent tracking entry to the workflow artifact instead), applied to
-every `TaskCreate()` site in these 5 files — the rule is scoped to "any `TaskCreate()` call site
-in these 5 files," never gated on matching a specific heading name or pattern, so it is not
-invalidated by any file reorganizing its own subsections later. `blockedBy` relationships
-declared at any of these sites become ordering constraints enforced by `phase_cursor` advancement
-in `## 12. Chain Execution Loop`'s fallback rather than by task-graph blocker fields. Skip every
-paired `TaskUpdate({ taskId: <var bound by a skipped TaskCreate()>, addBlockedBy: [...] })` call
-in the same block too — do not attempt these; the ordering they would declare is captured
-structurally by insertion order in `phase_status`/`normalized_phases` instead. When
-`capabilities.task_tools_available == true`, every one of these sites runs exactly
-as written today — no behavior change on that path.
-
 ## 7. Dispatcher And Agent Prompt Contract
 
 ### Explicit dispatcher
@@ -542,18 +508,6 @@ as written today — no behavior change on that path.
 "Explicit Dispatcher (Phase-to-Agent Table)" (full phase→agent mapping).** Claude Code resolves each row via `Task()`/`TaskCreate()`
 against a registered subagent type using the `craftflow:` name directly — no host-specific
 resolution step needed here, unlike Cursor's `## Agent File Paths` literal-path mapping.
-
-**Task*-tool fallback (Design Success Criterion 3):** when `capabilities.task_tools_available ==
-false`, dispatch every agent via the `Agent` tool directly instead of `Task()`/`TaskCreate()`.
-The `## Task Context` scaffold (per `### Prompt scaffold for every agent` below) already embeds
-`wf:`/`kind:`/`phase:` metadata directly in the prompt text — this is the metadata a dispatched
-agent relies on in place of a `TaskCreate()`-backed task description's structured fields, which do
-not exist in this state. Substitute the scaffold's `Task ID:` field with the same no-real-task-id
-placeholder defined in `### Prompt scaffold for every agent` below
-(`'n/a — task-tool fallback active (capabilities.task_tools_available=false)'`). This mirrors the
-pattern already documented as used ad hoc across multiple prior sessions before this rule existed.
-When `capabilities.task_tools_available == true`, dispatch continues via
-`Task()`/`TaskCreate()` exactly as documented today — no behavior change on that path.
 
 `skill-author` is deliberately NOT a `kind:remfix` origin. A `skill-distill` task returning
 `STATUS: FAIL` (or never returning) is not a code defect for `component-builder` to fix — it
@@ -573,15 +527,6 @@ list.** Claude Code needs no host-specific additions to this scaffold — dispat
 `Task()`/`TaskCreate()` on a registered subagent type already loads that agent's own
 system prompt, so unlike Cursor's `generalPurpose`-only dispatch, no extra preamble or
 `## Worktree` block is required here.
-
-**`Task ID:` runtime substitution rule:** in the `## Task Context` section of every dispatched
-agent's prompt (per the shared scaffold's field list), the `Task ID:` field's runtime value
-follows this rule: when `capabilities.task_tools_available == false`, substitute the literal
-string `'n/a — task-tool fallback active (capabilities.task_tools_available=false)'` for
-`{task_id}` instead of a real `TaskCreate()`-minted task id. The dispatched agent's own contract
-text (see the 7 agent `.md` files' stop-and-report guard paragraph) tells it not to attempt
-`TaskUpdate` in this state. When `capabilities.task_tools_available == true`, `Task ID:` is
-populated with the real task id exactly as documented today — no behavior change on that path.
 
 ### Prompt assembly rule
 
@@ -651,23 +596,10 @@ TaskCreate({
 })
 ```
 
-**Task*-tool fallback:** when `capabilities.task_tools_available == false`, skip the
-`TaskCreate()` call above entirely — there is no cycle-tracking task to create. Dispatch
-`craftflow:doubt-verifier` directly (same `## Task Context` prompt scaffold as any other agent
-dispatch, per `## 7 -> Prompt scaffold for every agent`), substituting `Task ID:` with the same
-no-real-task-id placeholder defined in `### Prompt scaffold for every agent`
-(`'n/a — task-tool fallback active (capabilities.task_tools_available=false)'`). Track the doubt
-cycle via the workflow artifact's own `telemetry.loop_counts.doubt_verify` counter (already
-incremented per cycle today) and the current `phase_cursor`/`phase_status` entry — never via a
-real task. The rest of this rule (dispatch conditions, `DOUBT_VERDICT` handling, the 3-cycle hard
-stop, reliability-gates evidence recording) applies unchanged; only the task-creation mechanism
-changes. When `capabilities.task_tools_available == true`, this rule runs exactly as documented
-today — no behavior change on that path.
-
 In fallback mode include `## Cycle` N (per-phase, from 1) in the `craftflow:doubt-verifier` dispatch prompt; there is no `Cycle:` task line for the agent to read.
 
 **After doubt-verifier returns:**
-- First run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate doubt_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root "$PROJECT_ROOT"` (N = the `Cycle:` of this cycle's task; in Task*-tool fallback mode, the `## Cycle` value of this dispatch's prompt, else the agent's echoed `Cycle number:`, never `telemetry.loop_counts`). `advance` → apply the bullet for the returned verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict, as the hard-stop bullet does (advance once in total). `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).
+- First run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate doubt_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root "$PROJECT_ROOT"` (N = the `Cycle:` of this cycle's task; in fallback mode, the `## Cycle` value of this dispatch's prompt, else the agent's echoed `Cycle number:`, never `telemetry.loop_counts`). `advance` → apply the bullet for the returned verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict, as the hard-stop bullet does (advance once in total). `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).
 - `DOUBT_VERDICT: CONFIRMED` → advance phase cursor, continue workflow
 - `DOUBT_VERDICT: REFUTED` → create REM-FIX task (same as normal verification failure), increment loop counter
 - `DOUBT_VERDICT: DOUBT_THEATER` → log event, skip further doubt cycles, advance to Memory Update with advisory note
@@ -723,22 +655,10 @@ TaskCreate({
 })
 ```
 
-**Task*-tool fallback:** when `capabilities.task_tools_available == false`, skip the
-`TaskCreate()` call above entirely — there is no cycle-tracking task to create. Dispatch
-`craftflow:doubt-verifier` directly for the fix-verify cycle (same `## Task Context` prompt
-scaffold, same `Task ID:` placeholder substitution as the Doubt-Verify Dispatch Rule above).
-Track the fix-verify cycle via `telemetry.loop_counts.fix_verify` and the current
-`phase_cursor`/`phase_status` entry instead of a real task. The rest of this rule
-(gate-independence from `doubt_verify_gate`, `FIX_VERDICT` handling, the contract-override check,
-the stricter-verdict-wins rule, the 3-cycle hard stop, reliability-gates evidence recording)
-applies unchanged; only the task-creation mechanism changes. When
-`capabilities.task_tools_available == true`, this rule runs exactly as documented today — no
-behavior change on that path.
-
 In fallback mode include `## Cycle` N (per-phase, from 1) in the fix-verify dispatch prompt too; there is no `Cycle:` task line to read.
 
 **After doubt-verifier returns** (see `agents/doubt-verifier.md → ## Fix-Verify Contract`):
-- First run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate fix_verify_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root "$PROJECT_ROOT"` (after the contract-override check below has been applied; N = the `Cycle:` of the fix-verify task; in Task*-tool fallback mode, the `## Cycle` value of this dispatch's prompt). `advance` → apply the bullet for the returned (post-override) verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict (the `policy.fix_verify_cycles_max` hard stop that the cycle-counter paragraph inherits from `doubt_verify`; advance once in total). If `doubt_verify_gate` also fired on this phase, a capped verdict does not block phase exit under the stricter-verdict rule; the other gate's verdict still applies. `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).
+- First run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate fix_verify_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root "$PROJECT_ROOT"` (after the contract-override check below has been applied; N = the `Cycle:` of the fix-verify task; in fallback mode, the `## Cycle` value of this dispatch's prompt). `advance` → apply the bullet for the returned (post-override) verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict (the `policy.fix_verify_cycles_max` hard stop that the cycle-counter paragraph inherits from `doubt_verify`; advance once in total). If `doubt_verify_gate` also fired on this phase, a capped verdict does not block phase exit under the stricter-verdict rule; the other gate's verdict still applies. `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).
 - `FIX_VERDICT: LOAD_BEARING` → advance phase cursor, continue workflow.
 - `FIX_VERDICT: NOT_LOAD_BEARING` or `SIBLING_FOUND` → create a REM-FIX task (same shape as any
   other verification failure — `origin:router`, `phase:fix-verify`), increment
@@ -783,9 +703,6 @@ Timing telemetry is measurement only. It must never bypass gates, phase exit, or
 **Router-owned timestamp instrumentation:**
 - When dispatching an agent task, append `"agent_started"` to the event log with `"ts": "{iso_now}"` before invoking the agent.
 - When capturing agent output, append `"agent_completed"` to the event log with `"ts": "{iso_now}"`.
-- At memory-finalize, for each agent that ran in this workflow, compute `completed_ts - started_ts` in seconds and write to `telemetry.agent_wall_clock_seconds.{agent}`.
-- Compute `workflow_wall_clock_seconds` as the delta between the `workflow_started` event `ts` and the `memory_finalized` event `ts`.
-- ISO timestamps are always UTC. Use `new Date().toISOString()` or equivalent. If the runtime does not expose a clock, omit the field rather than writing 0.
 
 **Legacy path (Claude Code task metrics):**
 - If Claude Code exposes task duration metrics via `TaskGet()`, use those as the primary source.
@@ -1019,16 +936,6 @@ is presented via `AskUserQuestion` exactly as the shared doc describes; unlike C
 
 ## 12. Chain Execution Loop
 
-**Task*-tool fallback for step 1:** when `capabilities.task_tools_available == false`, step 1
-below (`TaskList()`) is skipped. Select runnable phases directly from the workflow artifact's
-`phase_status` map and `phase_cursor` (populated per `## 6. Workflow Task Graphs`'s fallback
-above): a phase is runnable when its `phase_status` entry is `"pending"` or `"in_progress"` and
-every phase it is ordered after (per the `blockedBy`-equivalent ordering constraint established
-in `## 6.`'s fallback) has `phase_status == "completed"`. Steps 2-7 below apply unchanged in
-spirit — substitute "the selected runnable phase" everywhere the fenced block says "task". When
-`capabilities.task_tools_available == true`, step 1 runs exactly as documented today — no
-behavior change on that path.
-
 ```text
 1. TaskList()
 2. Select tasks in the active `wf:` where:
@@ -1107,20 +1014,6 @@ If any answer is "no" or "unknown", treat as incomplete and apply the fallback v
    - If the task is still not completed after agent return, router applies fallback `TaskUpdate(status="completed")`.
    - Blockers or findings may change workflow routing, but they never transfer orchestration ownership back to the read-only agent.
 
-**Task*-tool fallback for steps 1-3:** when `capabilities.task_tools_available == false`: step 1
-above (`TaskGet({ taskId })` or `TaskList()`) is skipped — there is no task state to re-check.
-Steps 2 and 3's WRITE-vs-READ-ONLY distinction is GENERALIZED to apply identically to every
-agent, write-capable or read-only: no agent's `TaskUpdate` call can succeed in this state,
-regardless of what its own contract text instructs it to attempt (every write-capable agent's
-contract now includes the stop-and-report guard, so it will not attempt one).
-The router becomes the sole writer of `phase_status` completion state for every agent in this
-state, parsing only the returned Router Contract YAML's `STATUS` field to decide whether to mark
-the phase `"completed"`, `"partial"`, or `"blocked"` in the workflow artifact directly —
-consistent with the existing Hard Rule "Router is the only orchestration state owner" (see the
-new bullet in `## 14. Hard Rules`, which states this generalization explicitly as
-router law). When `capabilities.task_tools_available == true`, steps 1-3 run exactly as
-documented today for every agent type — no behavior change on that path.
-
 4. Memory payload was already captured in step 0:
    - READ-ONLY agents: append extracted notes to the memory task description.
    - WRITE agents: append deferred or supplemental payload needed by the memory task.
@@ -1153,147 +1046,7 @@ Shared with Cursor — canonical text lives in
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
 "Verifier Findings Handoff".
 
-**Stale `true` capability — router's own native Task* call fails mid-session:** the fallback
-branches above are all gated on `capabilities.task_tools_available == false`.
-This paragraph covers the remaining gap: the flag was correctly recorded `true` at session start
-(`## 0a` succeeded), but a router-owned native call — any `TaskCreate()`/`TaskUpdate()`/
-`TaskList()` call, wherever it currently occurs across `SKILL.md` or the `references/*.md` files
-`## 4`'s Resume And Hydration fallback, `## 6`'s per-type task graph fallback, `## 12`'s Chain
-Execution Loop fallback, and `## 7`'s Doubt-Verify/Fix-Verify Dispatch Rules already cover — then
-errors unexpectedly later in the same
-session (a genuine tool-call failure: tool-not-found, permission error, unhandled exception, or
-any error response distinct from a normal empty-result or task-not-found response). When this
-happens:
-1. Treat it identically to `capabilities.task_tools_available == false` for the remainder of
-   THIS session, starting immediately: flip the in-context `capabilities.task_tools_available`
-   value from `true` to `false` (do not leave it `true`; do not re-probe with `## 0a` to "double
-   check" — the failed call is itself stronger, fresher evidence than a session-start probe).
-2. Log the transition: record a `status_history`/event entry in the current workflow artifact
-   noting which native call failed, its error, and that `task_tools_available` flipped
-   `true -> false` mid-session — this transition must be visible in durable state, not only in
-   conversational context that compaction can drop.
-3. Fall through immediately to the same artifact-based fallback path every other fallback branch
-   in this document already defines for `capabilities.task_tools_available == false` (Resume And
-   Hydration, Workflow Task Graphs, Dispatcher scaffold, Chain Execution Loop) for this call and
-   every subsequent step this session. Do not retry the same native call a second time in the same
-   session on the theory it might succeed next time — a stale `true` that already failed once is
-   not trusted again this session, matching the existing `## 0a` policy of never re-probing
-   mid-session once a value is recorded.
-4. This must not silently stall. A native call failing and the router simply stopping, or
-   silently repeating the same failing call, is exactly the gap this rule closes — it is the
-   router's own version of Design Success Criterion 2 ("no step silently fails or stalls"),
-   extended from sub-agents' `TaskUpdate` calls to the router's own `TaskList()`/
-   `TaskCreate()` calls.
-
-Distinguish a genuine call failure (this rule) from a normal empty/negative response: `TaskList()`
-returning zero tasks, or `TaskCreate()` succeeding but the newly created task having no immediate
-matches, are NOT failures and do not trigger this rule — only an actual tool-call error does. When
-`capabilities.task_tools_available` was `false` from the start (`## 0a`'s own detection), this
-rule is moot — the other fallback branches already cover that path unconditionally; this rule
-exists only for the narrower "was `true`, then broke" transition.
-
-## 13. Memory Finalization
-
-The memory task executes inline only. Never spawn it as a sub-agent.
-For PLAN and BUILD memory-finalize specifically, also run the feature-backlog register/activate/complete/VCR calls per `references/harness-self-checks.md § Feature Backlog` — the detail lives there, not here.
-
-Memory is written to two tiers. Route each `MEMORY_NOTES` field as follows:
-
-| MEMORY_NOTES field | Write destination | Rationale |
-|--------------------|-------------------|-----------|
-| `learnings` | `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## Learnings` | Workflow-specific causal insights |
-| `patterns` | `$PROJECT_ROOT/.craftflow/state/project/patterns.md ## Common Gotchas` | Durable conventions that apply to all future workflows |
-| `verification` | `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md ## Verification` | Proof evidence scoped to this build/debug/review run |
-| `deferred` | `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md` as `[Deferred]: ...` | Non-blocking follow-ups scoped to this workflow |
-
-Cross-workflow promotion rule: If a `learnings` item is a project-wide constraint
-(not specific to the current task), also copy it to
-`$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Learnings`.
-Use judgment: workflow-local observations stay in
-`$PROJECT_ROOT/.craftflow/state/workflows/{wf}/`; durable project truths belong in
-`$PROJECT_ROOT/.craftflow/state/project/`.
-
-Skill-candidate observe step (required before any markdown persistence below):
-- Before writing any `.md` memory file, run the deterministic ledger observe call for
-  every workflow (BUILD, DEBUG, REVIEW, and PLAN alike — this is cheap, deterministic
-  Python and runs unconditionally, independent of whether `skill-distill` itself was
-  gated in for this workflow):
-  ```bash
-  python3 {plugin_root}/scripts/craftflow_skill_ledger.py --observe {workflow_uuid} --state-dir .craftflow/state
-  ```
-- This mines this workflow's own artifact/event log into
-  `.craftflow/state/project/skill-candidates.json`, feeding future `skill-distill` gate
-  checks on later workflows even when this workflow's own candidate count never crossed
-  the recurrence threshold.
-- A non-zero exit from this call is non-blocking for the workflow itself (log a
-  `skill_candidates_observed` event with the error and continue to memory persistence) —
-  the ledger is best-effort telemetry, never a gate on workflow completion.
-- **Explicit resolution:** this `--observe` call runs unconditionally even when the
-  `SKILL_DISTILL: skip` Session Setting disables the `skill-distill` phase (gate check +
-  `skill-author` dispatch, per `## 14. Hard Rules`) — that toggle never disables this observe
-  step, which stays cheap, deterministic, and preserves future calibration value if the
-  toggle is later removed.
-
-Skill-candidate prune step (required before any markdown persistence below, runs immediately
-after the observe step above, same unconditional cadence — every workflow, BUILD, DEBUG, REVIEW,
-and PLAN alike, independent of whether `skill-distill` itself was gated in):
-- Immediately after the observe call above, run the ledger's anti-rot pass:
-  ```bash
-  python3 {plugin_root}/scripts/craftflow_skill_ledger.py --prune --state-dir .craftflow/state --project-root .
-  ```
-- This purges stale `candidate` entries (>90 days, no new evidence) outright, leaves `rejected`
-  entries untouched (permanent tombstone), and NEVER deletes or changes `status` for `promoted`
-  entries. Instead it checks each `promoted` entry for rot: whether its canonical
-  `.claude/skills/{name}/SKILL.md` still exists, whether every path listed in that file's
-  `craftflow-referenced-paths` frontmatter still exists on disk, and (if present) whether its
-  `craftflow-review-after` date has not yet elapsed, and whether the entry's `promoted_skill`
-  name itself is present. Any rot found sets `needs_review: true` / `needs_review_reason`
-  (`missing_promoted_skill_name`, `stale_path`, `review_after_elapsed`, or
-  `unparseable_review_after`) on the ledger entry in place — never a status transition, never a
-  delete.
-- A non-zero exit from this call is non-blocking for the workflow itself (log a
-  `skill_candidates_pruned` event with the error and continue to memory persistence) — same
-  best-effort-telemetry posture as the observe step; never a gate on workflow completion.
-- **Explicit resolution:** this `--prune` call runs unconditionally even when the
-  `SKILL_DISTILL: skip` Session Setting disables the `skill-distill` phase, for the same reason
-  the observe step is exempt — anti-rot maintenance of the ledger is independent of whether this
-  workflow itself dispatches `skill-author`.
-
-Memory finalization permit (required before any `.md` memory write):
-- The `craftflow_pretooluse_guard.py` hook blocks direct writes to protected memory files.
-- Before writing the first memory file, create the permit token:
-  ```
-  Bash("printf '%s' '{workflow_uuid}' > \"$PROJECT_ROOT/.craftflow/state/.memory-finalize\"")
-  ```
-- After all memory files are written, clear the permit:
-  ```
-  Bash("rm -f \"$PROJECT_ROOT/.craftflow/state/.memory-finalize\"")
-  ```
-- Permit create and clear must each be their own **standalone Bash** call. Folding the `printf ... > .memory-finalize` into a compound command (`&&`, `;`, a second line) is denied by the bash guard (`bash-write-protected-path`).
-- **Batch alternative (preferred for 2+ `--apply` calls):** write one JSON file `{"project_root","workflow_uuid","applies":[{"target","payload"}...]}` (payloads = the usual `--apply` payloads) and run `python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_memory_merge.py" --finalize <batch.json>`. The script creates the permit, applies every item, and clears the permit in a `finally` block, so no separate permit Bash calls are needed. Exit 1 means at least one item failed (others still applied); the permit is already cleared.
-- If workflow_uuid is unavailable (fallback path), omit the permit steps — the guard will audit-log but not block in that case.
-
-The memory task also:
-- Replaces `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md ## Tasks` with the active workflow snapshot.
-- Keeps only the most recent 10 items in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/progress.md ## Completed`.
-- Updates `$PROJECT_ROOT/.craftflow/state/project/progress.md ## Completed` with a one-line summary of the finished workflow, via `craftflow_memory_merge.py` bullets-mode (section: `Completed`, `max_bullets: 20`, `archive: {"dir_rel": ".craftflow/state/project/archive", "section_slug": "completed", "month": "<current UTC YYYY-MM>"}`) — the same cap+archive mechanism already used for `patterns.md ## Common Gotchas`, reusing the existing `.craftflow/state/project/archive/completed-2026-08.md` archive file/slug established by a prior one-time rotation. Never omit `max_bullets`/`archive` for this destination; omitting it is exactly the gap that let this section regrow unbounded once already (a prior one-time manual rotation on 2026-08-19 archived it once, but no ongoing per-workflow cap was ever wired in afterward, so it silently regrew from ~25KB back to ~77KB by 2026-08-25 — six days, roughly 15 workflows).
-- Caps project-tier `## Last Updated` in ALL THREE project memory files the same way, using `craftflow_memory_merge.py`'s `"unit": "entries"` mode (paragraph-shaped, not bullet-shaped — see the memory-finalize instruction sites for the full field contract): `max_bullets: 20` each, archived to `.craftflow/state/project/archive/` with per-file slugs `activecontext-last-updated`, `progress-last-updated`, `patterns-last-updated` respectively (distinct slugs required — all three files share the identical `## Last Updated` heading, so a shared slug would collide in the archive directory).
-- Removes the matching `[craftflow-internal]` or legacy `[cc10x-internal]` `memory_task_id` line from `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References`.
-- If any artifact or memory write fails, stop immediately (clear the permit first). Never advance the workflow after a failed persistence write.
-- **Known deferred gap (do not silently "fix" without a dedicated PLAN):** `activeContext.md ## Current Focus`, `activeContext.md ## Recent Changes`, and `progress.md ## Current Workflow` (project-tier) exhibit the same unbounded-append anti-pattern as `## Last Updated`/`## Completed` above and are NOT yet capped — `## Current Focus` in particular is typically the single largest contributor to `activeContext.md`'s size, well past `## Last Updated`. Fixing these requires a product decision (replace-in-place per their own single-value template contract vs. cap+archive like a history log), not just wiring the existing mechanism, and is out of scope here. `progress.md ## Current Workflow` already has a precedent archive file from one prior one-time manual rotation (`.craftflow/state/project/archive/current-workflow-history-2026-08.md`, slug `current-workflow-history`) that a future fix should resume, not replace.
-
-Fallback: If `workflow_uuid` is unavailable, write to root-flat files
-(`$PROJECT_ROOT/.craftflow/state/activeContext.md`, `$PROJECT_ROOT/.craftflow/state/patterns.md`,
-`$PROJECT_ROOT/.craftflow/state/progress.md`) as in prior versions.
-
-For PLAN:
-- Ensure `- Plan: {plan_file}` remains correct in `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References`.
-- Ensure `- Design: {design_file}` remains correct in `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References` when a design exists.
-- If a plan exists, record `Plan saved: {plan_file}` in `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Recent Changes`.
-- If a plan exists, set `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Next Steps` to `1. Execute plan: {plan_file}` unless the workflow ended in clarification-needed state.
-
-For DEBUG:
-- Preserve the latest `[DEBUG-RESET: wf:{workflow_uuid}]` section in `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}/activeContext.md ## Recent Changes` and summarize the final result beneath it.
+Memory finalization runs when the memory task is runnable: read `references/memory-finalize.md` and follow it (it also holds the single copy of the Memory Update task instructions).
 
 ## 14. Hard Rules
 
@@ -1313,22 +1066,9 @@ For DEBUG:
 - Agents must never inherit raw conversation context. They receive only the structured scaffold from the dispatcher. Leaking conversation history into agent prompts causes scope pollution and non-reproducible behavior.
 - Maintain professional objectivity in all routing decisions. Do not rationalize a failing workflow as "close enough" or downgrade critical findings to avoid remediation. The router exists to enforce quality, not to please.
 - `DIFF_DRIVEN_DOCS: skip` in Session Settings disables doc-syncer for projects that manage documentation separately; when present, skip `build-doc-sync` task creation and block Memory Update on `verifier_task_id` directly.
-- `SKILL_DISTILL: skip` in Session Settings disables the `skill-distill` phase entirely; when present, never run the ledger gate check, never create the `skill-distill` task, and block Memory Update on whatever task it would otherwise have depended on (`learn-distill` if gated in, otherwise `doc_sync_task_id`/`verifier_task_id` per the normal chain). This toggle does NOT disable the unconditional `--observe` step in `## 13. Memory Finalization` — that call still runs every workflow regardless of this setting (cheap, deterministic, preserves future calibration value).
+- `SKILL_DISTILL: skip` in Session Settings disables the `skill-distill` phase entirely; when present, never run the ledger gate check, never create the `skill-distill` task, and block Memory Update on whatever task it would otherwise have depended on (`learn-distill` if gated in, otherwise `doc_sync_task_id`/`verifier_task_id` per the normal chain). This toggle does NOT disable the unconditional `--observe` step in `references/memory-finalize.md → ## 13. Memory Finalization` — that call still runs every workflow regardless of this setting (cheap, deterministic, preserves future calibration value).
 - Agents must never reference or read internal skill files from other agents or skills (e.g., component-builder must never read code-review-patterns/SKILL.md). Cross-agent knowledge flows exclusively through router-mediated scaffolds and workflow artifacts.
 - Never use EnterPlanMode. Claude Code's native plan mode is incompatible with Craftflow. Planning requests go through the Craftflow PLAN workflow (brainstorming → planner → bounded fresh review → memory finalization), which provides orchestration state, workflow artifacts, intent contracts, and verification. Native plan mode provides none of these.
-- When `capabilities.task_tools_available == false`, no agent's `TaskUpdate` call can succeed —
-  the router is the sole writer of `phase_status` completion state for every agent, write-capable
-  or read-only alike, derived only from each returned Router Contract YAML's `STATUS` field (see
-  `## 12. Chain Execution Loop`'s fallback). A dispatched agent that discovers `TaskGet`/
-  `TaskUpdate` unavailable or failing mid-task — whether `capabilities.task_tools_available` was
-  already `false` at dispatch time or the tools disappeared after — must stop its turn after
-  emitting its Router Contract YAML block and state plainly in its final output that
-  `TaskUpdate` was unavailable; it must never attempt to write directly to the workflow artifact
-  JSON, `events.jsonl`, or any `.craftflow/state/*.md` memory file itself, and never self-report
-  another agent's role or verdict (e.g., a fabricated verifier pass) to compensate. This rule
-  exists to prevent a repeat of `wf-20260720-053825-af03998a`, where a component-builder lacking
-  `TaskGet`/`TaskUpdate` self-dispatched a router role and wrote a fabricated
-  "integration-verifier PASS" into durable state.
 
 ### Policy table
 

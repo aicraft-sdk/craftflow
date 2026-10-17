@@ -1181,41 +1181,49 @@ def test_router_task_tool_probe_call_documented() -> None:
 
 
 def test_router_task_tool_fallback_wired_through_resume_and_chain_loop() -> None:
+    # P9 retarget (stale-requirement note): this test used to slice "## 4. Resume And Hydration" and
+    # "## 12. Chain Execution Loop" out of SKILL.md and require 'task_tools_available' in each. The requirement it
+    # encodes is unchanged (resume and the chain loop each carry a task-tools-unavailable fallback, and the kernel tells
+    # the router when to apply it); the fallback paragraphs now live in references/task-tool-fallback.md, one section per
+    # site, and section 0a carries the trigger that sends the router there.
     name = "router/task-tool-fallback-wired-resume-and-chain-loop"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    content = _router_corpus_text()
-    # NOTE: "## 4. Resume And Hydration" and "## 12. Chain Execution Loop" also
-    # appear earlier in this file as backtick-quoted prose cross-references
-    # (e.g. inside the "## 0a." section). A bare content.find() on either
-    # string matches those earlier prose mentions instead of the real
-    # heading, silently absorbing several unrelated earlier sections into
-    # the computed bounds (false negative — the check would pass even if
-    # the real section were missing the wiring). Anchor with a leading "\n"
-    # so only the real heading (always preceded by a blank line) matches.
-    resume_match = content.find("\n## 4. Resume And Hydration")
-    resume_idx = resume_match + 1 if resume_match != -1 else -1
-    next_after_resume = content.find("\n## 5.", resume_idx) if resume_idx != -1 else -1
-    if resume_idx == -1 or next_after_resume == -1:
-        fail(name, "could not locate '## 4. Resume And Hydration' section bounds")
+    zero_a = _router_section_or_none("## 0a. Task Tool Capability Detection", "SKILL.md")
+    if zero_a is None:
+        fail(name, "could not locate '## 0a. Task Tool Capability Detection' in SKILL.md")
         return
-    resume_section = content[resume_idx:next_after_resume]
-    if "task_tools_available" not in resume_section:
-        fail(name, "## 4. Resume And Hydration missing 'task_tools_available' wiring")
-        return
-
-    chain_match = content.find("\n## 12. Chain Execution Loop")
-    chain_idx = chain_match + 1 if chain_match != -1 else -1
-    next_after_chain = content.find("\n## 13.", chain_idx) if chain_idx != -1 else -1
-    if chain_idx == -1 or next_after_chain == -1:
-        fail(name, "could not locate '## 12. Chain Execution Loop' section bounds")
-        return
-    chain_section = content[chain_idx:next_after_chain]
-    if "task_tools_available" not in chain_section:
-        fail(name, "## 12. Chain Execution Loop missing 'task_tools_available' wiring")
-        return
+    for trigger in ("When `capabilities.task_tools_available == false`", "native Task* call fails mid-session",
+                    "read `references/task-tool-fallback.md` now"):
+        if trigger not in zero_a:
+            fail(name, f"## 0a lacks the fallback trigger text {trigger!r}")
+            return
+    sites = (
+        ("## Resume fallback", "phase_cursor"),
+        ("## Parent creation fallback", "TaskCreate"),
+        ("### Task*-tool fallback for per-type task graphs and remediation/research task sites", "phase_status"),
+        ("## Dispatcher fallback", "Agent"),
+        ("## Task ID substitution", "Task ID:"),
+        ("## Doubt-Verify fallback", "doubt_verify"),
+        ("## Fix-Verify fallback", "fix_verify"),
+        ("## Chain loop step 1 fallback", "phase_cursor"),
+        ("## After agent completion fallback", "Router Contract"),
+        ("## Stale true capability", "true -> false"),
+        ("## Hard rule", "sole writer"),
+    )
+    for heading, detail in sites:
+        section = _router_section_or_none(heading, "task-tool-fallback.md")
+        if section is None:
+            fail(name, f"references/task-tool-fallback.md lacks the section {heading!r}")
+            return
+        if "task_tools_available" not in section:
+            fail(name, f"{heading} in task-tool-fallback.md missing 'task_tools_available' wiring")
+            return
+        if detail not in section:
+            fail(name, f"{heading} in task-tool-fallback.md lost its rule text ({detail!r} missing)")
+            return
     ok(name)
 
 
@@ -16945,15 +16953,32 @@ def test_craftflow_router_documents_state_read_compaction_self_heal() -> None:
     ok(name)
 
 
+# P9 (single-copy Memory Update instructions): the description body lives ONCE in references/memory-finalize.md under
+# "### Memory Update task instructions"; the five Memory Update TaskCreate sites (build x2, plan, debug, review) carry
+# only a pointer description. Stale-requirement note: these counts were 1/2/1/1 per workflow file (the five inlined
+# copies). The requirement they encode (every protected marker is present exactly once per instruction copy, and no
+# copy drops one) is unchanged. There is now exactly one copy, so the expected counts move to 1 for memory-finalize.md
+# and 0 for the four workflow files, and the pointer sites are asserted separately (_MEMORY_UPDATE_POINTER_COUNTS).
+_MEMORY_FINALIZE_DOC_EXPECTED_COUNTS = {
+    "memory-finalize.md": 1,
+    "plan-workflow.md": 0,
+    "build-workflow.md": 0,
+    "debug-workflow.md": 0,
+    "review-workflow.md": 0,
+}
+_MEMORY_UPDATE_POINTER_COUNTS = {
+    "plan-workflow.md": 1,
+    "build-workflow.md": 2,
+    "debug-workflow.md": 1,
+    "review-workflow.md": 1,
+}
+_MEMORY_UPDATE_POINTER = "Follow references/memory-finalize.md § Memory Update task instructions"
+
+
 def test_memory_finalize_instruction_sites_use_state_query_full_mode() -> None:
     name = "craftflow-router/references/memory-finalize-uses-state-query-full-mode"
     marker = "craftflow_state_query.py <destination_file_path> --mode full"
-    expected_counts = {
-        "plan-workflow.md": 1,
-        "build-workflow.md": 2,
-        "debug-workflow.md": 1,
-        "review-workflow.md": 1,
-    }
+    expected_counts = _MEMORY_FINALIZE_DOC_EXPECTED_COUNTS
     for filename, expected in expected_counts.items():
         path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / filename
         if not path.exists():
@@ -16970,12 +16995,7 @@ def test_memory_finalize_instruction_sites_use_state_query_full_mode() -> None:
 def test_memory_finalize_instruction_sites_wire_archive_rotation() -> None:
     name = "craftflow-router/references/memory-finalize-wires-archive-rotation"
     marker = "write archive_path FIRST"
-    expected_counts = {
-        "plan-workflow.md": 1,
-        "build-workflow.md": 2,
-        "debug-workflow.md": 1,
-        "review-workflow.md": 1,
-    }
+    expected_counts = _MEMORY_FINALIZE_DOC_EXPECTED_COUNTS
     for filename, expected in expected_counts.items():
         path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / filename
         if not path.exists():
@@ -16997,12 +17017,7 @@ def test_memory_finalize_instruction_sites_document_entries_unit() -> None:
     # against them again.
     name = "craftflow-router/references/memory-finalize-documents-entries-unit"
     marker = "unit mode, notes are prepended as new raw-text entries"
-    expected_counts = {
-        "plan-workflow.md": 1,
-        "build-workflow.md": 2,
-        "debug-workflow.md": 1,
-        "review-workflow.md": 1,
-    }
+    expected_counts = _MEMORY_FINALIZE_DOC_EXPECTED_COUNTS
     for filename, expected in expected_counts.items():
         path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / filename
         if not path.exists():
@@ -17015,13 +17030,6 @@ def test_memory_finalize_instruction_sites_document_entries_unit() -> None:
             return
     ok(name)
 
-
-_MEMORY_FINALIZE_DOC_EXPECTED_COUNTS = {
-    "plan-workflow.md": 1,
-    "build-workflow.md": 2,
-    "debug-workflow.md": 1,
-    "review-workflow.md": 1,
-}
 
 _MEMORY_FINALIZE_APPLY_MARKER = "craftflow_memory_merge.py --apply <destination_file_path>"
 _MEMORY_FINALIZE_ENVELOPE_MARKER = "its stdout is a JSON envelope -- never write it raw"
@@ -17072,6 +17080,15 @@ def _memory_finalize_doc_check(name: str, predicate) -> None:
         if bad:
             fail(name, f"{filename}: {bad}")
             return
+        # pointer-present assertion (P9): a workflow file must hold its pointer descriptions, so the zero counts
+        # above cannot be satisfied by a site that lost its Memory Update description altogether
+        pointers = _MEMORY_UPDATE_POINTER_COUNTS.get(filename)
+        if pointers is not None:
+            found = path.read_text(encoding="utf-8").count(_MEMORY_UPDATE_POINTER)
+            if found != pointers:
+                fail(name, f"{filename}: expected {pointers} Memory Update pointer description(s) "
+                           f"({_MEMORY_UPDATE_POINTER!r}), found {found}")
+                return
     ok(name)
 
 
@@ -17108,6 +17125,40 @@ def test_memory_finalize_instruction_sites_preserve_protected_marker_counts() ->
         "craftflow-router/references/memory-finalize-preserves-protected-markers",
         lambda p: any(m in p for m in _MEMORY_FINALIZE_PROTECTED_MARKERS),
     )
+
+
+_MEMORY_UPDATE_TASK_RE = re.compile(
+    r'subject: "(CRAFTFLOW Memory Update:[^"]*)",[ \t]*\n[ \t]*description: "(.*)",[ \t]*\n')
+
+
+def test_memory_update_pointer_sites_keep_router_only_marker() -> None:
+    # A14 (P9): the Memory Update TaskCreate description is now a pointer, but craftflow_task_completed_guard.py's
+    # validate_memory_task_completion still refuses to complete a memory task unless its description holds
+    # "ROUTER ONLY: execute inline." and its metadata says origin:router with a subject that starts
+    # "CRAFTFLOW Memory Update:". Read through the corpus helper so the check survives the P11 split of build-workflow.md.
+    name = "craftflow-router/references/memory-update-pointer-sites-keep-router-only-marker"
+    sites: "list[tuple[str, str, str]]" = []
+    for rel, text in sorted(router_corpus.read_corpus(PLUGIN_ROOT).items()):
+        for subject, description in _MEMORY_UPDATE_TASK_RE.findall(text):
+            sites.append((rel, subject, description))
+    expected_total = sum(_MEMORY_UPDATE_POINTER_COUNTS.values())
+    if len(sites) != expected_total:
+        fail(name, f"expected {expected_total} Memory Update TaskCreate sites, found {len(sites)}: "
+                   f"{[rel for rel, _, _ in sites]}")
+        return
+    for rel, subject, description in sites:
+        # the description is a source-text string literal, so its newlines are the two characters backslash + n
+        for needle in ("ROUTER ONLY: execute inline.", "\\norigin:router\\n", "\\nkind:memory\\n", _MEMORY_UPDATE_POINTER):
+            if needle not in description:
+                fail(name, f"{rel}: Memory Update description lacks {needle!r}")
+                return
+        if not subject.startswith("CRAFTFLOW Memory Update:"):
+            fail(name, f"{rel}: Memory Update subject {subject!r} does not start with 'CRAFTFLOW Memory Update:'")
+            return
+        if "craftflow_memory_merge.py" in description:
+            fail(name, f"{rel}: Memory Update description still inlines the instruction body")
+            return
+    ok(name)
 
 
 def test_cursor_router_memory_finalize_parity_mentions_apply() -> None:
@@ -28606,6 +28657,7 @@ def main() -> int:
     test_memory_finalize_instruction_sites_drop_dangling_phase3_reference()
     test_memory_finalize_instruction_sites_have_no_inline_heredoc_instruction()
     test_memory_finalize_instruction_sites_preserve_protected_marker_counts()
+    test_memory_update_pointer_sites_keep_router_only_marker()
     test_cursor_router_memory_finalize_parity_mentions_apply()
     test_skill_md_wires_project_tier_last_updated_and_completed_caps()
     test_cursor_router_skill_md_wires_completed_cap()

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Relocation-drill guard for the router tests (P1 REM-FIX 3, extended in REM-FIX 4).
 
-Run: python3 tests/fixtures/test_router_relocation_drills.py [--drills p9_memfin,p10_parent] [--jobs N] [--list] [--help]
+Run: python3 tests/fixtures/test_router_relocation_drills.py [--drills p10_parent,p11_proto_split] [--jobs N] [--list] [--help]
 Applies the plan's P9/P10/P11 section moves on scratch copies (router_relocation_drills.py) and runs the hook suite and
 the router-reading fixtures against each copy. For every drill it asserts: no C-row test fails, no failing test is
 unclassified, every failing K/F row's owner names the drill's phase, and no suite crashes. A failure counts only when the
@@ -63,11 +63,12 @@ def test_classifier() -> None:
           str(drills.classify("hook::t_x", 10, rows)))
 
 
-def test_drill_set_is_the_thirteen_remaining_moves() -> None:
-    want = {"p9_memfin", "p9_memfin_pointer", "p9_fallback_labels", "p10_parent", "p10_resume", "p10_0a", "p10_section3",
-            "p10_worktree13", "p10_postagent", "p10_memload_5a", "p11_proto_split", "p11_build_split", "p11_hookpolicy"}
+def test_drill_set_is_the_ten_remaining_moves() -> None:
+    want = {"p10_parent", "p10_resume", "p10_0a", "p10_section3", "p10_worktree13", "p10_postagent", "p10_memload_5a",
+            "p11_proto_split", "p11_build_split", "p11_hookpolicy"}
     have = {n for n in drills.DRILLS if n != "control"}
-    check("DRILLS holds exactly the thirteen drills (the p8_step4 drill retired when P8 moved step 4)", have == want, f"missing={sorted(want - have)} extra={sorted(have - want)}")
+    check("DRILLS holds exactly the ten drills (the p8_step4 drill retired when P8 moved step 4; p9_memfin, p9_memfin_pointer and p9_fallback_labels when P9 moved section 13 and the fallback paragraphs)",
+          have == want, f"missing={sorted(want - have)} extra={sorted(have - want)}")
 
 
 def test_every_drill_applies_and_moves_text() -> None:
@@ -99,8 +100,8 @@ def test_duplicate_heading_variants_are_rejected() -> None:
     """The doubt-verifier's variants repeat a moved heading; the invariant must reject each by construction."""
     base = Path(tempfile.mkdtemp(prefix="drill-variants-"))
     try:
-        check("three duplicate-heading variants are registered",
-              sorted(drills.VARIANTS) == ["x_p10_memload_dup", "x_p9_fb_verbatim", "x_p9_memfin_keep"], str(sorted(drills.VARIANTS)))
+        check("the duplicate-heading variant is registered (x_p9_memfin_keep and x_p9_fb_verbatim retired with the P9 drills)",
+              sorted(drills.VARIANTS) == ["x_p10_memload_dup"], str(sorted(drills.VARIANTS)))
         for name, (_, _, fn) in drills.VARIANTS.items():
             root = drills.copy_plugin(base / name)
             fn(drills.Tree(root))
@@ -156,8 +157,8 @@ def test_cli_help_and_list_do_not_run_drills() -> None:
           helped.returncode == 0 and "--jobs" in helped.stdout and "--drills" in helped.stdout and time.time() - start < 30,
           f"rc={helped.returncode} out={helped.stdout[:80]!r} err={helped.stderr[:120]!r}")
     names = [line.split("\t")[0] for line in listed.stdout.splitlines()]
-    check("--list prints control, the thirteen drills and the variants without running any",
-          listed.returncode == 0 and len(names) == 1 + 13 + len(drills.VARIANTS), f"rc={listed.returncode} names={names} err={listed.stderr[:120]!r}")
+    check("--list prints control, the ten drills and the variants without running any",
+          listed.returncode == 0 and len(names) == 1 + 10 + len(drills.VARIANTS), f"rc={listed.returncode} names={names} err={listed.stderr[:120]!r}")
 
 
 def test_drills_end_to_end(selected: List[str], jobs: int) -> None:
@@ -181,7 +182,7 @@ def test_drills_end_to_end(selected: List[str], jobs: int) -> None:
 
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description="Relocation-drill guard for the router tests: self-tests plus every planned section move.")
-    ap.add_argument("--drills", default="", help="comma-separated drill names to run end to end (default: all thirteen)")
+    ap.add_argument("--drills", default="", help="comma-separated drill names to run end to end (default: all ten)")
     ap.add_argument("--list", action="store_true", help="print the drills and variants, run nothing")
     ap.add_argument("--jobs", type=int, default=drills.default_jobs(), help="drills run in parallel (default min(4, cpus // 2))")
     args = ap.parse_args(argv)
@@ -196,7 +197,7 @@ def main(argv: List[str]) -> int:
         return 2
     test_owner_parser()
     test_classifier()
-    test_drill_set_is_the_thirteen_remaining_moves()
+    test_drill_set_is_the_ten_remaining_moves()
     test_every_drill_applies_and_moves_text()
     test_duplicate_heading_variants_are_rejected()
     test_timing_tests_and_control_failures_are_not_violations()

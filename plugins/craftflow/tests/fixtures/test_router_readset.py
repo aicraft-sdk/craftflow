@@ -991,7 +991,8 @@ def test_reach_feasibility_block_is_in_the_projection() -> None:
                  and sb(v)["buckets"]["widening"]["pairs"] == v["readmap_widened"] and sb(v)["section_move_rows"]["ops"] > 0 and "formula" in sb(v)
                  and v["variant_split"]["units"] <= v["reach_loss_split"][classes[2]]["units"] for v in tiers.values())
     penalty = g["reach_a_kernel_penalty_bytes"] == 3913 and g["single_token_units"] == 1 and "reach_a_kernel_penalty_bytes" in block["note"]
-    pinned = [g["reach_loss_split"][c]["units"] for c in classes] == [167, 88, 160] and g["reach_lost_occurrences"] == 415
+    # 167 / 88 / 160 and 415 before P9; P9's drafted rows (the section 13 move and the fallback, dedupe and context rows) are read by the projection's diff
+    pinned = [g["reach_loss_split"][c]["units"] for c in classes] == [166, 87, 160] and g["reach_lost_occurrences"] == 413
     check("reach_feasibility_block_is_in_the_projection",
           shape and moves and sums and d17 and split and burden and penalty and pinned
           and g["reach_lost_occurrences"] > 0 and g["single_token_units"] > 0 and e["readmap_widened"] > 0
@@ -1090,8 +1091,9 @@ def test_reach_loss_split_pins_the_covered_first_numbers() -> None:
     classes = ("pure_2_to_1_covered", "drops_to_0", "drops_workflow_or_variant")
     got = {t: [tiers[t]["reach_loss_split"][c]["units"] for c in classes] for t in ("guaranteed", "conditional_if_reach_amended")}
     vs = {t: tiers[t]["variant_split"] for t in ("guaranteed", "conditional_if_reach_amended")}
+    # P9's drafted rows are read by the projection's diff: 167 / 88 / 160 and 359 / 88 / 160 become 166 / 87 / 160 and 358 / 87 / 160
     check("reach_loss_split_pins_the_covered_first_numbers",
-          got == {"guaranteed": [167, 88, 160], "conditional_if_reach_amended": [359, 88, 160]}
+          got == {"guaranteed": [166, 87, 160], "conditional_if_reach_amended": [358, 87, 160]}
           and all(v == {"units": 4, "bytes": 1186} for v in vs.values()),
           f"split={got} variant_split={vs}")
 
@@ -1133,8 +1135,10 @@ def test_signing_burden_buckets_are_disjoint_on_every_tier() -> None:
     # David signed (2026-10-17) the P8 rows, among them the 65-id worktree_merge group row. Its occurrences leave `unmapped_removed` (they are
     # policy_mapped now) but the burden records still count them as reach-lost or vanishing, so the buckets now sum to `unmapped_removed` plus
     # the occurrences already signed, and moved_without_loss (clamped at 0) is empty. Pinned per tier so the K1(a) double count still fails.
-    signed_overlap = {"conditional": 44, "conditional_if_reach_amended": 43, "effective": 44, "effective_without_infeasible_rows": 44,
-                      "guaranteed": 44, "with_contingencies": 44, "with_contingencies_if_reach_amended": 43}
+    # P9's drafted rows (the section 13 move, fallback, dedupe and context rows, still unsigned) are read by the projection's diff the same way:
+    # they take 70 more occurrences out of `unmapped_removed` than the burden records drop from reach-lost and vanishing: 44 / 43 become 114 / 113.
+    signed_overlap = {"conditional": 114, "conditional_if_reach_amended": 113, "effective": 114, "effective_without_infeasible_rows": 114,
+                      "guaranteed": 114, "with_contingencies": 114, "with_contingencies_if_reach_amended": 113}
     bad = {}
     for name, v in tiers.items():
         b = v["signing_burden"]["buckets"]
@@ -1162,14 +1166,17 @@ def test_signing_burden_counts_rows_not_occurrences() -> None:
     gd = g["definitional_D17B"]
     sec = g["section_move_rows"]
     check("signing_burden_counts_rows_not_occurrences",
-          b["vanishing"] == {"occurrences": 123, "ids": 111} and b["widening"] == {"pairs": 48, "files": 14}
+          # P9's drafted rows (counted by the projection although unsigned) change the guaranteed tree from 415 reach-lost occurrences (411 ids), 123 vanishing
+          # (111 ids) and 48 widening pairs (14 files) to 413 (409 ids), 126 (114 ids) and 38 (12 files): the section 13 move, the fallback and dedupe rows and the
+          # two widening rows for the new stage files; the partial spans without a heading go from 23 to 22 and REACH-A / REACH-B from 589 / 422 to 588 / 422
+          b["vanishing"] == {"occurrences": 126, "ids": 114} and b["widening"] == {"pairs": 38, "files": 12}
           and (sec["ops"], sec["rows_low"], sec["rows_high_headed_spans"], sec["rows_upper_bound"]) == (41, 41, 49, 53)
-          and (sec["partial_spans_without_heading"], sec["multi_section_spans"]) == (23, 7)
+          and (sec["partial_spans_without_heading"], sec["multi_section_spans"]) == (22, 7)
           and sec["needs_destination_heading"] == ["p10-pav-verifier-telemetry"]
-          and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (411 + 111 + 53 + 14, 244 + 111 + 53 + 14)
-          and g["REACH_A"]["occurrences"]["total"] == 415 + 123 + 0 + 48 and g["REACH_B"]["occurrences"]["total"] == 41 + 248 + 123 + 48
-          and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 244 + 111 + 53 + 14
-          and d["REACH_A"]["occurrences"]["total"] == 607 + 144 + 0 + 48
+          and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (409 + 114 + 53 + 12, 243 + 114 + 53 + 12)
+          and g["REACH_A"]["occurrences"]["total"] == 413 + 126 + 0 + 38 and g["REACH_B"]["occurrences"]["total"] == 41 + 247 + 126 + 38
+          and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 243 + 114 + 53 + 12
+          and d["REACH_A"]["occurrences"]["total"] == 605 + 147 + 0 + 38
           # REACH-A counts the 39 moved-without-loss occurrences, REACH-B the 42 section-move ops; they were equal (42) until P5's signed
           # plan_commit row removed one occurrence without removing a section move, and P6's six literal-to-key Rewrites rows (listed in the
           # policy map, still unsigned) took away two more and one vanishing occurrence. P8's thirteen unsigned rows (the gate summary, its bullets, the
@@ -1177,8 +1184,9 @@ def test_signing_burden_counts_rows_not_occurrences() -> None:
           # 38 to 32, 15 files / 50 pairs to 14 / 48. The P8 remediation added an Applicability row for the Safety paragraph (it used to hide in the draft group row), which takes its two occurrences out of moved-without-loss: 32 to 30. The row-count bounds below still coincide.
           # David's signature (2026-10-17) of the P8 rows left no unsigned moved-without-loss occurrence: 30 to 0 (31 to 0 if-amended), so
           # REACH-A's occurrence totals lose exactly those (guaranteed 616 to 586, if-amended 830 to 799); the row-count bounds (589 / 422) do not move.
-          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 0 + 248 + 144 + 48
-          and d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 248 + 144 + 48
+          # P9: the if-amended tier goes from 607 per-unit / 144 vanishing / 48 widening to 605 / 147 / 38 (the definitional readings 248 to 247)
+          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 0 + 247 + 147 + 38
+          and d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 247 + 147 + 38
           and d["definitional_D17B"]["REACH_B"]["rows_upper_bound"] < d["REACH_B"]["rows_upper_bound"] < d["REACH_A"]["rows_upper_bound"],
           f"buckets={b} sections={sec} guaranteed={(g['REACH_A']['rows_upper_bound'], g['REACH_B']['rows_upper_bound'])} amended_A_occ={d['REACH_A']['occurrences']}")
 
@@ -1196,7 +1204,8 @@ def test_bias_notes_carry_the_residue() -> None:
           len(notes) == 2 and hsc == 6008 and "R-M2" in notes[0] and "6,008 B" in notes[0] and "harness-self-checks.md" in notes[0]
           and "widening row" in notes[0] and "P11/P13" in notes[0]
           and f"{split['drops_to_0']['bytes']:,} B" in notes[1] and f"{split['drops_workflow_or_variant']['bytes']:,} B" in notes[1]
-          and (split["drops_to_0"]["bytes"], split["drops_workflow_or_variant"]["bytes"]) == (32881, 32762) and "notes" not in partial["bias"],
+          # 32,881 B of drops-to-0 before P9; P9's drafted rows take one 1,148 B unit out of that bucket (31,733 B); the workflow-or-variant drops stay 32,762 B
+          and (split["drops_to_0"]["bytes"], split["drops_workflow_or_variant"]["bytes"]) == (31733, 32762) and "notes" not in partial["bias"],
           f"notes={notes} hsc={hsc}")
 
 

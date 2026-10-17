@@ -418,10 +418,13 @@ def main() -> int:
         "references/plan-workflow.md",
         "references/remediation-and-research.md",
         "references/worktree.md",
+        "references/memory-finalize.md",
+        "references/task-tool-fallback.md",
         "## 12. Chain Execution Loop",
-        "## 13. Memory Finalization",
         "## 14. Hard Rules",
     ]
+    # P9: "## 13. Memory Finalization" moved into references/memory-finalize.md; the kernel keeps the pointer, and the
+    # heading itself is still required across the whole router surface (required_router_surface_text below).
     for heading in required_router_inline:
         if heading not in router:
             errors.append(f"router missing required inline reference/text: {heading}")
