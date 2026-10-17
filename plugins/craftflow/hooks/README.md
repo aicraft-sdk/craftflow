@@ -120,8 +120,8 @@ It validates the publication-critical contract:
 
 Phase 1 of `docs/plans/2026-07-29-craftflow-skill-distillation-plan.md` ships
 a standalone recurrence miner. As of Phase 3, both `craftflow-router/SKILL.md`
-(the Skill-Distill Approval Flow's Gate check and the unconditional
-`--observe` step in Memory Finalization) and `cursor-router/SKILL.md` (§ 5a
+(the Skill-Distill Approval Flow's Gate check), `craftflow-router/references/memory-finalize.md`
+(the unconditional `--observe` step in Memory Finalization) and `cursor-router/SKILL.md` (§ 5a
 Skill-Distill Gate) invoke it directly via Bash — it is still not registered
 as a `hooks.json` entry, but it is no longer merely a standalone CLI:
 

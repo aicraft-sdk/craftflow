@@ -1331,14 +1331,20 @@ def test_router_memory_finalize_pointer_not_under_verifier_handoff() -> None:
     ok(name)
 
 
-_SECTION_13_REF_RE = re.compile(r"(?:§\s*13\b|\bSection\s+13\b)", re.IGNORECASE)
+_SECTION_13_REF_RE = re.compile(
+    r"(?:§\s*13\b|\bSection\s+13\b|\bsec\.?\s*13\b|\bs13\b|\bstep\s+13\b"
+    r"|SKILL\.md\s*(?:#|§|##)\s*(?:§|##)?\s*13\b)",
+    re.IGNORECASE,
+)
 
 
 def test_plugin_has_no_dangling_section_13_references() -> None:
     # P9 remediation (doubt cycle 1): section 13 moved from SKILL.md into references/memory-finalize.md and the kernel
     # no longer has a "## 13." heading, so an inbound "SKILL.md § 13" / "Section 13" reference points at nothing. Every
-    # inbound reference names `references/memory-finalize.md → ## 13. Memory Finalization` instead. Fixtures (baseline
-    # and plan history) and this test file are out of scope.
+    # inbound reference names `references/memory-finalize.md → ## 13. Memory Finalization` instead. Scope: the runtime
+    # trees, the plugin README, live docs (not dated `YYYY-MM-DD-*` decision/benchmark records, which are history) and
+    # the live anchors table tests/fixtures/router-test-anchors.md. Other fixtures (baselines, plan history) and this
+    # test file are out of scope.
     name = "plugin/no-dangling-section-13-references"
     hits: "list[str]" = []
     for sub in ("skills", "hooks", "scripts", "agents", "commands", "rules", "config"):
@@ -1352,6 +1358,16 @@ def test_plugin_has_no_dangling_section_13_references() -> None:
             for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
                 if _SECTION_13_REF_RE.search(line):
                     hits.append(f"{path.relative_to(PLUGIN_ROOT)}:{n}")
+    live_files = [PLUGIN_ROOT / "README.md", PLUGIN_ROOT / "tests" / "fixtures" / "router-test-anchors.md"]
+    docs_dir = PLUGIN_ROOT / "docs"
+    if docs_dir.is_dir():
+        live_files += [d for d in sorted(docs_dir.rglob("*.md")) if not re.match(r"\d{4}-\d{2}-\d{2}", d.name)]
+    for path in live_files:
+        if not path.is_file():
+            continue
+        for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if _SECTION_13_REF_RE.search(line):
+                hits.append(f"{path.relative_to(PLUGIN_ROOT)}:{n}")
     if hits:
         fail(name, "dangling '§ 13' / 'Section 13' references (retarget to `references/memory-finalize.md → ## 13. Memory Finalization`): "
                    + ", ".join(hits))
@@ -17480,7 +17496,7 @@ def test_router_memory_finalization_calls_ledger_observe() -> None:
 
 def test_router_memory_finalization_calls_ledger_prune() -> None:
     # Phase 4: wires a real caller for --prune into the same memory-finalize
-    # step that already unconditionally runs --observe (SKILL.md ## 13,
+    # step that already unconditionally runs --observe (references/memory-finalize.md ## 13,
     # single non-duplicated location applying to every workflow type).
     name = "router/memory-finalization-calls-ledger-prune"
     path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
