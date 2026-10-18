@@ -1599,7 +1599,7 @@ def is_workspace_member(workspace_root: Path, requesting_path: Path) -> bool:
     return False
 
 
-_WORKSPACE_ROOT_MAX_ASCENT = 3  # mirrors craftflow-router/SKILL.md step 5a's capped walk
+_WORKSPACE_ROOT_MAX_ASCENT = 3  # mirrors craftflow-router/references/memory-load-workspace.md step 5a's capped walk
 
 
 def discover_workspace_root(cwd: Path) -> "Path | None":
@@ -1610,7 +1610,7 @@ def discover_workspace_root(cwd: Path) -> "Path | None":
     Marker = EITHER a `.craftflow-workspace.json` file OR a
     `.craftflow/state/workspace/` directory. Walk is capped at
     _WORKSPACE_ROOT_MAX_ASCENT levels above `cwd`, exactly as the
-    read-side walk in craftflow-router/SKILL.md step 5a (which this
+    read-side walk in craftflow-router/references/memory-load-workspace.md step 5a (which this
     function deliberately does NOT mirror the membership gate of -- M-8,
     disclosed and ADR-recorded, not an oversight).
 

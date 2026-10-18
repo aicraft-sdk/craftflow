@@ -297,7 +297,7 @@ shared memory purely because of where it happens to sit on disk.
   the stray marker at `Y` is skipped exactly as if it weren't there, so a legitimate, farther
   membership grant is still reachable.
 - **M-8 — the read side is deliberately not membership-gated.** Both routers'
-  memory-*load* walk (`craftflow-router/SKILL.md` step 5a, `cursor-router/SKILL.md` step 4a)
+  memory-*load* walk (`craftflow-router/references/memory-load-workspace.md` step 5a, `cursor-router/SKILL.md` step 4a)
   reads an ancestor's workspace-tier memory files with no membership check at all — this is the
   write-side mechanism documented above, not the read side. This is a deliberate, disclosed
   choice, not drift: fixing it fail-closed would break every existing workspace-memory user who
