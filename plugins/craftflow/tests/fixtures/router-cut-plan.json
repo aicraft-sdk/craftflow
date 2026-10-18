@@ -1446,7 +1446,7 @@
     "class": "stage",
     "file": "skills/craftflow-router/references/memory-load-workspace.md",
     "happy_path": false,
-    "trigger": "workspace marker found",
+    "trigger": "workspace marker found, or a state-read-compaction deny during Memory Load",
     "workflows": [
      "ALL"
     ]
@@ -1917,15 +1917,15 @@
   {
    "condition": "always",
    "dst": "skills/craftflow-router/references/plan-bakeoff.md",
-   "dst_header": "\n## Chain loop step 5b\n\n",
-   "end_anchor": "     to `phase:plan-bakeoff-candidate-*`).",
+   "dst_header": "\n",
+   "end_anchor": "     to `phase:plan-bakeoff-candidate-*`).\n```",
    "id": "p11-pw-bakeoff-step5b",
    "op": "move",
    "phase": "P11",
    "pointer_text": "",
-   "source": "plan P11 Files: plus section 12 step 5b",
+   "source": "plan P11 Files: plus section 12 step 5b (P10 remediation: step 5a left plan-workflow.md for remediation-and-research.md, so the whole '## Chain loop step 5b (PLAN)' section, heading and fence included, moves)",
    "src": "skills/craftflow-router/references/plan-workflow.md",
-   "start_anchor": "5b. If N-1 `plan-bakeoff-candidate-*` tasks are all runnable in the same round (PLAN workflow,"
+   "start_anchor": "## Chain loop step 5b (PLAN)"
   },
   {
    "condition": "always",
@@ -1933,21 +1933,10 @@
    "id": "p11-g6-kernel-5a-5b-pointer",
    "op": "replace",
    "phase": "P11",
-   "source": "P2 REM-FIX 3 G6 (doubt-verify cycle 2): step 5b left plan-workflow.md for plan-bakeoff.md in P11, so the kernel pointer written in P10 must name both files",
-   "start_anchor": "5a/5b. (PLAN workflow) research and bake-off candidate dispatch: `references/plan-workflow.md`.",
+   "source": "P2 REM-FIX 3 G6 (doubt-verify cycle 2): step 5b left plan-workflow.md for plan-bakeoff.md in P11, so the kernel pointer written in P10 must name both files (P10 remediation: the anchor is the as-built kernel paragraph; step 5a now sits in remediation-and-research.md, so only 5b changes its file)",
+   "start_anchor": "`SKILL.md → ## 12. Chain Execution Loop` 5a (research): `references/remediation-and-research.md`; 5b (bake-off): `references/plan-workflow.md`. In task-tool fallback mode, step 1 and agent-completion steps 1-3: `references/task-tool-fallback.md`.",
    "status": "drafted",
-   "text": "5a. (PLAN workflow) parallel research dispatch: see `references/plan-workflow.md`. 5b. bake-off candidate dispatch: see `references/plan-bakeoff.md`.\n"
-  },
-  {
-   "condition": "always",
-   "file": "skills/craftflow-router/references/plan-workflow.md",
-   "id": "p11-g6-pw-chain-heading",
-   "op": "replace",
-   "phase": "P11",
-   "source": "P2 REM-FIX 3 G6 (doubt-verify cycle 2): plan-workflow.md keeps step 5a only once p11-pw-bakeoff-step5b has moved 5b",
-   "start_anchor": "## Chain loop steps 5a and 5b (PLAN)",
-   "status": "drafted",
-   "text": "## Chain loop step 5a (PLAN)\n"
+   "text": "`SKILL.md → ## 12. Chain Execution Loop` 5a (research): `references/remediation-and-research.md`; 5b (bake-off): `references/plan-bakeoff.md`. In task-tool fallback mode, step 1 and agent-completion steps 1-3: `references/task-tool-fallback.md`.\n"
   },
   {
    "condition": "always",
@@ -2192,7 +2181,7 @@
    "op": "replace",
    "phase": "P11",
    "source": "manual-review claim: SKILL.md section 8 still holds the Skill-Distill Approval Flow (fast-path.md:97)",
-   "start_anchor": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`craftflow-router/SKILL.md` § 8) — `AskUserQuestion` with Approve / Approve + register in SKILL_HINTS / Reject / Defer — before proceeding to `memory-finalize`. Append `skill_proposed` to the event log, then `skill_promoted` or `skill_rejected` once the user's choice is executed (no event for Defer — the candidate is unchanged). Under `JUST_GO=true`, this gate is a de facto REVERT-class gate (fail-closed default `Defer`) — see `SKILL.md` § 8's JUST_GO carve-out; never auto-select Approve or Approve + SKILL_HINTS.",
+   "start_anchor": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`craftflow-router/SKILL.md` § 8, `references/post-agent-validation.md`) — `AskUserQuestion` with Approve / Approve + register in SKILL_HINTS / Reject / Defer — before proceeding to `memory-finalize`. Append `skill_proposed` to the event log, then `skill_promoted` or `skill_rejected` once the user's choice is executed (no event for Defer — the candidate is unchanged). Under `JUST_GO=true`, this gate is a de facto REVERT-class gate (fail-closed default `Defer`) — see `SKILL.md` § 8's JUST_GO carve-out; never auto-select Approve or Approve + SKILL_HINTS.",
    "status": "drafted",
    "text": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`_shared/skill-distill-approval.md`) — `AskUserQuestion` with Approve / Approve + register in SKILL_HINTS / Reject / Defer — before proceeding to `memory-finalize`. Append `skill_proposed` to the event log, then `skill_promoted` or `skill_rejected` once the user's choice is executed (no event for Defer — the candidate is unchanged). Under `JUST_GO=true`, this gate is a de facto REVERT-class gate (fail-closed default `Defer`) — see that file's JUST_GO carve-out; never auto-select Approve or Approve + SKILL_HINTS.\n"
   },
@@ -2203,7 +2192,7 @@
    "op": "replace",
    "phase": "P11",
    "source": "manual-review claim: SKILL.md section 8 still holds the Skill-Distill Approval Flow (build-workflow.md:143, moved by p11-bw-graph-standard)",
-   "start_anchor": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`SKILL.md` § 8) before Memory Update proceeds.",
+   "start_anchor": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`SKILL.md` § 8, `references/post-agent-validation.md`) before Memory Update proceeds.",
    "status": "drafted",
    "text": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`_shared/skill-distill-approval.md`) before Memory Update proceeds.\n"
   },
@@ -2510,12 +2499,12 @@
   {
    "condition": "always",
    "contingency": "C2",
-   "end_anchor": "    `.craftflow-workspace.json` or `.craftflow/state/workspace/`, read `references/memory-load-workspace.md`.",
+   "end_anchor": "    no marker, or workspace_root == PROJECT_ROOT: skip, without a hard stop.",
    "file": "skills/craftflow-router/SKILL.md",
    "id": "p12-c2-discover-workspace",
    "op": "contingency",
    "phase": "P12",
-   "source": "plan Budget Ledger C2; after P10 the 5a walk prose already left the kernel, so only the 2-line trigger remains to shrink - DRAFT",
+   "source": "plan Budget Ledger C2; after P10 the 5a walk prose already left the kernel, so only the 2-line trigger remains to shrink - DRAFT (P10 remediation: the end anchor is the third trigger line, which states the no-marker and same-root outcomes; applying C2 removes those words, so the P12 builder must revisit the 2fd73e63c356 pointer row)",
    "start_anchor": "5a. Workspace tier (walk up max 3 levels above PROJECT_ROOT): if an ancestor holds",
    "status": "drafted",
    "text": "5a. Workspace tier: run `craftflow_state_query.py --discover-workspace` and pass a printed root as `--workspace-root`. (Details: `references/memory-load-workspace.md`.)\n"
@@ -2548,6 +2537,450 @@
    "phase": "P12",
    "source": "plan Budget Ledger C4",
    "status": "needs_anchor"
+  },
+  {
+   "action": "update",
+   "condition": "always",
+   "id": "p10-readmap-router-protocol-trigger",
+   "match": {
+    "class": "kernel",
+    "file": "skills/_shared/router-protocol.md"
+   },
+   "op": "readmap",
+   "phase": "P10",
+   "row": {
+    "trigger": "read before routing"
+   },
+   "source": "P10 remediation: the Read Map trigger drops its parenthetical (kernel bytes)"
+  },
+  {
+   "action": "update",
+   "condition": "always",
+   "id": "p10-readmap-fast-path-trigger",
+   "match": {
+    "class": "stage",
+    "file": "skills/craftflow-router/references/fast-path.md"
+   },
+   "op": "readmap",
+   "phase": "P10",
+   "row": {
+    "trigger": "first agent dispatch effort lookup"
+   },
+   "source": "P10 remediation: the Read Map trigger drops its parenthetical (kernel bytes); a P10 row so the P2-only projection snapshot stays exact"
+  },
+  {
+   "condition": "always",
+   "file": "skills/_shared/router-protocol.md",
+   "id": "p10r-delta-router-protocol-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "     at **Parent workflow creation** (`## 6.`) below, the same ordering constraint the",
+   "text": "     at **Parent workflow creation** (`## 6.`; Claude Code: `references/workflow-start.md`) below, the same ordering constraint the\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "When `capabilities.task_tools_available == false`, or any router-owned native Task* call fails mid-session, read `references/task-tool-fallback.md` now and apply its per-site rule at every `TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` call site.",
+   "text": "When `capabilities.task_tools_available == false`, or a router-owned native Task* call fails mid-session, read `references/task-tool-fallback.md` now and apply it at every `TaskCreate`/`TaskList`/`TaskGet`/`TaskUpdate` call site.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-02",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "    `.craftflow-workspace.json` or `.craftflow/state/workspace/`, read `references/memory-load-workspace.md`.",
+   "text": "    `.craftflow-workspace.json` or `.craftflow/state/workspace/`, read `references/memory-load-workspace.md`;\n    no marker, or workspace_root == PROJECT_ROOT: skip, without a hard stop.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-03",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "State-read compaction self-heal: `references/memory-load-workspace.md`.",
+   "text": "`state-read-compaction` deny in Memory Load (`SKILL.md → ## 2. Memory Load And Template Validation`): `references/memory-load-workspace.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-04",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "**3. Task Metadata Contract:** see `references/workflow-start.md`.",
+   "text": "**3. Task Metadata Contract** and **Parent workflow creation** (§ 6): before any `TaskCreate()`: `references/workflow-start.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-05",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "On resume, or when the digest `## Decisions` holds a live `[SCOPE-DECISION-PENDING:` or unconsumed `[jev-auto-decided:` marker, read `references/resume.md`.",
+   "text": "On resume, or when grep of `project/activeContext.md ## Decisions` finds a live `[SCOPE-DECISION-PENDING:` or unconsumed `[jev-auto-decided:` marker, read `references/resume.md`.\n"
+  },
+  {
+   "anchor": "- Read `$PROJECT_ROOT/.craftflow/state/project/progress.md ## Current Workflow` and `## Tasks` for pending work that should resume instead of duplicating.",
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-06",
+   "op": "insert",
+   "phase": "P10",
+   "position": "after_anchor",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "text": "- Pending work to resume: `references/resume.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-07",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "Fast Path Detection and Worktree Isolation steps 1-3: `references/build-workflow.md`.\n\n4. After `integration-verifier` PASS on the final phase and before memory-finalize: when\n   `worktree_mode == \"auto_created\"`, read `references/worktree.md` and run its finalize call.",
+   "text": "4. Final-phase `integration-verifier` PASS, before memory-finalize, `worktree_mode == \"auto_created\"`:\n   read `references/worktree.md`, run its finalize call.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-08",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "\n**Parent workflow creation:** see `references/workflow-start.md`.",
+   "text": ""
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-09",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "is a proposal-authoring/availability issue. See `## 6. Workflow Task Graphs` (Skill-Distill\nGate) for the exact non-blocking handling: no REM-FIX is created, the chain is never stalled",
+   "text": "is a proposal-authoring/availability issue. See `## 6.` and `references/build-workflow.md → #### Skill-Distill Gate`\nfor the exact non-blocking handling: no REM-FIX is created, the chain is never stalled\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-10",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "**Doubt-Verify and Fix-Verify (BUILD, DEBUG):** after `integration-verifier` returns PASS, read `references/verify-dispatch.md`.",
+   "text": "**Doubt-Verify, Fix-Verify:** after `integration-verifier` PASS, read `references/verify-dispatch.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-11",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "After any agent returns, read `references/post-agent-validation.md` (once per workflow; re-read after compaction) and apply it. It parses:",
+   "text": "After any agent returns, read `references/post-agent-validation.md` (once per context; re-read after /clear or compaction) and apply it. Stand-ins:\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-12",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "| any | see that file |",
+   "text": "| any | in that file |\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-13",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "**Intent Interview Gate and brainstorming handoff (PLAN only):** `references/plan-workflow.md`.",
+   "text": "**Intent Interview Gate, brainstorming (PLAN only):** `references/plan-workflow.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-14",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "3. If the runnable task kind is memory:",
+   "text": "3. If the runnable task kind is memory (`references/memory-finalize.md`):\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-15",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "5a/5b. (PLAN workflow) research and bake-off candidate dispatch: `references/plan-workflow.md`.",
+   "text": ""
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-16",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "   - validate output",
+   "text": "   - validate output (§ 8)\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-17",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "In task-tool fallback mode, step 1 and agent-completion steps 1-3 follow the matching sections of `references/task-tool-fallback.md`. Memory task (step 3): read `references/memory-finalize.md`.",
+   "text": "`SKILL.md → ## 12. Chain Execution Loop` 5a (research): `references/remediation-and-research.md`; 5b (bake-off): `references/plan-workflow.md`. In task-tool fallback mode, step 1 and agent-completion steps 1-3: `references/task-tool-fallback.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10r-delta-SKILL-18",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "| `worktree_merge` | `require_clean_tree=true, lock_max_attempts=9, lock_sleep_seconds=5, copy_fallback_on_up_to_date=true` | `craftflow_pretooluse_bash_guard.py` (clean tree) | § 5 |",
+   "text": "| `worktree_merge` | `require_clean_tree=true, lock_max_attempts=9, lock_sleep_seconds=5, copy_fallback_on_up_to_date=true` | `craftflow_pretooluse_bash_guard.py` (clean tree) | worktree.md |\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/build-workflow.md",
+   "id": "p10r-delta-build-workflow-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`SKILL.md` § 8) before Memory Update proceeds.",
+   "text": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`SKILL.md` § 8, `references/post-agent-validation.md`) before Memory Update proceeds.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/build-workflow.md",
+   "id": "p10r-delta-build-workflow-02",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "**Clean-State Check (advisory):** when `worktree_mode != \"auto_created\"` (no worktree exists — `SKILL.md`'s Worktree Isolation step already covers the worktree-exists case) and `integration-verifier` returned PASS on the final phase, also run the clean-state check per `references/harness-self-checks.md § Clean-State Check` before creating the Memory Update task below.\n\n```text\nTaskCreate({\n  subject: \"CRAFTFLOW Memory Update: Persist workflow learnings\",\n  description: \"wf:{workflow_uuid}\\nkind:memory\\norigin:router\\nphase:memory-finalize\\nplan:{plan_file or 'N/A'}\\nscope:N/A\\nreason:Persist captured Memory Notes. ROUTER ONLY: execute inline. Follow references/memory-finalize.md § Memory Update task instructions (read it now if not in context). Never spawn Agent() for this task.\",\n  activeForm: \"Persisting workflow learnings\"\n}) -> memory_task_id\nTaskUpdate({ taskId: memory_task_id, addBlockedBy: [chain_tail_task_id] })\n```\n\n`chain_tail_task_id` at this point is `skill_distill_task_id` if the Skill-Distill Gate fired, else `learn_distill_task_id` if the Learn-Distill Gate fired, else `doc_sync_task_id` (or `verifier_task_id` if doc-sync itself was skipped) — i.e. `addBlockedBy: [skill_distill_task_id]` in the common case where both gates fire.",
+   "text": "**Clean-State Check (advisory):** when `worktree_mode != \"auto_created\"` (no worktree exists — `references/worktree.md` covers the worktree-exists case) and `integration-verifier` returned PASS on the final phase, also run the clean-state check per `references/harness-self-checks.md § Clean-State Check` before creating the Memory Update task below.\n\n```text\nTaskCreate({\n  subject: \"CRAFTFLOW Memory Update: Persist workflow learnings\",\n  description: \"wf:{workflow_uuid}\\nkind:memory\\norigin:router\\nphase:memory-finalize\\nplan:{plan_file or 'N/A'}\\nscope:N/A\\nreason:Persist captured Memory Notes. ROUTER ONLY: execute inline. Follow references/memory-finalize.md § Memory Update task instructions (read it now if not in context). Never spawn Agent() for this task.\",\n  activeForm: \"Persisting workflow learnings\"\n}) -> memory_task_id\nTaskUpdate({ taskId: memory_task_id, addBlockedBy: [chain_tail_task_id] })\n```\n\n`chain_tail_task_id` at this point is `skill_distill_task_id` if the Skill-Distill Gate fired, else `learn_distill_task_id` if the Learn-Distill Gate fired, else `doc_sync_task_id` (or `verifier_task_id` if doc-sync itself was skipped) — i.e. `addBlockedBy: [skill_distill_task_id]` in the common case where both gates fire.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/build-workflow.md",
+   "id": "p10r-delta-build-workflow-03",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "**Clean-State Check (advisory):** when `worktree_mode != \"auto_created\"` (no worktree exists — `SKILL.md`'s Worktree Isolation step already covers the worktree-exists case) and `integration-verifier` returned PASS on the final phase, also run the clean-state check per `references/harness-self-checks.md § Clean-State Check` before creating the Memory Update task below.",
+   "text": "**Clean-State Check (advisory):** when `worktree_mode != \"auto_created\"` (no worktree exists — `references/worktree.md` covers the worktree-exists case) and `integration-verifier` returned PASS on the final phase, also run the clean-state check per `references/harness-self-checks.md § Clean-State Check` before creating the Memory Update task below.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/fast-path.md",
+   "id": "p10r-delta-fast-path-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`craftflow-router/SKILL.md` § 8) — `AskUserQuestion` with Approve / Approve + register in SKILL_HINTS / Reject / Defer — before proceeding to `memory-finalize`. Append `skill_proposed` to the event log, then `skill_promoted` or `skill_rejected` once the user's choice is executed (no event for Defer — the candidate is unchanged). Under `JUST_GO=true`, this gate is a de facto REVERT-class gate (fail-closed default `Defer`) — see `SKILL.md` § 8's JUST_GO carve-out; never auto-select Approve or Approve + SKILL_HINTS.",
+   "text": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`craftflow-router/SKILL.md` § 8, `references/post-agent-validation.md`) — `AskUserQuestion` with Approve / Approve + register in SKILL_HINTS / Reject / Defer — before proceeding to `memory-finalize`. Append `skill_proposed` to the event log, then `skill_promoted` or `skill_rejected` once the user's choice is executed (no event for Defer — the candidate is unchanged). Under `JUST_GO=true`, this gate is a de facto REVERT-class gate (fail-closed default `Defer`) — see `SKILL.md` § 8's JUST_GO carve-out; never auto-select Approve or Approve + SKILL_HINTS.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/harness-self-checks.md",
+   "id": "p10r-delta-harness-self-checks-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "  `SKILL.md` § 8.",
+   "text": "  `SKILL.md` § 8 (`references/post-agent-validation.md`).\n"
+  },
+  {
+   "anchor": "# Memory load: workspace tier",
+   "condition": "always",
+   "file": "skills/craftflow-router/references/memory-load-workspace.md",
+   "id": "p10r-delta-memory-load-workspace-01",
+   "op": "insert",
+   "phase": "P10",
+   "position": "after_anchor",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "text": "\nRead this when a workspace marker is found in the step 5a walk (`SKILL.md → ## 2. Memory Load And Template Validation`), or when a `Read(...)` in the Memory Load step is denied with `state-read-compaction`: the first section is the workspace tier, the last the self-heal.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p10r-delta-plan-workflow-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "   happens in `SKILL.md § 6`'s Parent workflow creation, reused verbatim, no new script — and",
+   "text": "   happens in `SKILL.md § 6`'s Parent workflow creation (`references/workflow-start.md`), reused verbatim, no new script — and\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p10r-delta-plan-workflow-02",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "  `SKILL.md § 12` step 5/5a \"structured agent results\"): one line per valid candidate —",
+   "text": "  `SKILL.md § 12` step 5 and `references/remediation-and-research.md` step 5a \"structured agent results\"): one line per valid candidate —\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p10r-delta-plan-workflow-03",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "`SKILL.md § 6`'s fallback rule enforces ordering purely via `phase_status`/`normalized_phases`",
+   "text": "`SKILL.md § 6`'s fallback rule (`references/task-tool-fallback.md`) enforces ordering purely via `phase_status`/`normalized_phases`\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p10r-delta-plan-workflow-04",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "reviewer+hunter / research-web+research-github precedent (`SKILL.md § 12` step 5/5a).",
+   "text": "reviewer+hunter / research-web+research-github precedent (`SKILL.md § 12` step 5; `references/remediation-and-research.md` step 5a).\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p10r-delta-plan-workflow-05",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "contract is validated today (`SKILL.md § 8` override row, unchanged). Additionally verify",
+   "text": "contract is validated today (`SKILL.md § 8` override row, now in `references/post-agent-validation.md`, unchanged). Additionally verify\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p10r-delta-plan-workflow-06",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "EXCEPTION to the default \"malformed contract = hard stop\" rule (`SKILL.md § 8`), scoped ONLY to",
+   "text": "EXCEPTION to the default \"malformed contract = hard stop\" rule (`SKILL.md § 8`, `references/post-agent-validation.md`), scoped ONLY to\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p10r-delta-plan-workflow-07",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "Validate judge's contract per the `SKILL.md § 8` override row (added for `plan-bakeoff-judge`).",
+   "text": "Validate judge's contract per the `SKILL.md § 8` override row in `references/post-agent-validation.md` (added for `plan-bakeoff-judge`).\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p10r-delta-plan-workflow-08",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "generalized Task*-tool-fallback rule in `SKILL.md § 6` without further modification — when",
+   "text": "generalized Task*-tool-fallback rule in `SKILL.md § 6` (`references/task-tool-fallback.md`) without further modification — when\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p10r-delta-plan-workflow-09",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "`SKILL.md § 7`'s existing Task*-tool-fallback rule, substituting the same `'n/a — task-tool",
+   "text": "`SKILL.md § 7`'s existing Task*-tool-fallback rule (`references/task-tool-fallback.md`), substituting the same `'n/a — task-tool\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p10r-delta-plan-workflow-10",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "## Chain loop steps 5a and 5b (PLAN)",
+   "text": "## Chain loop step 5b (PLAN)\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p10r-delta-plan-workflow-11",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "5a. If both `research-web` and `research-github` tasks are runnable in the same round (PLAN workflow):\n   - Mark both in_progress first\n   - Dispatch them in the same message (same pattern as reviewer+hunter in BUILD)\n   - Both are read-only with no file-write overlap — safe to parallelize\n   - If parallel invocation fails (rate limit, API error): fall back to sequential (web first, then github). Log `event=parallel_fallback` in the event log.\n   - Wait for BOTH to complete before proceeding to planner or investigator.",
+   "text": ""
+  },
+  {
+   "anchor": "8. Include `craftflow:research` in `## SKILL_HINTS` only when at least one research file exists.",
+   "condition": "always",
+   "file": "skills/craftflow-router/references/remediation-and-research.md",
+   "id": "p10r-delta-remediation-and-research-01",
+   "op": "insert",
+   "phase": "P10",
+   "position": "after_anchor",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "text": "Chain loop step 5a (research dispatch, read by PLAN and DEBUG):\n5a. If both `research-web` and `research-github` tasks are runnable in the same round (PLAN and DEBUG workflows):\n   - Mark both in_progress first\n   - Dispatch them in the same message (same pattern as reviewer+hunter in BUILD)\n   - Both are read-only with no file-write overlap — safe to parallelize\n   - If parallel invocation fails (rate limit, API error): fall back to sequential (web first, then github). Log `event=parallel_fallback` in the event log.\n   - Wait for BOTH to complete before proceeding to planner or investigator.\n\n"
+  },
+  {
+   "anchor": "  - The plan-then-build ambiguity (A4): a plan workflow and the build workflow that follows it can run in the same session, so the chosen artifact's `session_id` equalling the payload `session_id` does not by itself identify which of the two is meant.",
+   "condition": "always",
+   "file": "skills/craftflow-router/references/resume.md",
+   "id": "p10r-delta-resume-01",
+   "op": "insert",
+   "phase": "P10",
+   "position": "after_anchor",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "text": "\nTask creation while resuming (the REM-FIX created after a scope decision, a doubt-verify or re-verify task, a research task): every `TaskCreate()` description starts with the metadata lines of `references/workflow-start.md → ## 3. Task Metadata Contract`; read that section before the first one.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/task-tool-fallback.md",
+   "id": "p10r-delta-task-tool-fallback-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "Each section was moved verbatim from the kernel site it names, so read its \"above\", \"below\" and \"this section\" as that site: Resume is `SKILL.md → ## 4. Resume And Hydration`; Parent creation and per-type task graphs are `SKILL.md → ## 6. Workflow Task Graphs`; Dispatcher, Task ID, Doubt-Verify and Fix-Verify are `SKILL.md → ## 7. Dispatcher And Agent Prompt Contract`; Chain loop step 1 and After agent completion are `SKILL.md → ## 12. Chain Execution Loop`.",
+   "text": "Each section was moved verbatim from the kernel site it names, so read its \"above\", \"below\" and \"this section\" as that site: Resume is `references/resume.md` (kernel `SKILL.md → ## 4. Resume And Hydration`); Parent creation is `references/workflow-start.md` and per-type task graphs are the `references/*-workflow.md` task-graph blocks (kernel `SKILL.md → ## 6. Workflow Task Graphs`); Dispatcher and Task ID are `SKILL.md → ## 7. Dispatcher And Agent Prompt Contract` and Doubt-Verify and Fix-Verify are `references/verify-dispatch.md`; Chain loop step 1 is `SKILL.md → ## 12. Chain Execution Loop` and After agent completion is `references/post-agent-validation.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/task-tool-fallback.md",
+   "id": "p10r-delta-task-tool-fallback-02",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "`## 4`'s Resume And Hydration fallback, `## 6`'s per-type task graph fallback, `## 12`'s Chain\nExecution Loop fallback, and `## 7`'s Doubt-Verify/Fix-Verify Dispatch Rules already cover — then",
+   "text": "`## 4`'s Resume And Hydration fallback (`references/resume.md`), `## 6`'s per-type task graph fallback, `## 12`'s Chain\nExecution Loop fallback, and `## 7`'s Doubt-Verify/Fix-Verify Dispatch Rules (`references/verify-dispatch.md`) already cover — then\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/verify-dispatch.md",
+   "id": "p10r-delta-verify-dispatch-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
+   "start_anchor": "fires for DEBUG (see `references/verify-dispatch.md → ### Fix-Verify Dispatch Rule`, formerly `SKILL.md § 7`).",
+   "text": "fires for DEBUG (see `references/verify-dispatch.md → ### Fix-Verify Dispatch Rule`, pointed to from `SKILL.md § 7`).\n"
   }
  ],
  "version": 1

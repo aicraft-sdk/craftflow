@@ -32,7 +32,7 @@
    "workflows": [
     "ALL"
    ],
-   "trigger": "read before routing (SKILL.md section 1 pointer)",
+   "trigger": "read before routing",
    "happy_path": true
   },
   {
@@ -127,7 +127,7 @@
     "DEBUG",
     "REVIEW"
    ],
-   "trigger": "first agent dispatch effort lookup (SKILL.md § Effort Dispatch Rule)",
+   "trigger": "first agent dispatch effort lookup",
    "happy_path": true
   },
   {
@@ -198,7 +198,7 @@
    "class": "stage",
    "file": "skills/craftflow-router/references/memory-load-workspace.md",
    "happy_path": false,
-   "trigger": "workspace marker found",
+   "trigger": "workspace marker found, or a state-read-compaction deny during Memory Load",
    "workflows": [
     "ALL"
    ]
