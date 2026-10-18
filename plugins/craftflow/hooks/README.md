@@ -119,8 +119,8 @@ It validates the publication-critical contract:
 ## Skill Candidate Ledger (router-invoked, not a registered hook)
 
 Phase 1 of `docs/plans/2026-07-29-craftflow-skill-distillation-plan.md` ships
-a standalone recurrence miner. As of Phase 3, both `craftflow-router/SKILL.md`
-(the Skill-Distill Approval Flow's Gate check), `craftflow-router/references/memory-finalize.md`
+a standalone recurrence miner. As of Phase 3, all three of `craftflow-router/references/build-workflow.md`
+(the Skill-Distill Gate's `--query` check), `craftflow-router/references/memory-finalize.md`
 (the unconditional `--observe` step in Memory Finalization) and `cursor-router/SKILL.md` (§ 5a
 Skill-Distill Gate) invoke it directly via Bash — it is still not registered
 as a `hooks.json` entry, but it is no longer merely a standalone CLI:
@@ -158,7 +158,7 @@ Phase 2 of the same plan adds a `skill-author` agent
 candidate, applies the anti-slop rubric
 (`skills/skill-distillation/references/rubric.md`), and — only if it
 survives — stages a proposal. Phase 3 wires this into both routers:
-`craftflow-router/SKILL.md`'s Skill-Distill Approval Flow (`AskUserQuestion`
+`craftflow-router/references/post-agent-validation.md`'s Skill-Distill Approval Flow pointer to the shared protocol (`AskUserQuestion`
 with Approve / Approve + register in SKILL_HINTS / Reject / Defer) and
 `cursor-router/SKILL.md` § 5a (a synchronous plain-text confirmation
 exchange, since Cursor has no `AskUserQuestion` equivalent). Neither script

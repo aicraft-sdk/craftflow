@@ -1,7 +1,7 @@
 {
   "baseline_ref": "0439c33932463d257b881ce50f136ab7661c0a39",
-  "measured_at_sha": "e9f8f91c1c6457c53caef0aad89929022de0b7fa",
-  "last_phase": "P9",
+  "measured_at_sha": "28f4655996cc50c60f914de1dcd1ee153b368d43",
+  "last_phase": "P10",
   "merged_phases": [
     "P2",
     "P2C",
@@ -11,7 +11,8 @@
     "P6",
     "P7",
     "P8",
-    "P9"
+    "P9",
+    "P10"
   ],
   "conditions": {
     "difference_17": true,
@@ -19,15 +20,15 @@
   },
   "reach_amendment": null,
   "ceilings": {
-    "kernel_bytes": 86251,
+    "kernel_bytes": 33842,
     "protocol_bytes": 29315,
-    "reference_max_bytes": 23944,
+    "reference_max_bytes": 27037,
     "description_chars": 4014,
     "readset": {
-      "BUILD": 162800,
-      "PLAN": 153262,
-      "DEBUG": 132553,
-      "REVIEW": 130615
+      "BUILD": 121512,
+      "PLAN": 112353,
+      "DEBUG": 88551,
+      "REVIEW": 86613
     }
   },
   "ceiling_raises": [
@@ -102,6 +103,14 @@
       "to": 184699,
       "projected_delta": 5713,
       "at_sha": "02c3fd56789c632958ab2a1e7d7958fd9971ef89"
+    },
+    {
+      "phase": "P10",
+      "key": "reference_max_bytes",
+      "from": 23944,
+      "to": 27037,
+      "projected_delta": 3093,
+      "at_sha": "28f4655996cc50c60f914de1dcd1ee153b368d43"
     }
   ],
   "targets": {
@@ -138,7 +147,7 @@
     "projection_sha256": "5b27b389a30d7205e0c07a231d218d1fd2ae16958c99fe919ca7879d84d9f832",
     "cause": "P2C: Difference 17 dropped (D17-A, reach_amendment null) and REACH-B adopted as the reach option; caps are the guaranteed effective tier of router-projection.json, exact values, ratchet-only afterwards"
   },
-  "projection_sha256": "241f4e87f6fbf1c9559e04ff476b24ce32c1d925d218f49fd68c5674e830a4fd",
+  "projection_sha256": "28e1ba4e0d44a2bb2895e38d8fbef460126591366bff8863b90b9739e6033440",
   "projection_revisions": [
     {
       "phase": "P5",
@@ -171,6 +180,14 @@
       "fits_enforced_caps": true,
       "decided_by": "David",
       "cause": "P9 dedup: SKILL.md section 13 (with its heading) and the memory-phase timing bullets (including the ISO-UTC bullet) move to the new stage file references/memory-finalize.md (all workflows, happy path); the five Memory Update TaskCreate descriptions (BUILD x2, PLAN, DEBUG, REVIEW) become pointers to its single '### Memory Update task instructions'; the eleven Task*-tool fallback paragraphs move to the new conditional stage file references/task-tool-fallback.md and section 0a gains the trigger; two read-map rows. The cut-plan P9 rows carry the as-built text: the section 13 heading moves with the body (the kernel keeps a plain pointer paragraph), the fallback file opens with a line that maps each section to its kernel site, the cross-reference edits use the single-code-span form 'SKILL.md -> ## heading' (the plan's table form does not resolve for numbered headings), the kernel's two 'Task*-tool fallback mode' phrases and its SKILL_DISTILL bullet are reworded to stay at most one 'Task*-tool fallback' mention and to name the moved file, and no kernel stub is kept (a stub in 'After every agent completion' would push post-agent-validation.md over the reference cap at P10). The projection's reach_feasibility reads the committed policy map, so it also counts the drafted, unsigned P9 rows (31 Rewrites, 25 Applicability, 2 Read-map widening); signing them can change it again and then needs its own revision entry. REVIEW (doubt cycle 1 REFUTED, hunter and reviewer findings): every inbound 'SKILL.md section 13' reference is retargeted to `references/memory-finalize.md -> ## 13. Memory Finalization` (policy table cell, harness-self-checks, fast-path, cursor-router, session-memory, hooks/README) and the kernel pointer moves out from under '### Verifier findings handoff' into the chain-loop intro; the kernel stamps gain '{iso_now} is UTC ISO-8601; omit the field if no clock'; the kernel gets call-site pointers to task-tool-fallback.md (Resume, Doubt-Verify, Fix-Verify, chain loop / agent completion) and says 'task-tool fallback mode (references/task-tool-fallback.md)'. Offsets that keep the full-plan projection inside enforced_caps: the policy-table and loop-caps introductions are shortened, the section 0a trigger says 'at every ... call site', and the chain-loop pointer is one short paragraph. Full-plan projection stays under enforced_caps (kernel 34176 of 34202, reference max 19101 of 19101, BUILD/PLAN/DEBUG/REVIEW 98154/86927/74178/72240 of 98180/86940/74204/72266). The live ceilings are re-ratcheted to the measured tree (still far below origin/main's P8 ceilings); versus the first P9 commit they rise by the call-site pointers because those lines leave the kernel at P10 (the projection falls). decided_by is pending-David."
+    },
+    {
+      "phase": "P10",
+      "from_projection_sha256": "241f4e87f6fbf1c9559e04ff476b24ce32c1d925d218f49fd68c5674e830a4fd",
+      "to_projection_sha256": "28e1ba4e0d44a2bb2895e38d8fbef460126591366bff8863b90b9739e6033440",
+      "fits_enforced_caps": true,
+      "decided_by": "pending-David",
+      "cause": "P10 kernel relocation: SKILL.md falls from 86251 to about 33.8 K. Section 4 (resume), the section 0a probe body, section 3 and Parent workflow creation, the verifier workload telemetry, section 8 (read-only contracts, YAML contracts, schema validation, Contract overrides, Skill-Distill pointer), 'After every agent completion', 'Verifier findings handoff', Doubt-Verify and Fix-Verify (with fix_verify_keyword_scan from fast-path.md), the Intent Interview Gate, the brainstorming handoff, chain-loop steps 5a/5b, Fast Path Detection, Worktree Isolation steps 1-3 and the step 5a workspace details with the state-read self-heal move to five new files (workflow-start.md start/all, resume.md conditional/all, post-agent-validation.md happy-path/all, verify-dispatch.md happy-path/BUILD+DEBUG, memory-load-workspace.md conditional/all) and to build-workflow.md and plan-workflow.md; the artifact policy's session_id sub-bullets move to resume.md. The cut-plan P10 rows now carry the as-built text: 35 delta rows (anchored replace and insert rows generated against the mechanical move result) reproduce the working tree byte for byte, so the kernel pointers are the shortened as-built lines, the moved text carries the cross-reference qualifiers (SKILL.md or the new file named, cross-reference fix 3 exactly as planned), the carry-item-1 sentence of Worktree Isolation step 1 no longer cites the retired MERGE_EXIT pattern, the telemetry block has no heading of its own (it ends the 'After every agent completion' section, so the largest reference gains no heading), workflow-start.md has no H1 and its Parent workflow creation is a '## ' section, and section 0a gains a one-line probe trigger. Two later-phase rows only change their anchors to the as-built kernel lines: p11-g6-kernel-5a-5b-pointer and p12-c2-discover-workspace (replacement texts unchanged). Plan B2 conflict found and resolved inside the caps: nine units (SCENARIOS_TOTAL, SCENARIOS_PASSED, SCENARIOS_FAILED, REMEDIATION_REASON: ..., REPLAN_REASON: ..., DESIGN_FILE, 'telemetry:', and the Agent/Override table header, plus the Group/Keywords header handled by a dedupe row) have fewer than two words or a cell delimiter, so no Applicability quote can narrow their reach; the plan says such a block stays in the kernel. The kernel keeps a seven-item list and a one-row table (about 230 bytes) instead of the 3,913 B kernel penalty the P2 analysis disclosed for REACH-A, and the projection now reports reach_a_kernel_penalty_bytes 0 and single_token_units 0. Offsets that keep the full-plan projection inside enforced_caps: shorter kernel pointers, the section 0a probe sentence is one line, the kernel keeps no heading for moved sections, policy-table and loop-caps cells say 'verify-dispatch.md Doubt-Verify' without a section number, and the fast-path.md paragraph drops the word 'above' instead of naming the new file. Carry item 2 (naming craftflow_worktree_finalize.py in the worktree_merge enforced-by cell) was measured at +34 B of kernel and not applied: the full plan has 21 B of kernel headroom, reported instead. The policy map gains 42 Rewrites rows (18 section-move, 14 xref, 4 pointer, 3 group, 2 split and 1 dedupe), 161 Applicability rows and 5 Read-map widening rows, all unsigned; the projection's reach_feasibility reads them, so signing them changes it again and needs its own revision entry. Full-plan projection stays under enforced_caps (kernel 34181 of 34202, reference max 19097 of 19101, BUILD/PLAN/DEBUG/REVIEW 98157/86930/74181/72243 of 98180/86940/74204/72266). Live ceilings are re-ratcheted to the measured tree; only reference_max_bytes rises (build-workflow.md and plan-workflow.md receive Fast Path Detection, Worktree steps 1-3, the Intent Interview Gate, the brainstorming handoff and steps 5a/5b), recorded in ceiling_raises within its projected delta. decided_by is pending-David."
     }
   ],
   "enforce": false,

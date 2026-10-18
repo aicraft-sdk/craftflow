@@ -315,8 +315,8 @@ Use the minimal artifact schema:
 ```
 
 **Step 4d:** Append the workflow_started event to a new per-workflow event log, mirroring
-Claude Code craftflow-router/SKILL.md's own event log (§ 6 "Parent workflow creation" step
-3 there). Before this step, Cursor-run workflows wrote no `.events.jsonl` file at all, which
+Claude Code craftflow-router's own event log ("Parent workflow creation" in
+`craftflow-router/references/workflow-start.md`, step 3 there). Before this step, Cursor-run workflows wrote no `.events.jsonl` file at all, which
 made them invisible to any tooling reading `.craftflow/state/workflows/*.events.jsonl` (for
 example, a cross-project metrics dashboard) — this step and the `agent_started`/
 `agent_completed` appends in § 5's Execution loop below close that gap. The `host` field is

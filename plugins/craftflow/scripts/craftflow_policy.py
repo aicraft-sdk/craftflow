@@ -223,8 +223,8 @@ TABLE_ROWS = (
     ("memory_write", "`craftflow_pretooluse_guard.py`", "`references/memory-finalize.md → ## 13. Memory Finalization`"),
     ("worktree_merge", "`craftflow_pretooluse_bash_guard.py` (clean tree)", "§ 5"),
     ("remediation_cycles_max", "`craftflow_gate_check.py`", "§ 14 remediation loop rule"),
-    ("doubt_cycles_max", "`craftflow_gate_check.py`", "§ 7 Doubt-Verify Dispatch Rule"),
-    ("fix_verify_cycles_max", "`craftflow_gate_check.py`", "§ 7 Fix-Verify Dispatch Rule"),
+    ("doubt_cycles_max", "`craftflow_gate_check.py`", "verify-dispatch.md Doubt-Verify"),
+    ("fix_verify_cycles_max", "`craftflow_gate_check.py`", "verify-dispatch.md Fix-Verify"),
     ("plan_review_passes_max", "`craftflow_gate_check.py`", "`references/plan-workflow.md`"),
 )
 

@@ -29,6 +29,7 @@ import craftflow_policy as pol  # noqa: E402
 
 SKILL = "skills/craftflow-router/SKILL.md"
 RR = "skills/craftflow-router/references/remediation-and-research.md"
+VD = "skills/craftflow-router/references/verify-dispatch.md"  # P10: Doubt-Verify and Fix-Verify moved here
 PLAN = "skills/craftflow-router/references/plan-workflow.md"
 ART = "skills/craftflow-router/references/workflow-artifact-and-hook-policy.md"
 
@@ -75,8 +76,19 @@ SUB_IN_SPAN = re.compile(r">= policy\.(\w+)` \(= (\d+)\)")  # `circuit_breaker.r
 CALL_LINE = "- First run `python3"
 
 
+# P10 cross-reference fix 3 (plan B3): the moved Fix-Verify text names the file of the two headings it cites, because they no longer
+# resolve in their own file. The only edits the verbatim check allows besides the P6 substitutions; each reverses to the baseline words.
+XREF_P10 = (
+    ("`references/post-agent-validation.md \u2192 ### Contract overrides`, in the Post-Agent Validation section 8)",
+     "`## 8. Post-Agent Validation \u2192 Contract overrides`)"),
+    ("`SKILL.md \u2192 ## 12. Chain Execution\n  Loop`", "`## 12. Chain Execution\n  Loop`"),
+)
+
+
 def unsubstitute(text: str) -> str:
     """Reverse the listed literal -> key substitutions: every one carries its `(= <value>)` pin."""
+    for new, old in XREF_P10:
+        text = text.replace(new, old)
     text = SUB_IN_SPAN.sub(lambda m: f">= {m.group(2)}`", text)
     return SUB_VALUE.sub(lambda m: m.group(2), text)
 
@@ -106,10 +118,11 @@ def without_call_lines(seg: str) -> str:
 
 
 SEGMENTS = (
-    # (label, file, start, end): P6 may insert a call line above the bullets and substitute listed literals, nothing else
-    ("doubt_verdict_bullets_and_counter_skill_md_977_983", SKILL, "**After doubt-verifier returns:**", "**Reliability-gates evidence recording", True),
-    ("fix_verify_bullets_and_counter_skill_md_1045_1067", SKILL, "**After doubt-verifier returns** (see", "**Fix-verify cycle counter:**", True),
-    ("fix_verify_counter_skill_md_1065_1067", SKILL, "**Fix-verify cycle counter:**", "**Reliability-gates evidence recording", True),
+    # (label, file, start, end, subs[, baseline file]): P6 may insert a call line above the bullets and substitute listed literals, nothing else;
+    # P10 moved the Doubt-Verify and Fix-Verify segments from SKILL.md to verify-dispatch.md, so their baseline file differs from the current one
+    ("doubt_verdict_bullets_and_counter_skill_md_977_983", VD, "**After doubt-verifier returns:**", "**Reliability-gates evidence recording", True, SKILL),
+    ("fix_verify_bullets_and_counter_skill_md_1045_1067", VD, "**After doubt-verifier returns** (see", "**Fix-verify cycle counter:**", True, SKILL),
+    ("fix_verify_counter_skill_md_1065_1067", VD, "**Fix-verify cycle counter:**", "**Reliability-gates evidence recording", True, SKILL),
     ("remediation_bullets_rr_27_33", RR, "Before creating a new remediation task:", "### Rule matrix", True),
     ("plan_review_four_blocks_rr_145_177", RR, "When `plan-gap-reviewer` pass 1 returns `PASS`:", "### Investigator continuation", False),
     ("hard_rule_remediation_skill_md_1615", SKILL, "- Never let a remediation loop run more than", "- Only parallelize agents", True),
@@ -118,8 +131,8 @@ SEGMENTS = (
 )
 
 
-def segment_pair(label, rel, start, end, subs):
-    base = baseline(rel)
+def segment_pair(label, rel, start, end, subs, base_rel=None):
+    base = baseline(base_rel or rel)
     if base is None:
         return None
     b, c = segment(base, start, end), segment(current(rel), start, end)
@@ -138,17 +151,21 @@ def test_verdict_lines_verbatim_except_substitutions():
             _skips.append("SKIP [verdict_lines_verbatim_except_substitutions]: baseline ref unavailable (shallow clone?)")
             print("  SKIP: baseline ref unavailable")
         return
-    for label, rel, start, end, subs in SEGMENTS:
+    for label, rel, start, end, subs, *base_rel in SEGMENTS:
         # the one-line segments: the end marker must be searched after the start line, so a single-line segment ends at the next item
-        got = segment_pair(label, rel, start, end, subs)
+        got = segment_pair(label, rel, start, end, subs, *base_rel)
         check(f"verbatim:{label}", got is not None and got[1] is not None and got[1] == got[2],
               f"anchor missing or text differs: baseline={None if got is None else repr(got[1])[:160]} current={None if got is None else repr(got[2])[:160]}")
     # controls: the comparison must catch a changed threshold, a changed verb, and an edit inside the plan-review blocks
-    label, rel, start, end, subs = SEGMENTS[0]
-    base_seg = segment(baseline(rel), start, end)
+    label, rel, start, end, subs, base_rel = SEGMENTS[0]
+    base_seg = segment(baseline(base_rel), start, end)
     live = without_call_lines(segment(current(rel), start, end))
     check("verbatim:control_changed_threshold_is_caught", "(= 3)" in live and unsubstitute(live.replace("(= 3)", "(= 2)")) != base_seg, "")
     check("verbatim:control_inserted_line_is_caught", unsubstitute(live + "- extra rule\n") != base_seg, "")
+    fix_seg = without_call_lines(segment(current(SEGMENTS[1][1]), SEGMENTS[1][2], SEGMENTS[1][3]))
+    check("verbatim:control_p10_xref_rewrite_is_the_only_allowed_edit",
+          XREF_P10[0][0] in fix_seg and unsubstitute(fix_seg) == segment(baseline(SEGMENTS[1][5]), SEGMENTS[1][2], SEGMENTS[1][3])
+          and unsubstitute(fix_seg.replace("section 8)", "section 9)")) != segment(baseline(SEGMENTS[1][5]), SEGMENTS[1][2], SEGMENTS[1][3]), "")
     blocks = segment(current(RR), SEGMENTS[4][2], SEGMENTS[4][3])
     check("verbatim:control_block_edit_is_caught", blocks is not None and blocks.replace("pass 2 returns `FINDINGS`", "pass 2 returns `FINDING`") != segment(baseline(RR), SEGMENTS[4][2], SEGMENTS[4][3]), "")
 
@@ -163,7 +180,7 @@ def test_plan_review_cap_pin_follows_the_literal_line():
 def test_prose_policy_values_match():
     print("\n[prose_policy_values_match]")
     tokens = []
-    for rel in (SKILL, RR, PLAN, ART):
+    for rel in (SKILL, VD, RR, PLAN, ART):
         for m in list(SUB_VALUE.finditer(current(rel))) + list(SUB_IN_SPAN.finditer(current(rel))):
             tokens.append((rel, m.group(1), int(m.group(2))))
     bad = []
@@ -233,6 +250,8 @@ def command_of(line: str) -> str:
 def test_call_lines_define_every_action():
     print("\n[call_lines_define_every_action]")
     kernel, rr = current(SKILL), current(RR)
+    # P10: the Doubt-Verify and Fix-Verify call lines and their fallback sentences moved from the kernel to verify-dispatch.md
+    kernel = kernel + "\n" + current(VD)
     kernel_calls = [ln for ln in kernel.splitlines() if CALL_LINE in ln and "craftflow_gate_check.py" in ln]
     rr_pre = [ln for ln in rr.splitlines() if CALL_LINE in ln and "remediation_cycles_max" in ln]
     rr_plan = [ln for ln in rr.splitlines() if "plan_review_passes_max" in ln and "craftflow_gate_check.py" in ln]
@@ -275,7 +294,7 @@ def test_call_lines_define_every_action():
             bad.append((cmd, str(exc)))
     check("call_lines_parse_with_the_real_cli", not bad, str(bad))
     check("gate_check_wired_only_at_the_four_decision_points",
-          sum(r.count('python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py"') for r in (kernel, rr, current(PLAN), current(ART))) == 4, "")
+          sum(r.count('python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py"') for r in (current(SKILL), current(VD), rr, current(PLAN), current(ART))) == 4, "")
 
 
 def test_not_wired_remediation_264_and_plan_review_blocks_untouched():

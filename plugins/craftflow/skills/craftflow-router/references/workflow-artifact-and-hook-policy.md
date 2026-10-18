@@ -11,9 +11,7 @@ Artifact schema must include:
 - `workflow_id`
 - `workflow_type`
 - `session_id` (Claude session id stamped by the router at creation, or `null` when unavailable). The router re-stamps on resume only when the stamp is null/absent, or on an explicit user resume of a workflow whose `updated_at` is older than 15 minutes; each re-stamp appends a `session_rebound` event recording `from`/`to`. P4 note: the stop-gate A03 check will also require no `session_rebound` event newer than the last human line.
-  - Context-nudge binding: the nudge binds a payload `session_id` to the artifact whose `session_id` matches exactly. After `/clear` or a new session the nudge sees `no_live_candidate` for stamped artifacts until the router restamps.
-  - PreToolUse: `latest_live_workflow_file` still falls back to the newest live artifact when nothing matches the session (pre-existing limitation; MEDIUM-4, deferred to a later change). Only non-empty string stamps trigger its widen scan.
-  - The plan-then-build ambiguity (A4): a plan workflow and the build workflow that follows it can run in the same session, so the chosen artifact's `session_id` equalling the payload `session_id` does not by itself identify which of the two is meant.
+  - Context-nudge binding, PreToolUse fallback and the plan-then-build ambiguity for `session_id`: see `references/resume.md`.
 - `state_root`
 - `user_request`
 - `plan_file`

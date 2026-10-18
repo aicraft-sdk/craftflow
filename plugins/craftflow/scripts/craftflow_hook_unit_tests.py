@@ -1149,8 +1149,8 @@ def test_router_documents_task_tool_capability_detection() -> None:
     if not path.exists():
         fail(name, f"craftflow-router SKILL.md not found at {path}")
         return
-    # K (P10): the plan keeps the `## 0a.` heading with its trigger in the kernel and moves the body to
-    # references/workflow-start.md, so the heading then exists twice and this read reports it as not found.
+    # K (P10): the kernel keeps the `## 0a.` heading with its trigger lines; the probe procedure (the body) moved to
+    # references/workflow-start.md under "Task tool capability detection". Both halves are asserted.
     section = _router_section_or_none("## 0a. Task Tool Capability Detection")
     if section is None:
         fail(name, "missing '## 0a. Task Tool Capability Detection' section")
@@ -1158,24 +1158,34 @@ def test_router_documents_task_tool_capability_detection() -> None:
     if "task_tools_available" not in section:
         fail(name, "## 0a section missing 'task_tools_available' marker")
         return
-    if "ToolSearch" not in section:
-        fail(name, "## 0a section missing 'ToolSearch' reference")
+    if "references/workflow-start.md" not in section:
+        fail(name, "## 0a trigger must point at references/workflow-start.md, which holds the probe procedure")
+        return
+    body = _router_section_or_none("## Task tool capability detection")
+    if body is None:
+        fail(name, "the 0a body section is missing from references/workflow-start.md")
+        return
+    if "task_tools_available" not in body:
+        fail(name, "0a body section missing 'task_tools_available' marker")
+        return
+    if "ToolSearch" not in body:
+        fail(name, "0a body section missing 'ToolSearch' reference")
         return
     ok(name)
 
 
 def test_router_task_tool_probe_call_documented() -> None:
     # test_router_documents_task_tool_capability_detection only checks the bare token "ToolSearch" inside
-    # ## 0a, and a second line of that section also names it, so deleting the probe call itself goes unnoticed.
-    # This test pins the call literal (found wherever ## 0a lives).
+    # the 0a body, and a second line of that section also names it, so deleting the probe call itself goes unnoticed.
+    # This test pins the call literal (P10: it lives in the body of kernel section 0a, references/workflow-start.md).
     name = "router/task-tool-probe-call-documented"
-    section = _router_section_or_none("## 0a. Task Tool Capability Detection")
+    section = _router_section_or_none("## Task tool capability detection")
     if section is None:
-        fail(name, "## 0a. Task Tool Capability Detection not found as a single section")
+        fail(name, "the 0a body section not found as a single section (references/workflow-start.md)")
         return
     probe = 'ToolSearch(select: "TaskCreate,TaskList,TaskGet,TaskUpdate")'
     if probe not in section:
-        fail(name, f"## 0a does not document the capability probe call {probe!r}")
+        fail(name, f"the 0a body does not document the capability probe call {probe!r}")
         return
     ok(name)
 
@@ -1331,22 +1341,87 @@ def test_router_memory_finalize_pointer_not_under_verifier_handoff() -> None:
     ok(name)
 
 
+def test_router_p10_kernel_relocation_wiring() -> None:
+    # P10 wiring proof: each moved block sits once in its planned file, the kernel keeps a plain pointer (never the moved
+    # heading), every new reference file is named by the kernel, and the two factual claims that the policy-map Applicability
+    # rows narrow reach on (only BUILD and DEBUG dispatch integration-verifier; only PLAN invokes brainstorming) still hold.
+    name = "router/p10-kernel-relocation-wiring"
+    corpus = router_corpus.read_corpus(PLUGIN_ROOT)
+    ref = "skills/craftflow-router/references/"
+    kernel = corpus["skills/craftflow-router/SKILL.md"]
+    moved = (
+        ("### Doubt-Verify Dispatch Rule", "verify-dispatch.md"), ("### Fix-Verify Dispatch Rule", "verify-dispatch.md"),
+        ("#### fix_verify_keyword_scan — Keyword Table", "verify-dispatch.md"),
+        ("### Read-only contracts", "post-agent-validation.md"), ("### Write-agent YAML contracts", "post-agent-validation.md"),
+        ("### Contract overrides", "post-agent-validation.md"), ("### After every agent completion", "post-agent-validation.md"),
+        ("### Verifier findings handoff", "post-agent-validation.md"),
+        ("### Intent Interview Gate (PLAN only)", "plan-workflow.md"), ("### Inline brainstorming handoff", "plan-workflow.md"),
+        ("### Fast Path Detection", "build-workflow.md"), ("### Worktree Isolation (BUILD Default)", "build-workflow.md"),
+        ("## Parent workflow creation", "workflow-start.md"), ("## 3. Task Metadata Contract", "workflow-start.md"),
+    )
+    for heading, fname in moved:
+        homes = [rel for rel, text in corpus.items() if re.search(r"^" + re.escape(heading) + r"\s*$", text, re.M)]
+        if ref + fname not in homes or "skills/craftflow-router/SKILL.md" in homes:
+            fail(name, f"{heading!r} must live in references/{fname} and no longer in the kernel; found in {homes}")
+            return
+    for fname in ("workflow-start.md", "resume.md", "post-agent-validation.md", "verify-dispatch.md", "memory-load-workspace.md"):
+        if f"`references/{fname}`" not in kernel:
+            fail(name, f"the kernel must name references/{fname}")
+            return
+    if "DEBUG skips hunter findings." not in kernel or "5a/5b." not in kernel or "Intent Interview Gate" not in kernel:
+        fail(name, "the kernel lost the Previous Findings DEBUG sentence or a PLAN-only pointer (5a/5b, Intent Interview Gate)")
+        return
+    for rel, text in corpus.items():
+        if rel.endswith(("review-workflow.md", "plan-workflow.md")) and "integration-verifier" in text:
+            fail(name, f"{rel} dispatches integration-verifier: the verify-dispatch.md Applicability row must then add that workflow")
+            return
+        if 'Skill(skill="craftflow:brainstorming")' in text and not rel.endswith("plan-workflow.md"):
+            fail(name, f"{rel} invokes brainstorming outside the PLAN workflow: the handoff must stay in the kernel")
+            return
+    ok(name)
+
+
 _SECTION_13_REF_RE = re.compile(
     r"(?:§\s*13\b|\bSection\s+13\b|\bsec\.?\s*13\b|\bs13\b|\bstep\s+13\b"
-    r"|SKILL\.md\s*(?:#|§|##)\s*(?:§|##)?\s*13\b)",
+    # a SKILL.md anchor followed by 13: `SKILL.md § 13`, `SKILL.md ## 13`, and (P10) the arrow pointer form `SKILL.md → ## 13.`
+    # with optional backtick or parenthesis separators (`SKILL.md` → `## 13.`, (SKILL.md -> ## 13)).
+    r"|SKILL\.md[`)\s]*(?:#|§|##|→|->)[`\s]*(?:§|##)?[`\s]*13\b)",
     re.IGNORECASE,
 )
+_DATED_HISTORY_LINE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 
 
 def test_plugin_has_no_dangling_section_13_references() -> None:
     # P9 remediation (doubt cycle 1): section 13 moved from SKILL.md into references/memory-finalize.md and the kernel
     # no longer has a "## 13." heading, so an inbound "SKILL.md § 13" / "Section 13" reference points at nothing. Every
     # inbound reference names `references/memory-finalize.md → ## 13. Memory Finalization` instead. Scope: the runtime
-    # trees, the plugin README, live docs (not dated `YYYY-MM-DD-*` decision/benchmark records, which are history) and
-    # the live anchors table tests/fixtures/router-test-anchors.md. Other fixtures (baselines, plan history) and this
-    # test file are out of scope.
+    # trees, the repo-level plugin README, the live files of tools/craftflow-plugin/docs (P10: the P9 version looked for a
+    # docs/ directory inside the plugin root, which does not exist) and the live anchors table
+    # tests/fixtures/router-test-anchors.md. History is exempt: dated `YYYY-MM-DD-*` records and any line that carries an
+    # ISO date (a signed policy-map row, a dated note). Other fixtures (baselines, plan history) and this test file are out of scope.
     name = "plugin/no-dangling-section-13-references"
+    repo_plugin = PLUGIN_ROOT.parents[1]  # tools/craftflow-plugin
+    controls = {
+        "planted `SKILL.md → ## 13.` arrow": bool(_SECTION_13_REF_RE.search("see `SKILL.md → ## 13. Memory Finalization` for it")),
+        "planted (SKILL.md -> ## 13) form": bool(_SECTION_13_REF_RE.search("(SKILL.md -> ## 13)")),
+        "planted `SKILL.md` → `## 13.` form": bool(_SECTION_13_REF_RE.search("see `SKILL.md` → `## 13.` there")),
+        "planted § 13": bool(_SECTION_13_REF_RE.search("per SKILL.md § 13")),
+    }
+    clean = {
+        "the retargeted memory-finalize form": _SECTION_13_REF_RE.search("see `references/memory-finalize.md → ## 13. Memory Finalization`"),
+        "an arrow to another section": _SECTION_13_REF_RE.search("per `SKILL.md → ## 14. Hard Rules`"),
+    }
+    bad_controls = [k for k, v in controls.items() if not v] + [k for k, v in clean.items() if v]
+    if bad_controls:
+        fail(name, f"the section-13 reference pattern no longer separates planted dangling forms from valid ones: {bad_controls}")
+        return
     hits: "list[str]" = []
+
+    def scan(path: Path, label: str) -> None:
+        for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if _SECTION_13_REF_RE.search(line) and not _DATED_HISTORY_LINE_RE.search(line):
+                hits.append(f"{label}:{n}")
+
     for sub in ("skills", "hooks", "scripts", "agents", "commands", "rules", "config"):
         root = PLUGIN_ROOT / sub
         if not root.is_dir():
@@ -1355,21 +1430,19 @@ def test_plugin_has_no_dangling_section_13_references() -> None:
             if (not path.is_file() or path.suffix not in (".md", ".mdc", ".py", ".json", ".sh")
                     or "__pycache__" in path.parts or path.name == "craftflow_hook_unit_tests.py"):
                 continue
-            for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-                if _SECTION_13_REF_RE.search(line):
-                    hits.append(f"{path.relative_to(PLUGIN_ROOT)}:{n}")
-    live_files = [PLUGIN_ROOT / "README.md", PLUGIN_ROOT / "tests" / "fixtures" / "router-test-anchors.md"]
-    docs_dir = PLUGIN_ROOT / "docs"
-    if docs_dir.is_dir():
-        live_files += [d for d in sorted(docs_dir.rglob("*.md")) if not re.match(r"\d{4}-\d{2}-\d{2}", d.name)]
+            scan(path, str(path.relative_to(PLUGIN_ROOT)))
+    live_files = [repo_plugin / "README.md", PLUGIN_ROOT / "README.md", PLUGIN_ROOT / "tests" / "fixtures" / "router-test-anchors.md"]
+    for docs_dir in (repo_plugin / "docs", PLUGIN_ROOT / "docs"):
+        if docs_dir.is_dir():
+            live_files += [d for d in sorted(docs_dir.glob("*.md")) if not re.match(r"\d{4}-\d{2}-\d{2}", d.name)]
+    if not any(f.parent.name == "docs" and f.is_file() for f in live_files):
+        fail(name, f"no live docs found under {repo_plugin / 'docs'}: the docs scan would be vacuous")
+        return
     for path in live_files:
-        if not path.is_file():
-            continue
-        for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-            if _SECTION_13_REF_RE.search(line):
-                hits.append(f"{path.relative_to(PLUGIN_ROOT)}:{n}")
+        if path.is_file():
+            scan(path, str(path.relative_to(repo_plugin)) if repo_plugin in path.parents else str(path.relative_to(PLUGIN_ROOT)))
     if hits:
-        fail(name, "dangling '§ 13' / 'Section 13' references (retarget to `references/memory-finalize.md → ## 13. Memory Finalization`): "
+        fail(name, "dangling '§ 13' / 'Section 13' / 'SKILL.md → ## 13.' references (retarget to `references/memory-finalize.md → ## 13. Memory Finalization`): "
                    + ", ".join(hits))
         return
     ok(name)
@@ -1578,6 +1651,12 @@ def test_memory_load_anchored_to_project_root() -> None:
     if '"activeContext.md"' in section or 'Read(".craftflow/state/project/activeContext.md")' in section:
         fail(name, "bare unanchored activeContext.md reference still present in ## 2.")
         return
+    # P10: the negative checks follow the step 5a workspace-walk details and the self-heal paragraph to their new file, so moving
+    # that text out of ## 2. cannot hide an unanchored reference from this test (relocation-drill finding: negative-check scope loss).
+    moved = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "memory-load-workspace.md").read_text(encoding="utf-8")
+    if '"activeContext.md"' in moved or 'Read(".craftflow/state/project/activeContext.md")' in moved:
+        fail(name, "bare unanchored activeContext.md reference present in references/memory-load-workspace.md")
+        return
     ok(name)
 
 
@@ -1585,7 +1664,7 @@ def test_parent_workflow_creation_anchored_to_project_root() -> None:
     name = "router/parent-workflow-creation-anchored"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
     # Bound by the section's own heading, wherever it lives (SKILL.md today, references/workflow-start.md after P10).
-    section = _router_section_first("### Parent workflow creation")
+    section = _router_section_first("## Parent workflow creation")
     if section is None:
         fail(name, "could not bound ### Parent workflow creation section")
         return
@@ -1602,7 +1681,7 @@ def test_parent_workflow_creation_fallback_reason_wired() -> None:
     name = "router/parent-workflow-creation-fallback-reason-wired"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
     # Bound by the section's own heading, wherever it lives (SKILL.md today, references/workflow-start.md after P10).
-    section = _router_section_first("### Parent workflow creation")
+    section = _router_section_first("## Parent workflow creation")
     if section is None:
         fail(name, "could not bound ### Parent workflow creation section")
         return
@@ -1699,9 +1778,12 @@ def test_worktree_isolation_reuses_project_root_no_duplicate_resolution() -> Non
     if shared_content.count("craftflow_resolve_workspace_root.py") != 1:
         fail(name, f"expected exactly 1 reference to the resolver script in the shared doc, found {shared_content.count('craftflow_resolve_workspace_root.py')}")
         return
-    start = content.find("### Worktree Isolation (BUILD Default)")
-    next_heading = content.find("\n### DEBUG preparation", start)
-    section = content[start: next_heading if next_heading != -1 else None]
+    # P10 retarget (K): Worktree Isolation steps 1-3 moved from SKILL.md to references/build-workflow.md, so the heading is
+    # unique corpus-wide and the section is read without a file hint (it follows its text if a later phase moves it again).
+    section = _router_section_or_none("### Worktree Isolation (BUILD Default)")
+    if section is None:
+        fail(name, "'### Worktree Isolation (BUILD Default)' not found as a single section (steps 1-3 live in references/build-workflow.md)")
+        return
     if "was already resolved once by" not in section:
         fail(name, "expected reuse sentence not found in Worktree Isolation section")
         return
@@ -1910,12 +1992,17 @@ def test_just_go_and_scope_decision_resume_anchored_to_project_root() -> None:
     # interpretations agree, but not a durable guarantee).
     # K (P10): bounded by the heading itself; the plan keeps the `## 4.` heading in the kernel as the trigger and moves
     # the body to references/resume.md, after which the Decisions reference is no longer under this heading.
-    resume_section = _router_section_or_none("## 4. Resume And Hydration")
-    resume_start = 0 if resume_section is not None else -1
-    resume_end = 0 if resume_section is not None else -1
-    if resume_start == -1 or resume_end == -1:
-        fail(name, "could not bound ## 4. Resume And Hydration through ## 5. Workflow Preparation")
+    # P10 retarget (K): the kernel keeps the `## 4.` heading with its trigger, which must point at references/resume.md; the
+    # Decisions reference lives in that file, which is read whole (its text is the body of the former `## 4.` section).
+    kernel_resume = _router_section_or_none("## 4. Resume And Hydration")
+    if kernel_resume is None or "references/resume.md" not in kernel_resume:
+        fail(name, "the kernel's ## 4. Resume And Hydration trigger must point at references/resume.md")
         return
+    resume_md = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "resume.md"
+    if not resume_md.is_file():
+        fail(name, "references/resume.md not found (the body of ## 4. Resume And Hydration)")
+        return
+    resume_section = resume_md.read_text(encoding="utf-8")
     if "`$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Decisions`" not in resume_section:
         fail(name, "anchored scope-decision-resume Decisions reference not found")
         return
@@ -2308,7 +2395,7 @@ def test_memory_finalize_permit_standalone_documented() -> None:
 
 def test_router_one_call_minting_documented() -> None:
     name = "router/one-call-workflow-minting-documented"
-    section = _router_section_first("### Parent workflow creation")
+    section = _router_section_first("## Parent workflow creation")
     if section is None:
         fail(name, "### Parent workflow creation not found in SKILL.md")
         return
@@ -2488,16 +2575,21 @@ def test_resolve_workspace_root_accepts_request_file() -> None:
 def test_router_snippets_avoid_llm_quoted_requests_and_eval() -> None:
     name = "router/snippets-use-request-file-no-eval"
     skill = (PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md").read_text(encoding="utf-8")
+    # P10 retarget (K): Parent workflow creation moved from SKILL.md to references/workflow-start.md, so the --request-file mint
+    # is asserted there (and in the shared doc, each checked separately); the kernel must not carry a quoted-request form either.
+    start_md = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "workflow-start.md").read_text(encoding="utf-8")
     shared = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md").read_text(encoding="utf-8")
-    for label, text in (("SKILL.md", skill), ("router-protocol.md", shared)):
+    for label, text, needs_flag in (("SKILL.md", skill, False), ("workflow-start.md", start_md, True), ("router-protocol.md", shared, True)):
         if "USER_REQUEST_SHELL_ESCAPED" in text:
             fail(name, f"{label} still passes the request as an LLM-quoted shell string")
             return
-        if "--request-file" not in text:
+        if needs_flag and "--request-file" not in text:
             fail(name, f"{label} must pass the request via --request-file")
             return
-    start = skill.find("### Parent workflow creation")
-    section = skill[start: skill.find("\n### BUILD task graph", start)]
+    section = _router_section_or_none("## Parent workflow creation") or ""
+    if not section:
+        fail(name, "'### Parent workflow creation' not found as a single section (it lives in references/workflow-start.md)")
+        return
     if 'eval "' in section:
         fail(name, "eval of helper output is denied by the safe-shell guard; read the KEY=value lines instead")
         return
@@ -2510,7 +2602,7 @@ def test_router_snippets_avoid_llm_quoted_requests_and_eval() -> None:
 
 def test_router_mint_command_passes_safe_shell_guard() -> None:
     name = "router/mint-command-passes-safe-shell-guard"
-    section = _router_section_first("### Parent workflow creation")
+    section = _router_section_first("## Parent workflow creation")
     if section is None:
         fail(name, "### Parent workflow creation not found in SKILL.md")
         return
@@ -2987,21 +3079,29 @@ def test_worktree_isolation_resolver_gated_on_toplevel_failure() -> None:
         return
     skill_section = skill_content[skill_section_start:]
     pointer_idx = skill_section.find("skills/_shared/router-protocol.md")
-    mkdir_idx = skill_section.find('mkdir -p "$PROJECT_ROOT/.claude/worktrees"')
     if pointer_idx == -1:
         fail(name, "SKILL.md's '## 0.' section no longer points at the shared doc")
-        return
-    if mkdir_idx == -1:
-        fail(name, "mkdir -p .../.claude/worktrees block not found after '## 0.' in SKILL.md")
         return
     if "TOPLEVEL_EXIT != 0" in skill_section[: skill_section.find("## 2.")]:
         fail(name, "SKILL.md's '## 0.' section still inlines the resolution branching text -- stale re-embedded copy alongside the shared-doc pointer")
         return
-    if not (pointer_idx < mkdir_idx):
+    # P10 retarget (K): the mkdir/worktree-add block moved with Worktree Isolation steps 1-3 into references/build-workflow.md, so the
+    # ordering "root already resolved by ## 0. before the mkdir block" is asserted inside that file, where both the reuse sentence
+    # (which names `SKILL.md -> ## 0. Resolve Project Root`) and the block now sit; the kernel keeps its pointer to the shared doc.
+    worktree_section = _router_section_or_none("### Worktree Isolation (BUILD Default)")
+    if worktree_section is None:
+        fail(name, "'### Worktree Isolation (BUILD Default)' not found as a single section (steps 1-3 live in references/build-workflow.md)")
+        return
+    reuse_idx = worktree_section.find("was already resolved once by")
+    mkdir_idx = worktree_section.find('mkdir -p "$PROJECT_ROOT/.claude/worktrees"')
+    if mkdir_idx == -1:
+        fail(name, "mkdir -p .../.claude/worktrees block not found in the Worktree Isolation section")
+        return
+    if reuse_idx == -1 or "SKILL.md" not in worktree_section[reuse_idx - 120: reuse_idx + 120] or not (reuse_idx < mkdir_idx):
         fail(
             name,
-            f"expected the shared-doc pointer ({pointer_idx}) to textually precede the "
-            f"mkdir/worktree-add block ({mkdir_idx}) in SKILL.md",
+            f"expected the reuse sentence naming SKILL.md's '## 0.' ({reuse_idx}) to textually precede the "
+            f"mkdir/worktree-add block ({mkdir_idx}) in the Worktree Isolation section",
         )
         return
     ok(name)
@@ -3066,7 +3166,7 @@ def test_router_uses_workflow_id_helper() -> None:
         return
     # Bound to the section that mints the ids (wherever it lives): the helper name and the worktree bindings also appear in
     # other router files, so a corpus-wide read would still pass with the rule deleted.
-    content = _router_section_first("### Parent workflow creation")
+    content = _router_section_first("## Parent workflow creation")
     if content is None:
         fail(name, "SKILL.md does not reference craftflow_workflow_id.py helper")
         return
@@ -17554,14 +17654,17 @@ def test_router_documents_skill_distill_approval_flow() -> None:
     skill_content = skill_path.read_text(encoding="utf-8")
     shared_content = shared_path.read_text(encoding="utf-8")
 
-    skill_start = skill_content.find("### Skill-Distill Approval Flow")
-    skill_end = skill_content.find("\n## 9. Remediation And Workflow Rules", skill_start)
-    if skill_start == -1 or skill_end == -1:
-        fail(name, "could not bound ### Skill-Distill Approval Flow through ## 9. in SKILL.md")
+    # P10 retarget (K): section 8 moved to references/post-agent-validation.md, so the pointer section is read from there
+    # (the shared doc has a same-text heading, so the file hint is required); the kernel itself must not re-embed the flow.
+    skill_section = _router_section_or_none("### Skill-Distill Approval Flow", "references/post-agent-validation.md")
+    if skill_section is None:
+        fail(name, "could not bound ### Skill-Distill Approval Flow in references/post-agent-validation.md")
         return
-    skill_section = skill_content[skill_start:skill_end]
     if "skills/_shared/router-protocol.md" not in skill_section:
-        fail(name, "SKILL.md's Skill-Distill Approval Flow section no longer points at the shared doc")
+        fail(name, "the Skill-Distill Approval Flow section no longer points at the shared doc")
+        return
+    if "### Skill-Distill Approval Flow" in skill_content or "craftflow_skill_promote.py" in skill_content:
+        fail(name, "SKILL.md re-embeds the Skill-Distill Approval Flow after section 8 moved out of the kernel")
         return
 
     shared_start = shared_content.find("## Skill-Distill Approval Flow")
@@ -18447,17 +18550,28 @@ def test_router_template_stamps_session_id(tmp_dir: Path) -> None:
     if "--init-artifact" not in skill or "session_id_json" not in skill:
         fail(name, "router must invoke --init-artifact and document the session_id_json binding")
         return
-    # Anchor on the heading line itself; the title is also mentioned inline in earlier sections.
-    resume = skill.split("\n## 4. Resume And Hydration\n", 1)
-    resume_body = resume[1].split("\n## ", 1)[0] if len(resume) == 2 else ""
+    # P10 retarget (K): the body of `## 4. Resume And Hydration` moved to references/resume.md (the kernel keeps the heading and
+    # its trigger), together with the artifact policy's session_id sub-bullets (their `## Artifact session_id rules` section).
+    resume_md = router_corpus.read_corpus(PLUGIN_ROOT)["skills/craftflow-router/references/resume.md"]
+    kernel_resume = _router_section_or_none("## 4. Resume And Hydration") or ""
+    if "references/resume.md" not in kernel_resume:
+        fail(name, "the kernel's ## 4. Resume And Hydration trigger must point at references/resume.md")
+        return
+    resume_body = resume_md.split("\n## Artifact session_id rules", 1)[0]
     for needle in ("session_rebound", "15 minutes", "explicitly resum", "never rebind"):
         if needle not in resume_body:
             fail(name, f"Resume And Hydration re-stamp rule lacks {needle!r}")
             return
-    for needle in ("`session_id`", "no_live_candidate", "context-nudge", "latest_live_workflow_file",
-                   "session_rebound", "plan-then-build"):
+    # the pin to the policy file is deliberate (a corpus-wide read would be satisfied by other files): what stays in the policy file
+    # is the session_id bullet and its pointer; the moved sub-bullets are pinned in resume.md
+    for needle in ("`session_id`", "context-nudge", "session_rebound", "plan-then-build", "references/resume.md"):
         if needle not in policy:
             fail(name, f"policy doc must document {needle!r}")
+            return
+    session_rules = resume_md.split("\n## Artifact session_id rules", 1)[1] if "\n## Artifact session_id rules" in resume_md else ""
+    for needle in ("no_live_candidate", "Context-nudge binding", "latest_live_workflow_file", "plan-then-build"):
+        if needle not in session_rules:
+            fail(name, f"resume.md session_id rules must document {needle!r}")
             return
     if "checkpoint_type" not in policy:
         fail(name, "policy doc normalized_phases list must include checkpoint_type")
@@ -20659,7 +20773,7 @@ def test_workspace_root_config_read_gated_inside_step_1a() -> None:
 def test_workflow_artifact_template_includes_workspace_writable_paths_field() -> None:
     name = "router/workflow-artifact-template-includes-workspace-writable-paths-field"
     skill_path = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
-    section = _router_section_first("### Parent workflow creation")
+    section = _router_section_first("## Parent workflow creation")
     if section is None:
         fail(name, "'### Parent workflow creation' section not found")
         return
@@ -24039,10 +24153,12 @@ def test_workspace_setup_and_routers_cross_reference_membership() -> None:
     if "ai-first-setup" not in workspace_setup_text or "members" not in workspace_setup_text:
         fail(name, "workspace-setup SKILL.md missing 'ai-first-setup' and/or 'members' reference")
         return
-    for skill_dir in ("craftflow-router", "cursor-router"):
-        router_text = (PLUGIN_ROOT / "skills" / skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    # P10 retarget (K): the step 5a workspace-walk details moved from craftflow-router/SKILL.md to
+    # references/memory-load-workspace.md (the kernel keeps a 3-line trigger); the cursor-router half is unchanged.
+    for skill_dir, rel in (("craftflow-router", "references/memory-load-workspace.md"), ("cursor-router", "SKILL.md")):
+        router_text = (PLUGIN_ROOT / "skills" / skill_dir / rel).read_text(encoding="utf-8")
         if "NOT membership-gated" not in router_text:
-            fail(name, f"{skill_dir} SKILL.md missing 'NOT membership-gated' read-side note")
+            fail(name, f"{skill_dir} {rel} missing 'NOT membership-gated' read-side note")
             return
     ok(name)
 
@@ -28834,6 +28950,7 @@ def main() -> int:
     test_router_task_tool_fallback_kernel_keeps_call_site_pointers()
     test_router_kernel_agent_stamps_carry_utc_rule()
     test_router_memory_finalize_pointer_not_under_verifier_handoff()
+    test_router_p10_kernel_relocation_wiring()
     test_plugin_has_no_dangling_section_13_references()
     test_workflow_artifact_schema_documents_task_tools_available()
     test_self_dispatch_guard_present_in_task_update_agents()

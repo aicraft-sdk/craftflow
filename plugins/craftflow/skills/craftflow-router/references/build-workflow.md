@@ -254,3 +254,71 @@ TaskUpdate({ taskId: re_verify_task_id, addBlockedBy: [remfix_task_id] })
 ```
 
 **Doc-syncer on escalated path:** SKIP. Fast-path work is unlikely to have doc impact significant enough to warrant it. Do not create a `build-doc-sync` task even after escalation.
+
+### Fast Path Detection
+
+Before BUILD child task creation, read `references/fast-path.md` (contains canonical keyword table and escalation protocol).
+
+Perform `risk_keyword_scan`:
+1. Scan request text (case-insensitive) against all keyword groups in `references/fast-path.md → risk_keyword_scan — Keyword Table`
+2. Collect matched keywords into `fast_path_risk_signals`
+3. Assign `build_mode`:
+   - `fast_path_risk_signals == []` → `build_mode = "fast_path"`
+   - `fast_path_risk_signals != []` → `build_mode = "standard"`
+4. Write to workflow artifact: `build_mode`, `fast_path_risk_signals`, `fast_path_escalated: false`
+5. Announce routing decision:
+   - Fast path: `-> FAST-PATH BUILD (no risk signals)`
+   - Standard: `-> FULL BUILD (risk signals: {matched keywords})`
+
+### Worktree Isolation (BUILD Default)
+
+Every new BUILD workflow attempts to isolate file writes in a dedicated git worktree:
+
+1. At BUILD start, `PROJECT_ROOT` was already resolved once by `SKILL.md → ## 0. Resolve Project Root`
+   at session start — reuse it directly. Do not re-run `git rev-parse --show-toplevel` or
+   invoke the workspace-root resolver script a second time.
+
+   [EASY TO MISS: if `## 0.` fell back to `NO_REPO_FOUND`/`RESOLVE_SCRIPT_ERROR` (no git-repo
+   children under cwd, or the resolver script itself failed), `PROJECT_ROOT` is already set to
+   `$(pwd)` from that fallback — Worktree Isolation still proceeds with the `mkdir`/`git
+   worktree add` block below using that same fallback value, exactly like the single-repo
+   path. There is no separate NO_REPO_FOUND branch here anymore; `## 0.` already handled it.]
+
+   With `PROJECT_ROOT` reused from `## 0.` above, capture both commands' output and exit code,
+   mirroring the exit-code handling of the finalize call in `references/worktree.md` —
+   never leave either command's exit code unchecked:
+   ```bash
+   MKDIR_OUTPUT=$(mkdir -p "$PROJECT_ROOT/.claude/worktrees" 2>&1)
+   MKDIR_EXIT=$?
+   WORKTREE_ADD_OUTPUT=$(git worktree add "$PROJECT_ROOT/.claude/worktrees/{worktree_dir}" -b {worktree_branch} 2>&1)
+   WORKTREE_ADD_EXIT=$?
+   ```
+   where `worktree_dir` and `worktree_branch` come from the `craftflow_workflow_id.py` helper
+   output (see step 1 of **Parent workflow creation** in `workflow-start.md`).
+   The trailing 8-hex suffix in both names ties the worktree back to the workflow id,
+   guaranteeing concurrent same-feature workflows always get distinct dirs/branches.
+
+   - **If `MKDIR_EXIT != 0` OR `WORKTREE_ADD_EXIT != 0`**: proceed to step 3 ("On failure") below.
+     Use `$MKDIR_OUTPUT` as the `{error}` value if `MKDIR_EXIT != 0`; otherwise use
+     `$WORKTREE_ADD_OUTPUT`.
+   - **Otherwise** (`MKDIR_EXIT == 0` AND `WORKTREE_ADD_EXIT == 0`): proceed to step 2 ("On
+     success") below.
+
+2. On success:
+   - Set `worktree_mode: "auto_created"` in the workflow artifact
+   - Set `worktree_path: "{project_root}/.claude/worktrees/{worktree_dir}"` (absolute; `worktree_dir` from the helper)
+   - Set `worktree_branch: "{worktree_branch}"` (from the helper)
+   - Add `## Worktree` section to every builder and verifier task description:
+     ```
+     ## Worktree
+     WORKTREE_PATH: {worktree_path}
+     All file reads, edits, and writes must use paths rooted at WORKTREE_PATH.
+     Do not modify files outside WORKTREE_PATH during this BUILD phase.
+     ```
+
+3. On failure (any git error — shallow clone, detached HEAD, path conflict):
+   - Set `worktree_mode: null`
+   - Append `{"event":"worktree_fallback","reason":"{error}"}` to the event log
+   - Continue with main tree — never block a workflow over worktree failure
+   - Omit the `## Worktree` section from task descriptions when in fallback mode
+

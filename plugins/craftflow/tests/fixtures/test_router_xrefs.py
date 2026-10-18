@@ -56,6 +56,9 @@ SK = "skills/craftflow-router/SKILL.md"
 FPM = "skills/craftflow-router/references/fast-path.md"
 BW = "skills/craftflow-router/references/build-workflow.md"
 HSC = "skills/craftflow-router/references/harness-self-checks.md"
+PAV = "skills/craftflow-router/references/post-agent-validation.md"
+VD = "skills/craftflow-router/references/verify-dispatch.md"
+WS = "skills/craftflow-router/references/workflow-start.md"
 AP = "skills/craftflow-router/references/workflow-artifact-and-hook-policy.md"
 PR = "skills/_shared/router-protocol.md"
 CUR = "skills/cursor-router/SKILL.md"
@@ -256,17 +259,20 @@ KNOWN = [
     (SK, "explicit dispatcher (phase-to-agent table)", "router-protocol.md", 1),
     (SK, "dispatch prompt scaffold", "router-protocol.md", 2),
     (SK, "previous agent findings handoff", "router-protocol.md", 1),
-    (SK, "agent verdict headings", "router-protocol.md", 1),
-    (SK, "skill-distill approval flow", "router-protocol.md", 1),
-    (SK, "verifier findings handoff", "router-protocol.md", 1),
+    (PAV, "agent verdict headings", "router-protocol.md", 1),  # P10: section 8 moved to post-agent-validation.md
+    (PAV, "skill-distill approval flow", "router-protocol.md", 1),
+    (PAV, "verifier findings handoff", "router-protocol.md", 1),
     (SK, "build preparation", "build-workflow.md", 1),
     (SK, "build task graph", "build-workflow.md", 2),
     (SK, "fast path escalation", "build-workflow.md", 1),
-    (SK, "gate table", "fast-path.md", 1),
-    (SK, "fix_verify_keyword_scan — keyword table", "fast-path.md", 1),
-    (SK, "risk_keyword_scan — keyword table", "fast-path.md", 1),
-    (SK, "fix-verify contract", "agents/doubt-verifier.md", 1),
-    (SK, "8. post-agent validation", "SKILL.md", 2),
+    (VD, "gate table", "fast-path.md", 1),  # P10: Doubt-Verify and Fix-Verify moved to verify-dispatch.md
+    (VD, "fix_verify_keyword_scan — keyword table", "verify-dispatch.md", 1),  # cross-reference fix 3
+    (BW, "risk_keyword_scan — keyword table", "fast-path.md", 1),  # P10: Fast Path Detection moved to build-workflow.md
+    (VD, "fix-verify contract", "agents/doubt-verifier.md", 1),
+    (VD, "contract overrides", "post-agent-validation.md", 2),  # the two former "## 8. Post-Agent Validation" sites
+    (VD, "12. chain execution loop", "SKILL.md", 1),
+    (WS, "5. workflow preparation", "SKILL.md", 1),  # P10: the section 0a body moved to workflow-start.md
+    (WS, "2a. workflow artifact and hook policy", "SKILL.md", 1),
     (HSC, "build task graph", "build-workflow.md", 1),
     (HSC, "fast path escalation", "build-workflow.md", 1),
     (HSC, "review task graph", "review-workflow.md", 1),

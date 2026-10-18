@@ -332,3 +332,63 @@ fallback rule already provided. Dispatch itself falls through to the `Agent()`-t
 `SKILL.md § 7`'s existing Task*-tool-fallback rule, substituting the same `'n/a — task-tool
 fallback active (capabilities.task_tools_available=false)'` `Task ID:` placeholder every other
 agent already uses.
+
+### Intent Interview Gate (PLAN only)
+
+Before brainstorming, check whether the task description is under-specified:
+
+**Dispatch `Skill(skill="craftflow:intent-interview")` when ALL of:**
+- `AUTO_PROCEED` is NOT `true` in `activeContext.md ## Session Settings`
+- No saved plan file exists for this request in `activeContext.md ## References`
+- At least ONE of:
+  - Request is ≤3 sentences with no success definition
+  - Request contains scope-ambiguous terms: "improve", "refactor", "clean up", "make it better", "fix things"
+  - Request touches ≥2 systems or modules with no stated boundary
+
+**Skip the interview (run brainstorming directly) when ANY of:**
+- `AUTO_PROCEED: true` (JUST_GO mode — auto-skip)
+- A saved plan file is already referenced
+- Request explicitly names the file, function, or behavior to change
+
+After `Skill(skill="craftflow:intent-interview")` completes, read the `## Intent Contract (From Interview)` block it emits. Persist it into:
+- Workflow artifact `intent` field
+- Planner prompt under `## Intent Contract (Pre-Interview)` (planner treats it as user-approved input)
+
+
+### Inline brainstorming handoff
+
+After `Skill(skill="craftflow:brainstorming")`, parse the fenced YAML block under
+`### Brainstorming Handoff (MACHINE-READABLE)`.
+
+Required field:
+- `DESIGN_FILE`
+
+If present:
+- persist it into workflow artifact `design_file`
+- pass it to planner as `## Design File`
+- do not require `activeContext.md` to be updated first
+
+
+## Chain loop steps 5a and 5b (PLAN)
+
+```text
+5a. If both `research-web` and `research-github` tasks are runnable in the same round (PLAN workflow):
+   - Mark both in_progress first
+   - Dispatch them in the same message (same pattern as reviewer+hunter in BUILD)
+   - Both are read-only with no file-write overlap — safe to parallelize
+   - If parallel invocation fails (rate limit, API error): fall back to sequential (web first, then github). Log `event=parallel_fallback` in the event log.
+   - Wait for BOTH to complete before proceeding to planner or investigator.
+5b. If N-1 `plan-bakeoff-candidate-*` tasks are all runnable in the same round (PLAN workflow,
+    qualifying bake-off only):
+   - Mark all in_progress first
+   - Dispatch all of them in the same message (see `references/plan-workflow.md → ### PLAN
+     dispatch-time prompt assembly` for the exact per-candidate model/target-file construction
+     formula and `### PLAN bake-off fan-out` for the actual per-candidate dispatch loop)
+   - If parallel invocation fails (rate limit, API error): fall back to sequential dispatch, one
+     candidate at a time. Log `event=parallel_fallback` in the event log.
+   - Wait for ALL dispatched candidates to return (validly or failed) before creating the
+     `plan-bakeoff-judge` task. A candidate returning an invalid contract does not block the
+     others — see `references/plan-workflow.md`'s degraded-bake-off tolerance rule (a scoped
+     exception to the Chain Execution Loop's own step 6 hard-stop-on-malformed-output default in `SKILL.md`, applying only
+     to `phase:plan-bakeoff-candidate-*`).
+```

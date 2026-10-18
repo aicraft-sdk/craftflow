@@ -420,6 +420,12 @@ def main() -> int:
         "references/worktree.md",
         "references/memory-finalize.md",
         "references/task-tool-fallback.md",
+        # P10: the kernel names the five relocated reference files (their text is checked across the router surface below)
+        "references/workflow-start.md",
+        "references/resume.md",
+        "references/post-agent-validation.md",
+        "references/verify-dispatch.md",
+        "references/memory-load-workspace.md",
         "## 12. Chain Execution Loop",
         "## 14. Hard Rules",
     ]
@@ -799,7 +805,8 @@ def main() -> int:
         "persist it into workflow artifact `design_file`",
         "- Ensure `- Design: {design_file}` remains correct",
     ):
-        if phrase not in router:
+        # P10: the Inline brainstorming handoff moved from the kernel to references/plan-workflow.md; read the whole router surface
+        if phrase not in router_surface:
             errors.append(f"router missing design-handoff phrase '{phrase}'")
 
     if "Explore project first, then invoke the router." in readme:

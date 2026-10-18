@@ -169,8 +169,8 @@ def _seed_gates() -> list:
             ),
             "oracle": (
                 "No automated test exists for this invariant today -- it is enforced by the "
-                "router's own contract-override judgment each cycle (SKILL.md ### Contract "
-                "overrides, doubt-verifier (phase:fix-verify) row), applied by an LLM reading "
+                "router's own contract-override judgment each cycle (references/post-agent-validation.md "
+                "### Contract overrides, doubt-verifier (phase:fix-verify) row), applied by an LLM reading "
                 "the agent's own reported fields. This is the exact gap exposed by the "
                 "2026-08-08 incident (a reviewer cited a stale test count unnoticed by "
                 "contract-override logic); this gate's own evidenceRuns log is the primary "
@@ -178,7 +178,7 @@ def _seed_gates() -> list:
                 "scope for this plan)."
             ),
             "assertionRefs": [
-                "skills/craftflow-router/SKILL.md::### Contract overrides -> doubt-verifier (phase:fix-verify) row",
+                "skills/craftflow-router/references/post-agent-validation.md::### Contract overrides -> doubt-verifier (phase:fix-verify) row",
                 "agents/doubt-verifier.md::## Fix-Verify Contract (phase:fix-verify)",
             ],
             "evidenceRuns": [],

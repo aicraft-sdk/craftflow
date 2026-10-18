@@ -1394,7 +1394,7 @@
     "class": "stage",
     "file": "skills/craftflow-router/references/resume.md",
     "happy_path": false,
-    "trigger": "resume or a live scope marker",
+    "trigger": "resume or live scope marker",
     "workflows": [
      "ALL"
     ]
@@ -1411,7 +1411,7 @@
     "class": "stage",
     "file": "skills/craftflow-router/references/post-agent-validation.md",
     "happy_path": true,
-    "trigger": "after any agent returns",
+    "trigger": "agent returns",
     "workflows": [
      "ALL"
     ]
@@ -1428,7 +1428,7 @@
     "class": "stage",
     "file": "skills/craftflow-router/references/verify-dispatch.md",
     "happy_path": true,
-    "trigger": "after integration-verifier PASS",
+    "trigger": "integration-verifier PASS",
     "workflows": [
      "BUILD",
      "DEBUG"
@@ -1452,6 +1452,358 @@
     ]
    },
    "source": "plan P10 task 4"
+  },
+  {
+   "anchor": "## 0a. Task Tool Capability Detection\n",
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10-delta-SKILL-01",
+   "op": "insert",
+   "phase": "P10",
+   "position": "after_anchor",
+   "source": "P10 as-built delta against the mechanical move result",
+   "text": "Probe task tools once per session via `references/workflow-start.md`, before `TaskList()` or a workflow write.\n\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10-delta-SKILL-02",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "5a. Workspace-tier discovery (capped upward walk, max 3 levels above PROJECT_ROOT): when an ancestor holds\n    `.craftflow-workspace.json` or `.craftflow/state/workspace/`, read `references/memory-load-workspace.md` and follow it.",
+   "text": "5a. Workspace tier (walk up max 3 levels above PROJECT_ROOT): if an ancestor holds\n    `.craftflow-workspace.json` or `.craftflow/state/workspace/`, read `references/memory-load-workspace.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10-delta-SKILL-03",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "State-read compaction self-heal: see `references/memory-load-workspace.md`.",
+   "text": "State-read compaction self-heal: `references/memory-load-workspace.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10-delta-SKILL-04",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "**3. Task Metadata Contract:** before creating the workflow, read `references/workflow-start.md` (Read Map).",
+   "text": "**3. Task Metadata Contract:** see `references/workflow-start.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10-delta-SKILL-05",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "On resume, or when the digest `## Decisions` holds `[SCOPE-DECISION-PENDING:` or an unconsumed `[jev-auto-decided:` for a live workflow, read `references/resume.md` and follow it.",
+   "text": "On resume, or when the digest `## Decisions` holds a live `[SCOPE-DECISION-PENDING:` or unconsumed `[jev-auto-decided:` marker, read `references/resume.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10-delta-SKILL-06",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "Fast Path Detection and Worktree Isolation steps 1-3 (BUILD default; they set `build_mode` and `worktree_mode`) are in `references/build-workflow.md` (`### Fast Path Detection`, `### Worktree Isolation (BUILD Default)`).",
+   "text": "Fast Path Detection and Worktree Isolation steps 1-3: `references/build-workflow.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10-delta-SKILL-07",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "**Parent workflow creation:** read `references/workflow-start.md` before creating the parent task and artifact.",
+   "text": "**Parent workflow creation:** see `references/workflow-start.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10-delta-SKILL-08",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "**Doubt-Verify and Fix-Verify dispatch rules (BUILD, DEBUG):** after `integration-verifier` returns PASS, read `references/verify-dispatch.md` and apply it.",
+   "text": "**Doubt-Verify and Fix-Verify (BUILD, DEBUG):** after `integration-verifier` returns PASS, read `references/verify-dispatch.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10-delta-SKILL-09",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "After any agent returns, read `references/post-agent-validation.md` (once per workflow; re-read after compaction) and apply it.",
+   "text": "After any agent returns, read `references/post-agent-validation.md` (once per workflow; re-read after compaction) and apply it. It parses:\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10-delta-SKILL-10",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "**Intent Interview Gate and inline brainstorming handoff (PLAN only):** see `references/plan-workflow.md`.",
+   "text": "- `SCENARIOS_TOTAL`\n- `SCENARIOS_PASSED`\n- `SCENARIOS_FAILED`\n- `REMEDIATION_REASON: ...`\n- `REPLAN_REASON: ...`\n- `DESIGN_FILE`\n- telemetry:\n\n| Agent | Override |\n|---|---|\n| any | see that file |\n\n**Intent Interview Gate and brainstorming handoff (PLAN only):** `references/plan-workflow.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10-delta-SKILL-11",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "5a/5b. (PLAN workflow) parallel research and bake-off candidate dispatch: see `references/plan-workflow.md`.",
+   "text": "5a/5b. (PLAN workflow) research and bake-off candidate dispatch: `references/plan-workflow.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10-delta-SKILL-12",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "| `doubt_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Doubt-Verify Dispatch Rule |\n| `fix_verify_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Fix-Verify Dispatch Rule |",
+   "text": "| `doubt_cycles_max` | `3` | `craftflow_gate_check.py` | verify-dispatch.md Doubt-Verify |\n| `fix_verify_cycles_max` | `3` | `craftflow_gate_check.py` | verify-dispatch.md Fix-Verify |\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p10-delta-SKILL-13",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "| `doubt_cycles_max` | 3 | after doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Doubt-Verify \"After doubt-verifier returns\" |\n| `fix_verify_cycles_max` | 3 | after the fix-verify doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Fix-Verify \"After doubt-verifier returns\" |",
+   "text": "| `doubt_cycles_max` | 3 | after doubt-verifier returns | cycle N | advance, no REM-FIX | verify-dispatch.md Doubt-Verify \"After doubt-verifier returns\" |\n| `fix_verify_cycles_max` | 3 | after the fix-verify doubt-verifier returns | cycle N | advance, no REM-FIX | verify-dispatch.md Fix-Verify \"After doubt-verifier returns\" |\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/build-workflow.md",
+   "id": "p10-delta-build-workflow-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "1. At BUILD start, `PROJECT_ROOT` was already resolved once by `## 0. Resolve Project Root`",
+   "text": "1. At BUILD start, `PROJECT_ROOT` was already resolved once by `SKILL.md → ## 0. Resolve Project Root`\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/build-workflow.md",
+   "id": "p10-delta-build-workflow-02",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "   mirroring the `MERGE_EXIT`/`COPY_FALLBACK_EXIT`/`WORKTREE_REMOVE_EXIT` pattern used later in\n   this section — never leave either command's exit code unchecked:",
+   "text": "   mirroring the exit-code handling of the finalize call in `references/worktree.md` —\n   never leave either command's exit code unchecked:\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/build-workflow.md",
+   "id": "p10-delta-build-workflow-03",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "   output (see step 1 of **Parent workflow creation** above).",
+   "text": "   output (see step 1 of **Parent workflow creation** in `workflow-start.md`).\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/fast-path.md",
+   "id": "p10-delta-fast-path-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "fast-path BUILD). Its trigger condition is `fix_verify_keyword_scan` above (BUILD) or",
+   "text": "fast-path BUILD). Its trigger condition is `fix_verify_keyword_scan` (BUILD) or\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/memory-load-workspace.md",
+   "id": "p10-delta-memory-load-workspace-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "State-read compaction self-heal: if any `Read(...)` in this section is denied with a",
+   "text": "State-read compaction self-heal: if any `Read(...)` in the Memory Load step is denied with a\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-workflow.md",
+   "id": "p10-delta-plan-workflow-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "     exception to this section's own step 6 hard-stop-on-malformed-output default, applying only",
+   "text": "     exception to the Chain Execution Loop's own step 6 hard-stop-on-malformed-output default in `SKILL.md`, applying only\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/post-agent-validation.md",
+   "id": "p10-delta-post-agent-validation-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "\n\n### Contract overrides",
+   "text": "\n### Contract overrides\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/post-agent-validation.md",
+   "id": "p10-delta-post-agent-validation-02",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "\n\n**Verifier workload telemetry (unchanged):**\n- When `integration-verifier` reports a `### Timing & Workload` section, persist:\n  - `telemetry.verifier.phase_exit_proof_runs`\n  - `telemetry.verifier.extended_audit_runs`\n  - `telemetry.verifier.workload_seconds`\n\nUse telemetry to explain latency. Do not use it to auto-reduce verification scope.\n",
+   "text": ""
+  },
+  {
+   "anchor": "6. Persist `[craftflow-internal] memory_task_id: {memory_task_id} wf:{workflow_uuid}` only if it matches the active workflow; first remove any existing matching `[craftflow-internal]` or legacy `[cc10x-internal]` `memory_task_id` line to avoid duplicate orphans.\n",
+   "condition": "always",
+   "file": "skills/craftflow-router/references/post-agent-validation.md",
+   "id": "p10-delta-post-agent-validation-03",
+   "op": "insert",
+   "phase": "P10",
+   "position": "after_anchor",
+   "source": "P10 as-built delta against the mechanical move result",
+   "text": "**Verifier workload telemetry (unchanged):**\n- When `integration-verifier` reports a `### Timing & Workload` section, persist:\n  - `telemetry.verifier.phase_exit_proof_runs`\n  - `telemetry.verifier.extended_audit_runs`\n  - `telemetry.verifier.workload_seconds`\n\nUse telemetry to explain latency. Do not use it to auto-reduce verification scope.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/resume.md",
+   "id": "p10-delta-resume-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "\n\n## Artifact session_id rules",
+   "text": "\n## Artifact session_id rules\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/verify-dispatch.md",
+   "id": "p10-delta-verify-dispatch-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "- Contract-override check (`## 8. Post-Agent Validation → Contract overrides`): a claimed",
+   "text": "- Contract-override check (`references/post-agent-validation.md → ### Contract overrides`, in the Post-Agent Validation section 8): a claimed\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/verify-dispatch.md",
+   "id": "p10-delta-verify-dispatch-02",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "  treat the stricter of the two as authoritative (existing Hard Rule, `## 12. Chain Execution",
+   "text": "  treat the stricter of the two as authoritative (existing Hard Rule, `SKILL.md → ## 12. Chain Execution\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/verify-dispatch.md",
+   "id": "p10-delta-verify-dispatch-03",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "captured (and any contract-override downgrade from `## 8. Post-Agent Validation → Contract\noverrides` has already been applied), always call:",
+   "text": "captured (and any contract-override downgrade from `references/post-agent-validation.md → ### Contract overrides`\nin the Post-Agent Validation section 8 has already been applied), always call:\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/verify-dispatch.md",
+   "id": "p10-delta-verify-dispatch-04",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "\n\n#### fix_verify_keyword_scan — Keyword Table",
+   "text": "\n#### fix_verify_keyword_scan — Keyword Table\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/verify-dispatch.md",
+   "id": "p10-delta-verify-dispatch-05",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "fires for DEBUG (see `SKILL.md § 7 → Fix-Verify Dispatch Rule`).",
+   "text": "fires for DEBUG (see `references/verify-dispatch.md → ### Fix-Verify Dispatch Rule`, formerly `SKILL.md § 7`).\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/verify-dispatch.md",
+   "id": "p10-delta-verify-dispatch-06",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "above):** when the text to scan is missing or empty, default to **not** firing",
+   "text": "in `references/fast-path.md`):** when the text to scan is missing or empty, default to **not** firing\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/workflow-start.md",
+   "id": "p10-delta-workflow-start-01",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "# Workflow start\n\n## Task tool capability detection (body of kernel section 0a)",
+   "text": "## Task tool capability detection\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/workflow-start.md",
+   "id": "p10-delta-workflow-start-02",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "workflow artifact write of that session (i.e. before `## 5. Workflow Preparation` creates a new\nworkflow, and before `## 4. Resume And Hydration` needs to decide whether `TaskList()` is safe to",
+   "text": "workflow artifact write of that session (i.e. before `SKILL.md → ## 5. Workflow Preparation` creates a new\nworkflow, and before `SKILL.md → ## 4. Resume And Hydration` needs to decide whether `TaskList()` is safe to\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/workflow-start.md",
+   "id": "p10-delta-workflow-start-03",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "   (see `## 6. Workflow Task Graphs -> Parent workflow creation` for the `--task-tools-available`\n   flag that stamps this field at artifact creation, and `## 2a. Workflow Artifact And Hook Policy` for the schema",
+   "text": "   (see `SKILL.md → ## 6. Workflow Task Graphs` and `Parent workflow creation` below for the `--task-tools-available`\n   flag that stamps this field at artifact creation, and `SKILL.md → ## 2a. Workflow Artifact And Hook Policy` for the schema\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/workflow-start.md",
+   "id": "p10-delta-workflow-start-04",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "`ToolSearch`) and always lives here in `craftflow-router/SKILL.md`, never in",
+   "text": "`ToolSearch`) and always lives in `craftflow-router`, never in\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/workflow-start.md",
+   "id": "p10-delta-workflow-start-05",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "algorithm is shared or host-specific.\n\n",
+   "text": "algorithm is shared or host-specific.\n\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/workflow-start.md",
+   "id": "p10-delta-workflow-start-06",
+   "op": "replace",
+   "phase": "P10",
+   "source": "P10 as-built delta against the mechanical move result (reworded or added text, see the policy map rows)",
+   "start_anchor": "\n### Parent workflow creation",
+   "text": "## Parent workflow creation\n"
   },
   {
    "condition": "always",
@@ -1582,7 +1934,7 @@
    "op": "replace",
    "phase": "P11",
    "source": "P2 REM-FIX 3 G6 (doubt-verify cycle 2): step 5b left plan-workflow.md for plan-bakeoff.md in P11, so the kernel pointer written in P10 must name both files",
-   "start_anchor": "5a/5b. (PLAN workflow) parallel research and bake-off candidate dispatch: see `references/plan-workflow.md`.",
+   "start_anchor": "5a/5b. (PLAN workflow) research and bake-off candidate dispatch: `references/plan-workflow.md`.",
    "status": "drafted",
    "text": "5a. (PLAN workflow) parallel research dispatch: see `references/plan-workflow.md`. 5b. bake-off candidate dispatch: see `references/plan-bakeoff.md`.\n"
   },
@@ -2158,13 +2510,13 @@
   {
    "condition": "always",
    "contingency": "C2",
-   "end_anchor": "    `.craftflow-workspace.json` or `.craftflow/state/workspace/`, read `references/memory-load-workspace.md` and follow it.",
+   "end_anchor": "    `.craftflow-workspace.json` or `.craftflow/state/workspace/`, read `references/memory-load-workspace.md`.",
    "file": "skills/craftflow-router/SKILL.md",
    "id": "p12-c2-discover-workspace",
    "op": "contingency",
    "phase": "P12",
    "source": "plan Budget Ledger C2; after P10 the 5a walk prose already left the kernel, so only the 2-line trigger remains to shrink - DRAFT",
-   "start_anchor": "5a. Workspace-tier discovery (capped upward walk, max 3 levels above PROJECT_ROOT): when an ancestor holds",
+   "start_anchor": "5a. Workspace tier (walk up max 3 levels above PROJECT_ROOT): if an ancestor holds",
    "status": "drafted",
    "text": "5a. Workspace tier: run `craftflow_state_query.py --discover-workspace` and pass a printed root as `--workspace-root`. (Details: `references/memory-load-workspace.md`.)\n"
   },

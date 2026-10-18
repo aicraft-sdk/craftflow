@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Relocation-drill guard for the router tests (P1 REM-FIX 3, extended in REM-FIX 4).
 
-Run: python3 tests/fixtures/test_router_relocation_drills.py [--drills p10_parent,p11_proto_split] [--jobs N] [--list] [--help]
-Applies the plan's P9/P10/P11 section moves on scratch copies (router_relocation_drills.py) and runs the hook suite and
+Run: python3 tests/fixtures/test_router_relocation_drills.py [--drills p11_hookpolicy,p11_proto_split] [--jobs N] [--list] [--help]
+Applies the plan's P11 section moves on scratch copies (router_relocation_drills.py) and runs the hook suite and
 the router-reading fixtures against each copy. For every drill it asserts: no C-row test fails, no failing test is
 unclassified, every failing K/F row's owner names the drill's phase, and no suite crashes. A failure counts only when the
 test passes on the control copy, fails in the drill and is not a wall-clock budget test (DRILL_IGNORED_TESTS). Every drill
-must also leave every heading text unique across the runtime corpus (the heading-uniqueness invariant), and the
-doubt-verifier's duplicate-heading variants must be rejected by that check.
+must also leave every heading text unique across the runtime corpus (the heading-uniqueness invariant), and a corpus that repeats
+a heading must be rejected by that check (exercised on synthetic corpora since the P10 variant retired).
 The self-tests below prove the harness itself: the classifier, the owner parser, the ignore rule and the heading check.
 Prints `Results: N passed, M failed`; exits 1 on any failure. Takes several minutes (all drills in parallel, jobs default
 min(4, cpus // 2)); `--help` and `--list` run nothing.
@@ -63,11 +63,10 @@ def test_classifier() -> None:
           str(drills.classify("hook::t_x", 10, rows)))
 
 
-def test_drill_set_is_the_ten_remaining_moves() -> None:
-    want = {"p10_parent", "p10_resume", "p10_0a", "p10_section3", "p10_worktree13", "p10_postagent", "p10_memload_5a",
-            "p11_proto_split", "p11_build_split", "p11_hookpolicy"}
+def test_drill_set_is_the_three_remaining_moves() -> None:
+    want = {"p11_proto_split", "p11_build_split", "p11_hookpolicy"}
     have = {n for n in drills.DRILLS if n != "control"}
-    check("DRILLS holds exactly the ten drills (the p8_step4 drill retired when P8 moved step 4; p9_memfin, p9_memfin_pointer and p9_fallback_labels when P9 moved section 13 and the fallback paragraphs)",
+    check("DRILLS holds exactly the three P11 drills (the p8_step4 drill retired when P8 moved step 4; p9_memfin, p9_memfin_pointer and p9_fallback_labels when P9 moved section 13 and the fallback paragraphs; the seven p10_* drills when P10 made those moves)",
           have == want, f"missing={sorted(want - have)} extra={sorted(have - want)}")
 
 
@@ -97,18 +96,12 @@ def test_every_drill_applies_and_moves_text() -> None:
 
 
 def test_duplicate_heading_variants_are_rejected() -> None:
-    """The doubt-verifier's variants repeat a moved heading; the invariant must reject each by construction."""
-    base = Path(tempfile.mkdtemp(prefix="drill-variants-"))
-    try:
-        check("the duplicate-heading variant is registered (x_p9_memfin_keep and x_p9_fb_verbatim retired with the P9 drills)",
-              sorted(drills.VARIANTS) == ["x_p10_memload_dup"], str(sorted(drills.VARIANTS)))
-        for name, (_, _, fn) in drills.VARIANTS.items():
-            root = drills.copy_plugin(base / name)
-            fn(drills.Tree(root))
-            problems = drills.heading_problems(drills.rc.read_corpus(root))
-            check(f"variant {name} is rejected as a duplicate heading", bool(problems), "variant left every heading unique")
-    finally:
-        shutil.rmtree(base, ignore_errors=True)
+    """The heading-uniqueness invariant rejects a repeated heading by construction (synthetic corpora: the registered variant retired in P10)."""
+    check("no duplicate-heading variant is registered (x_p10_memload_dup retired with the P10 drills)", sorted(drills.VARIANTS) == [], str(sorted(drills.VARIANTS)))
+    clean = {"skills/craftflow-router/SKILL.md": "## 2. Memory Load\n\ntext\n", "skills/craftflow-router/references/a.md": "## Other\n"}
+    dup = {"skills/craftflow-router/SKILL.md": "## 2. Memory Load\n\ntext\n", "skills/craftflow-router/references/a.md": "## 2. Memory Load\n\nmoved\n"}
+    check("a corpus that repeats a moved heading is rejected", bool(drills.heading_problems(dup)), "duplicate heading accepted")
+    check("a corpus with unique headings passes", not drills.heading_problems(clean), str(drills.heading_problems(clean)))
 
 
 def _run_with(failed: Dict[str, str]) -> "drills.Run":
@@ -118,21 +111,21 @@ def _run_with(failed: Dict[str, str]) -> "drills.Run":
 
 
 def test_timing_tests_and_control_failures_are_not_violations() -> None:
-    rows = {"hook::t_c": ("C", "none"), "hook::t_k": ("K", "P10")}
+    rows = {"hook::t_c": ("C", "none"), "hook::t_k": ("K", "P11")}
     timing = ["fx::test_craftflow_jev_prompt_hint.py::test_new_modules_are_import_cheap",
               "fx::test_craftflow_context_nudge.py::test_module_import_cheap", "fx::test_other.py::test_x_import_cheap_budget"]
-    report, violations = drills.evaluate("p10_parent", _run_with({k: "0.7s > 0.5s" for k in timing}), drills.Run(), rows)
+    report, violations = drills.evaluate("p11_proto_split", _run_with({k: "0.7s > 0.5s" for k in timing}), drills.Run(), rows)
     check("a wall-clock import-budget failure is not a violation", violations == [], str(violations))
     check("an ignored failure is logged, not hidden", sum("ignored" in line for line in report) == 3, str(report))
-    report, violations = drills.evaluate("p10_parent", _run_with({"hook::t_c": "x"}), _run_with({"hook::t_c": "x"}), rows)
+    report, violations = drills.evaluate("p11_proto_split", _run_with({"hook::t_c": "x"}), _run_with({"hook::t_c": "x"}), rows)
     check("a failure that also fails on the control copy is environmental", violations == [], str(violations))
-    report, violations = drills.evaluate("p10_parent", _run_with({"hook::t_c": "x"}), drills.Run(), rows)
+    report, violations = drills.evaluate("p11_proto_split", _run_with({"hook::t_c": "x"}), drills.Run(), rows)
     check("a C row that passes on control and fails in the drill is a violation", len(violations) == 1, str(violations))
     check("a hook test with timing in its name is not ignored",
           not drills.is_ignored_test("hook::test_router_documents_task_metrics_and_timing_telemetry"), "timing fragment ignored a router test")
     heading_run = drills.Run()
     heading_run.heading_problems.append("duplicate heading '2. x' x2 (allowed 1) in ['a.md', 'b.md']")
-    report, violations = drills.evaluate("p10_parent", heading_run, drills.Run(), rows)
+    report, violations = drills.evaluate("p11_proto_split", heading_run, drills.Run(), rows)
     check("a run that repeats a heading is a violation", len(violations) == 1 and "duplicate heading" in violations[0], str(violations))
 
 
@@ -157,8 +150,8 @@ def test_cli_help_and_list_do_not_run_drills() -> None:
           helped.returncode == 0 and "--jobs" in helped.stdout and "--drills" in helped.stdout and time.time() - start < 30,
           f"rc={helped.returncode} out={helped.stdout[:80]!r} err={helped.stderr[:120]!r}")
     names = [line.split("\t")[0] for line in listed.stdout.splitlines()]
-    check("--list prints control, the ten drills and the variants without running any",
-          listed.returncode == 0 and len(names) == 1 + 10 + len(drills.VARIANTS), f"rc={listed.returncode} names={names} err={listed.stderr[:120]!r}")
+    check("--list prints control, the three drills and the variants without running any",
+          listed.returncode == 0 and len(names) == 1 + 3 + len(drills.VARIANTS), f"rc={listed.returncode} names={names} err={listed.stderr[:120]!r}")
 
 
 def test_drills_end_to_end(selected: List[str], jobs: int) -> None:
@@ -182,7 +175,7 @@ def test_drills_end_to_end(selected: List[str], jobs: int) -> None:
 
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description="Relocation-drill guard for the router tests: self-tests plus every planned section move.")
-    ap.add_argument("--drills", default="", help="comma-separated drill names to run end to end (default: all ten)")
+    ap.add_argument("--drills", default="", help="comma-separated drill names to run end to end (default: all three)")
     ap.add_argument("--list", action="store_true", help="print the drills and variants, run nothing")
     ap.add_argument("--jobs", type=int, default=drills.default_jobs(), help="drills run in parallel (default min(4, cpus // 2))")
     args = ap.parse_args(argv)
@@ -197,7 +190,7 @@ def main(argv: List[str]) -> int:
         return 2
     test_owner_parser()
     test_classifier()
-    test_drill_set_is_the_ten_remaining_moves()
+    test_drill_set_is_the_three_remaining_moves()
     test_every_drill_applies_and_moves_text()
     test_duplicate_heading_variants_are_rejected()
     test_timing_tests_and_control_failures_are_not_violations()

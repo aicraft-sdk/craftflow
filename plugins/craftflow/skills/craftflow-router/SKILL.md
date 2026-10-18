@@ -43,6 +43,11 @@ Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset
 | stage | final-phase verifier PASS (BUILD, worktree_mode == auto_created); BUILD resume with auto_created or any worktree pending_gate (incl. policy_invalid) | `references/worktree.md` | BUILD | - | yes |
 | stage | memory task runnable | `references/memory-finalize.md` | ALL | - | yes |
 | stage | task_tools_available == false or native Task* failure | `references/task-tool-fallback.md` | ALL | - | no |
+| start | before workflow creation | `references/workflow-start.md` | ALL | - | yes |
+| stage | resume or live scope marker | `references/resume.md` | ALL | - | no |
+| stage | agent returns | `references/post-agent-validation.md` | ALL | - | yes |
+| stage | integration-verifier PASS | `references/verify-dispatch.md` | BUILD, DEBUG | - | yes |
+| stage | workspace marker found | `references/memory-load-workspace.md` | ALL | - | no |
 <!-- readmap:end -->
 
 ## 1. Intent Routing
@@ -71,31 +76,7 @@ re-run `git rev-parse --show-toplevel` a second time later in a session.
 
 ## 0a. Task Tool Capability Detection
 
-Runs once per session, immediately after `## 0.` resolves `PROJECT_ROOT` and before the first
-workflow artifact write of that session (i.e. before `## 5. Workflow Preparation` creates a new
-workflow, and before `## 4. Resume And Hydration` needs to decide whether `TaskList()` is safe to
-call). Never re-probe within the same session once a value is recorded — reuse the in-context
-result for every later workflow created or resumed this session. Always re-probe fresh in a new
-session; never trust a `capabilities.task_tools_available` value carried over from a prior
-session's resumed artifact (that value can go stale — tool availability has been observed to
-reappear or disappear across restarts).
-
-Detection procedure:
-1. Call `ToolSearch(select: "TaskCreate,TaskList,TaskGet,TaskUpdate")` (or the top-level tool
-   listing query if the `select` parameter is unsupported in the current Claude Code build).
-2. All 4 names present in the result -> `task_tools_available = true`.
-3. None of the 4 names present -> `task_tools_available = false`.
-4. Any ambiguous, partial, or errored probe result -> fail-safe to `task_tools_available = false`.
-   Never assume `true` without an unambiguous positive confirmation.
-5. Record the boolean under `capabilities.task_tools_available` in the workflow artifact JSON
-   (see `## 6. Workflow Task Graphs -> Parent workflow creation` for the `--task-tools-available`
-   flag that stamps this field at artifact creation, and `## 2a. Workflow Artifact And Hook Policy` for the schema
-   documentation this field is added to).
-
-This section's content is inherently Claude-only vocabulary (`task_tools_available`,
-`ToolSearch`) and always lives here in `craftflow-router/SKILL.md`, never in
-`skills/_shared/router-protocol.md`, regardless of whether `## 0.`'s own project-root resolution
-algorithm is shared or host-specific.
+Probe task tools once per session via `references/workflow-start.md`, before `TaskList()` or a workflow write.
 
 When `capabilities.task_tools_available == false`, or any router-owned native Task* call fails mid-session, read `references/task-tool-fallback.md` now and apply its per-site rule at every `TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` call site.
 
@@ -119,32 +100,8 @@ Always run this before routing or resuming. Memory is organized in three tiers:
     dispatch scaffold. Read a file in full only when the digest is insufficient, via
     `craftflow_state_query.py <path> --mode full`, or raw Read for files under the compaction threshold.
     **Re-read rule:** when the digest shows `(omitted for size` or `(+N more)` for a section the task depends on, or the task depends on prior Decisions/Learnings, re-read that file with `craftflow_state_query.py <path> --mode full` before acting.
-5a. Workspace-tier discovery (capped upward walk, max 3 levels above PROJECT_ROOT, to
-    avoid runaway scans): starting at PROJECT_ROOT's parent, check each ancestor for
-    EITHER a `.craftflow-workspace.json` file OR a `.craftflow/state/workspace/`
-    directory. Stop at the first match, or after 3 levels, or at the filesystem root,
-    whichever comes first. Never select `$HOME` or `/` itself as a matched workspace
-    root even if a marker is somehow present there (defense in depth alongside
-    `craftflow_workspace_init.py`'s own refusal list).
-    - No marker found: skip silently -- zero behavior change (existing production
-      reality for every non-workspace session today).
-    - Marker found at {workspace_root}: pass it as `--workspace-root` to the digest call
-      (covers workspace/activeContext.md, patterns.md, progress.md).
-      Missing/malformed file: auto-heal via craftflow:session-memory template (same rule
-      as project/'s own auto-heal), never a hard stop.
-      Unreadable (permission error): skip with a logged note, never a hard stop.
-    - workspace_root == PROJECT_ROOT (the current project IS itself the configured
-      workspace root): do not double-load; treat workspace tier as absent for this
-      session to avoid merging a tier with itself.
-    Merge precedence (lowest to highest): workspace/ < project/ < workflows/{wf-id}/ --
-    for ## Current Focus / ## Next Steps / ## Tasks, the highest-precedence tier present
-    wins; ## Decisions / ## User Standards / ## Architecture Patterns always come from
-    project/ (unchanged rule) with workspace/'s own such sections available as
-    additional read-only context, never overriding project/'s.
-    Note: this **load** walk is deliberately NOT membership-gated, unlike
-    `discover_workspace_root()`'s write-grant walk in `craftflow_hooklib.py`. The
-    divergence is intentional (back-compat with existing workspace-memory users) and
-    ADR-recorded -- do not "re-sync" the two without reading that ADR first.
+5a. Workspace tier (walk up max 3 levels above PROJECT_ROOT): if an ancestor holds
+    `.craftflow-workspace.json` or `.craftflow/state/workspace/`, read `references/memory-load-workspace.md`.
 6. If workflow_uuid is known (resume path):
    a. Bash("mkdir -p \"$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}\"")
    b-d. pass `--workflow-uuid {workflow_uuid}` to the digest call (covers workflows/{workflow_uuid}/
@@ -161,11 +118,7 @@ Do not parallelize step 1 with reads.
 Memory Summary / Project Patterns for the dispatch scaffold: take them from the digest's
 `## Memory Summary` and `## Project Patterns` blocks (do not re-Read the files for this).
 
-State-read compaction self-heal: if any `Read(...)` in this section is denied with a
-`state-read-compaction` reason (the target `.craftflow/state/**` file is oversized), do not
-treat the denial as a hard failure. Instead, run the exact `craftflow_state_query.py ...
---mode summary` command named in the deny message via `Bash(...)` and treat its stdout as the
-loaded memory content for that file.
+State-read compaction self-heal: `references/memory-load-workspace.md`.
 
 If a project/ memory file is missing:
 - Create it using the `craftflow:session-memory` template.
@@ -203,109 +156,11 @@ Mandatory reference read:
 - Before workflow creation, artifact mutation, hook policy changes, or resume logic that depends on artifact fields, immediately read `references/workflow-artifact-and-hook-policy.md`.
 - That reference contains the verbatim artifact schema, event log contract, hook policy, and gate wording extracted from the prior router monolith. Treat it as load-bearing orchestration law, not optional background.
 
-## 3. Task Metadata Contract
-
-Every CRAFTFLOW task description starts with normalized metadata lines:
-
-```text
-wf:{workflow_uuid}
-kind:{workflow|agent|remfix|memory|reverify|research}
-origin:{router|component-builder|bug-investigator|code-reviewer|silent-failure-hunter|integration-verifier|planner}
-phase:{build|build-implement|build-review|build-hunt|build-verify|build-doc-sync|learn-distill|skill-distill|debug|debug-investigate|debug-review|debug-verify|doubt-verify|review|review-audit|plan|plan-create|plan-review-gap-1|plan-review-gap-2|memory-finalize|re-review|re-hunt|re-verify|re-plan|research-web|research-github|plan-bakeoff-candidate-opus|plan-bakeoff-candidate-sonnet|plan-bakeoff-candidate-haiku|plan-bakeoff-candidate-fable|plan-bakeoff-judge}
-plan:{path|N/A}
-scope:{ALL_ISSUES|CRITICAL_ONLY|N/A}
-reason:{short reason or N/A}
-```
-
-Rules:
-- `wf:` is mandatory on every child task.
-- Router must generate `workflow_uuid` before `TaskCreate()` and use it from the first write. `wf:PENDING_SELF` is retired in v10.
-- `kind:` is mandatory and drives resume, routing, and counting logic.
-- `origin:` is mandatory on every `kind:remfix` task.
-- `plan:` is required on workflow, agent, reverify, and memory tasks.
-- `reason:` is required on remediation and research tasks.
-- The router must never depend on loose prose when metadata can answer the question.
+**3. Task Metadata Contract:** see `references/workflow-start.md`.
 
 ## 4. Resume And Hydration
 
-After memory load:
-
-```text
-TaskList()
-```
-
-In task-tool fallback mode (`references/task-tool-fallback.md → ## Resume fallback`), skip `TaskList()` and resume from the workflow artifact.
-
-Hydration rules:
-- Find active parent workflow tasks by subject prefix `CRAFTFLOW BUILD:`, `CRAFTFLOW DEBUG:`, `CRAFTFLOW REVIEW:`, `CRAFTFLOW PLAN:`.
-- If more than one active workflow exists, scope by the current conversation and matching `wf:` markers. Do not resume a workflow you cannot scope confidently.
-- Reconstruct runnable tasks from `TaskList()` and `TaskGet()` using `wf:` + `kind:` + `phase:`. Do not rely on stored task IDs for correctness.
-- Read and write only the state namespace. Ignore legacy `.craftflow/*.md` and `.craftflow/workflows/*` state during hydration. State lives under `.craftflow/state/`.
-- `[craftflow-internal] memory_task_id` in `activeContext.md` is only a transient optimization. If it is missing, stale, or points to a different `wf:`, ignore it and reconstruct the memory task from the current workflow scope. [EASY TO MISS: stale memory_task_id is the #1 cause of cross-workflow pollution]
-- Never use an unscoped fallback like "first pending Memory Update task". [EASY TO MISS: unscoped lookups silently pick up orphan tasks from prior workflows]
-- **Session re-stamp on resume.** After scoping the resumed workflow, run `python3 "$CLAUDE_PLUGIN_ROOT/scripts/craftflow_workflow_id.py" --session-id`. An empty line means the id is unavailable or invalid: change nothing. Otherwise re-stamp (set `session_id` to the printed id, bump `updated_at`, append a `session_rebound` event `{"ts":"{iso_timestamp}","wf":"{workflow_uuid}","event":"session_rebound","agent":"router","from":"{old_session_id|null}","to":"{session_id}"}` to `events.jsonl`) ONLY when (a) the artifact `session_id` is null or absent, or (b) the user explicitly resumes this workflow (not status/review hydration) AND the artifact `updated_at` is older than 15 minutes. In every other case leave `session_id` as is and never rebind a workflow another live session may own.
-
-Resume algorithm:
-1. Identify the active parent workflow.
-2. Extract `workflow_uuid` from the `wf:` line.
-3. Read all CRAFTFLOW tasks whose descriptions contain that `wf:`.
-4. Derive runnable tasks from `status` and `blockedBy`.
-5. Reconstruct the memory task as the unique pending/in_progress `kind:memory` task in the same `wf:`.
-
-Scope-decision resume:
-- Before normal routing, check `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Decisions` for a live marker:
-  - `[SCOPE-DECISION-PENDING: wf:{workflow_uuid} reason:{...}]`
-- If present, treat the current user reply as the answer to that pending BUILD scope gate:
-  - `critical only` -> create the pending REM-FIX with `scope:CRITICAL_ONLY`
-  - `all issues` -> create the pending REM-FIX with `scope:ALL_ISSUES`
-  - anything else -> ask again with the same two options and stop
-- After consuming a valid answer:
-  - remove the pending marker from `## Decisions`
-  - create the scoped REM-FIX
-  - block downstream re-review / re-hunt / verifier tasks as normal
-  - stop after task creation so the next turn resumes from task state, not from repeated prose parsing
-  - [EASY TO MISS: When persisting user decisions, use the user's exact words. Paraphrasing introduces drift that compounds across resume cycles.]
-- Interrupted jev-auto-decide: if `## Decisions` instead contains a
-  `[jev-auto-decided: wf:{workflow_uuid} choice:{choice} confidence:{confidence}]` marker (the
-  `### Scope resolution` procedure's Jev auto-decide branch writes this marker, creates the
-  REM-FIX, then rewrites the marker a second time to append `consumed:true` — a session
-  interrupted between the write and that final `consumed:true` rewrite leaves the marker without
-  the tag) that does **not** already end in `consumed:true`, treat it as an interrupted
-  auto-decide, not a pending human ask.
-  - **Correlation, not bare existence:** do not treat "some `kind:remfix` task exists anywhere in
-    this `wf:`" as proof this marker was already handled. A single workflow can legitimately
-    accumulate multiple sequential REM-FIX cycles over its lifetime (this workflow's own
-    `remediation_history` already has several), so a workflow-wide existence check is vacuously
-    satisfied by any unrelated remfix task and would silently skip a genuinely interrupted marker.
-    The `consumed:true` tag lives on the marker itself and is written only once *this exact
-    marker's* REM-FIX is confirmed created — that tag, not a task-list search, is the
-    correlation signal.
-  - do not ask the user — the marker already records a resolved Jev decision
-  - **Existence check before create (closes the remaining interruption window):** the
-    create-then-tag sequence below is itself two separate, non-atomic steps — a session
-    interrupted between "create the REM-FIX" and "rewrite the marker to append `consumed:true`"
-    would otherwise cause this branch to create a *second* REM-FIX for the same already-created
-    one on resume. Before creating, check for an existing `kind:remfix` task in this `wf:` whose
-    description's `reason:` line references this exact marker's `choice`/`confidence` values and
-    was created after this marker was written. If found, reuse that task as the REM-FIX (skip
-    creation, go straight to the `consumed:true` rewrite below) instead of creating a duplicate.
-  - create the REM-FIX now (only if no matching task was found above) using the `scope`/`choice`
-    already recorded in the marker (`scope:ALL_ISSUES` if `choice:all_issues`, else
-    `scope:CRITICAL_ONLY`) through the normal Circuit breaker and rule `1a` procedure
-  - immediately rewrite the marker to append `consumed:true`, exactly as the happy path in
-    `### Scope resolution` does, so a later resume does not re-process the same marker again
-  - block downstream re-review / re-hunt / verifier tasks as normal
-  - stop after task creation so the next turn resumes from task state, not from repeated prose
-    parsing
-  - leave the `[jev-auto-decided: ... consumed:true]` marker in place (it is not a pending-ask
-    marker — it is already-consumed history, matching how a normal
-    `[SCOPE-DECISION-PENDING: ...]` marker is only removed once its own REM-FIX exists)
-
-Safety rules:
-- If a task list is shared across sessions, always scope by `wf:` before resuming.
-- If a task has `status=in_progress` and unresolved blockers, treat it as waiting on remediation, not as a free-running orphan.
-- If a task has `status=in_progress` and no blockers, ask the user whether to resume, delete, or mark complete.
-- If legacy tasks exist with subjects starting `BUILD:`, `DEBUG:`, `REVIEW:`, or `PLAN:` without the `CRAFTFLOW` prefix, ask whether to resume the legacy workflow or start a fresh CRAFTFLOW workflow.
+On resume, or when the digest `## Decisions` holds a live `[SCOPE-DECISION-PENDING:` or unconsumed `[jev-auto-decided:` marker, read `references/resume.md`.
 
 ## 5. Workflow Preparation
 
@@ -338,72 +193,7 @@ Router-owned interface fields:
 - Before fast-path routing (performed during BUILD preparation), read `references/fast-path.md` for the canonical keyword table, agent dispatch table, gate table, and escalation protocol.
 - Before any `code-reviewer` dispatch (BUILD or REVIEW), read `references/harness-self-checks.md` for the arch-lint wiring; the detail lives there, not here, to keep this file from growing further.
 
-### Fast Path Detection
-
-Before BUILD child task creation, read `references/fast-path.md` (contains canonical keyword table and escalation protocol).
-
-Perform `risk_keyword_scan`:
-1. Scan request text (case-insensitive) against all keyword groups in `references/fast-path.md → risk_keyword_scan — Keyword Table`
-2. Collect matched keywords into `fast_path_risk_signals`
-3. Assign `build_mode`:
-   - `fast_path_risk_signals == []` → `build_mode = "fast_path"`
-   - `fast_path_risk_signals != []` → `build_mode = "standard"`
-4. Write to workflow artifact: `build_mode`, `fast_path_risk_signals`, `fast_path_escalated: false`
-5. Announce routing decision:
-   - Fast path: `-> FAST-PATH BUILD (no risk signals)`
-   - Standard: `-> FULL BUILD (risk signals: {matched keywords})`
-
-### Worktree Isolation (BUILD Default)
-
-Every new BUILD workflow attempts to isolate file writes in a dedicated git worktree:
-
-1. At BUILD start, `PROJECT_ROOT` was already resolved once by `## 0. Resolve Project Root`
-   at session start — reuse it directly. Do not re-run `git rev-parse --show-toplevel` or
-   invoke the workspace-root resolver script a second time.
-
-   [EASY TO MISS: if `## 0.` fell back to `NO_REPO_FOUND`/`RESOLVE_SCRIPT_ERROR` (no git-repo
-   children under cwd, or the resolver script itself failed), `PROJECT_ROOT` is already set to
-   `$(pwd)` from that fallback — Worktree Isolation still proceeds with the `mkdir`/`git
-   worktree add` block below using that same fallback value, exactly like the single-repo
-   path. There is no separate NO_REPO_FOUND branch here anymore; `## 0.` already handled it.]
-
-   With `PROJECT_ROOT` reused from `## 0.` above, capture both commands' output and exit code,
-   mirroring the `MERGE_EXIT`/`COPY_FALLBACK_EXIT`/`WORKTREE_REMOVE_EXIT` pattern used later in
-   this section — never leave either command's exit code unchecked:
-   ```bash
-   MKDIR_OUTPUT=$(mkdir -p "$PROJECT_ROOT/.claude/worktrees" 2>&1)
-   MKDIR_EXIT=$?
-   WORKTREE_ADD_OUTPUT=$(git worktree add "$PROJECT_ROOT/.claude/worktrees/{worktree_dir}" -b {worktree_branch} 2>&1)
-   WORKTREE_ADD_EXIT=$?
-   ```
-   where `worktree_dir` and `worktree_branch` come from the `craftflow_workflow_id.py` helper
-   output (see step 1 of **Parent workflow creation** above).
-   The trailing 8-hex suffix in both names ties the worktree back to the workflow id,
-   guaranteeing concurrent same-feature workflows always get distinct dirs/branches.
-
-   - **If `MKDIR_EXIT != 0` OR `WORKTREE_ADD_EXIT != 0`**: proceed to step 3 ("On failure") below.
-     Use `$MKDIR_OUTPUT` as the `{error}` value if `MKDIR_EXIT != 0`; otherwise use
-     `$WORKTREE_ADD_OUTPUT`.
-   - **Otherwise** (`MKDIR_EXIT == 0` AND `WORKTREE_ADD_EXIT == 0`): proceed to step 2 ("On
-     success") below.
-
-2. On success:
-   - Set `worktree_mode: "auto_created"` in the workflow artifact
-   - Set `worktree_path: "{project_root}/.claude/worktrees/{worktree_dir}"` (absolute; `worktree_dir` from the helper)
-   - Set `worktree_branch: "{worktree_branch}"` (from the helper)
-   - Add `## Worktree` section to every builder and verifier task description:
-     ```
-     ## Worktree
-     WORKTREE_PATH: {worktree_path}
-     All file reads, edits, and writes must use paths rooted at WORKTREE_PATH.
-     Do not modify files outside WORKTREE_PATH during this BUILD phase.
-     ```
-
-3. On failure (any git error — shallow clone, detached HEAD, path conflict):
-   - Set `worktree_mode: null`
-   - Append `{"event":"worktree_fallback","reason":"{error}"}` to the event log
-   - Continue with main tree — never block a workflow over worktree failure
-   - Omit the `## Worktree` section from task descriptions when in fallback mode
+Fast Path Detection and Worktree Isolation steps 1-3: `references/build-workflow.md`.
 
 4. After `integration-verifier` PASS on the final phase and before memory-finalize: when
    `worktree_mode == "auto_created"`, read `references/worktree.md` and run its finalize call.
@@ -426,53 +216,7 @@ Every new BUILD workflow attempts to isolate file writes in a dedicated git work
 
 ## 6. Workflow Task Graphs
 
-### Parent workflow creation
-
-Use this pattern for every new workflow:
-
-1. Mint the id, worktree names and `iso_timestamp` AND write the v10 artifact + event log in one helper call, in three sub-steps. Never splice request text into a shell string (quotes, `$(...)` and backticks in it would be executed or corrupt the command); it travels through a per-session file instead.
-
-   a. Resolve the install dir and the session id (no workflow id is needed for this). `CRAFTFLOW_INSTALL` is resolved by this one-line bootstrap, the canonical form that other sections reuse verbatim:
-
-```bash
-CRAFTFLOW_INSTALL=$(python3 -c "import json,pathlib;print(json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())['plugins']['craftflow@craftflow'][0]['installPath'])")
-python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_workflow_id.py" --session-id
-```
-
-   b. Write the user request VERBATIM with the `Write` tool to `$PROJECT_ROOT/.craftflow/state/.router-request-{session_id}.txt` (`{session_id}` = the line printed above; use `nosession` when it is empty). The per-session name keeps concurrent sessions apart; the Write guard allows this path (`.craftflow/state/` is inside the project, unlike `/tmp`).
-
-   c. Mint (the helper reads the file, mints, writes the artifact, then deletes the request file; it rejects a request file older than 120 s as a stale leftover, and an empty request):
-
-```bash
-CRAFTFLOW_INSTALL=$(python3 -c "import json,pathlib;print(json.loads(pathlib.Path.home().joinpath('.claude/plugins/installed_plugins.json').read_text())['plugins']['craftflow@craftflow'][0]['installPath'])")
-python3 "$CRAFTFLOW_INSTALL/scripts/craftflow_workflow_id.py" \
-  --request-file "$PROJECT_ROOT/.craftflow/state/.router-request-{session_id}.txt" --project "$PROJECT_ROOT" \
-  --emit-env --init-artifact \
-  --workflow-type "{WORKFLOW}" --phase "{build|debug|review|plan}" \
-  --task-tools-available "{true|false|unknown}"
-```
-
-`{WORKFLOW}` is `BUILD|DEBUG|REVIEW|PLAN` and `--task-tools-available` is the detected `capabilities.task_tools_available` value. The call prints raw `KEY=value` lines (split each on the first `=`; no quoting to undo); read `workflow_uuid` · `iso_timestamp` · `worktree_dir` · `worktree_branch` · `session_id` · `session_id_json` from that output and substitute them into later steps (do not `eval` the output: the safe-shell guard denies it). **Mint-failure stop rule:** if the call exits non-zero, or its output has no `workflow_uuid=` line, STOP — do not call `TaskCreate()`, do not create child tasks, and report the `Error:` line to the user; a failed mint writes nothing (the helper removes any file it created) and is never to be treated as success. The helper writes `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json` (the v10 artifact, schema per `references/workflow-artifact-and-hook-policy.md`, including `circuit_breaker`), `{workflow_uuid}.events.jsonl` (the `workflow_started` line) and creates the `workflows/{workflow_uuid}/` directory; it refuses (non-zero exit, naming the conflicting file) to overwrite an existing artifact or events log. No artifact `Write()` and no separate `mkdir` are needed. Optional flags:
-
-- `--task-id "{parent_task_id}"` is optional and normally omitted: the artifact is written before `TaskCreate()`, so the `workflow_started` event's `task_id` is `null`.
-- **Only if `## 0.` recorded a `project_root_resolution_fallback` reason for this session** (`TOPLEVEL_EXIT != 0` and outcome `NO_REPO_FOUND` or `RESOLVE_SCRIPT_ERROR`): `--fallback-reason "NO_REPO_FOUND"` (or `"RESOLVE_SCRIPT_ERROR"`). This appends the `project_root_resolution_fallback` `status_history` entry and a second events.jsonl line. Skip in the common single-repo case.
-- **Only if `## 0.` step 1a set `WORKSPACE_WRITABLE_PATHS_JSON` to something other than `[]`** (`TOPLEVEL_EXIT != 0` and the variable is set and `!= '[]'`): `--workspace-writable-paths-json "$WORKSPACE_WRITABLE_PATHS_JSON"` (fills `workspace_writable_paths`; default `[]`). Additionally, if `WORKSPACE_WRITABLE_PATHS_DROPPED_JSON` is non-empty, `--writable-paths-dropped-json "$WORKSPACE_WRITABLE_PATHS_DROPPED_JSON"` (appends the `workspace_writable_paths_entries_dropped` entry and events line).
-
-ID format: `wf-{slug}-{YYYYMMDD-HHMMSS}-{8hex}`.
-Slug = slugified git branch name (if a genuine feature branch, i.e. not main/master/develop/dev/trunk or a craftflow-generated `wf-`/`worktree-` branch) — otherwise slugified request text.
-The `iso_timestamp` from the helper is the authoritative creation timestamp — use it for any later `{iso_timestamp}` placeholder. `session_id_json` is a raw JSON fragment (a double-quoted string, or `null` when the session id is absent); paste it as-is where a JSON value is needed, and `session_id` is empty in that case. The project's `.craftflow/` directory must already exist (the `## 2.` memory-load step creates it); otherwise the mint fails with `Error:` and writes nothing.
-
-2. Create the parent workflow task with that UUID (after step 1, so the artifact exists first):
-
-```text
-TaskCreate({
-  subject: "CRAFTFLOW {WORKFLOW}: {summary}",
-  description: "wf:{workflow_uuid}\nkind:workflow\norigin:router\nphase:{build|debug|review|plan}\nplan:{plan_file or 'N/A'}\nscope:N/A\nreason:User request\n\nUser request: {request}\nChain: {chain description}",
-  activeForm: "{workflow active form}"
-})
-```
-
-Only create child tasks after the v10 artifact and state directory exist (step 1 guarantees both). The `workflows/{workflow_uuid}/` directory is where the memory-finalize task writes workflow-scoped memory (activeContext.md, patterns.md, progress.md for this workflow only).
+**Parent workflow creation:** see `references/workflow-start.md`.
 
 ### BUILD task graph
 
@@ -577,126 +321,7 @@ Shared with Cursor — canonical text lives in
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
 "Previous Agent Findings Handoff". DEBUG skips hunter findings.
 
-### Doubt-Verify Dispatch Rule
-
-After `integration-verifier` returns PASS, dispatch `craftflow:doubt-verifier` when ANY of these conditions are true:
-- `verification_rigor: critical_path` is set in the workflow artifact
-- The phase included irreversible operations: data migration, schema change, auth flow, payment path, secret rotation
-- The phase changed ≥3 files across ≥2 directories (cross-module blast radius)
-
-**Do NOT dispatch doubt-verifier when:**
-- `verification_rigor: standard` and no irreversible ops
-- Integration verifier returned FAIL (remediate first)
-- A doubt cycle already returned DOUBT_THEATER (escalate instead)
-
-**Doubt-verify task shape:**
-```text
-TaskCreate({
-  subject: "CRAFTFLOW doubt-verifier: Adversarial review cycle {N}",
-  description: "wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:doubt-verify\nplan:{plan_file or 'N/A'}\nscope:N/A\nreason:critical_path adversarial pass\n\nCycle: {N}\n\n## Artifact\n{artifact description: plan name, diff summary, or scenario table}\n\n## Contract\n{acceptance criteria from plan or integration-verifier exit criteria}",
-  activeForm: "Adversarial doubt review"
-})
-```
-
-In task-tool fallback mode (`references/task-tool-fallback.md`) include `## Cycle` N (per-phase, from 1) in the `craftflow:doubt-verifier` dispatch prompt; there is no `Cycle:` task line for the agent to read.
-
-**After doubt-verifier returns:**
-- First run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate doubt_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root "$PROJECT_ROOT"` (N = the `Cycle:` of this cycle's task; in task-tool fallback mode (`references/task-tool-fallback.md`), the `## Cycle` value of this dispatch's prompt, else the agent's echoed `Cycle number:`, never `telemetry.loop_counts`). `advance` → apply the bullet for the returned verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict, as the hard-stop bullet does (advance once in total). `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).
-- `DOUBT_VERDICT: CONFIRMED` → advance phase cursor, continue workflow
-- `DOUBT_VERDICT: REFUTED` → create REM-FIX task (same as normal verification failure), increment loop counter
-- `DOUBT_VERDICT: DOUBT_THEATER` → log event, skip further doubt cycles, advance to Memory Update with advisory note
-- `CYCLE_COMPLETE: true` on cycle `policy.doubt_cycles_max` (= 3) → advance regardless of verdict (`policy.doubt_cycles_max` (= 3)-cycle hard stop)
-
-**Doubt cycle counter:** Track in workflow artifact under `telemetry.loop_counts.doubt_verify`. Max `policy.doubt_cycles_max` (= 3) cycles; router enforces the hard stop.
-
-**Reliability-gates evidence recording (best-effort, non-blocking):** After the `DOUBT_VERDICT`
-is captured, check whether this cycle's `plan:`/`reason:` text loosely matches any seeded gate in
-`.craftflow/state/project/reliability-gates.json` — a case-insensitive substring match against 3+
-significant words from the gate's `title`, or against any `assertionRefs` basename, is sufficient
-(this is bookkeeping, not a hard gate). For every matching gate, call:
-```bash
-python3 {plugin_root}/scripts/craftflow_reliability_gates.py --record-evidence {gate_id} \
-  --wf {workflow_uuid} --outcome {pass|fail} --note "{one-line cycle summary}" \
-  --state-dir .craftflow/state
-```
-Map `DOUBT_VERDICT: CONFIRMED` to `--outcome pass`; `REFUTED` or `DOUBT_THEATER` to `--outcome
-fail`. A non-zero exit from this call is non-blocking — log the error to the workflow event log
-and continue; same best-effort posture as the existing skill-ledger `--observe`/`--prune` calls.
-
-### Fix-Verify Dispatch Rule
-
-After `integration-verifier` returns PASS, evaluate `fix_verify_gate` independently of
-`doubt_verify_gate` above — either, both, or neither may fire for the same phase. Unlike
-`doubt_verify_gate`, `fix_verify_gate` is NOT restricted to `build_mode: "standard"` — it fires
-on fast-path and escalated BUILD too (see `references/fast-path.md → Gate Table`).
-
-**DEBUG workflows:** always fires. A DEBUG workflow is by definition fixing a demonstrated bug
-— `bug-investigator`'s own contract already requires a reproduced `Regression:` scenario with
-`ROOT_CAUSE`, so a pre-fix state to compare against always exists.
-
-**BUILD workflows:** fires only when the current phase is fixing an existing defect, not
-adding new functionality. Determine this via `fix_verify_keyword_scan`
-(`references/fast-path.md → fix_verify_keyword_scan — Keyword Table`):
-1. If a plan exists (`plan_file != null`): scan `normalized_phases[phase_cursor].objective`
-   (case-insensitive) against the keyword table.
-2. If `plan:N/A`: scan the workflow artifact's own `user_request` field — the same text
-   `risk_keyword_scan` already scans at BUILD prep. There is no separate phase-objective
-   structure to read when no plan exists (`normalized_phases` is empty).
-3. If the text to scan (from either source) is empty, missing, or otherwise unreadable:
-   default to **not** firing. This is a fail-safe default, not fail-open: a false negative here
-   just means today's existing verification level still applies (no regression); a false
-   positive would add unnecessary review cost to genuine new-feature BUILD work.
-4. A keyword match fires the gate; no match does not.
-
-**Fix-verify task shape:**
-```text
-TaskCreate({
-  subject: "CRAFTFLOW doubt-verifier: Fix-verification cycle {N}",
-  description: "wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:fix-verify\nplan:{plan_file or 'N/A'}\nscope:N/A\nreason:Prove the fix is load-bearing and scan for dormant sibling defects\n\nCycle: {N}\n\n## Artifact\n{diff summary or files changed in this phase}\n\n## Original Defect\n{DEBUG: bug-investigator's ROOT_CAUSE + reproduced Regression scenario. BUILD: the phase objective/exit-criteria text that matched fix_verify_keyword_scan.}\n\n## Contract\nReproduce the pre-fix state against the exact reported reproduction input and confirm it exhibits the defect; confirm the post-fix state closes it on the same input; search for other reachable call sites of the same root-cause logic.",
-  activeForm: "Verifying fix is load-bearing"
-})
-```
-
-In task-tool fallback mode (`references/task-tool-fallback.md`) include `## Cycle` N (per-phase, from 1) in the fix-verify dispatch prompt too; there is no `Cycle:` task line to read.
-
-**After doubt-verifier returns** (see `agents/doubt-verifier.md → ## Fix-Verify Contract`):
-- First run `python3 "$CRAFTFLOW_SCRIPTS/craftflow_gate_check.py" --gate fix_verify_cycles_max --point post_verdict --cycle {N} --wf {workflow_uuid} --project-root "$PROJECT_ROOT"` (after the contract-override check below has been applied; N = the `Cycle:` of the fix-verify task; in task-tool fallback mode (`references/task-tool-fallback.md`), the `## Cycle` value of this dispatch's prompt). `advance` → apply the bullet for the returned (post-override) verdict, except that no REM-FIX is created; its loop-counter increment still applies; then advance regardless of verdict (the `policy.fix_verify_cycles_max` hard stop that the cycle-counter paragraph inherits from `doubt_verify`; advance once in total). If `doubt_verify_gate` also fired on this phase, a capped verdict does not block phase exit under the stricter-verdict rule; the other gate's verdict still applies. `proceed` → apply the verdict bullets below. Any other result → `loop_cap_check_failed` (§ 14).
-- `FIX_VERDICT: LOAD_BEARING` → advance phase cursor, continue workflow.
-- `FIX_VERDICT: NOT_LOAD_BEARING` or `SIBLING_FOUND` → create a REM-FIX task (same shape as any
-  other verification failure — `origin:router`, `phase:fix-verify`), increment
-  `telemetry.loop_counts.fix_verify`.
-- Contract-override check (`## 8. Post-Agent Validation → Contract overrides`): a claimed
-  `FIX_VERDICT: LOAD_BEARING` where `PRE_FIX_OUTPUT` does not actually differ from
-  `POST_FIX_OUTPUT` in the direction the fix claims is downgraded to `NOT_LOAD_BEARING` before
-  the router acts on it.
-- If `doubt_verify_gate` also fired on this same phase, the two verdicts are independent —
-  treat the stricter of the two as authoritative (existing Hard Rule, `## 12. Chain Execution
-  Loop` step 6, "if two agents in the same phase return contradictory verdicts... treat the
-  stricter verdict as authoritative"). Either a `DOUBT_VERDICT: REFUTED` or a
-  `FIX_VERDICT: NOT_LOAD_BEARING`/`SIBLING_FOUND` blocks phase-exit; never average or reconcile
-  the two contracts into one.
-- When both gates fire for the same phase, dispatch sequentially — fix-verify first, then
-  doubt-verify — never in parallel. `doubt-verifier` has not previously been parallelized
-  against itself; both dispatches are read-only and cheap enough to run in sequence, and
-  introducing a new same-agent parallel-dispatch pattern is out of scope for this change.
-
-**Fix-verify cycle counter:** Track in workflow artifact under
-`telemetry.loop_counts.fix_verify`. Max `policy.fix_verify_cycles_max` (= 3) cycles; router enforces the hard stop (same rule as
-`doubt_verify`'s own counter above).
-
-**Reliability-gates evidence recording (best-effort, non-blocking):** After `FIX_VERDICT` is
-captured (and any contract-override downgrade from `## 8. Post-Agent Validation → Contract
-overrides` has already been applied), always call:
-```bash
-python3 {plugin_root}/scripts/craftflow_reliability_gates.py --record-evidence \
-  fix-verify-evidence-completeness --wf {workflow_uuid} --outcome {pass|fail} \
-  --note "{one-line cycle summary}" --state-dir .craftflow/state
-```
-(`LOAD_BEARING` → `--outcome pass`; `NOT_LOAD_BEARING`/`SIBLING_FOUND` → `--outcome fail`) — every
-fix-verify cycle is definitionally evidence for this gate, recorded unconditionally. Additionally,
-apply the same loose-match check as the Doubt-Verify Dispatch Rule above against this cycle's
-`plan:`/`reason:`/diff-summary text for any OTHER seeded gate, and record evidence there too if it
-matches. A non-zero exit from either call is non-blocking — log and continue.
+**Doubt-Verify and Fix-Verify (BUILD, DEBUG):** after `integration-verifier` returns PASS, read `references/verify-dispatch.md`.
 
 ### Task metrics and timing telemetry
 
@@ -712,209 +337,23 @@ Timing telemetry is measurement only. It must never bypass gates, phase exit, or
 - If unavailable, use the event log delta above.
 - Keep `task_metrics_available="unknown"` until one of these paths succeeds; set to `"event_log"` when using delta computation.
 
-**Verifier workload telemetry (unchanged):**
-- When `integration-verifier` reports a `### Timing & Workload` section, persist:
-  - `telemetry.verifier.phase_exit_proof_runs`
-  - `telemetry.verifier.extended_audit_runs`
-  - `telemetry.verifier.workload_seconds`
-
-Use telemetry to explain latency. Do not use it to auto-reduce verification scope.
-
 ## 8. Post-Agent Validation
 
-### Read-only contracts
+After any agent returns, read `references/post-agent-validation.md` (once per workflow; re-read after compaction) and apply it. It parses:
 
-Primary signal and fallback heading conventions — shared with Cursor — canonical list
-lives in `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
-"Agent Verdict Headings". `Read()` that file now if you have not already this session.
-
-Verdict extraction:
-1. Try the envelope on line 1.
-2. If envelope is missing or malformed, scan the first 5 lines for the heading.
-3. Extract `CRITICAL_ISSUES` from `### Critical Issues`.
-4. If output is too short or malformed, run inline verification rather than blindly approving.
-5. Detect `SELF_REMEDIATED` from task state:
-   - If the task remains `in_progress` and `blockedBy` is non-empty after the agent stops, treat it as self-remediated.
-6. For integration-verifier, parse scenario accounting:
-   - `SCENARIOS_TOTAL`
-   - `SCENARIOS_PASSED`
-   - `SCENARIOS_FAILED`
-   - Fail validation if those counts do not reconcile with the evidence array.
-   - Fail validation if any scenario omits explicit `Expected` or `Actual` evidence.
-
-Read-only structured intent fields:
-- `REMEDIATION_NEEDED: true|false`
+- `SCENARIOS_TOTAL`
+- `SCENARIOS_PASSED`
+- `SCENARIOS_FAILED`
 - `REMEDIATION_REASON: ...`
-- `REMEDIATION_SCOPE_REQUESTED: N/A|CRITICAL_ONLY|ALL_ISSUES`
-- `REVERT_RECOMMENDED: true|false`
-- `PLANNING_REVIEW_STATUS: PASS|FINDINGS`
-- `BLOCKING_FINDINGS_COUNT: [number]`
-- `REPLAN_NEEDED: true|false`
 - `REPLAN_REASON: ...`
-
-Compatibility rule:
-- Accept legacy self-healed blocked task behavior during migration.
-- Prefer the new structured remediation fields over task-state inference when both exist.
-
-### Write-agent YAML contracts
-
-For write agents, parse the final fenced YAML block under `### Router Contract (MACHINE-READABLE)`.
-
-Expected fields:
-
-| Agent | Required fields |
-|-------|-----------------|
-| component-builder | `STATUS`, `SUMMARY`, `CONFIDENCE`, `PHASE_ID`, `PHASE_STATUS`, `PHASE_EXIT_READY`, `CHECKPOINT_TYPE`, `PROOF_STATUS`, `INPUTS`, `EXPECTED_ARTIFACTS`, `TDD_RED_EXIT`, `TDD_GREEN_EXIT`, `SCENARIOS`, `ASSUMPTIONS`, `DECISIONS`, `BLOCKED_ITEMS`, `SKIPPED_ITEMS`, `SCOPE_INCREASES`, `BLOCKING`, `NEXT_ACTION`, `REMEDIATION_NEEDED`, `REQUIRES_REMEDIATION`, `REMEDIATION_REASON`, `MEMORY_NOTES` |
-| bug-investigator | `STATUS`, `SUMMARY`, `VERIFICATION_RIGOR`, `CONFIDENCE`, `ROOT_CAUSE`, `TDD_RED_EXIT`, `TDD_GREEN_EXIT`, `VARIANTS_COVERED`, `BLAST_RADIUS_SCAN`, `SCENARIOS`, `ASSUMPTIONS`, `DECISIONS`, `BLOCKING`, `NEXT_ACTION`, `REMEDIATION_NEEDED`, `REQUIRES_REMEDIATION`, `REMEDIATION_REASON`, `NEEDS_EXTERNAL_RESEARCH`, `RESEARCH_REASON`, `MEMORY_NOTES` |
-| planner | `STATUS`, `SUMMARY`, `PLAN_MODE`, `VERIFICATION_RIGOR`, `CONFIDENCE`, `PLAN_FILE`, `PHASES`, `RISKS_IDENTIFIED`, `SCENARIOS`, `ASSUMPTIONS`, `DECISIONS`, `OPEN_DECISIONS`, `DIFFERENCES_FROM_AGREEMENT`, `RECOMMENDED_DEFAULTS`, `ALTERNATIVES`, `DRAWBACKS`, `PROVABLE_PROPERTIES`, `BLOCKING`, `NEXT_ACTION`, `REMEDIATION_NEEDED`, `REQUIRES_REMEDIATION`, `REMEDIATION_REASON`, `GATE_PASSED`, `USER_INPUT_NEEDED`, `MEMORY_NOTES` |
-| web-researcher | `STATUS`, `SUMMARY`, `FILE_PATH`, `BACKEND_MODE`, `SOURCES_ATTEMPTED`, `SOURCES_USED`, `QUALITY_LEVEL`, `KEY_FINDINGS_COUNT`, `WHAT_CHANGED_RECOMMENDATION`, `MEMORY_NOTES` |
-| github-researcher | `STATUS`, `SUMMARY`, `FILE_PATH`, `BACKEND_MODE`, `SOURCES_ATTEMPTED`, `SOURCES_USED`, `QUALITY_LEVEL`, `IMPLEMENTATIONS_FOUND`, `WHAT_CHANGED_RECOMMENDATION`, `MEMORY_NOTES` |
-| doc-syncer | `STATUS`, `SUMMARY`, `IMPACT_LEVEL`, `DOC_LAYERS_EVALUATED`, `DOC_FILES_UPDATED`, `DOC_FILES_SKIPPED`, `SKIP_REASON`, `AUDIT_DOCS_CREATED`, `AUDIT_DOCS_UPDATED`, `MEMORY_NOTES` |
-| plan-bakeoff-judge | `STATUS`, `SUMMARY`, `PLAN_MODE`, `VERIFICATION_RIGOR`, `CONFIDENCE`, `PLAN_FILE`, `WINNING_MODEL`, `SYNTHESIZED`, `CANDIDATES_COMPARED`, `PHASES`, `RISKS_IDENTIFIED`, `SCENARIOS`, `OPEN_DECISIONS`, `DIFFERENCES_FROM_AGREEMENT`, `ALTERNATIVES`, `DRAWBACKS`, `PROVABLE_PROPERTIES`, `BLOCKING`, `REMEDIATION_NEEDED`, `REQUIRES_REMEDIATION`, `REMEDIATION_REASON`, `GATE_PASSED`, `MEMORY_NOTES` |
-
-As of the schema-validation pilot, `component-builder` and `planner` nest every field in their
-rows above under `verdict:`/`rationale:` and additionally emit `REMEDIATION_SCOPE_REQUESTED` —
-see § "Write-agent contract schema validation (pilot: component-builder, planner)" immediately
-below for the exact per-field split and the new field's current always-`N/A` status.
-
-(`skill-author`'s required fields, including `SUMMARY`, are documented in
-its own row in the Contract overrides table below rather than duplicated
-here.)
-
-`SUMMARY` is a single human-readable sentence describing what happened this
-round — the router surfaces it directly in `status_history`/event-log
-entries and memory distillation so a workflow's progress can be scanned
-without re-parsing every structured field (borrowed from deepseek-harness's
-Ralph-loop round handoff). It is additive to, not a replacement for, the
-richer structured fields above (`SCENARIOS`, `ROOT_CAUSE`, `MEMORY_NOTES`,
-etc.) — do not let a present `SUMMARY` substitute for the actual evidence
-those fields carry.
-
-If the YAML block is missing or malformed:
-- Treat the task as invalid output.
-- Do not continue the workflow based on prose alone.
-- Re-run inline verification and fail safe.
-
-### Write-agent contract schema validation (pilot: component-builder, planner)
-
-`component-builder` and `planner` emit their Router Contract YAML body as two nested top-level
-keys, `verdict:` (strictly typed: enums, booleans, numbers, nullable numbers) and `rationale:`
-(free text: summaries, prose lists, `MEMORY_NOTES`) — see each agent's `.md` file for the exact
-per-field split. Before applying any Contract Overrides row below for these two agents,
-mechanically validate the extracted YAML body:
-
-1. Write the extracted YAML block body (the text between the ```` ```yaml ```` fence markers,
-   starting with `verdict:`) to a scratch file — do not pipe it through a shell heredoc, since
-   the body routinely contains quotes and colons that are easy to mis-quote.
-2. Run:
-   ```bash
-   python3 {plugin_root}/scripts/craftflow_contract_validate_pilot.py \
-     --agent component-builder --file {scratch_path}
-   ```
-   (substitute `--agent planner` for the planner agent).
-3. Parse the single-line stdout JSON: `{"valid": bool, "violations": [...]}`.
-4. `valid: false` (including a non-zero exit with no parseable JSON, a missing/corrupt schema
-   file, or any script crash) — treat identically to the "YAML block is missing or malformed"
-   rule above: do not apply any Contract Override, re-run inline verification, fail safe.
-5. `valid: true` — proceed to the Contract Overrides table below, reading fields as
-   `verdict.FIELD` / `rationale.FIELD`.
-
-This validator (`craftflow_contract_validate_pilot.py`) is a distinct script from the
-pre-existing, still-dormant `craftflow_contract_validate.py` (flat, kind-keyed envelope format
-for read-only agents) — do not confuse the two or merge their schema tables.
-
-Field-to-section map for the two pilot agents (single source of truth:
-`scripts/schemas/component-builder.json` / `scripts/schemas/planner.json`):
-
-| Agent | `verdict` (typed) | `rationale` (free text) |
-|-------|--------------------|--------------------------|
-| component-builder | `STATUS`, `CONFIDENCE`, `PHASE_ID`, `PHASE_STATUS`, `PHASE_EXIT_READY`, `CHECKPOINT_TYPE`, `PROOF_STATUS`, `TDD_RED_EXIT`, `TDD_GREEN_EXIT`, `CRITICAL_ISSUES`, `BLOCKING`, `NEXT_ACTION`, `REMEDIATION_NEEDED`, `REQUIRES_REMEDIATION`, `REMEDIATION_SCOPE_REQUESTED` | `SUMMARY`, `INPUTS`, `EXPECTED_ARTIFACTS`, `SCENARIOS`, `ASSUMPTIONS`, `DECISIONS`, `BLOCKED_ITEMS`, `SKIPPED_ITEMS`, `SCOPE_INCREASES`, `REMEDIATION_REASON`, `MEMORY_NOTES` |
-| planner | `STATUS`, `PLAN_MODE`, `VERIFICATION_RIGOR`, `CONFIDENCE`, `PHASES`, `RISKS_IDENTIFIED`, `PLANNING_REVIEW_STATUS`, `PLANNING_REVIEW_RUNS`, `BLOCKING`, `NEXT_ACTION`, `REMEDIATION_NEEDED`, `REQUIRES_REMEDIATION`, `GATE_PASSED`, `REMEDIATION_SCOPE_REQUESTED` | `SUMMARY`, `PLAN_FILE`, `LIVING_SPEC_IMPACTED`, `SCENARIOS`, `ASSUMPTIONS`, `DECISIONS`, `OPEN_DECISIONS`, `DIFFERENCES_FROM_AGREEMENT`, `RECOMMENDED_DEFAULTS`, `ALTERNATIVES`, `DRAWBACKS`, `PROVABLE_PROPERTIES`, `REMEDIATION_REASON`, `USER_INPUT_NEEDED`, `MEMORY_NOTES` |
-
-`REMEDIATION_SCOPE_REQUESTED` is new on these two agents as of this pilot — both always emit
-`N/A` today (neither agent drives the BUILD `1a-SCOPE` scope decision, which stays sourced from
-the read-only reviewer/hunter agents per `references/remediation-and-research.md` § Scope
-resolution); the field exists on the schema now so a future wiring change cannot ship an
-unvalidated value.
-
-**Known gap (not fixed by this pilot):** `skills/cursor-router/SKILL.md`'s own "Verdict by
-agent" table still documents `component-builder`/`planner` using the old flat field names,
-because Cursor dispatches the same `agents/component-builder.md`/`agents/planner.md` files and
-will therefore receive the new nested output without its own routing doc being updated. This is
-a known, tracked follow-up, not an oversight — see the schema-validation plan's Risks section.
-
-Non-pilot agents (`bug-investigator`, `web-researcher`, `github-researcher`, `doc-syncer`,
-`plan-bakeoff-judge`, `skill-author`) keep their existing flat YAML shape and are validated only
-by the prose-level check above — no `craftflow_contract_validate_pilot.py` invocation for them
-yet.
-
-### Intent Interview Gate (PLAN only)
-
-Before brainstorming, check whether the task description is under-specified:
-
-**Dispatch `Skill(skill="craftflow:intent-interview")` when ALL of:**
-- `AUTO_PROCEED` is NOT `true` in `activeContext.md ## Session Settings`
-- No saved plan file exists for this request in `activeContext.md ## References`
-- At least ONE of:
-  - Request is ≤3 sentences with no success definition
-  - Request contains scope-ambiguous terms: "improve", "refactor", "clean up", "make it better", "fix things"
-  - Request touches ≥2 systems or modules with no stated boundary
-
-**Skip the interview (run brainstorming directly) when ANY of:**
-- `AUTO_PROCEED: true` (JUST_GO mode — auto-skip)
-- A saved plan file is already referenced
-- Request explicitly names the file, function, or behavior to change
-
-After `Skill(skill="craftflow:intent-interview")` completes, read the `## Intent Contract (From Interview)` block it emits. Persist it into:
-- Workflow artifact `intent` field
-- Planner prompt under `## Intent Contract (Pre-Interview)` (planner treats it as user-approved input)
-
-### Inline brainstorming handoff
-
-After `Skill(skill="craftflow:brainstorming")`, parse the fenced YAML block under
-`### Brainstorming Handoff (MACHINE-READABLE)`.
-
-Required field:
 - `DESIGN_FILE`
-
-If present:
-- persist it into workflow artifact `design_file`
-- pass it to planner as `## Design File`
-- do not require `activeContext.md` to be updated first
-
-### Contract overrides
+- telemetry:
 
 | Agent | Override |
-|-------|----------|
-| component-builder | `verdict.STATUS=PASS` requires `verdict.TDD_RED_EXIT=1`, `verdict.TDD_GREEN_EXIT=0`, `verdict.PHASE_STATUS=completed`, `verdict.PHASE_EXIT_READY=true`, `verdict.PROOF_STATUS=passed`, empty `rationale.BLOCKED_ITEMS`, a non-empty `rationale.SUMMARY`, and a non-empty `rationale.SCENARIOS` array with at least one passing scenario. That passing scenario must include non-empty `name`, `command`, `expected`, `actual`, and `exit_code`. |
-| bug-investigator | `STATUS=FIXED` requires `VERIFICATION_RIGOR` to be explicit, `TDD_RED_EXIT=1`, `TDD_GREEN_EXIT=0`, `VARIANTS_COVERED>=1`, a non-empty `BLAST_RADIUS_SCAN`, a non-empty `SUMMARY`, and a non-empty `SCENARIOS` array unless it explicitly set `NEEDS_EXTERNAL_RESEARCH=true`. At least one scenario name must start with `Regression:` and one with `Variant:`. Both required scenarios must include non-empty `command`, `expected`, `actual`, and `exit_code`. |
-| code-reviewer | `APPROVE` + critical issues becomes `CHANGES_REQUESTED` |
-| code-reviewer | `APPROVE` with zero findings across ALL dimensions AND fewer than 3 file:line evidence citations → trigger fallback inline verification. Rubber-stamp approvals without substantive analysis are invalid. |
-| silent-failure-hunter | `CLEAN` + critical issues becomes `ISSUES_FOUND` |
-| silent-failure-hunter | `CLEAN` with zero error-handling sites inspected OR zero files scanned → trigger fallback inline verification. A CLEAN verdict requires stated scope. |
-| integration-verifier | `PASS` + critical issues becomes `FAIL`; scenario totals must reconcile with the scenario table and evidence array; every counted scenario must map to a concrete evidence row; every scenario row must contain non-empty `Expected` and `Actual` values |
-| planner | `verdict.STATUS=PLAN_CREATED` or `verdict.STATUS=DECISION_RFC_CREATED` requires non-empty `rationale.PLAN_FILE`, explicit `verdict.PLAN_MODE`, explicit `verdict.VERIFICATION_RIGOR`, `verdict.CONFIDENCE>=50`, `verdict.GATE_PASSED=true`, a non-empty `rationale.SUMMARY`, a non-empty `rationale.SCENARIOS` array, `rationale.OPEN_DECISIONS=[]`, and `rationale.DIFFERENCES_FROM_AGREEMENT` explicitly present. `verdict.PLAN_MODE=decision_rfc` also requires non-empty `rationale.ALTERNATIVES` and `rationale.DRAWBACKS`; `verdict.VERIFICATION_RIGOR=critical_path` requires non-empty `rationale.PROVABLE_PROPERTIES`. |
-| plan-bakeoff-judge | `STATUS=PLAN_CREATED` or `STATUS=DECISION_RFC_CREATED` requires every threshold the `planner` override row already requires (non-empty `PLAN_FILE`, explicit `PLAN_MODE`, explicit `VERIFICATION_RIGOR`, `CONFIDENCE>=50`, `GATE_PASSED=true`, non-empty `SUMMARY`, non-empty `SCENARIOS`, `OPEN_DECISIONS=[]`, `DIFFERENCES_FROM_AGREEMENT` present; `PLAN_MODE=decision_rfc` also requires `ALTERNATIVES`/`DRAWBACKS`; `VERIFICATION_RIGOR=critical_path` requires `PROVABLE_PROPERTIES`) PLUS non-empty `WINNING_MODEL`, an explicit boolean `SYNTHESIZED`, and a `CANDIDATES_COMPARED` array whose length matches the number of candidates the router actually dispatched to it. A router-run `Glob` confirming zero surviving `docs/plans/{plan_file_stem}-candidate-*.md` files is required before accepting either `STATUS` value — a surviving candidate file downgrades the contract to invalid regardless of the agent's own claim (mirrors "APPROVE + critical issues becomes CHANGES_REQUESTED"). `STATUS=FAIL` is a hard stop, same posture as any other malformed write-agent output. |
-| doc-syncer | `STATUS=COMPLETE` requires `DOC_LAYERS_EVALUATED` non-empty, a non-empty `SUMMARY`, and at least one entry in `DOC_FILES_UPDATED` or `AUDIT_DOCS_CREATED`; `STATUS=SKIPPED` requires non-empty `SKIP_REASON` and non-empty `SUMMARY` — `DOC_LAYERS_EVALUATED` MAY be empty (fast-path classifier exits before per-layer evaluation when `IMPACT_LEVEL=none` is detected immediately); `STATUS=PARTIAL` requires at least one entry in `DOC_FILES_UPDATED` or `AUDIT_DOCS_CREATED` and at least one layer in `DOC_LAYERS_EVALUATED` — router advances to Memory Update and persists `doc_sync_partial=true` in `results.doc_syncer`; `STATUS=FAIL` blocks workflow. |
-| skill-author | `STATUS=COMPLETE` requires non-empty `PROPOSAL_PATH`, non-empty `CANDIDATE_ID`, and non-empty `SUMMARY`; `STATUS=SKIPPED` requires non-empty `SKIP_REASON` and non-empty `SUMMARY` — `SKIPPED` is explicitly a passing state (never blocks workflow advance), matching the doc-syncer `SKIPPED` precedent exactly; `STATUS=FAIL` blocks workflow. |
-| plan-gap-reviewer | `PASS` requires `BLOCKING_FINDINGS_COUNT=0` and `REPLAN_NEEDED=false`; `FINDINGS` requires explicit finding buckets and a non-empty `REPLAN_REASON` when blocking findings exist. |
-| doubt-verifier (phase:fix-verify) | `FIX_VERDICT: LOAD_BEARING` requires `PRE_FIX_COMMAND`, `PRE_FIX_OUTPUT`, `POST_FIX_COMMAND`, `POST_FIX_OUTPUT`, `SIBLING_SCAN_COMMAND`, `SIBLING_SCAN_RESULT` all non-empty; a `PRE_FIX_OUTPUT` that does not demonstrate the original defect (i.e., is not meaningfully different from `POST_FIX_OUTPUT` in the direction the fix claims to close) is downgraded to `NOT_LOAD_BEARING` regardless of the agent's own claim — mirrors the existing "APPROVE + critical issues becomes CHANGES_REQUESTED" override pattern. This is a distinct contract from `doubt-verifier`'s own `DOUBT_VERDICT` contract (`phase:doubt-verify`), which is unchanged and carries no override row of its own (pre-existing, out of scope for this plan). |
+|---|---|
+| any | see that file |
 
-Convergence rule:
-- If evidence is incomplete, contradictory, or missing for a required pass path, do not advance the workflow.
-- Set the workflow artifact `quality.convergence_state` to `needs_iteration` and stop on the appropriate remediation or clarification gate instead of treating the task as good enough.
-
-### Skill-Distill Approval Flow
-
-**Shared with Cursor — canonical text lives in
-`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
-"Skill-Distill Approval Flow" (the four options (Approve / Approve + register in SKILL_HINTS / Reject / Defer), the exact
-`craftflow_skill_promote.py`/`craftflow_skill_ledger.py` invocations, the non-matching-reply
-re-ask rule, the JUST_GO carve-out (never auto-Approve), and the `STATUS: SKIPPED`/
-`STATUS: FAIL` handling).** Claude Code needs no host-specific additions here — this gate
-is presented via `AskUserQuestion` exactly as the shared doc describes; unlike Cursor's
-`## 5a. Skill-Distill Gate`, no plain-text-chat fallback or `cursor-wf.json`
-`pending_skill_approval` bookkeeping is needed.
+**Intent Interview Gate and brainstorming handoff (PLAN only):** `references/plan-workflow.md`.
 
 ## 9. Remediation And Workflow Rules
 
@@ -963,25 +402,7 @@ is presented via `AskUserQuestion` exactly as the shared doc describes; unlike C
    - mark both in_progress first
    - invoke them in the same message
    - If parallel invocation fails or is unavailable (API error, rate limit): fall back to sequential execution (reviewer first, then hunter). Never block a workflow because parallelism is unavailable. Log `event=parallel_fallback` in the workflow event log.
-5a. If both `research-web` and `research-github` tasks are runnable in the same round (PLAN workflow):
-   - Mark both in_progress first
-   - Dispatch them in the same message (same pattern as reviewer+hunter in BUILD)
-   - Both are read-only with no file-write overlap — safe to parallelize
-   - If parallel invocation fails (rate limit, API error): fall back to sequential (web first, then github). Log `event=parallel_fallback` in the event log.
-   - Wait for BOTH to complete before proceeding to planner or investigator.
-5b. If N-1 `plan-bakeoff-candidate-*` tasks are all runnable in the same round (PLAN workflow,
-    qualifying bake-off only):
-   - Mark all in_progress first
-   - Dispatch all of them in the same message (see `references/plan-workflow.md → ### PLAN
-     dispatch-time prompt assembly` for the exact per-candidate model/target-file construction
-     formula and `### PLAN bake-off fan-out` for the actual per-candidate dispatch loop)
-   - If parallel invocation fails (rate limit, API error): fall back to sequential dispatch, one
-     candidate at a time. Log `event=parallel_fallback` in the event log.
-   - Wait for ALL dispatched candidates to return (validly or failed) before creating the
-     `plan-bakeoff-judge` task. A candidate returning an invalid contract does not block the
-     others — see `references/plan-workflow.md`'s degraded-bake-off tolerance rule (a scoped
-     exception to this section's own step 6 hard-stop-on-malformed-output default, applying only
-     to `phase:plan-bakeoff-candidate-*`).
+5a/5b. (PLAN workflow) research and bake-off candidate dispatch: `references/plan-workflow.md`.
 6. After each agent returns:
    - capture memory payload immediately
    - validate output
@@ -998,58 +419,6 @@ is presented via `AskUserQuestion` exactly as the shared doc describes; unlike C
 ```
 
 In task-tool fallback mode, step 1 and agent-completion steps 1-3 follow the matching sections of `references/task-tool-fallback.md`. Memory task (step 3): read `references/memory-finalize.md`.
-
-### After every agent completion
-
-Pre-check before processing agent output:
-- Did the agent address the assigned scope (not a subset or superset)?
-- Did tests, builds, or checks referenced in the contract actually run (not merely described)?
-- Is follow-up work needed that the agent did not self-remediate?
-If any answer is "no" or "unknown", treat as incomplete and apply the fallback validation path below.
-
-0. Capture memory payload first, before validation or task-state mutation.
-   - READ-ONLY agents: extract `### Memory Notes (For Workflow-Final Persistence)` immediately after return.
-   - WRITE agents: extract `MEMORY_NOTES` from YAML immediately after return.
-1. `TaskGet({ taskId })` or `TaskList()` to verify final task state.
-2. WRITE agents:
-   - They should already have called `TaskUpdate(status="completed")`.
-   - Parse YAML before continuing.
-3. READ-ONLY agents:
-   - Router owns completion fallback for read-only tasks.
-   - If the task is still not completed after agent return, router applies fallback `TaskUpdate(status="completed")`.
-   - Blockers or findings may change workflow routing, but they never transfer orchestration ownership back to the read-only agent.
-
-4. Memory payload was already captured in step 0:
-   - READ-ONLY agents: append extracted notes to the memory task description.
-   - WRITE agents: append deferred or supplemental payload needed by the memory task.
-5. Update `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json` with:
-   - intent contract fields from planner output when available
-   - task ids
-   - phase status
-   - phase cursor changes only after `phase_exit_gate` passes
-   - structured agent results
-   - the WRITE agent's `SUMMARY` field, into `results.{agent}.summary` and echoed into the
-     matching `agent_completed` event-log entry as `"summary"` — gives a one-line round
-     handoff scannable from `status_history`/the event log without re-parsing every
-     structured field on every resume
-   - scenario evidence grouped by agent
-   - plan/design/research file paths
-   - capabilities and chosen research backend path when applicable
-   - research quality and round metadata when applicable
-   - telemetry:
-     - task metrics duration when available
-     - loop counters
-     - verifier workload classification when present
-   - quality/convergence state
-   - status_history and remediation_history entries when decisions change workflow state
-   - pending gate if waiting on user input
-6. Persist `[craftflow-internal] memory_task_id: {memory_task_id} wf:{workflow_uuid}` only if it matches the active workflow; first remove any existing matching `[craftflow-internal]` or legacy `[cc10x-internal]` `memory_task_id` line to avoid duplicate orphans.
-
-### Verifier findings handoff
-
-Shared with Cursor — canonical text lives in
-`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
-"Verifier Findings Handoff".
 
 ## 14. Hard Rules
 
@@ -1084,8 +453,8 @@ Printed by `craftflow_policy.py --print-table`; each value is enforced by the na
 | `memory_write` | `finalize-only` | `craftflow_pretooluse_guard.py` | `references/memory-finalize.md → ## 13. Memory Finalization` |
 | `worktree_merge` | `require_clean_tree=true, lock_max_attempts=9, lock_sleep_seconds=5, copy_fallback_on_up_to_date=true` | `craftflow_pretooluse_bash_guard.py` (clean tree) | § 5 |
 | `remediation_cycles_max` | `3` | `craftflow_gate_check.py` | § 14 remediation loop rule |
-| `doubt_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Doubt-Verify Dispatch Rule |
-| `fix_verify_cycles_max` | `3` | `craftflow_gate_check.py` | § 7 Fix-Verify Dispatch Rule |
+| `doubt_cycles_max` | `3` | `craftflow_gate_check.py` | verify-dispatch.md Doubt-Verify |
+| `fix_verify_cycles_max` | `3` | `craftflow_gate_check.py` | verify-dispatch.md Fix-Verify |
 | `plan_review_passes_max` | `2` | `craftflow_gate_check.py` | `references/plan-workflow.md` |
 
 ### Loop caps
@@ -1095,8 +464,8 @@ Hard stops. Operative text: the last column.
 | gate | max | evaluation point | input | at-cap action | operative prose |
 |---|---|---|---|---|---|
 | `remediation_cycles_max` | 3 | before creating a REM-FIX task | `circuit_breaker` | ask the user | `remediation-and-research.md` "Before creating a new remediation task" |
-| `doubt_cycles_max` | 3 | after doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Doubt-Verify "After doubt-verifier returns" |
-| `fix_verify_cycles_max` | 3 | after the fix-verify doubt-verifier returns | cycle N | advance, no REM-FIX | § 7 Fix-Verify "After doubt-verifier returns" |
+| `doubt_cycles_max` | 3 | after doubt-verifier returns | cycle N | advance, no REM-FIX | verify-dispatch.md Doubt-Verify "After doubt-verifier returns" |
+| `fix_verify_cycles_max` | 3 | after the fix-verify doubt-verifier returns | cycle N | advance, no REM-FIX | verify-dispatch.md Fix-Verify "After doubt-verifier returns" |
 | `plan_review_passes_max` | 2 | after a plan-gap-reviewer pass | pass N, verdict | pass 2 FINDINGS: clarification | `remediation-and-research.md` plan-gap-reviewer blocks |
 
 **`loop_cap_check_failed`.** When `craftflow_gate_check.py` exits non-zero, prints anything but one JSON line with a valid `action`, or returns `human_checkpoint` with a `reason` other than `cap-reached`: persist `pending_gate: "loop_cap_check_failed"`, apply no verdict, create no task, increment no further counter, and ask: "Loop-cap check for `{gate}` gave no usable decision (`{reason or "exit " + code}`), so I have not acted on the `{verdict}` verdict for cycle/pass {N}. Reply `retry` to run the check again, `advance` to apply the hard-stop handling, or `proceed` to apply the verdict as written." For remediation, `advance` is not offered and `proceed` reads "create the REM-FIX as written". On the reply, clear `pending_gate` and apply the chosen block. On resume with this `pending_gate`, re-ask the same line and take no other action.

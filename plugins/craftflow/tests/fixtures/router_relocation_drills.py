@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Router relocation drills (P1 REM-FIX 3): simulate the plan's P10/P11 section moves on scratch copies.
-(The P8 and P9 drills retired when those phases made their moves for real.)
+"""Router relocation drills (P1 REM-FIX 3): simulate the plan's P11 section moves on scratch copies.
+(The P8, P9 and P10 drills retired when those phases made their moves for real.)
 
 Run: python3 tests/fixtures/router_relocation_drills.py [--drills a,b] [--list] [--jobs N] [--keep] [--verbose]
 (the `x_*` variants are probes the heading-uniqueness invariant must reject; they run only when named in --drills)
 
 For each drill the harness copies `tools/craftflow-plugin` (minus `ref-*`) to a temp dir, moves verbatim router sections
-between files the way the plan's P10/P11 file lists do, runs the hook suite and the router-reading fixtures on the
+between files the way the plan's P11 file lists do, runs the hook suite and the router-reading fixtures on the
 copy, and prints every failing test with its `router-test-anchors.md` row (`kind/owner`, or `UNCLASSIFIED`).
 A `control` run (no move) is executed first; whatever fails there is environmental (the copy is not a git checkout of
 the repo: ADR-exists tests, git-lock rule-inventory tests) and is subtracted from every drill.
@@ -17,7 +17,7 @@ A failure counts only when the same test PASSES on the control copy, FAILS in th
 Heading-uniqueness invariant (REM-FIX 4): every heading text occurs once across the runtime corpus (HEADING_DUP_ALLOWLIST
 freezes the pre-existing duplicates). A drill whose result repeats a heading, or grows an allowlisted one, is a violation
 and its suites are not run: a kernel pointer for a moved section must not be a heading with the moved text.
-Drills are single moves on the current tree, not cumulative P10 -> P11 sequences (a cumulative mode is not implemented).
+Drills are single moves on the current tree, not cumulative sequences (a cumulative mode is not implemented).
 Temp dirs follow $TMPDIR (set it to keep the copies inside a given workspace). Python 3.9 stdlib.
 """
 from __future__ import annotations
@@ -166,53 +166,6 @@ def d_control(t: Tree) -> None:
     return None
 
 
-def d_p10_parent(t: Tree) -> None:
-    """P10: `### Parent workflow creation` (SKILL.md § 6) moves to references/workflow-start.md."""
-    lines = _read(t.skill)
-    s, e = span(lines, "### Parent workflow creation")
-    block = cut(t.skill, s, e, ["Parent workflow creation: read `references/workflow-start.md` before creating a workflow.", ""])
-    put(t.refs / "workflow-start.md", block, "# Workflow start (P10)")
-
-
-def d_p10_resume(t: Tree) -> None:
-    """P10: the body of `## 4. Resume And Hydration` moves to references/resume.md; the kernel heading stays as the trigger."""
-    lines = _read(t.skill)
-    s, e = span(lines, "## 4. Resume And Hydration")
-    block = cut(t.skill, s + 1, e, ["", "Trigger: when resuming, read `references/resume.md`.", ""])
-    put(t.refs / "resume.md", ["# Resume And Hydration (body of the kernel `4.` trigger)", ""] + block)
-
-
-def d_p10_0a(t: Tree) -> None:
-    """P10: the `## 0a.` body moves to references/workflow-start.md under the same heading; the kernel keeps heading + trigger."""
-    lines = _read(t.skill)
-    s, e = span(lines, "## 0a. Task Tool Capability Detection")
-    block = cut(t.skill, s + 1, e, ["", "Trigger: before the first workflow artifact write of a session, read `references/workflow-start.md`.", ""])
-    # The moved body sits under its own heading: the kernel keeps `## 0a.` as the trigger, so repeating it would be a duplicate.
-    put(t.refs / "workflow-start.md", ["## Task tool capability detection (body of the kernel 0a trigger)", ""] + block, "# Workflow start (P10)")
-
-
-def d_p10_section3(t: Tree) -> None:
-    """P10: `## 3. Task Metadata Contract` moves verbatim to references/workflow-start.md."""
-    lines = _read(t.skill)
-    s, e = span(lines, "## 3. Task Metadata Contract")
-    block = cut(t.skill, s, e, ["Task metadata contract: read `references/workflow-start.md` before creating tasks.", ""])
-    put(t.refs / "workflow-start.md", block, "# Workflow start (P10)")
-
-
-def d_p10_worktree13(t: Tree) -> None:
-    """P10: Fast Path Detection and Worktree Isolation steps 1-3 move to references/build-workflow.md."""
-    lines = _read(t.skill)
-    s, e = span(lines, "### Fast Path Detection")
-    fpd = cut(t.skill, s, e, ["Fast Path Detection: see `references/build-workflow.md`.", ""])
-    lines = _read(t.skill)
-    ws, _ = span(lines, "### Worktree Isolation (BUILD Default)")
-    first = line_index(lines, "1. At BUILD start", ws)
-    step4 = line_index(lines, "4. After `integration-verifier` PASS on the final phase", first)  # P8 reworded the step-4 pointer
-    steps = cut(t.skill, first, step4, ["(Steps 1-3: see `references/build-workflow.md`.)", ""])
-    # SKILL.md keeps `### Worktree Isolation (BUILD Default)` (steps 4+), so the moved steps get a different heading.
-    put(t.refs / "build-workflow.md", fpd + ["### Worktree isolation steps 1-3", ""] + steps)
-
-
 def d_p11_proto_split(t: Tree) -> None:
     """P11: step 1a of `## Resolve Project Root` moves to _shared/router-protocol-multirepo.md."""
     lines = _read(t.protocol)
@@ -240,71 +193,20 @@ def d_p11_build_split(t: Tree) -> None:
     esc, esc_end = span(lines, "### Fast Path Escalation")
     parts = {"build-graph-standard.md": lines[std:fast], "build-graph-fast.md": lines[fast:esc],
              "build-fast-path-escalation.md": lines[esc:esc_end]}
-    if esc_end != len(lines) or fast_end > esc:
-        raise DrillError("build-workflow.md no longer ends with the escalation section")
-    _write(path, lines[:std] + ["BUILD task graphs: see `build-graph-standard.md`, `build-graph-fast.md` and `build-fast-path-escalation.md`.", ""])
+    if fast_end > esc:
+        raise DrillError("the fast task graph overlaps the escalation section of build-workflow.md")
+    # P10 appended Fast Path Detection and Worktree Isolation steps 1-3 after the escalation section; they stay in build-workflow.md
+    _write(path, lines[:std] + ["BUILD task graphs: see `build-graph-standard.md`, `build-graph-fast.md` and `build-fast-path-escalation.md`.", ""] + lines[esc_end:])
     for name, block in parts.items():
         put(t.refs / name, block)
 
 
-def d_p10_postagent(t: Tree) -> None:
-    """P10: `## 8. Post-Agent Validation` and `### After every agent completion` move to references/post-agent-validation.md."""
-    lines = _read(t.skill)
-    s8, e8 = span(lines, "## 8. Post-Agent Validation")
-    sa, ea = span(lines, "### After every agent completion")
-    if not (e8 <= sa):
-        raise DrillError("`After every agent completion` no longer follows § 8")
-    after = cut(t.skill, sa, ea, ["After every agent completion: read `references/post-agent-validation.md` after any agent returns.", ""])
-    sec8 = cut(t.skill, s8, e8, ["Post-agent validation: read `references/post-agent-validation.md` after any agent returns.", ""])
-    put(t.refs / "post-agent-validation.md", sec8 + [""] + after, "# Post-agent validation (P10)")
-
-
-def _memload_5a(t: Tree) -> Tuple[int, List[str]]:
-    """Cut step 5a and the self-heal paragraph out of § 2; returns (index of the § 2 heading, moved lines)."""
-    lines = _read(t.skill)
-    s, e = span(lines, "## 2. Memory Load And Template Validation")
-    first = line_index(lines, "5a. Workspace-tier discovery", s)
-    step6 = line_index(lines, "6. If workflow_uuid is known", first)
-    heal = line_index(lines, "State-read compaction self-heal:", step6)
-    if not (s < first < step6 < heal < e):
-        raise DrillError("§ 2 no longer holds step 5a before step 6 and the self-heal paragraph")
-    steps = cut(t.skill, first, step6, ["5a. Workspace-tier discovery: when a workspace marker may exist, read `references/memory-load-workspace.md`."])
-    lines = _read(t.skill)
-    heal = line_index(lines, "State-read compaction self-heal:")
-    heal_end = next((j for j in range(heal, len(lines)) if not lines[j].strip()), len(lines))
-    para = cut(t.skill, heal, heal_end, ["State-read compaction self-heal: see `references/memory-load-workspace.md`."])
-    return s, steps + [""] + para
-
-
-def d_p10_memload_5a(t: Tree) -> None:
-    """P10: step 5a and the self-heal paragraph move to references/memory-load-workspace.md (own H1); § 2 keeps a one-line trigger per moved item."""
-    _, block = _memload_5a(t)
-    put(t.refs / "memory-load-workspace.md", block, "# Memory load: workspace tier and state-read self-heal")
-
-
-# Variants a doubt-verifier proposed: each REPEATS a moved heading, which the uniqueness invariant must reject (they are
-# not planned moves). Run them with --drills x_...; they are not part of the default set.
-
-
-def v_p10_memload_dup(t: Tree) -> None:
-    _, block = _memload_5a(t)
-    put(t.refs / "memory-load-workspace.md", ["## 2. Memory Load And Template Validation", ""] + block, "# Memory load workspace")
-
-
 # name -> (phase, one-line description, function)
-VARIANTS: Dict[str, Tuple[int, str, Callable[[Tree], None]]] = {
-    "x_p10_memload_dup": (10, "variant: 5a move whose new file repeats `## 2.` (must be rejected)", v_p10_memload_dup),
-}
+# (empty: the x_p10_memload_dup variant retired with the P10 drills; the heading-uniqueness check is exercised on synthetic corpora)
+VARIANTS: Dict[str, Tuple[int, str, Callable[[Tree], None]]] = {}
 
 DRILLS: Dict[str, Tuple[int, str, Callable[[Tree], None]]] = {
     "control": (0, "no move (environmental baseline)", d_control),
-    "p10_postagent": (10, "## 8 Post-Agent Validation + After every agent completion -> references/post-agent-validation.md", d_p10_postagent),
-    "p10_memload_5a": (10, "## 2 step 5a + self-heal paragraph -> references/memory-load-workspace.md", d_p10_memload_5a),
-    "p10_parent": (10, "### Parent workflow creation -> references/workflow-start.md", d_p10_parent),
-    "p10_resume": (10, "## 4 body -> references/resume.md, kernel heading kept as trigger", d_p10_resume),
-    "p10_0a": (10, "## 0a body -> references/workflow-start.md, trigger stays under ## 0a", d_p10_0a),
-    "p10_section3": (10, "## 3 Task Metadata Contract -> references/workflow-start.md", d_p10_section3),
-    "p10_worktree13": (10, "Fast Path Detection + Worktree steps 1-3 -> references/build-workflow.md", d_p10_worktree13),
     "p11_hookpolicy": (11, "`Hook policy:` block (:261-277) -> hooks/README.md (outside the corpus)", d_p11_hookpolicy),
     "p11_proto_split": (11, "step 1a -> _shared/router-protocol-multirepo.md", d_p11_proto_split),
     "p11_build_split": (11, "build-workflow.md -> graph-standard / graph-fast / escalation", d_p11_build_split),

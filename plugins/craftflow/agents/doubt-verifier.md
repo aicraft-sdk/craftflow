@@ -136,7 +136,7 @@ exercise, not a subjective adversarial review — the Doubt Theater framing abov
 to this contract.
 
 **When invoked:** DEBUG workflows always; BUILD workflows only when the current phase's
-objective indicates fixing an existing defect. See `craftflow-router/SKILL.md § 7 →
+objective indicates fixing an existing defect. See `craftflow-router/references/verify-dispatch.md →
 Fix-Verify Dispatch Rule` for the exact trigger.
 
 **Isolation Contract (MANDATORY):** Before starting, confirm your prompt includes:
@@ -211,6 +211,6 @@ independently instead of trusting it.
 
 **CONTRACT:** `FIX_VERDICT` is the machine-readable signal for this contract. `BLOCKING=true`
 for `NOT_LOAD_BEARING` or `SIBLING_FOUND`. The router validates the six evidence fields are
-present and internally consistent per `craftflow-router/SKILL.md § 8 → Contract overrides` but
+present and internally consistent per `craftflow-router/references/post-agent-validation.md → Contract overrides` but
 does not independently re-execute `PRE_FIX_COMMAND`/`POST_FIX_COMMAND`/`SIBLING_SCAN_COMMAND`
 itself.

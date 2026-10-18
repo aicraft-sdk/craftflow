@@ -897,9 +897,11 @@ def test_adr_discloses_the_rem_fix_3_findings() -> None:
     split = [proj["reach_loss_split"][c]["units"] for c in ("pure_2_to_1_covered", "drops_to_0", "drops_workflow_or_variant")]
     check("adr_discloses_the_rem_fix_3_findings",
           # 167 / 88 / 160 at REM-FIX 3 (the ADR keeps that figure as history); P9's drafted rows (the section 13 move, the pointer, xref and dedupe rows)
-          # are read by the projection's policy-map diff and take one unit out of each of the first two buckets: 166 / 87 / 160
-          all(n in text for n in need) and "309 of them into happy-path files" not in text and split == [166, 87, 160]
-          and proj["reach_a_kernel_penalty_bytes"] == 3913,
+          # are read by the projection's policy-map diff and take one unit out of each of the first two buckets: 166 / 87 / 160.
+          # P10 (its drafted rows are read the same way, and the relocation is real in the live tree): 159 / 86 / 151, and the 3,913 B kernel penalty
+          # (the one single-token unit the P2 analysis disclosed) is 0 because the one-word units stay in the kernel as stand-ins (ADR P10 notes)
+          all(n in text for n in need) and "309 of them into happy-path files" not in text and split == [159, 86, 151]
+          and proj["reach_a_kernel_penalty_bytes"] == 0,
           f"missing={[n for n in need if n not in text]} split={split}")
 
 
@@ -985,8 +987,8 @@ def test_adr_discloses_the_rem_fix_4_findings() -> None:
           # 591 / 424 at REM-FIX 4 (the ADR keeps those figures as history); P6's six literal-to-key Rewrites rows take one vanishing id away,
           # and P8's thirteen listed rows (one of them a widening row for worktree.md) take one widening file away: 590 / 423 to 589 / 422
           # and P9's drafted rows (the section 13 move, the pointer, xref and dedupe rows and the two widening rows for the new stage files)
-          # change the REACH-A upper bound once more: 589 / 422 to 588 / 422
-          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (588, 422),
+          # change the REACH-A upper bound once more: 589 / 422 to 588 / 422; P10's drafted rows and the real relocation make it 579 / 420
+          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (579, 420),
           f"missing={[n for n in need if n not in text]}")
 
 

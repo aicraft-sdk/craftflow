@@ -20,6 +20,10 @@ ROUTER_PROTOCOL_MD_PATH = os.path.join(_FIXTURES_DIR, "../../skills/_shared/rout
 PLAN_WORKFLOW_MD_PATH = os.path.join(
     _FIXTURES_DIR, "../../skills/craftflow-router/references/plan-workflow.md"
 )
+# P10 (K retarget): section 3 (the phase enum) moved to workflow-start.md; section 8 (the write-agent table and the Contract
+# overrides table) moved to post-agent-validation.md; chain-loop step 5b moved to plan-workflow.md with step 5a.
+WORKFLOW_START_MD_PATH = os.path.join(_FIXTURES_DIR, "../../skills/craftflow-router/references/workflow-start.md")
+POST_AGENT_MD_PATH = os.path.join(_FIXTURES_DIR, "../../skills/craftflow-router/references/post-agent-validation.md")
 
 PASS = 0
 FAIL = 0
@@ -343,8 +347,13 @@ check_contains(
 # ---------------------------------------------------------------------------
 print("\n[test_skill_md_phase_enum_lists_bakeoff_phases]")
 
+with open(WORKFLOW_START_MD_PATH, "r", encoding="utf-8") as f:
+    workflow_start_text = f.read()
+with open(POST_AGENT_MD_PATH, "r", encoding="utf-8") as f:
+    post_agent_text = f.read()
+
 _phase_enum_line = None
-for _line in skill_text.splitlines():
+for _line in workflow_start_text.splitlines():
     if _line.startswith("phase:{") and "plan-create" in _line:
         _phase_enum_line = _line
         break
@@ -377,21 +386,21 @@ print("\n[test_skill_md_chain_loop_has_5b_bakeoff_step]")
 
 check_count(
     "§ 12 Chain Execution Loop has exactly one '5b.' bake-off dispatch step",
-    skill_text,
+    plan_workflow_text,
     "5b. If N-1 `plan-bakeoff-candidate-*` tasks are all runnable in the same round (PLAN workflow,",
     1,
 )
 
 check_contains(
     "step 5b waits for all dispatched candidates before creating the plan-bakeoff-judge task",
-    skill_text,
+    plan_workflow_text,
     "Wait for ALL dispatched candidates to return (validly or failed) before creating the\n"
     "     `plan-bakeoff-judge` task.",
 )
 
 check_contains(
     "step 5b falls back to sequential dispatch and logs event=parallel_fallback",
-    skill_text,
+    plan_workflow_text,
     "fall back to sequential dispatch, one\n"
     "     candidate at a time. Log `event=parallel_fallback` in the event log.",
 )
@@ -399,7 +408,7 @@ check_contains(
 check_contains(
     "step 5b cross-references PLAN dispatch-time prompt assembly and PLAN bake-off fan-out"
     " (not the incorrect PLAN task graph section)",
-    skill_text,
+    plan_workflow_text,
     "see `references/plan-workflow.md → ### PLAN\n"
     "     dispatch-time prompt assembly` for the exact per-candidate model/target-file construction\n"
     "     formula and `### PLAN bake-off fan-out` for the actual per-candidate dispatch loop)",
@@ -421,19 +430,19 @@ _JUDGE_ROW_FULL = (
 check_count(
     "write-agent YAML-fields table has exactly one plan-bakeoff-judge row matching the full,"
     " corrected field list (no trailing-field truncation)",
-    skill_text,
+    post_agent_text,
     _JUDGE_ROW_FULL,
     1,
 )
 
 check_contains(
     "write-agent table judge row includes CANDIDATES_COMPARED field",
-    skill_text,
+    post_agent_text,
     "`CANDIDATES_COMPARED`",
 )
 
 _JUDGE_ROW_LINE = None
-for _line in skill_text.splitlines():
+for _line in post_agent_text.splitlines():
     if _line.startswith("| plan-bakeoff-judge | `STATUS`, `SUMMARY`, `PLAN_MODE`"):
         _JUDGE_ROW_LINE = _line
         break
@@ -460,7 +469,7 @@ print("\n[test_skill_md_contract_overrides_has_judge_row]")
 
 check_count(
     "Contract overrides table has exactly one plan-bakeoff-judge row",
-    skill_text,
+    post_agent_text,
     "| plan-bakeoff-judge | `STATUS=PLAN_CREATED` or `STATUS=DECISION_RFC_CREATED` requires every "
     "threshold the `planner` override row already requires",
     1,
@@ -468,7 +477,7 @@ check_count(
 
 check_contains(
     "contract override judge row requires a router-run Glob confirming zero surviving candidate files",
-    skill_text,
+    post_agent_text,
     "A router-run `Glob` confirming zero surviving `docs/plans/{plan_file_stem}-candidate-*.md` "
     "files is required",
 )

@@ -22,6 +22,11 @@
     {"file": "skills/craftflow-router/references/fast-path.md", "class": "stage", "workflows": ["PLAN", "DEBUG", "REVIEW"], "trigger": "first agent dispatch effort lookup (SKILL.md § Effort Dispatch Rule)", "happy_path": true},
     {"file": "skills/craftflow-router/references/worktree.md", "class": "stage", "workflows": ["BUILD"], "trigger": "final-phase verifier PASS (BUILD, worktree_mode == auto_created); BUILD resume with auto_created or any worktree pending_gate (incl. policy_invalid)", "happy_path": true},
     {"file": "skills/craftflow-router/references/memory-finalize.md", "class": "stage", "workflows": ["ALL"], "trigger": "memory task runnable", "happy_path": true},
-    {"file": "skills/craftflow-router/references/task-tool-fallback.md", "class": "stage", "workflows": ["ALL"], "trigger": "task_tools_available == false or native Task* failure", "happy_path": false}
+    {"file": "skills/craftflow-router/references/task-tool-fallback.md", "class": "stage", "workflows": ["ALL"], "trigger": "task_tools_available == false or native Task* failure", "happy_path": false},
+    {"file": "skills/craftflow-router/references/workflow-start.md", "class": "start", "workflows": ["ALL"], "trigger": "before workflow creation", "happy_path": true},
+    {"file": "skills/craftflow-router/references/resume.md", "class": "stage", "workflows": ["ALL"], "trigger": "resume or live scope marker", "happy_path": false},
+    {"file": "skills/craftflow-router/references/post-agent-validation.md", "class": "stage", "workflows": ["ALL"], "trigger": "agent returns", "happy_path": true},
+    {"file": "skills/craftflow-router/references/verify-dispatch.md", "class": "stage", "workflows": ["BUILD", "DEBUG"], "trigger": "integration-verifier PASS", "happy_path": true},
+    {"file": "skills/craftflow-router/references/memory-load-workspace.md", "class": "stage", "workflows": ["ALL"], "trigger": "workspace marker found", "happy_path": false}
   ]
 }

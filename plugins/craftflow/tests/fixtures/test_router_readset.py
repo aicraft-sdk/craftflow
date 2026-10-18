@@ -990,16 +990,19 @@ def test_reach_feasibility_block_is_in_the_projection() -> None:
                  and sb(v)["definitional_D17B"]["REACH_A"]["rows_upper_bound"] == sb(v)["definitional_D17B"]["REACH_B"]["rows_upper_bound"]
                  and sb(v)["buckets"]["widening"]["pairs"] == v["readmap_widened"] and sb(v)["section_move_rows"]["ops"] > 0 and "formula" in sb(v)
                  and v["variant_split"]["units"] <= v["reach_loss_split"][classes[2]]["units"] for v in tiers.values())
-    penalty = g["reach_a_kernel_penalty_bytes"] == 3913 and g["single_token_units"] == 1 and "reach_a_kernel_penalty_bytes" in block["note"]
+    # P10 resolved the one-word units (plan B2: they stay in the kernel as stand-ins, see the policy map), so the penalty the P2 analysis
+    # disclosed (3,913 B, one single-token unit) is 0 / 0 now; the fields and the note that discloses them stay required
+    penalty = g["reach_a_kernel_penalty_bytes"] == 0 and g["single_token_units"] == 0 and "reach_a_kernel_penalty_bytes" in block["note"]
     # HAND-PINNED NUMBERS (here, in reach_loss_split_pins_the_covered_first_numbers, signing_burden_buckets_are_disjoint_on_every_tier and
     # signing_burden_counts_rows_not_occurrences): they are copied from a `--project` run and must be re-derived after ANY change to the
     # router text, the cut plan or the policy map. The P9 remediation re-derived them on its final text and none moved, because the added
     # pointer, xref and Applicability rows relate ids the projection already counted.
     # 167 / 88 / 160 and 415 before P9; P9's drafted rows (the section 13 move and the fallback, dedupe and context rows) are read by the projection's diff
-    pinned = [g["reach_loss_split"][c]["units"] for c in classes] == [166, 87, 160] and g["reach_lost_occurrences"] == 413
+    # P10 (final text, unsigned P10 rows read by the diff): 166 / 87 / 160 and 413 become 159 / 86 / 151 and 396
+    pinned = [g["reach_loss_split"][c]["units"] for c in classes] == [159, 86, 151] and g["reach_lost_occurrences"] == 396
     check("reach_feasibility_block_is_in_the_projection",
           shape and moves and sums and d17 and split and burden and penalty and pinned
-          and g["reach_lost_occurrences"] > 0 and g["single_token_units"] > 0 and e["readmap_widened"] > 0
+          and g["reach_lost_occurrences"] > 0 and g["single_token_units"] >= 0 and e["readmap_widened"] > 0
           and block == full_projection()["reach_feasibility"],
           f"shape={shape} moves={moves} sums={sums} d17={d17} split={split} burden={burden} penalty={penalty} pinned={pinned}")
 
@@ -1095,9 +1098,11 @@ def test_reach_loss_split_pins_the_covered_first_numbers() -> None:
     classes = ("pure_2_to_1_covered", "drops_to_0", "drops_workflow_or_variant")
     got = {t: [tiers[t]["reach_loss_split"][c]["units"] for c in classes] for t in ("guaranteed", "conditional_if_reach_amended")}
     vs = {t: tiers[t]["variant_split"] for t in ("guaranteed", "conditional_if_reach_amended")}
-    # P9's drafted rows are read by the projection's diff: 167 / 88 / 160 and 359 / 88 / 160 become 166 / 87 / 160 and 358 / 87 / 160
+    # P9's drafted rows are read by the projection's diff: 167 / 88 / 160 and 359 / 88 / 160 became 166 / 87 / 160 and 358 / 87 / 160.
+    # P10 (re-derived on its final text, unsigned P10 rows included): the relocation is real now, so the units the P10 cut-plan rows used to move
+    # are present in the live tree; the projection's remaining reach loss is the P11 and P12 moves: 159 / 86 / 151 and 351 / 86 / 151
     check("reach_loss_split_pins_the_covered_first_numbers",
-          got == {"guaranteed": [166, 87, 160], "conditional_if_reach_amended": [358, 87, 160]}
+          got == {"guaranteed": [159, 86, 151], "conditional_if_reach_amended": [351, 86, 151]}
           and all(v == {"units": 4, "bytes": 1186} for v in vs.values()),
           f"split={got} variant_split={vs}")
 
@@ -1141,8 +1146,10 @@ def test_signing_burden_buckets_are_disjoint_on_every_tier() -> None:
     # the occurrences already signed, and moved_without_loss (clamped at 0) is empty. Pinned per tier so the K1(a) double count still fails.
     # P9's drafted rows (the section 13 move, fallback, dedupe and context rows, still unsigned) are read by the projection's diff the same way:
     # they take 70 more occurrences out of `unmapped_removed` than the burden records drop from reach-lost and vanishing: 44 / 43 become 114 / 113.
-    signed_overlap = {"conditional": 114, "conditional_if_reach_amended": 113, "effective": 114, "effective_without_infeasible_rows": 114,
-                      "guaranteed": 114, "with_contingencies": 114, "with_contingencies_if_reach_amended": 113}
+    # P10's drafted rows (the section moves, xref and split rows and the Applicability rows, still unsigned) take 408 occurrences out of
+    # `unmapped_removed` that the burden records still count as reach-lost or vanishing: 114 / 113 become 408 / 407 (377 / 376 with contingencies)
+    signed_overlap = {"conditional": 408, "conditional_if_reach_amended": 407, "effective": 408, "effective_without_infeasible_rows": 408,
+                      "guaranteed": 408, "with_contingencies": 377, "with_contingencies_if_reach_amended": 376}
     bad = {}
     for name, v in tiers.items():
         b = v["signing_burden"]["buckets"]
@@ -1173,14 +1180,16 @@ def test_signing_burden_counts_rows_not_occurrences() -> None:
           # P9's drafted rows (counted by the projection although unsigned) change the guaranteed tree from 415 reach-lost occurrences (411 ids), 123 vanishing
           # (111 ids) and 48 widening pairs (14 files) to 413 (409 ids), 126 (114 ids) and 38 (12 files): the section 13 move, the fallback and dedupe rows and the
           # two widening rows for the new stage files; the partial spans without a heading go from 23 to 22 and REACH-A / REACH-B from 589 / 422 to 588 / 422
-          b["vanishing"] == {"occurrences": 126, "ids": 114} and b["widening"] == {"pairs": 38, "files": 12}
+          # P10 (final text, drafted rows read by the diff): 413 reach-lost occurrences (409 ids) become 396 (392 ids), 126 vanishing (114 ids) become
+          # 139 (127 ids), 38 widening pairs (12 files) become 15 (7 files); REACH-A / REACH-B (row bounds) go from 588 / 422 to 579 / 420
+          b["vanishing"] == {"occurrences": 139, "ids": 127} and b["widening"] == {"pairs": 15, "files": 7}
           and (sec["ops"], sec["rows_low"], sec["rows_high_headed_spans"], sec["rows_upper_bound"]) == (41, 41, 49, 53)
           and (sec["partial_spans_without_heading"], sec["multi_section_spans"]) == (22, 7)
           and sec["needs_destination_heading"] == ["p10-pav-verifier-telemetry"]
-          and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (409 + 114 + 53 + 12, 243 + 114 + 53 + 12)
-          and g["REACH_A"]["occurrences"]["total"] == 413 + 126 + 0 + 38 and g["REACH_B"]["occurrences"]["total"] == 41 + 247 + 126 + 38
-          and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 243 + 114 + 53 + 12
-          and d["REACH_A"]["occurrences"]["total"] == 605 + 147 + 0 + 38
+          and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (392 + 127 + 53 + 7, 233 + 127 + 53 + 7)
+          and g["REACH_A"]["occurrences"]["total"] == 396 + 139 + 0 + 15 and g["REACH_B"]["occurrences"]["total"] == 41 + 237 + 139 + 15
+          and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 233 + 127 + 53 + 7
+          and d["REACH_A"]["occurrences"]["total"] == 588 + 160 + 0 + 15
           # REACH-A counts the 39 moved-without-loss occurrences, REACH-B the 42 section-move ops; they were equal (42) until P5's signed
           # plan_commit row removed one occurrence without removing a section move, and P6's six literal-to-key Rewrites rows (listed in the
           # policy map, still unsigned) took away two more and one vanishing occurrence. P8's thirteen unsigned rows (the gate summary, its bullets, the
@@ -1189,8 +1198,9 @@ def test_signing_burden_counts_rows_not_occurrences() -> None:
           # David's signature (2026-10-17) of the P8 rows left no unsigned moved-without-loss occurrence: 30 to 0 (31 to 0 if-amended), so
           # REACH-A's occurrence totals lose exactly those (guaranteed 616 to 586, if-amended 830 to 799); the row-count bounds (589 / 422) do not move.
           # P9: the if-amended tier goes from 607 per-unit / 144 vanishing / 48 widening to 605 / 147 / 38 (the definitional readings 248 to 247)
-          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 0 + 247 + 147 + 38
-          and d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 247 + 147 + 38
+          # P10: the if-amended tier goes from 605 per-unit / 147 vanishing / 38 widening to 588 / 160 / 15 (the definitional readings 247 to 237)
+          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 0 + 237 + 160 + 15
+          and d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 237 + 160 + 15
           and d["definitional_D17B"]["REACH_B"]["rows_upper_bound"] < d["REACH_B"]["rows_upper_bound"] < d["REACH_A"]["rows_upper_bound"],
           f"buckets={b} sections={sec} guaranteed={(g['REACH_A']['rows_upper_bound'], g['REACH_B']['rows_upper_bound'])} amended_A_occ={d['REACH_A']['occurrences']}")
 
@@ -1209,7 +1219,8 @@ def test_bias_notes_carry_the_residue() -> None:
           and "widening row" in notes[0] and "P11/P13" in notes[0]
           and f"{split['drops_to_0']['bytes']:,} B" in notes[1] and f"{split['drops_workflow_or_variant']['bytes']:,} B" in notes[1]
           # 32,881 B of drops-to-0 before P9; P9's drafted rows take one 1,148 B unit out of that bucket (31,733 B); the workflow-or-variant drops stay 32,762 B
-          and (split["drops_to_0"]["bytes"], split["drops_workflow_or_variant"]["bytes"]) == (31733, 32762) and "notes" not in partial["bias"],
+          # P10 (final text, drafted rows read by the diff): the drops to 0 go from 31,733 B to 31,339 B and the workflow-or-variant drops from 32,762 B to 30,180 B
+          and (split["drops_to_0"]["bytes"], split["drops_workflow_or_variant"]["bytes"]) == (31339, 30180) and "notes" not in partial["bias"],
           f"notes={notes} hsc={hsc}")
 
 
@@ -1231,6 +1242,36 @@ def test_worktree_md_is_stage_and_mapped() -> None:
     check("worktree_md_is_stage_and_mapped",
           mapped and "`references/worktree.md`" in skill and call in body and "Clean-State Check" in body,
           f"rows={rows} file_exists={wt.is_file()} kernel_points={'references/worktree.md' in skill} call_in_body={call in body}")
+
+
+P10_FILES = {"workflow-start.md": ("start", ["ALL"]), "resume.md": ("stage", ["ALL"]), "post-agent-validation.md": ("stage", ["ALL"]),
+             "verify-dispatch.md": ("stage", ["BUILD", "DEBUG"]), "memory-load-workspace.md": ("stage", ["ALL"])}
+
+
+def test_stage_files_have_triggers() -> None:
+    """P10: every start/stage read-map entry has a non-empty trigger and is named by exactly one kernel Read Map row of its class
+    (keyed by file and class, because fast-path.md has a start row and a stage row); the five P10 files exist and are mapped."""
+    rm = rs.load_map(LIVE_MAP)
+    skill = (PLUGIN_ROOT / SKILL).read_text(encoding="utf-8")
+    table = [ln for ln in skill.splitlines() if ln.startswith("| ")]
+    bad = []
+    for e in rm["files"]:
+        if e["class"] not in ("start", "stage"):
+            continue
+        short = e["file"].split("skills/craftflow-router/", 1)[-1].replace("skills/_shared/", "_shared/")
+        named = [ln for ln in table if ln.startswith("| " + e["class"] + " |") and "`" + short + "`" in ln]
+        if not str(e.get("trigger", "")).strip() or len(named) != 1:
+            bad.append((e["file"], e["class"], e.get("trigger"), len(named)))
+    check("stage_files_have_triggers", not bad, f"bad={bad}")
+    missing = []
+    for name, (cls, wfs) in P10_FILES.items():
+        rows = [e for e in rm["files"] if e["file"] == REF + name]
+        f = PLUGIN_ROOT / REF / name
+        if not (f.is_file() and len(rows) == 1 and rows[0]["class"] == cls and rows[0]["workflows"] == wfs):
+            missing.append((name, f.is_file(), rows))
+    check("p10_files_exist_and_are_mapped", not missing, f"missing={missing}")
+    sizes = {n: (PLUGIN_ROOT / REF / n).stat().st_size for n in P10_FILES if (PLUGIN_ROOT / REF / n).is_file()}
+    check("p10_files_are_at_most_20000_bytes", all(v <= 20000 for v in sizes.values()), f"sizes={sizes}")
 
 
 def main() -> int:

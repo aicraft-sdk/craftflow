@@ -131,157 +131,157 @@
    "happy_path": true
   },
   {
+   "class": "stage",
    "file": "skills/craftflow-router/references/worktree.md",
-   "class": "stage",
-   "workflows": [
-    "BUILD"
-   ],
+   "happy_path": true,
    "trigger": "final-phase verifier PASS (BUILD, worktree_mode == auto_created); BUILD resume with auto_created or any worktree pending_gate (incl. policy_invalid)",
-   "happy_path": true
-  },
-  {
-   "file": "skills/craftflow-router/references/memory-finalize.md",
-   "class": "stage",
-   "workflows": [
-    "ALL"
-   ],
-   "trigger": "memory task runnable",
-   "happy_path": true
-  },
-  {
-   "file": "skills/craftflow-router/references/task-tool-fallback.md",
-   "class": "stage",
-   "workflows": [
-    "ALL"
-   ],
-   "trigger": "task_tools_available == false or native Task* failure",
-   "happy_path": false
-  },
-  {
-   "file": "skills/craftflow-router/references/workflow-start.md",
-   "class": "start",
-   "workflows": [
-    "ALL"
-   ],
-   "trigger": "before workflow creation",
-   "happy_path": true
-  },
-  {
-   "file": "skills/craftflow-router/references/resume.md",
-   "class": "stage",
-   "workflows": [
-    "ALL"
-   ],
-   "trigger": "resume or a live scope marker",
-   "happy_path": false
-  },
-  {
-   "file": "skills/craftflow-router/references/post-agent-validation.md",
-   "class": "stage",
-   "workflows": [
-    "ALL"
-   ],
-   "trigger": "after any agent returns",
-   "happy_path": true
-  },
-  {
-   "file": "skills/craftflow-router/references/verify-dispatch.md",
-   "class": "stage",
-   "workflows": [
-    "BUILD",
-    "DEBUG"
-   ],
-   "trigger": "after integration-verifier PASS",
-   "happy_path": true
-  },
-  {
-   "file": "skills/craftflow-router/references/memory-load-workspace.md",
-   "class": "stage",
-   "workflows": [
-    "ALL"
-   ],
-   "trigger": "workspace marker found",
-   "happy_path": false
-  },
-  {
-   "file": "skills/_shared/router-protocol-multirepo.md",
-   "class": "stage",
-   "workflows": [
-    "ALL"
-   ],
-   "trigger": "TOPLEVEL_EXIT != 0",
-   "happy_path": false
-  },
-  {
-   "file": "skills/_shared/skill-distill-approval.md",
-   "class": "stage",
-   "workflows": [
-    "BUILD",
-    "DEBUG"
-   ],
-   "trigger": "skill-author COMPLETE",
-   "happy_path": false
-  },
-  {
-   "file": "skills/_shared/verifier-handoff.md",
-   "class": "stage",
-   "workflows": [
-    "BUILD",
-    "DEBUG"
-   ],
-   "trigger": "before integration-verifier dispatch",
-   "happy_path": true
-  },
-  {
-   "file": "skills/craftflow-router/references/build-graph-standard.md",
-   "class": "start",
    "workflows": [
     "BUILD"
-   ],
+   ]
+  },
+  {
+   "class": "stage",
+   "file": "skills/craftflow-router/references/memory-finalize.md",
+   "happy_path": true,
+   "trigger": "memory task runnable",
+   "workflows": [
+    "ALL"
+   ]
+  },
+  {
+   "class": "stage",
+   "file": "skills/craftflow-router/references/task-tool-fallback.md",
+   "happy_path": false,
+   "trigger": "task_tools_available == false or native Task* failure",
+   "workflows": [
+    "ALL"
+   ]
+  },
+  {
+   "class": "start",
+   "file": "skills/craftflow-router/references/workflow-start.md",
+   "happy_path": true,
+   "trigger": "before workflow creation",
+   "workflows": [
+    "ALL"
+   ]
+  },
+  {
+   "class": "stage",
+   "file": "skills/craftflow-router/references/resume.md",
+   "happy_path": false,
+   "trigger": "resume or live scope marker",
+   "workflows": [
+    "ALL"
+   ]
+  },
+  {
+   "class": "stage",
+   "file": "skills/craftflow-router/references/post-agent-validation.md",
+   "happy_path": true,
+   "trigger": "agent returns",
+   "workflows": [
+    "ALL"
+   ]
+  },
+  {
+   "class": "stage",
+   "file": "skills/craftflow-router/references/verify-dispatch.md",
+   "happy_path": true,
+   "trigger": "integration-verifier PASS",
+   "workflows": [
+    "BUILD",
+    "DEBUG"
+   ]
+  },
+  {
+   "class": "stage",
+   "file": "skills/craftflow-router/references/memory-load-workspace.md",
+   "happy_path": false,
+   "trigger": "workspace marker found",
+   "workflows": [
+    "ALL"
+   ]
+  },
+  {
+   "class": "stage",
+   "file": "skills/_shared/router-protocol-multirepo.md",
+   "happy_path": false,
+   "trigger": "TOPLEVEL_EXIT != 0",
+   "workflows": [
+    "ALL"
+   ]
+  },
+  {
+   "class": "stage",
+   "file": "skills/_shared/skill-distill-approval.md",
+   "happy_path": false,
+   "trigger": "skill-author COMPLETE",
+   "workflows": [
+    "BUILD",
+    "DEBUG"
+   ]
+  },
+  {
+   "class": "stage",
+   "file": "skills/_shared/verifier-handoff.md",
+   "happy_path": true,
+   "trigger": "before integration-verifier dispatch",
+   "workflows": [
+    "BUILD",
+    "DEBUG"
+   ]
+  },
+  {
+   "class": "start",
+   "file": "skills/craftflow-router/references/build-graph-standard.md",
+   "happy_path": true,
    "trigger": "build_mode standard",
    "variant": "standard",
-   "happy_path": true
-  },
-  {
-   "file": "skills/craftflow-router/references/build-graph-fast.md",
-   "class": "start",
    "workflows": [
     "BUILD"
-   ],
+   ]
+  },
+  {
+   "class": "start",
+   "file": "skills/craftflow-router/references/build-graph-fast.md",
+   "happy_path": true,
    "trigger": "build_mode fast_path",
    "variant": "fast_path",
-   "happy_path": true
-  },
-  {
-   "file": "skills/craftflow-router/references/build-fast-path-escalation.md",
-   "class": "stage",
    "workflows": [
     "BUILD"
-   ],
+   ]
+  },
+  {
+   "class": "stage",
+   "file": "skills/craftflow-router/references/build-fast-path-escalation.md",
+   "happy_path": false,
    "trigger": "fast-path verifier FAIL",
    "variant": "fast_path",
-   "happy_path": false
+   "workflows": [
+    "BUILD"
+   ]
   },
   {
-   "file": "skills/craftflow-router/references/plan-bakeoff.md",
    "class": "stage",
+   "file": "skills/craftflow-router/references/plan-bakeoff.md",
+   "happy_path": false,
+   "trigger": "PLAN_MODE decision_rfc or VERIFICATION_RIGOR critical_path (bake-off qualifies)",
    "workflows": [
     "PLAN"
-   ],
-   "trigger": "PLAN_MODE decision_rfc or VERIFICATION_RIGOR critical_path (bake-off qualifies)",
-   "happy_path": false
+   ]
   },
   {
+   "class": "maintainer",
    "file": "hooks/README.md",
-   "class": "maintainer",
-   "workflows": [],
-   "trigger": "maintainers only"
+   "trigger": "maintainers only",
+   "workflows": []
   },
   {
-   "file": "tools/craftflow-plugin/docs/router-protocol-history.md",
    "class": "maintainer",
-   "workflows": [],
-   "trigger": "maintainers only"
+   "file": "tools/craftflow-plugin/docs/router-protocol-history.md",
+   "trigger": "maintainers only",
+   "workflows": []
   }
  ]
 }
