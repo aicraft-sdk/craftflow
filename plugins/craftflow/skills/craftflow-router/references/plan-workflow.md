@@ -150,7 +150,7 @@ phase matches "plan-bakeoff-candidate-{model}":
 phase == "plan-bakeoff-judge":
   assemble ## Target Plan File: docs/plans/{plan_file_stem}-plan.md
   assemble ## Candidates from results.bakeoff[] (already persisted per candidate return, per
-  `SKILL.md § 12` step 5 and `references/remediation-and-research.md` step 5a "structured agent results"): one line per valid candidate —
+  `SKILL.md § 12` step 5 and 5a, `references/post-agent-validation.md` "structured agent results"): one line per valid candidate —
   "- {model}: {plan_file} (CONFIDENCE={confidence}, PLAN_MODE={plan_mode},
   RISKS_IDENTIFIED={risks_identified}, ALTERNATIVES={alternatives}, DRAWBACKS={drawbacks})"
 ```

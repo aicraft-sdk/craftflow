@@ -2838,7 +2838,7 @@
    "phase": "P10",
    "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
    "start_anchor": "  `SKILL.md § 12` step 5/5a \"structured agent results\"): one line per valid candidate —",
-   "text": "  `SKILL.md § 12` step 5 and `references/remediation-and-research.md` step 5a \"structured agent results\"): one line per valid candidate —\n"
+   "text": "  `SKILL.md § 12` step 5 and 5a, `references/post-agent-validation.md` \"structured agent results\"): one line per valid candidate —\n"
   },
   {
    "condition": "always",

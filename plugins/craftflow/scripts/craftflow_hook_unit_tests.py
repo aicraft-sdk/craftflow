@@ -1463,7 +1463,10 @@ def test_router_corpus_has_no_stale_moved_section_pointers() -> None:
         need("plan-workflow task-tool fallback rule", pw, r"`SKILL\.md § (6|7)`'s (fallback|existing)", "task-tool-fallback.md"),
         need("plan-workflow contract overrides", pw, r"`SKILL\.md § 8`", "post-agent-validation.md"),
         gone("plan-workflow chain step 5/5a", pw, r"`SKILL\.md § 12` step 5/5a"),
-        need("plan-workflow chain step 5a", pw, r"`SKILL\.md § 12` step 5 and", "remediation-and-research.md"),
+        # R2 (doubt cycle 2): "structured agent results" is bullet 2 of `### After every agent completion` step 5 in
+        # post-agent-validation.md, not chain loop step 5a (research dispatch) in remediation-and-research.md.
+        need("plan-workflow structured agent results", pw, r"\"structured agent results\"", "references/post-agent-validation.md"),
+        gone("plan-workflow structured agent results", pw, r"remediation-and-research\.md`[^\n]*\"structured agent results\""),
         need("task-tool-fallback section map (resume)", ttf, r"^Each section was moved verbatim", "references/resume.md"),
         need("task-tool-fallback section map (verify)", ttf, r"^Each section was moved verbatim", "references/verify-dispatch.md"),
         need("task-tool-fallback section map (post-agent)", ttf, r"^Each section was moved verbatim", "references/post-agent-validation.md"),
@@ -1473,6 +1476,21 @@ def test_router_corpus_has_no_stale_moved_section_pointers() -> None:
              r"at\s+\*\*Parent workflow creation\*\* \(`## 6\.`", "workflow-start.md"),
     ]
     problems = [c for c in checks if c]
+    # Numeric-form pointers to a subsection that moved (P10 remediation, doubt cycle 2, advisory): the kernel keeps `## 8.
+    # Post-Agent Validation` as a heading, but its Contract overrides and Write-agent YAML contracts moved to
+    # post-agent-validation.md, so any reference-file paragraph that cites `SKILL.md § 8` / `SKILL.md -> ## 8` must also name the
+    # file. Scope: every runtime file but the kernel itself, the destination file and the Cursor binding's own `## 8`.
+    sec8 = re.compile(r"SKILL\.md`?\s*(?:§|→\s*`?##|->\s*`?##)\s*8\b")
+    sec8_planted = "verdict-extraction rules in `SKILL.md` § 8 apply"
+    if not sec8.search(sec8_planted) or not sec8.search("(`SKILL.md → ## 8. Post-Agent Validation`)"):
+        problems.append("the numeric-pointer control for `SKILL.md § 8` no longer matches its planted forms")
+    for rel, text in corpus.items():
+        if rel.endswith(("craftflow-router/SKILL.md", "post-agent-validation.md")) or "cursor-router" in rel:
+            continue
+        for para in paragraphs(text):
+            if sec8.search(para) and "post-agent-validation.md" not in para:
+                problems.append(f"{rel}: cites `SKILL.md § 8` without naming post-agent-validation.md: {para[:120]!r}")
+                break
     if re.search(r"formerly\s+`SKILL\.md\s+§\s*7`", corpus[ref + "verify-dispatch.md"]):
         problems.append("verify-dispatch.md still says 'formerly `SKILL.md § 7`' (the rule is cited by its own file and heading)")
     agent_files = [PLUGIN_ROOT / "agents" / n for n in ("bug-investigator.md", "component-builder.md", "plan-bakeoff-judge.md")]
@@ -1482,6 +1500,80 @@ def test_router_corpus_has_no_stale_moved_section_pointers() -> None:
         text = f.read_text(encoding="utf-8")
         if "Write-agent YAML contracts" in text and "post-agent-validation.md" not in text:
             problems.append(f"{f}: cites SKILL.md § Write-agent YAML contracts, which moved to references/post-agent-validation.md")
+    if problems:
+        fail(name, "; ".join(problems))
+        return
+    ok(name)
+
+
+def test_router_p10_moved_fragments_are_content_pinned() -> None:
+    # P10 remediation (doubt cycle 2, R1): the fragments of the two split fences that moved out of the kernel (the step 5a
+    # workspace walk, the state-read-compaction self-heal paragraph, chain loop step 5a) have no inventory identity of their own,
+    # so the inventory cannot see them change. Their text is pinned here, verbatim against the baseline (whitespace collapsed;
+    # the only intended rewords are the scope words "(PLAN and DEBUG workflows)" and "in the Memory Load step"). Deleting the
+    # $HOME guard, changing 3 levels to 30, moving the self-heal paragraph to resume.md or deleting the 5a fallback bullet fails.
+    name = "router/p10-moved-fragments-content-pinned"
+    corpus = router_corpus.read_corpus(PLUGIN_ROOT)
+    ref = "skills/craftflow-router/references/"
+
+    def flat(text: str) -> str:
+        return re.sub(r"\s+", " ", text)
+
+    mlw = flat(corpus[ref + "memory-load-workspace.md"])
+    rr = flat(corpus[ref + "remediation-and-research.md"])
+    walk_pins = (
+        "5a. Workspace-tier discovery (capped upward walk, max 3 levels above PROJECT_ROOT, to avoid runaway scans): starting at "
+        "PROJECT_ROOT's parent, check each ancestor for EITHER a `.craftflow-workspace.json` file OR a `.craftflow/state/workspace/` "
+        "directory. Stop at the first match, or after 3 levels, or at the filesystem root, whichever comes first. Never select "
+        "`$HOME` or `/` itself as a matched workspace root even if a marker is somehow present there (defense in depth alongside "
+        "`craftflow_workspace_init.py`'s own refusal list).",
+        "- No marker found: skip silently -- zero behavior change (existing production reality for every non-workspace session today).",
+        "- Marker found at {workspace_root}: pass it as `--workspace-root` to the digest call (covers workspace/activeContext.md, "
+        "patterns.md, progress.md). Missing/malformed file: auto-heal via craftflow:session-memory template (same rule as project/'s "
+        "own auto-heal), never a hard stop. Unreadable (permission error): skip with a logged note, never a hard stop.",
+        "- workspace_root == PROJECT_ROOT (the current project IS itself the configured workspace root): do not double-load; treat "
+        "workspace tier as absent for this session to avoid merging a tier with itself.",
+        "Merge precedence (lowest to highest): workspace/ < project/ < workflows/{wf-id}/ -- for ## Current Focus / ## Next Steps / "
+        "## Tasks, the highest-precedence tier present wins; ## Decisions / ## User Standards / ## Architecture Patterns always come "
+        "from project/ (unchanged rule) with workspace/'s own such sections available as additional read-only context, never "
+        "overriding project/'s.",
+        "Note: this **load** walk is deliberately NOT membership-gated, unlike `discover_workspace_root()`'s write-grant walk in "
+        "`craftflow_hooklib.py`. The divergence is intentional (back-compat with existing workspace-memory users) and ADR-recorded "
+        '-- do not "re-sync" the two without reading that ADR first.',
+    )
+    self_heal_pins = (
+        "## State-read compaction self-heal State-read compaction self-heal: if any `Read(...)` in the Memory Load step is denied "
+        "with a `state-read-compaction` reason (the target `.craftflow/state/**` file is oversized), do not treat the denial as a "
+        "hard failure. Instead, run the exact `craftflow_state_query.py ... --mode summary` command named in the deny message via "
+        "`Bash(...)` and treat its stdout as the loaded memory content for that file.",
+    )
+    five_a_pins = (
+        "5a. If both `research-web` and `research-github` tasks are runnable in the same round (PLAN and DEBUG workflows):",
+        "- Mark both in_progress first",
+        "- Dispatch them in the same message (same pattern as reviewer+hunter in BUILD)",
+        "- Both are read-only with no file-write overlap — safe to parallelize",
+        "- If parallel invocation fails (rate limit, API error): fall back to sequential (web first, then github). "
+        "Log `event=parallel_fallback` in the event log.",
+        "- Wait for BOTH to complete before proceeding to planner or investigator.",
+    )
+    problems = []
+    for pin in walk_pins + self_heal_pins:
+        if pin not in mlw:
+            problems.append(f"memory-load-workspace.md lost: {pin[:90]!r}")
+    for pin in five_a_pins:
+        if pin not in rr:
+            problems.append(f"remediation-and-research.md lost step 5a text: {pin[:90]!r}")
+    # The self-heal text lives once in the corpus, in memory-load-workspace.md, under its own heading.
+    holders = [r for r, t in corpus.items() if "State-read compaction self-heal: if any" in flat(t)]
+    if holders != [ref + "memory-load-workspace.md"]:
+        problems.append(f"the state-read compaction self-heal paragraph must live only in memory-load-workspace.md; found in {holders}")
+    if not re.search(r"^## State-read compaction self-heal\s*$", corpus[ref + "memory-load-workspace.md"], re.M):
+        problems.append("memory-load-workspace.md lost the '## State-read compaction self-heal' heading")
+    # The kernel pointer line sends a fresh-start state-read-compaction deny to that file (not to resume.md or anywhere else).
+    kernel = re.sub(r"<!-- readmap:begin -->.*?<!-- readmap:end -->", "", corpus["skills/craftflow-router/SKILL.md"], flags=re.S)
+    deny_paras = [p for p in re.split(r"\n\s*\n", kernel) if "`state-read-compaction`" in p]
+    if not deny_paras or not all("references/memory-load-workspace.md" in p and "Memory Load" in p for p in deny_paras):
+        problems.append("the kernel paragraph naming the `state-read-compaction` deny must send it to references/memory-load-workspace.md")
     if problems:
         fail(name, "; ".join(problems))
         return
@@ -29065,6 +29157,7 @@ def main() -> int:
     test_router_memory_finalize_pointer_not_under_verifier_handoff()
     test_router_p10_kernel_relocation_wiring()
     test_router_corpus_has_no_stale_moved_section_pointers()
+    test_router_p10_moved_fragments_are_content_pinned()
     test_plugin_has_no_dangling_section_13_references()
     test_workflow_artifact_schema_documents_task_tools_available()
     test_self_dispatch_guard_present_in_task_update_agents()
