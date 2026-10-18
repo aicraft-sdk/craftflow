@@ -1378,7 +1378,8 @@ def test_router_p10_kernel_relocation_wiring() -> None:
         ("any agent returns", ("After any agent returns", "references/post-agent-validation.md", "/clear")),
         ("task-tool probe", ("Probe task tools", "references/workflow-start.md")),
         ("Task Metadata Contract before a child TaskCreate", ("Task Metadata Contract", "references/workflow-start.md", "TaskCreate")),
-        ("chain loop step 6 validate output", ("validate output (§ 8)", "- capture memory payload immediately")),
+        ("pending work resumes through resume.md", ("Pending work to resume", "references/resume.md")),
+        ("chain loop step 6 validate output",("validate output (§ 8)", "- capture memory payload immediately")),
         ("chain loop steps 5a and 5b", ("5a", "5b", "references/remediation-and-research.md", "references/plan-workflow.md")),
         ("PLAN-only Intent Interview Gate", ("Intent Interview Gate", "PLAN only", "references/plan-workflow.md")),
     )

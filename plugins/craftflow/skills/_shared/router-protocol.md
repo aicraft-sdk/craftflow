@@ -161,7 +161,7 @@ terminology and minimizing blast radius on an already 1000+-line file.]
        only covers a workspace root with no nested git repos, or a scan failure, where cwd is
        the only available candidate.
        [EASY TO MISS: `## 0.` runs BEFORE `workflow_uuid` is minted (minted later, at
-       **Parent workflow creation** in `## 6.`, Claude Code: `references/workflow-start.md`), so no per-workflow event log
+       **Parent workflow creation** in `## 6.`), so no per-workflow event log
        (`$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.events.jsonl`) can exist yet
        at this point — it is filename-keyed on `workflow_uuid`, which literally cannot exist
        yet. Do not append an event to "the event log" here; there is nothing to append to.

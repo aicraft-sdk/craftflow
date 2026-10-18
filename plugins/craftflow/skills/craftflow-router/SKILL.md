@@ -78,7 +78,7 @@ re-run `git rev-parse --show-toplevel` a second time later in a session.
 
 Probe task tools once per session via `references/workflow-start.md`, before `TaskList()` or a workflow write.
 
-When `capabilities.task_tools_available == false`, or a router-owned native Task* call fails mid-session, read `references/task-tool-fallback.md` now and apply it at every `TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` call site.
+When `capabilities.task_tools_available == false`, or a router-owned native Task* call fails mid-session, read `references/task-tool-fallback.md` now and apply it at every `TaskCreate`/`TaskList`/`TaskGet`/`TaskUpdate` call site.
 
 ## 2. Memory Load And Template Validation
 
@@ -101,7 +101,8 @@ Always run this before routing or resuming. Memory is organized in three tiers:
     `craftflow_state_query.py <path> --mode full`, or raw Read for files under the compaction threshold.
     **Re-read rule:** when the digest shows `(omitted for size` or `(+N more)` for a section the task depends on, or the task depends on prior Decisions/Learnings, re-read that file with `craftflow_state_query.py <path> --mode full` before acting.
 5a. Workspace tier (walk up max 3 levels above PROJECT_ROOT): if an ancestor holds
-    `.craftflow-workspace.json` or `.craftflow/state/workspace/`, read `references/memory-load-workspace.md`.
+    `.craftflow-workspace.json` or `.craftflow/state/workspace/`, read `references/memory-load-workspace.md`;
+    no marker, or workspace_root == PROJECT_ROOT: skip, without a hard stop.
 6. If workflow_uuid is known (resume path):
    a. Bash("mkdir -p \"$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}\"")
    b-d. pass `--workflow-uuid {workflow_uuid}` to the digest call (covers workflows/{workflow_uuid}/
@@ -118,7 +119,7 @@ Do not parallelize step 1 with reads.
 Memory Summary / Project Patterns for the dispatch scaffold: take them from the digest's
 `## Memory Summary` and `## Project Patterns` blocks (do not re-Read the files for this).
 
-Workspace marker, or `state-read-compaction` deny in Memory Load (`SKILL.md → ## 2. Memory Load And Template Validation`): `references/memory-load-workspace.md`.
+`state-read-compaction` deny in Memory Load (`SKILL.md → ## 2. Memory Load And Template Validation`): `references/memory-load-workspace.md`.
 
 If a project/ memory file is missing:
 - Create it using the `craftflow:session-memory` template.
@@ -170,6 +171,7 @@ Before creating a new workflow:
 - Read `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## References` to discover `Plan`, `Design`, and prior `Research` files.
 - Read `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Decisions` for prior planner/build clarifications.
 - Read `$PROJECT_ROOT/.craftflow/state/project/progress.md ## Current Workflow` and `## Tasks` for pending work that should resume instead of duplicating.
+- Pending work to resume: `references/resume.md`.
 - Read the latest `$PROJECT_ROOT/.craftflow/state/workflows/*.json` artifact if one exists for the current conversation.
 
 **Script directory (DD-9):** `CRAFTFLOW_SCRIPTS` = the router skill's Base directory + `/../../scripts`; fall back to `$CRAFTFLOW_INSTALL/scripts` only when that directory lacks the script you need. The Skill tool can serve a different cached version than `installed_plugins.json` names.
@@ -317,7 +319,7 @@ Shared with Cursor — canonical text lives in
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
 "Previous Agent Findings Handoff". DEBUG skips hunter findings.
 
-**Doubt-Verify, Fix-Verify (BUILD, DEBUG):** after `integration-verifier` PASS, read `references/verify-dispatch.md`.
+**Doubt-Verify, Fix-Verify:** after `integration-verifier` PASS, read `references/verify-dispatch.md`.
 
 ### Task metrics and timing telemetry
 
@@ -347,9 +349,9 @@ After any agent returns, read `references/post-agent-validation.md` (once per co
 
 | Agent | Override |
 |---|---|
-| any | rows in that file |
+| any | in that file |
 
-**Intent Interview Gate, brainstorming handoff (PLAN only):** `references/plan-workflow.md`.
+**Intent Interview Gate, brainstorming (PLAN only):** `references/plan-workflow.md`.
 
 ## 9. Remediation And Workflow Rules
 
@@ -379,7 +381,7 @@ After any agent returns, read `references/post-agent-validation.md` (once per co
 2. Select tasks in the active `wf:` where:
    - status is pending or in_progress
    - blockedBy is empty or all blockers are completed
-3. If the runnable task kind is memory:
+3. If the runnable task kind is memory (`references/memory-finalize.md`):
    - execute inline in the main context
    - persist workflow artifact results + Memory Notes from the task description
    - append `memory_finalized` to `$PROJECT_ROOT/.craftflow/state/workflows/{wf}.events.jsonl`
@@ -413,7 +415,7 @@ After any agent returns, read `references/post-agent-validation.md` (once per co
 7. Repeat until all tasks in the active `wf:` are completed.
 ```
 
-`SKILL.md → ## 12. Chain Execution Loop` 5a (research): `references/remediation-and-research.md`; 5b (bake-off): `references/plan-workflow.md`. In task-tool fallback mode, step 1 and agent-completion steps 1-3: `references/task-tool-fallback.md`. Memory task (step 3): `references/memory-finalize.md`.
+`SKILL.md → ## 12. Chain Execution Loop` 5a (research): `references/remediation-and-research.md`; 5b (bake-off): `references/plan-workflow.md`. In task-tool fallback mode, step 1 and agent-completion steps 1-3: `references/task-tool-fallback.md`.
 
 ## 14. Hard Rules
 
