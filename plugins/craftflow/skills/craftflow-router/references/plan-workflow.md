@@ -1,7 +1,7 @@
 ### PLAN preparation
 
 0. Workflow setup (runs immediately after `workflow_uuid`/`WF_INFO` are minted — this already
-   happens in `SKILL.md § 6`'s Parent workflow creation, reused verbatim, no new script — and
+   happens in `SKILL.md § 6`'s Parent workflow creation (`references/workflow-start.md`), reused verbatim, no new script — and
    BEFORE Constitution Check below):
    - Derive `plan_file_stem` (collision-guarded):
      ```text
@@ -150,7 +150,7 @@ phase matches "plan-bakeoff-candidate-{model}":
 phase == "plan-bakeoff-judge":
   assemble ## Target Plan File: docs/plans/{plan_file_stem}-plan.md
   assemble ## Candidates from results.bakeoff[] (already persisted per candidate return, per
-  `SKILL.md § 12` step 5/5a "structured agent results"): one line per valid candidate —
+  `SKILL.md § 12` step 5 and `references/remediation-and-research.md` step 5a "structured agent results"): one line per valid candidate —
   "- {model}: {plan_file} (CONFIDENCE={confidence}, PLAN_MODE={plan_mode},
   RISKS_IDENTIFIED={risks_identified}, ALTERNATIVES={alternatives}, DRAWBACKS={drawbacks})"
 ```
@@ -190,7 +190,7 @@ ELSE:
 
 **Why the Block A/Block B split is a genuine, disclosed behavior change from "pre-create all 5
 atomically" (not a cosmetic single-edge deferral):** in the `task_tools_available == false` world,
-`SKILL.md § 6`'s fallback rule enforces ordering purely via `phase_status`/`normalized_phases`
+`SKILL.md § 6`'s fallback rule (`references/task-tool-fallback.md`) enforces ordering purely via `phase_status`/`normalized_phases`
 insertion order, with `blockedBy`-equivalent constraints fixed at the moment an entry is first
 appended — there is no mechanism to redirect a phase's ordering after the fact the way a real
 `addBlockedBy` edge can be re-bound later. Pre-creating `plan-review-gap-1`'s entry early (even
@@ -222,7 +222,7 @@ FOR each model in bakeoff_models (the fixed rotation slice from `### PLAN qualif
 
 Mark ALL candidate tasks in_progress FIRST, then dispatch every one of them (via Mechanism A,
 passing the literal `model` override) in the SAME message — identical mechanics to the existing
-reviewer+hunter / research-web+research-github precedent (`SKILL.md § 12` step 5/5a).
+reviewer+hunter / research-web+research-github precedent (`SKILL.md § 12` step 5; `references/remediation-and-research.md` step 5a).
 
 If the parallel invocation itself fails or is unavailable (API error, rate limit): fall back to
 sequential dispatch, one candidate at a time. Log event=parallel_fallback. Never block the
@@ -236,11 +236,11 @@ by the degraded-bake-off tolerance rule below.
 hard-stop rule):
 ```text
 For EACH candidate that returns (scout included), validate its contract exactly as any planner
-contract is validated today (`SKILL.md § 8` override row, unchanged). Additionally verify
+contract is validated today (`SKILL.md § 8` override row, now in `references/post-agent-validation.md`, unchanged). Additionally verify
 PLAN_FILE Glob-matches its OWN assigned target path exactly (not any other candidate's path, not
 the canonical path).
 
-EXCEPTION to the default "malformed contract = hard stop" rule (`SKILL.md § 8`), scoped ONLY to
+EXCEPTION to the default "malformed contract = hard stop" rule (`SKILL.md § 8`, `references/post-agent-validation.md`), scoped ONLY to
 phase:plan-bakeoff-candidate-* tasks: an invalid contract, a tool-level dispatch failure that
 survives the sequential retry (this is also where an unavailable-model dispatch failure lands —
 above), or a PLAN_FILE that doesn't match the assigned target does NOT hard-stop the workflow.
@@ -298,7 +298,7 @@ TaskUpdate({ taskId: judge_task_id, addBlockedBy: [every valid candidate's task_
 ### PLAN post-judge validation
 
 ```text
-Validate judge's contract per the `SKILL.md § 8` override row (added for `plan-bakeoff-judge`).
+Validate judge's contract per the `SKILL.md § 8` override row in `references/post-agent-validation.md` (added for `plan-bakeoff-judge`).
 Glob(f"docs/plans/{plan_file_stem}-candidate-*.md") — MUST return zero matches. (This check now
   holds unconditionally: every failed candidate's own leftover file was already deleted at
   fail-time by `### PLAN bake-off fan-out`'s router-owned cleanup above, so this Glob only needs to
@@ -319,7 +319,7 @@ On success: persist plan_file = judge's PLAN_FILE (== the canonical path).
 **Task*-tool-fallback note (cross-reference, not new logic):** every individual
 `TaskCreate()`/`TaskUpdate({ addBlockedBy })` call site in `### PLAN bake-off fan-out`,
 `### PLAN judge dispatch`, and Block B (`### PLAN task graph`) above is covered by the existing
-generalized Task*-tool-fallback rule in `SKILL.md § 6` without further modification — when
+generalized Task*-tool-fallback rule in `SKILL.md § 6` (`references/task-tool-fallback.md`) without further modification — when
 `capabilities.task_tools_available == false`, skip each call and append the corresponding
 `phase_status`/`normalized_phases` entry (`plan-bakeoff-candidate-{model}` / `plan-bakeoff-judge`
 / the Block B tail phases) directly. **What the existing rule does NOT, by itself, cover — and
@@ -329,7 +329,7 @@ the (skipped) call would have happened; it says nothing about deferring that poi
 branch resolves. That deferral is this mechanism's own structural change (`### PLAN task graph`
 Block B), layered on top of the pre-existing, unmodified fallback mechanism, not something the
 fallback rule already provided. Dispatch itself falls through to the `Agent()`-tool path per
-`SKILL.md § 7`'s existing Task*-tool-fallback rule, substituting the same `'n/a — task-tool
+`SKILL.md § 7`'s existing Task*-tool-fallback rule (`references/task-tool-fallback.md`), substituting the same `'n/a — task-tool
 fallback active (capabilities.task_tools_available=false)'` `Task ID:` placeholder every other
 agent already uses.
 
@@ -369,15 +369,9 @@ If present:
 - do not require `activeContext.md` to be updated first
 
 
-## Chain loop steps 5a and 5b (PLAN)
+## Chain loop step 5b (PLAN)
 
 ```text
-5a. If both `research-web` and `research-github` tasks are runnable in the same round (PLAN workflow):
-   - Mark both in_progress first
-   - Dispatch them in the same message (same pattern as reviewer+hunter in BUILD)
-   - Both are read-only with no file-write overlap — safe to parallelize
-   - If parallel invocation fails (rate limit, API error): fall back to sequential (web first, then github). Log `event=parallel_fallback` in the event log.
-   - Wait for BOTH to complete before proceeding to planner or investigator.
 5b. If N-1 `plan-bakeoff-candidate-*` tasks are all runnable in the same round (PLAN workflow,
     qualifying bake-off only):
    - Mark all in_progress first

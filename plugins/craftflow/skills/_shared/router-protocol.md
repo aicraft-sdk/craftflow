@@ -118,7 +118,7 @@ terminology and minimizing blast radius on an already 1000+-line file.]
      WORKSPACE_WRITABLE_PATHS_DROPPED_JSON=$(printf '%s' "$RESOLVE_RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get('workspace_writable_paths_dropped', [])))")
      ```
      `WORKSPACE_WRITABLE_PATHS_JSON` is held in-session — it is written into the workflow artifact
-     at **Parent workflow creation** (`## 6.`) below, the same ordering constraint the
+     at **Parent workflow creation** (`## 6.`; Claude Code: `references/workflow-start.md`) below, the same ordering constraint the
      `project_root_resolution_fallback` reason already works around (the artifact doesn't exist
      yet at this point in `## 0.`). If `WORKSPACE_WRITABLE_PATHS_DROPPED_JSON` is non-empty (`!=
      '[]'`), fold it into `## 6.`'s own initial event-log write alongside `workflow_started`, the
@@ -161,7 +161,7 @@ terminology and minimizing blast radius on an already 1000+-line file.]
        only covers a workspace root with no nested git repos, or a scan failure, where cwd is
        the only available candidate.
        [EASY TO MISS: `## 0.` runs BEFORE `workflow_uuid` is minted (minted later, at
-       **Parent workflow creation** in `## 6.`), so no per-workflow event log
+       **Parent workflow creation** in `## 6.`, Claude Code: `references/workflow-start.md`), so no per-workflow event log
        (`$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.events.jsonl`) can exist yet
        at this point — it is filename-keyed on `workflow_uuid`, which literally cannot exist
        yet. Do not append an event to "the event log" here; there is nothing to append to.

@@ -1002,7 +1002,7 @@ def test_reach_feasibility_block_is_in_the_projection() -> None:
     pinned = [g["reach_loss_split"][c]["units"] for c in classes] == [159, 86, 151] and g["reach_lost_occurrences"] == 396
     check("reach_feasibility_block_is_in_the_projection",
           shape and moves and sums and d17 and split and burden and penalty and pinned
-          and g["reach_lost_occurrences"] > 0 and g["single_token_units"] >= 0 and e["readmap_widened"] > 0
+          and g["reach_lost_occurrences"] > 0 and e["readmap_widened"] > 0
           and block == full_projection()["reach_feasibility"],
           f"shape={shape} moves={moves} sums={sums} d17={d17} split={split} burden={burden} penalty={penalty} pinned={pinned}")
 
@@ -1263,6 +1263,33 @@ def test_stage_files_have_triggers() -> None:
         if not str(e.get("trigger", "")).strip() or len(named) != 1:
             bad.append((e["file"], e["class"], e.get("trigger"), len(named)))
     check("stage_files_have_triggers", not bad, f"bad={bad}")
+    # The trigger has to name the CONDITION that makes the router open the file, in the read map and in the kernel prose outside
+    # the generated table (P10 remediation, hunter HIGH-2: a file name in the table alone satisfied the old check). Each file
+    # lists the words its trigger must carry; the kernel prose (table block removed) must name the file next to the same words.
+    prose = re.sub(r"<!-- readmap:begin -->.*?<!-- readmap:end -->", "", skill, flags=re.S)
+    paragraphs = [p for p in re.split(r"\n\s*\n", prose) if p.strip()]
+    conditions = {
+        "workflow-start.md": ["before workflow creation"],
+        "resume.md": ["resume", "scope marker"],
+        "post-agent-validation.md": ["agent returns"],
+        "verify-dispatch.md": ["integration-verifier PASS"],
+        "memory-load-workspace.md": ["workspace marker", "state-read-compaction"],
+    }
+    kernel_words = {  # each inner list must sit in ONE kernel paragraph (outside the table) that also names the file
+        "workflow-start.md": [["Probe task tools"], ["Task Metadata Contract", "TaskCreate"]],
+        "resume.md": [["On resume", "SCOPE-DECISION-PENDING:"]],
+        "post-agent-validation.md": [["After any agent returns"]],
+        "verify-dispatch.md": [["integration-verifier", "PASS"]],
+        "memory-load-workspace.md": [[".craftflow-workspace.json"], ["state-read-compaction"]],
+    }
+    vague = []
+    for fname, words in conditions.items():
+        entry = next((e for e in rm["files"] if e["file"] == REF + fname), None)
+        trig = str(entry.get("trigger", "")) if entry else ""
+        prose_ok = all(any(("references/" + fname) in p and all(w in p for w in group) for p in paragraphs) for group in kernel_words[fname])
+        if not entry or not all(w in trig for w in words) or len(trig.split()) < 2 or not prose_ok:
+            vague.append((fname, trig, prose_ok))
+    check("stage_triggers_name_their_condition", not vague, f"vague={vague}")
     missing = []
     for name, (cls, wfs) in P10_FILES.items():
         rows = [e for e in rm["files"] if e["file"] == REF + name]

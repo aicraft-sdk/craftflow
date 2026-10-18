@@ -262,6 +262,14 @@ GitHub: {github_file or 'Unavailable'}
 
 8. Include `craftflow:research` in `## SKILL_HINTS` only when at least one research file exists.
 
+Chain loop step 5a (research dispatch, read by PLAN and DEBUG):
+5a. If both `research-web` and `research-github` tasks are runnable in the same round (PLAN and DEBUG workflows):
+   - Mark both in_progress first
+   - Dispatch them in the same message (same pattern as reviewer+hunter in BUILD)
+   - Both are read-only with no file-write overlap — safe to parallelize
+   - If parallel invocation fails (rate limit, API error): fall back to sequential (web first, then github). Log `event=parallel_fallback` in the event log.
+   - Wait for BOTH to complete before proceeding to planner or investigator.
+
 ## 11. Re-Review Loop
 
 When a `kind:remfix` task completes:

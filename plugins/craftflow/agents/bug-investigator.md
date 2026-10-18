@@ -234,7 +234,7 @@ and one `Variant:`-named entry, each with non-empty `command`, `expected`, `actu
 `exit_code`.
 
 Emit only the `### Router Contract (MACHINE-READABLE)` YAML block below — it is the sole
-output the router parses (see `craftflow-router/SKILL.md` § Write-agent YAML contracts).
+output the router parses (see `craftflow-router/references/post-agent-validation.md` § Write-agent YAML contracts).
 Every field a prose report would restate — root cause, TDD evidence, variant coverage,
 blast-radius scan, scenario table, decisions, assumptions, findings — already has a home in
 that YAML (`ROOT_CAUSE`, `TDD_RED_EXIT`/`TDD_GREEN_EXIT`, `VARIANTS_COVERED`,

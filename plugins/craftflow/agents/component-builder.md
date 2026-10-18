@@ -262,7 +262,7 @@ The scenario must map back to the plan or prompt intent. STATUS=PASS without a p
 **CRITICAL: Cannot mark task complete without exit code evidence for BOTH red and green phases.**
 
 Emit only the `### Router Contract (MACHINE-READABLE)` YAML block below — it is the sole
-output the router parses (see `craftflow-router/SKILL.md` § Write-agent YAML contracts).
+output the router parses (see `craftflow-router/references/post-agent-validation.md` § Write-agent YAML contracts).
 Every field a prose report would restate — phase record, TDD evidence, scenario table,
 decisions, assumptions, findings — already has a home in that YAML (`PHASE_ID`/
 `PHASE_STATUS`/`PHASE_EXIT_READY`, `TDD_RED_EXIT`/`TDD_GREEN_EXIT`/`EVIDENCE`, `SCENARIOS`,

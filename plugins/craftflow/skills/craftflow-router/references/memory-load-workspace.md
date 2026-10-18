@@ -1,5 +1,7 @@
 # Memory load: workspace tier
 
+Read this when a workspace marker is found in the step 5a walk (`SKILL.md → ## 2. Memory Load And Template Validation`), or when a `Read(...)` in the Memory Load step is denied with `state-read-compaction`: the first section is the workspace tier, the last the self-heal.
+
 5a. Workspace-tier discovery (capped upward walk, max 3 levels above PROJECT_ROOT, to
     avoid runaway scans): starting at PROJECT_ROOT's parent, check each ancestor for
     EITHER a `.craftflow-workspace.json` file OR a `.craftflow/state/workspace/`

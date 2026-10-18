@@ -29,7 +29,7 @@ Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset
 | Class | Read when | File | Workflows | Variant | Happy path |
 |---|---|---|---|---|---|
 | kernel | skill load | `SKILL.md` | ALL | - | yes |
-| kernel | read before routing (SKILL.md section 1 pointer) | `_shared/router-protocol.md` | ALL | - | yes |
+| kernel | read before routing | `_shared/router-protocol.md` | ALL | - | yes |
 | start | workflow start | `references/workflow-artifact-and-hook-policy.md` | ALL | - | yes |
 | start | BUILD preparation | `references/build-workflow.md` | BUILD | - | yes |
 | start | fast-path routing during BUILD preparation | `references/fast-path.md` | BUILD | - | yes |
@@ -39,7 +39,7 @@ Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset
 | stage | before code-reviewer dispatch / clean-state check | `references/harness-self-checks.md` | BUILD, REVIEW, DEBUG | - | yes |
 | stage | remediation or research is triggered | `references/remediation-and-research.md` | ALL | - | no |
 | stage | phase exit | `references/context-boundary.md` | BUILD, PLAN | - | yes |
-| stage | first agent dispatch effort lookup (SKILL.md § Effort Dispatch Rule) | `references/fast-path.md` | PLAN, DEBUG, REVIEW | - | yes |
+| stage | first agent dispatch effort lookup | `references/fast-path.md` | PLAN, DEBUG, REVIEW | - | yes |
 | stage | final-phase verifier PASS (BUILD, worktree_mode == auto_created); BUILD resume with auto_created or any worktree pending_gate (incl. policy_invalid) | `references/worktree.md` | BUILD | - | yes |
 | stage | memory task runnable | `references/memory-finalize.md` | ALL | - | yes |
 | stage | task_tools_available == false or native Task* failure | `references/task-tool-fallback.md` | ALL | - | no |
@@ -47,7 +47,7 @@ Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset
 | stage | resume or live scope marker | `references/resume.md` | ALL | - | no |
 | stage | agent returns | `references/post-agent-validation.md` | ALL | - | yes |
 | stage | integration-verifier PASS | `references/verify-dispatch.md` | BUILD, DEBUG | - | yes |
-| stage | workspace marker found | `references/memory-load-workspace.md` | ALL | - | no |
+| stage | workspace marker found, or a state-read-compaction deny during Memory Load | `references/memory-load-workspace.md` | ALL | - | no |
 <!-- readmap:end -->
 
 ## 1. Intent Routing
@@ -78,7 +78,7 @@ re-run `git rev-parse --show-toplevel` a second time later in a session.
 
 Probe task tools once per session via `references/workflow-start.md`, before `TaskList()` or a workflow write.
 
-When `capabilities.task_tools_available == false`, or any router-owned native Task* call fails mid-session, read `references/task-tool-fallback.md` now and apply its per-site rule at every `TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` call site.
+When `capabilities.task_tools_available == false`, or a router-owned native Task* call fails mid-session, read `references/task-tool-fallback.md` now and apply it at every `TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` call site.
 
 ## 2. Memory Load And Template Validation
 
@@ -118,7 +118,7 @@ Do not parallelize step 1 with reads.
 Memory Summary / Project Patterns for the dispatch scaffold: take them from the digest's
 `## Memory Summary` and `## Project Patterns` blocks (do not re-Read the files for this).
 
-State-read compaction self-heal: `references/memory-load-workspace.md`.
+Workspace marker, or `state-read-compaction` deny in Memory Load (`SKILL.md → ## 2. Memory Load And Template Validation`): `references/memory-load-workspace.md`.
 
 If a project/ memory file is missing:
 - Create it using the `craftflow:session-memory` template.
@@ -156,11 +156,11 @@ Mandatory reference read:
 - Before workflow creation, artifact mutation, hook policy changes, or resume logic that depends on artifact fields, immediately read `references/workflow-artifact-and-hook-policy.md`.
 - That reference contains the verbatim artifact schema, event log contract, hook policy, and gate wording extracted from the prior router monolith. Treat it as load-bearing orchestration law, not optional background.
 
-**3. Task Metadata Contract:** see `references/workflow-start.md`.
+**3. Task Metadata Contract** and **Parent workflow creation** (§ 6): before any `TaskCreate()`: `references/workflow-start.md`.
 
 ## 4. Resume And Hydration
 
-On resume, or when the digest `## Decisions` holds a live `[SCOPE-DECISION-PENDING:` or unconsumed `[jev-auto-decided:` marker, read `references/resume.md`.
+On resume, or when grep of `project/activeContext.md ## Decisions` finds a live `[SCOPE-DECISION-PENDING:` or unconsumed `[jev-auto-decided:` marker, read `references/resume.md`.
 
 ## 5. Workflow Preparation
 
@@ -193,10 +193,8 @@ Router-owned interface fields:
 - Before fast-path routing (performed during BUILD preparation), read `references/fast-path.md` for the canonical keyword table, agent dispatch table, gate table, and escalation protocol.
 - Before any `code-reviewer` dispatch (BUILD or REVIEW), read `references/harness-self-checks.md` for the arch-lint wiring; the detail lives there, not here, to keep this file from growing further.
 
-Fast Path Detection and Worktree Isolation steps 1-3: `references/build-workflow.md`.
-
-4. After `integration-verifier` PASS on the final phase and before memory-finalize: when
-   `worktree_mode == "auto_created"`, read `references/worktree.md` and run its finalize call.
+4. Final-phase `integration-verifier` PASS, before memory-finalize, `worktree_mode == "auto_created"`:
+   read `references/worktree.md`, run its finalize call.
 
 ### DEBUG preparation
 
@@ -215,8 +213,6 @@ Fast Path Detection and Worktree Isolation steps 1-3: `references/build-workflow
 - If planner clarification, review-loop findings, or plan remediation rules trigger later in the workflow, also read `references/remediation-and-research.md` before continuing.
 
 ## 6. Workflow Task Graphs
-
-**Parent workflow creation:** see `references/workflow-start.md`.
 
 ### BUILD task graph
 
@@ -257,8 +253,8 @@ resolution step needed here, unlike Cursor's `## Agent File Paths` literal-path 
 
 `skill-author` is deliberately NOT a `kind:remfix` origin. A `skill-distill` task returning
 `STATUS: FAIL` (or never returning) is not a code defect for `component-builder` to fix — it
-is a proposal-authoring/availability issue. See `## 6. Workflow Task Graphs` (Skill-Distill
-Gate) for the exact non-blocking handling: no REM-FIX is created, the chain is never stalled
+is a proposal-authoring/availability issue. See `## 6.` and `references/build-workflow.md → #### Skill-Distill Gate`
+for the exact non-blocking handling: no REM-FIX is created, the chain is never stalled
 waiting on this agent.
 
 ### Prompt scaffold for every agent
@@ -321,7 +317,7 @@ Shared with Cursor — canonical text lives in
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
 "Previous Agent Findings Handoff". DEBUG skips hunter findings.
 
-**Doubt-Verify and Fix-Verify (BUILD, DEBUG):** after `integration-verifier` returns PASS, read `references/verify-dispatch.md`.
+**Doubt-Verify, Fix-Verify (BUILD, DEBUG):** after `integration-verifier` PASS, read `references/verify-dispatch.md`.
 
 ### Task metrics and timing telemetry
 
@@ -339,7 +335,7 @@ Timing telemetry is measurement only. It must never bypass gates, phase exit, or
 
 ## 8. Post-Agent Validation
 
-After any agent returns, read `references/post-agent-validation.md` (once per workflow; re-read after compaction) and apply it. It parses:
+After any agent returns, read `references/post-agent-validation.md` (once per context; re-read after /clear or compaction) and apply it. Stand-ins:
 
 - `SCENARIOS_TOTAL`
 - `SCENARIOS_PASSED`
@@ -351,9 +347,9 @@ After any agent returns, read `references/post-agent-validation.md` (once per wo
 
 | Agent | Override |
 |---|---|
-| any | see that file |
+| any | rows in that file |
 
-**Intent Interview Gate and brainstorming handoff (PLAN only):** `references/plan-workflow.md`.
+**Intent Interview Gate, brainstorming handoff (PLAN only):** `references/plan-workflow.md`.
 
 ## 9. Remediation And Workflow Rules
 
@@ -402,10 +398,9 @@ After any agent returns, read `references/post-agent-validation.md` (once per wo
    - mark both in_progress first
    - invoke them in the same message
    - If parallel invocation fails or is unavailable (API error, rate limit): fall back to sequential execution (reviewer first, then hunter). Never block a workflow because parallelism is unavailable. Log `event=parallel_fallback` in the workflow event log.
-5a/5b. (PLAN workflow) research and bake-off candidate dispatch: `references/plan-workflow.md`.
 6. After each agent returns:
    - capture memory payload immediately
-   - validate output
+   - validate output (§ 8)
    - persist task-state side effects
    - if BUILD review and hunt are both complete for the current phase, write one router-owned merged findings summary into the existing workflow results before verifier handoff
    - apply workflow rules
@@ -418,7 +413,7 @@ After any agent returns, read `references/post-agent-validation.md` (once per wo
 7. Repeat until all tasks in the active `wf:` are completed.
 ```
 
-In task-tool fallback mode, step 1 and agent-completion steps 1-3 follow the matching sections of `references/task-tool-fallback.md`. Memory task (step 3): read `references/memory-finalize.md`.
+`SKILL.md → ## 12. Chain Execution Loop` 5a (research): `references/remediation-and-research.md`; 5b (bake-off): `references/plan-workflow.md`. In task-tool fallback mode, step 1 and agent-completion steps 1-3: `references/task-tool-fallback.md`. Memory task (step 3): `references/memory-finalize.md`.
 
 ## 14. Hard Rules
 
@@ -451,7 +446,7 @@ Printed by `craftflow_policy.py --print-table`; each value is enforced by the na
 | `native_plan_mode` | `never` | `craftflow_pretooluse_guard.py` | § 14 EnterPlanMode rule |
 | `plan_commit` | `never` | `craftflow_pretooluse_bash_guard.py` | § 14 plan-artifact rule |
 | `memory_write` | `finalize-only` | `craftflow_pretooluse_guard.py` | `references/memory-finalize.md → ## 13. Memory Finalization` |
-| `worktree_merge` | `require_clean_tree=true, lock_max_attempts=9, lock_sleep_seconds=5, copy_fallback_on_up_to_date=true` | `craftflow_pretooluse_bash_guard.py` (clean tree) | § 5 |
+| `worktree_merge` | `require_clean_tree=true, lock_max_attempts=9, lock_sleep_seconds=5, copy_fallback_on_up_to_date=true` | `craftflow_pretooluse_bash_guard.py` (clean tree) | worktree.md |
 | `remediation_cycles_max` | `3` | `craftflow_gate_check.py` | § 14 remediation loop rule |
 | `doubt_cycles_max` | `3` | `craftflow_gate_check.py` | verify-dispatch.md Doubt-Verify |
 | `fix_verify_cycles_max` | `3` | `craftflow_gate_check.py` | verify-dispatch.md Fix-Verify |

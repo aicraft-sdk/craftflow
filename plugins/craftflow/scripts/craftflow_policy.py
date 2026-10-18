@@ -221,7 +221,7 @@ TABLE_ROWS = (
     ("native_plan_mode", "`craftflow_pretooluse_guard.py`", "§ 14 EnterPlanMode rule"),
     ("plan_commit", "`craftflow_pretooluse_bash_guard.py`", "§ 14 plan-artifact rule"),
     ("memory_write", "`craftflow_pretooluse_guard.py`", "`references/memory-finalize.md → ## 13. Memory Finalization`"),
-    ("worktree_merge", "`craftflow_pretooluse_bash_guard.py` (clean tree)", "§ 5"),
+    ("worktree_merge", "`craftflow_pretooluse_bash_guard.py` (clean tree)", "worktree.md"),
     ("remediation_cycles_max", "`craftflow_gate_check.py`", "§ 14 remediation loop rule"),
     ("doubt_cycles_max", "`craftflow_gate_check.py`", "verify-dispatch.md Doubt-Verify"),
     ("fix_verify_cycles_max", "`craftflow_gate_check.py`", "verify-dispatch.md Fix-Verify"),

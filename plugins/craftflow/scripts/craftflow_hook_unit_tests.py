@@ -1364,12 +1364,52 @@ def test_router_p10_kernel_relocation_wiring() -> None:
         if ref + fname not in homes or "skills/craftflow-router/SKILL.md" in homes:
             fail(name, f"{heading!r} must live in references/{fname} and no longer in the kernel; found in {homes}")
             return
-    for fname in ("workflow-start.md", "resume.md", "post-agent-validation.md", "verify-dispatch.md", "memory-load-workspace.md"):
-        if f"`references/{fname}`" not in kernel:
-            fail(name, f"the kernel must name references/{fname}")
+    # The generated Read Map table names every mapped file, so a bare `references/<file>` mention proves nothing: every trigger
+    # below is pinned in the kernel prose OUTSIDE the `<!-- readmap -->` block, paragraph by paragraph, with the condition words
+    # that make the reader open the file (P10 remediation, hunter HIGH-2: the old loop passed through the table alone).
+    prose = re.sub(r"<!-- readmap:begin -->.*?<!-- readmap:end -->", "", kernel, flags=re.S)
+    paragraphs = [p for p in re.split(r"\n\s*\n", prose) if p.strip()]
+    triggers = (
+        ("workspace marker (step 5a)", ("references/memory-load-workspace.md", ".craftflow-workspace.json")),
+        ("state-read-compaction deny during Memory Load", ("references/memory-load-workspace.md", "`state-read-compaction`", "Memory Load")),
+        ("resume or a live scope marker", ("On resume", "references/resume.md", "SCOPE-DECISION-PENDING:", "jev-auto-decided:",
+                                           "## Decisions", "grep")),
+        ("integration-verifier PASS", ("integration-verifier", "PASS", "references/verify-dispatch.md")),
+        ("any agent returns", ("After any agent returns", "references/post-agent-validation.md", "/clear")),
+        ("task-tool probe", ("Probe task tools", "references/workflow-start.md")),
+        ("Task Metadata Contract before a child TaskCreate", ("Task Metadata Contract", "references/workflow-start.md", "TaskCreate")),
+        ("chain loop step 6 validate output", ("validate output (§ 8)", "- capture memory payload immediately")),
+        ("chain loop steps 5a and 5b", ("5a", "5b", "references/remediation-and-research.md", "references/plan-workflow.md")),
+        ("PLAN-only Intent Interview Gate", ("Intent Interview Gate", "PLAN only", "references/plan-workflow.md")),
+    )
+    for label, needles in triggers:
+        if not any(all(n in para for n in needles) for para in paragraphs):
+            fail(name, f"kernel prose outside the Read Map has no paragraph for the trigger '{label}' naming {needles}")
             return
-    if "DEBUG skips hunter findings." not in kernel or "5a/5b." not in kernel or "Intent Interview Gate" not in kernel:
-        fail(name, "the kernel lost the Previous Findings DEBUG sentence or a PLAN-only pointer (5a/5b, Intent Interview Gate)")
+    if "DEBUG skips hunter findings." not in kernel:
+        fail(name, "the kernel lost the Previous Findings DEBUG sentence")
+        return
+    # Step 5a (research dispatch) applies to PLAN and DEBUG, so it sits where both read it; 5b (bake-off) stays PLAN-only.
+    rr = corpus[ref + "remediation-and-research.md"]
+    pw = corpus[ref + "plan-workflow.md"]
+    five_a = re.search(r"^5a\. If both `research-web` and `research-github` tasks are runnable.*?(?=^5b\.|^## |\Z)", rr, re.S | re.M)
+    if not five_a or "Wait for BOTH" not in five_a.group(0) or "PLAN" not in five_a.group(0) or "DEBUG" not in five_a.group(0):
+        fail(name, "remediation-and-research.md must hold step 5a (research parallel dispatch, wait for BOTH) and name PLAN and DEBUG")
+        return
+    if re.search(r"^5a\. If both", pw, re.M) or not re.search(r"^5b\. If N-1 `plan-bakeoff-candidate-\*`", pw, re.M):
+        fail(name, "plan-workflow.md must keep step 5b (bake-off) and no longer hold step 5a")
+        return
+    readmap = json.loads((PLUGIN_ROOT / "config" / "router-readmap.json").read_text(encoding="utf-8"))
+    rr_rows = [e for e in readmap["files"] if e["file"].endswith("references/remediation-and-research.md")]
+    if len(rr_rows) != 1 or rr_rows[0]["workflows"] != ["ALL"]:
+        fail(name, f"remediation-and-research.md must be read by every workflow when research is triggered: {rr_rows}")
+        return
+    mlw = [e for e in readmap["files"] if e["file"].endswith("references/memory-load-workspace.md")]
+    if len(mlw) != 1 or "state-read-compaction" not in mlw[0]["trigger"] or "workspace marker" not in mlw[0]["trigger"]:
+        fail(name, f"the memory-load-workspace.md read-map trigger must name the workspace marker and the state-read-compaction deny: {mlw}")
+        return
+    if "references/workflow-start.md" not in corpus[ref + "resume.md"] or "Task Metadata Contract" not in corpus[ref + "resume.md"]:
+        fail(name, "resume.md must send a resumed session that creates a REM-FIX or doubt task to the Task Metadata Contract")
         return
     for rel, text in corpus.items():
         if rel.endswith(("review-workflow.md", "plan-workflow.md")) and "integration-verifier" in text:
@@ -1378,6 +1418,72 @@ def test_router_p10_kernel_relocation_wiring() -> None:
         if 'Skill(skill="craftflow:brainstorming")' in text and not rel.endswith("plan-workflow.md"):
             fail(name, f"{rel} invokes brainstorming outside the PLAN workflow: the handoff must stay in the kernel")
             return
+    ok(name)
+
+
+def test_router_corpus_has_no_stale_moved_section_pointers() -> None:
+    # P10 remediation (reviewer / hunter MED-3): sentences that cite a kernel section by number or `SKILL.md`'s Worktree
+    # Isolation step kept pointing at text that moved to a reference file in P8-P10. Each site below must name the file that
+    # holds the rule now; the numeral may stay (the xref guard counts it) but not alone. The agents that cite
+    # `SKILL.md § Write-agent YAML contracts` are covered with their `packages/agent-workflow` mirrors.
+    name = "router/no-stale-moved-section-pointers"
+    corpus = router_corpus.read_corpus(PLUGIN_ROOT)
+    ref = "skills/craftflow-router/references/"
+    repo = PLUGIN_ROOT.parents[3]
+
+    def paragraphs(text: str) -> "list[str]":
+        return [p for p in re.split(r"\n\s*\n", text) if p.strip()]
+
+    def gone(label: str, text: str, stale: str) -> "str | None":
+        """No paragraph of `text` may still carry the stale wording."""
+        hits = [p for p in paragraphs(text) if re.search(stale, p, re.M)]
+        return f"{label}: stale wording {stale!r} is still present: {hits[0][:160]!r}" if hits else None
+
+    def need(label: str, text: str, trigger: str, home: str) -> "str | None":
+        """Every paragraph of `text` that matches `trigger` must also name `home`."""
+        hits = [p for p in paragraphs(text) if re.search(trigger, p, re.M)]
+        if not hits:
+            return f"{label}: no paragraph matches {trigger!r} (the test lost its subject)"
+        bad = [p for p in hits if home not in p]
+        return f"{label}: a paragraph matching {trigger!r} does not name {home}: {bad[0][:160]!r}" if bad else None
+
+    kernel = corpus["skills/craftflow-router/SKILL.md"]
+    bw, fp, hsc = corpus[ref + "build-workflow.md"], corpus[ref + "fast-path.md"], corpus[ref + "harness-self-checks.md"]
+    pw, ttf = corpus[ref + "plan-workflow.md"], corpus[ref + "task-tool-fallback.md"]
+    checks = [
+        need("kernel skill-author note", kernel, r"`skill-author` is deliberately NOT", "references/build-workflow.md"),
+        need("kernel policy table worktree_merge", kernel, r"\| `worktree_merge` \|.*\| worktree\.md \|$", "worktree.md"),
+        need("build-workflow Skill-Distill approval", bw, r"apply the Skill-Distill Approval Flow", "post-agent-validation.md"),
+        gone("build-workflow clean-state check", bw, r"`SKILL\.md`'s `?Worktree Isolation"),
+        need("build-workflow clean-state check", bw, r"no worktree exists", "references/worktree.md"),
+        need("fast-path Skill-Distill approval", fp, r"apply the Skill-Distill Approval Flow", "post-agent-validation.md"),
+        need("harness-self-checks contract overrides", hsc, r"verdict-extraction rules in\s+`SKILL.md` § 8", "post-agent-validation.md"),
+        need("plan-workflow parent creation", pw, r"`SKILL\.md § 6`'s Parent workflow creation", "workflow-start.md"),
+        need("plan-workflow task-tool fallback rule", pw, r"`SKILL\.md § (6|7)`'s (fallback|existing)", "task-tool-fallback.md"),
+        need("plan-workflow contract overrides", pw, r"`SKILL\.md § 8`", "post-agent-validation.md"),
+        gone("plan-workflow chain step 5/5a", pw, r"`SKILL\.md § 12` step 5/5a"),
+        need("plan-workflow chain step 5a", pw, r"`SKILL\.md § 12` step 5 and", "remediation-and-research.md"),
+        need("task-tool-fallback section map (resume)", ttf, r"^Each section was moved verbatim", "references/resume.md"),
+        need("task-tool-fallback section map (verify)", ttf, r"^Each section was moved verbatim", "references/verify-dispatch.md"),
+        need("task-tool-fallback section map (post-agent)", ttf, r"^Each section was moved verbatim", "references/post-agent-validation.md"),
+        need("task-tool-fallback section map (workflow-start)", ttf, r"^Each section was moved verbatim", "references/workflow-start.md"),
+        need("task-tool-fallback stale-true coverage list", ttf, r"Stale `true` capability", "references/verify-dispatch.md"),
+        need("router-protocol Parent workflow creation", corpus["skills/_shared/router-protocol.md"],
+             r"at\s+\*\*Parent workflow creation\*\* \(`## 6\.`", "workflow-start.md"),
+    ]
+    problems = [c for c in checks if c]
+    if re.search(r"formerly\s+`SKILL\.md\s+§\s*7`", corpus[ref + "verify-dispatch.md"]):
+        problems.append("verify-dispatch.md still says 'formerly `SKILL.md § 7`' (the rule is cited by its own file and heading)")
+    agent_files = [PLUGIN_ROOT / "agents" / n for n in ("bug-investigator.md", "component-builder.md", "plan-bakeoff-judge.md")]
+    agent_files += [repo / "packages" / "agent-workflow" / "resources" / "craftflow" / "agents" / n
+                    for n in ("bug-investigator.md", "component-builder.md")]
+    for f in agent_files:
+        text = f.read_text(encoding="utf-8")
+        if "Write-agent YAML contracts" in text and "post-agent-validation.md" not in text:
+            problems.append(f"{f}: cites SKILL.md § Write-agent YAML contracts, which moved to references/post-agent-validation.md")
+    if problems:
+        fail(name, "; ".join(problems))
+        return
     ok(name)
 
 
@@ -1998,6 +2104,12 @@ def test_just_go_and_scope_decision_resume_anchored_to_project_root() -> None:
     if kernel_resume is None or "references/resume.md" not in kernel_resume:
         fail(name, "the kernel's ## 4. Resume And Hydration trigger must point at references/resume.md")
         return
+    # P10 remediation (hunter HIGH-2/MED-1): the trigger has to name the condition itself, and detect the marker in the
+    # file, not through the lossy digest (last 3 bullets, 140-char cap): the router greps `## Decisions` for the prefixes.
+    for needle in ("On resume", "SCOPE-DECISION-PENDING:", "jev-auto-decided:", "## Decisions", "grep"):
+        if needle not in kernel_resume:
+            fail(name, f"the kernel's ## 4. trigger must name '{needle}' (scope-marker detection must not depend on the digest)")
+            return
     resume_md = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "resume.md"
     if not resume_md.is_file():
         fail(name, "references/resume.md not found (the body of ## 4. Resume And Hydration)")
@@ -28951,6 +29063,7 @@ def main() -> int:
     test_router_kernel_agent_stamps_carry_utc_rule()
     test_router_memory_finalize_pointer_not_under_verifier_handoff()
     test_router_p10_kernel_relocation_wiring()
+    test_router_corpus_has_no_stale_moved_section_pointers()
     test_plugin_has_no_dangling_section_13_references()
     test_workflow_artifact_schema_documents_task_tools_available()
     test_self_dispatch_guard_present_in_task_update_agents()

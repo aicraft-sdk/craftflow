@@ -2,7 +2,7 @@
 
 Apply the matching section when `capabilities.task_tools_available == false` or a router-owned native Task* call fails mid-session.
 
-Each section was moved verbatim from the kernel site it names, so read its "above", "below" and "this section" as that site: Resume is `SKILL.md → ## 4. Resume And Hydration`; Parent creation and per-type task graphs are `SKILL.md → ## 6. Workflow Task Graphs`; Dispatcher, Task ID, Doubt-Verify and Fix-Verify are `SKILL.md → ## 7. Dispatcher And Agent Prompt Contract`; Chain loop step 1 and After agent completion are `SKILL.md → ## 12. Chain Execution Loop`.
+Each section was moved verbatim from the kernel site it names, so read its "above", "below" and "this section" as that site: Resume is `references/resume.md` (kernel `SKILL.md → ## 4. Resume And Hydration`); Parent creation is `references/workflow-start.md` and per-type task graphs are the `references/*-workflow.md` task-graph blocks (kernel `SKILL.md → ## 6. Workflow Task Graphs`); Dispatcher and Task ID are `SKILL.md → ## 7. Dispatcher And Agent Prompt Contract` and Doubt-Verify and Fix-Verify are `references/verify-dispatch.md`; Chain loop step 1 is `SKILL.md → ## 12. Chain Execution Loop` and After agent completion is `references/post-agent-validation.md`.
 
 ## Resume fallback
 
@@ -135,8 +135,8 @@ branches above are all gated on `capabilities.task_tools_available == false`.
 This paragraph covers the remaining gap: the flag was correctly recorded `true` at session start
 (`## 0a` succeeded), but a router-owned native call — any `TaskCreate()`/`TaskUpdate()`/
 `TaskList()` call, wherever it currently occurs across `SKILL.md` or the `references/*.md` files
-`## 4`'s Resume And Hydration fallback, `## 6`'s per-type task graph fallback, `## 12`'s Chain
-Execution Loop fallback, and `## 7`'s Doubt-Verify/Fix-Verify Dispatch Rules already cover — then
+`## 4`'s Resume And Hydration fallback (`references/resume.md`), `## 6`'s per-type task graph fallback, `## 12`'s Chain
+Execution Loop fallback, and `## 7`'s Doubt-Verify/Fix-Verify Dispatch Rules (`references/verify-dispatch.md`) already cover — then
 errors unexpectedly later in the same
 session (a genuine tool-call failure: tool-not-found, permission error, unhandled exception, or
 any error response distinct from a normal empty-result or task-not-found response). When this

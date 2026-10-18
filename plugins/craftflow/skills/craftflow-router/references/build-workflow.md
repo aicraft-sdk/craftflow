@@ -140,13 +140,13 @@ TaskUpdate({ taskId: skill_distill_task_id, addBlockedBy: [chain_tail_task_id] }
 ```
 
 Set `chain_tail_task_id = skill_distill_task_id`. After `skill-author` returns:
-- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`SKILL.md` § 8) before Memory Update proceeds.
+- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`SKILL.md` § 8, `references/post-agent-validation.md`) before Memory Update proceeds.
 - `STATUS: SKIPPED` → passing state — proceed straight to Memory Update, no `AskUserQuestion`.
 - `STATUS: FAIL` or no return (stuck/timeout) → `skill-author` is NOT a `kind:remfix` origin; do not create a REM-FIX task and do not block the chain. Log an event describing the failure, leave the candidate's ledger status unchanged (flagged for retry next time the gate fires), and proceed straight to Memory Update.
 
 **Feature Backlog (advisory):** before creating the Memory Update task below, when `integration-verifier` returned PASS on the final phase, run the complete + VCR calls per `references/harness-self-checks.md § Feature Backlog`.
 
-**Clean-State Check (advisory):** when `worktree_mode != "auto_created"` (no worktree exists — `SKILL.md`'s Worktree Isolation step already covers the worktree-exists case) and `integration-verifier` returned PASS on the final phase, also run the clean-state check per `references/harness-self-checks.md § Clean-State Check` before creating the Memory Update task below.
+**Clean-State Check (advisory):** when `worktree_mode != "auto_created"` (no worktree exists — `references/worktree.md` covers the worktree-exists case) and `integration-verifier` returned PASS on the final phase, also run the clean-state check per `references/harness-self-checks.md § Clean-State Check` before creating the Memory Update task below.
 
 ```text
 TaskCreate({
@@ -190,7 +190,7 @@ Track `chain_tail_task_id` starting as `verifier_task_id` (no doc-sync on fast p
 
 **Feature Backlog (advisory):** before creating the Memory Update task below, when `integration-verifier` returned PASS on the final phase, run the complete + VCR calls per `references/harness-self-checks.md § Feature Backlog`.
 
-**Clean-State Check (advisory):** when `worktree_mode != "auto_created"` (no worktree exists — `SKILL.md`'s Worktree Isolation step already covers the worktree-exists case) and `integration-verifier` returned PASS on the final phase, also run the clean-state check per `references/harness-self-checks.md § Clean-State Check` before creating the Memory Update task below.
+**Clean-State Check (advisory):** when `worktree_mode != "auto_created"` (no worktree exists — `references/worktree.md` covers the worktree-exists case) and `integration-verifier` returned PASS on the final phase, also run the clean-state check per `references/harness-self-checks.md § Clean-State Check` before creating the Memory Update task below.
 
 ```text
 TaskCreate({

@@ -25,7 +25,7 @@ Parse stdout `{"findings": [...], "rule_count": N, "skipped": [...]}`.
   `skills/_shared/router-protocol.md` § "Dispatch Prompt Scaffold"), one `WHAT`/`WHY`/`FIX`
   block per finding. This is advisory context only — never a required field, never a new
   Contract Override row, never a change to `code-reviewer`'s verdict-extraction rules in
-  `SKILL.md` § 8.
+  `SKILL.md` § 8 (`references/post-agent-validation.md`).
 
 Non-zero exit or unparseable stdout: capture the script's stderr content (where the real
 diagnostic lives, not just the exit code) into `error`, and append

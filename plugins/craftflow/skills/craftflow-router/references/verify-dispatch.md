@@ -127,7 +127,7 @@ Scans phase-objective text (or, for `plan:N/A` BUILDs, the workflow artifact's o
 `user_request` field) case-insensitively. Used only by BUILD workflows to decide whether the
 current phase is fixing an existing defect (fires `fix_verify_gate`) versus adding new
 functionality (does not fire). DEBUG workflows never need this scan — `fix_verify_gate` always
-fires for DEBUG (see `references/verify-dispatch.md → ### Fix-Verify Dispatch Rule`, formerly `SKILL.md § 7`).
+fires for DEBUG (see `references/verify-dispatch.md → ### Fix-Verify Dispatch Rule`, pointed to from `SKILL.md § 7`).
 
 | Group | Keywords |
 |-------|----------|

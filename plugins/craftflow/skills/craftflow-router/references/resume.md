@@ -84,3 +84,5 @@ Safety rules:
   - Context-nudge binding: the nudge binds a payload `session_id` to the artifact whose `session_id` matches exactly. After `/clear` or a new session the nudge sees `no_live_candidate` for stamped artifacts until the router restamps.
   - PreToolUse: `latest_live_workflow_file` still falls back to the newest live artifact when nothing matches the session (pre-existing limitation; MEDIUM-4, deferred to a later change). Only non-empty string stamps trigger its widen scan.
   - The plan-then-build ambiguity (A4): a plan workflow and the build workflow that follows it can run in the same session, so the chosen artifact's `session_id` equalling the payload `session_id` does not by itself identify which of the two is meant.
+
+Task creation while resuming (the REM-FIX created after a scope decision, a doubt-verify or re-verify task, a research task): every `TaskCreate()` description starts with the metadata lines of `references/workflow-start.md → ## 3. Task Metadata Contract`; read that section before the first one.
