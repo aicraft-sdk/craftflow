@@ -93,6 +93,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/ai-first-setup/SKILL.md",
    "id": "p3-desc-ai-first-setup",
    "max_chars": 130,
@@ -104,6 +105,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/codebase-deepening/SKILL.md",
    "id": "p3-desc-codebase-deepening",
    "max_chars": 130,
@@ -115,6 +117,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/component-registry/SKILL.md",
    "id": "p3-desc-component-registry",
    "max_chars": 130,
@@ -126,6 +129,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/diagram-design/SKILL.md",
    "id": "p3-desc-diagram-design",
    "max_chars": 130,
@@ -137,6 +141,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/diff-driven-docs/SKILL.md",
    "id": "p3-desc-diff-driven-docs",
    "max_chars": 130,
@@ -148,6 +153,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/finishing-a-development-branch/SKILL.md",
    "id": "p3-desc-finishing-a-development-branch",
    "max_chars": 130,
@@ -159,6 +165,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/frontend-design-critique/SKILL.md",
    "id": "p3-desc-frontend-design-critique",
    "max_chars": 130,
@@ -170,6 +177,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/frontend-patterns/SKILL.md",
    "id": "p3-desc-frontend-patterns",
    "max_chars": 130,
@@ -181,6 +189,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/handoff-package/SKILL.md",
    "id": "p3-desc-handoff-package",
    "max_chars": 130,
@@ -192,6 +201,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/jev-setup/SKILL.md",
    "id": "p3-desc-jev-setup",
    "max_chars": 130,
@@ -203,6 +213,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/plan-review-gate/SKILL.md",
    "id": "p3-desc-plan-review-gate",
    "max_chars": 130,
@@ -214,6 +225,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/receiving-code-review/SKILL.md",
    "id": "p3-desc-receiving-code-review",
    "max_chars": 130,
@@ -225,6 +237,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/registry-promote/SKILL.md",
    "id": "p3-desc-registry-promote",
    "max_chars": 130,
@@ -236,6 +249,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/skill-distillation/SKILL.md",
    "id": "p3-desc-skill-distillation",
    "max_chars": 130,
@@ -247,6 +261,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/verification-before-completion/SKILL.md",
    "id": "p3-desc-verification-before-completion",
    "max_chars": 130,
@@ -258,6 +273,7 @@
   },
   {
    "condition": "always",
+   "est_bytes": null,
    "file": "skills/workspace-setup/SKILL.md",
    "id": "p3-desc-workspace-setup",
    "max_chars": 130,
@@ -270,10 +286,10 @@
   {
    "condition": "always",
    "direction": "add",
-   "est_bytes": 290,
+   "est_bytes": 0,
    "file": "skills/craftflow-router/SKILL.md",
    "id": "p3-kernel-when-to-use",
-   "note": "P3 task 3: 'Trigger lists move verbatim into body ## When To Use' for skills whose description exceeds 160 chars; the craftflow-router description (499 chars) has a keyword list, and the plan does not say whether it gets a '## When To Use' section in the kernel (about +290 B to every start set). Not applied; kernel tiers exclude it.",
+   "note": "P3 task 3 allowed a body '## When To Use' section for the router (about +290 B to every start set), never applied. Void at P12: the router description drops its Trigger keywords paragraph (policy-map Rewrites row 46d6f6359eeb, kind trigger) and no section carries the list, so nothing is added to the kernel. est_bytes is 0 and the projection's kernel bias is 0.",
    "op": "insert",
    "phase": "P3",
    "position": "end_of_file",
@@ -2617,9 +2633,8 @@
    "op": "insert",
    "phase": "P12",
    "position": "after_anchor",
-   "source": "plan P12 task 2: one statement in the kernel header",
-   "status": "drafted",
-   "text": "\n`(shared)` marks text whose canonical copy lives in `_shared/router-protocol.md`, which the Cursor router also reads.\n"
+   "source": "plan P12 task 2: one statement in the kernel header (as built: the statement is the kept copy of every dedupe row)",
+   "text": "\n`(shared)`: canonical text lives in `_shared/`, shared with Cursor.\n"
   },
   {
    "condition": "always",
@@ -2629,8 +2644,7 @@
    "phase": "P12",
    "replacement_text": "**(shared) `_shared/router-protocol.md` §\n\"Intent Routing\" (full priority/keyword/chain table, routing rules, announce-line convention).** See `references/fast-path.md`\n",
    "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
-   "start_anchor": "**Shared with Cursor — canonical text lives in\n`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §\n\"Intent Routing\" (full priority/keyword/chain table, routing rules, announce-line convention).** See `references/fast-path.md`",
-   "status": "drafted"
+   "start_anchor": "**Shared with Cursor — canonical text lives in\n`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §\n\"Intent Routing\" (full priority/keyword/chain table, routing rules, announce-line convention).** See `references/fast-path.md`"
   },
   {
    "condition": "always",
@@ -2640,8 +2654,7 @@
    "phase": "P12",
    "replacement_text": "**(shared) `_shared/router-protocol.md` §\n\"Resolve Project Root\" (single-repo/multi-repo resolution: the `git rev-parse --show-toplevel`\n",
    "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
-   "start_anchor": "**Shared with Cursor — canonical text lives in\n`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §\n\"Resolve Project Root\" (single-repo/multi-repo resolution: the `git rev-parse --show-toplevel`",
-   "status": "drafted"
+   "start_anchor": "**Shared with Cursor — canonical text lives in\n`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §\n\"Resolve Project Root\" (single-repo/multi-repo resolution: the `git rev-parse --show-toplevel`"
   },
   {
    "condition": "always",
@@ -2652,8 +2665,7 @@
    "phase": "P12",
    "replacement_text": "**(shared) `_shared/router-protocol.md` §\n\"Explicit Dispatcher (Phase-to-Agent Table)\" (full phase→agent mapping).** Claude Code resolves each row via `Task()`/`TaskCreate()`\n",
    "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
-   "start_anchor": "**Shared with Cursor — canonical text lives in\n`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §",
-   "status": "drafted"
+   "start_anchor": "**Shared with Cursor — canonical text lives in\n`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §"
   },
   {
    "condition": "always",
@@ -2664,8 +2676,7 @@
    "phase": "P12",
    "replacement_text": "**(shared) `_shared/router-protocol.md` § \"Dispatch\nPrompt Scaffold\" (full field list: `## Task\n",
    "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
-   "start_anchor": "**Shared with Cursor — canonical text lives in",
-   "status": "drafted"
+   "start_anchor": "**Shared with Cursor — canonical text lives in"
   },
   {
    "condition": "always",
@@ -2676,8 +2687,7 @@
    "phase": "P12",
    "replacement_text": "**(shared) `_shared/router-protocol.md` § \"Dispatch\nPrompt Scaffold\" section referenced immediately above** (the Prompt assembly rule is the\n",
    "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
-   "start_anchor": "**Shared with Cursor — canonical text lives in the same",
-   "status": "drafted"
+   "start_anchor": "**Shared with Cursor — canonical text lives in the same"
   },
   {
    "condition": "always",
@@ -2688,8 +2698,7 @@
    "phase": "P12",
    "replacement_text": "(shared) `_shared/verifier-handoff.md` §\n\"Previous Agent Findings Handoff\". DEBUG skips hunter findings.\n",
    "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
-   "start_anchor": "Shared with Cursor — canonical text lives in",
-   "status": "drafted"
+   "start_anchor": "Shared with Cursor — canonical text lives in"
   },
   {
    "condition": "always",
@@ -2700,8 +2709,7 @@
    "phase": "P12",
    "replacement_text": "**(shared) `_shared/skill-distill-approval.md` §\n\"Skill-Distill Approval Flow\" (the four options (Approve / Approve + register in SKILL_HINTS / Reject / Defer), the exact\n",
    "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
-   "start_anchor": "**Shared with Cursor — canonical text lives in",
-   "status": "drafted"
+   "start_anchor": "**Shared with Cursor — canonical text lives in"
   },
   {
    "condition": "always",
@@ -2712,8 +2720,7 @@
    "phase": "P12",
    "replacement_text": "(shared) `_shared/verifier-handoff.md` §\n\"Verifier Findings Handoff\".\n",
    "source": "plan P12 task 2: 'Shared with Cursor' boilerplate collapsed to a (shared) tag",
-   "start_anchor": "Shared with Cursor — canonical text lives in",
-   "status": "drafted"
+   "start_anchor": "Shared with Cursor — canonical text lives in"
   },
   {
    "condition": "live_verified_enterplanmode",
@@ -3231,6 +3238,181 @@
    "source": "P10 remediation delta (git diff of the working tree against the pre-remediation P10 tree)",
    "start_anchor": "fires for DEBUG (see `references/verify-dispatch.md → ### Fix-Verify Dispatch Rule`, formerly `SKILL.md § 7`).",
    "text": "fires for DEBUG (see `references/verify-dispatch.md → ### Fix-Verify Dispatch Rule`, pointed to from `SKILL.md § 7`).\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p12-shared-memory-load",
+   "op": "dedupe",
+   "phase": "P12",
+   "replacement_text": "Required sections — (shared) `_shared/router-protocol.md` §\n",
+   "source": "plan P12 task 2: a ninth 'shared with Cursor' site (lower case, Memory Load) found while collapsing the eight the plan counted",
+   "start_anchor": "Required sections — shared with Cursor — canonical table lives in\n`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p12-desc-craftflow-router-as-built",
+   "op": "replace",
+   "phase": "P12",
+   "source": "plan P3 task 3 / P12: the one-line draft of p3-desc-craftflow-router is blocked by the inventory (the guarded word not, the 60% retention rule); as built the Trigger keywords paragraph is dropped and the other three paragraphs stay verbatim in the block scalar",
+   "start_anchor": "description: THE ONLY ENTRY POINT FOR CRAFTFLOW. Use for any build, fix, debug, review, plan, test, refactor or continue request; route and execute immediately.",
+   "text": "description: |\n  THE ONLY ENTRY POINT FOR CRAFTFLOW. Activate this skill for build, debug, review, and plan requests.\n\n  Use when the user asks to implement, fix, review, plan, test, refactor, or continue code work.\n\n  CRITICAL: Route and execute immediately. Do not stop at describing capabilities.\n"
+  },
+  {
+   "condition": "always",
+   "end_anchor": "section numbering.)",
+   "file": "skills/_shared/router-protocol.md",
+   "id": "p12-rationale-dispatcher-note",
+   "op": "replace",
+   "phase": "P12",
+   "source": "plan P12 task 3 (A15): the whole non-normative Host-specific paragraph (baseline id 1be8628b06e4, 793 B) moves verbatim to docs/router-rationale.md",
+   "start_anchor": "| `kind:remfix` + `origin:code-reviewer|silent-failure-hunter|integration-verifier|router` | `craftflow:component-builder` |",
+   "text": "| `kind:remfix` + `origin:code-reviewer|silent-failure-hunter|integration-verifier|router` | `craftflow:component-builder` |\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/ai-first-setup/SKILL.md",
+   "id": "p12-desc-as-built-ai-first-setup",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use when the user asks to set up an AI-first project: scaffold AGENTS.md and docs/ai, AI Context Pack, agents-md-lint."
+  },
+  {
+   "condition": "always",
+   "file": "skills/codebase-deepening/SKILL.md",
+   "id": "p12-desc-as-built-codebase-deepening",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use when a codebase has shallow modules (thin wrappers, pass-through layers, duplicate helpers) to find and deepen them."
+  },
+  {
+   "condition": "always",
+   "file": "skills/component-registry/SKILL.md",
+   "id": "p12-desc-as-built-component-registry",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use before writing any UI component, token file, layout pattern or UI flow: search the ai-craft registry and reuse matches."
+  },
+  {
+   "condition": "always",
+   "file": "skills/diagram-design/SKILL.md",
+   "id": "p12-desc-as-built-diagram-design",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use when asked for an architecture, flowchart, sequence, state, ER, timeline, swimlane or quadrant diagram (craftflow's own)."
+  },
+  {
+   "condition": "always",
+   "file": "skills/diff-driven-docs/SKILL.md",
+   "id": "p12-desc-as-built-diff-driven-docs",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use when a BUILD phase completes, a commit is staged, a PR is imminent, or the user says 'update docs' or 'sync docs'."
+  },
+  {
+   "condition": "always",
+   "file": "skills/finishing-a-development-branch/SKILL.md",
+   "id": "p12-desc-as-built-finishing-a-development-branch",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use when implementation is complete and tests pass, to choose how to integrate the work: merge, PR or cleanup."
+  },
+  {
+   "condition": "always",
+   "file": "skills/frontend-design-critique/SKILL.md",
+   "id": "p12-desc-as-built-frontend-design-critique",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use when reviewing the visual/UX quality of a built UI: score it against an anchored rubric and catch AI-slop patterns."
+  },
+  {
+   "condition": "always",
+   "file": "skills/frontend-patterns/SKILL.md",
+   "id": "p12-desc-as-built-frontend-patterns",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use when frontend UI work needs accessibility, responsive layout, loading/error states, perf guardrails or DESIGN.md authoring."
+  },
+  {
+   "condition": "always",
+   "file": "skills/handoff-package/SKILL.md",
+   "id": "p12-desc-as-built-handoff-package",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use when handing unfinished work to a coworker, another tool or a fresh session: a portable, secrets-redacted handoff doc."
+  },
+  {
+   "condition": "always",
+   "file": "skills/jev-setup/SKILL.md",
+   "id": "p12-desc-as-built-jev-setup",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use when the user asks to 'enable jev', 'set up typesafe', 'disable jev' or 'check jev status' for the craftflow plugin."
+  },
+  {
+   "condition": "always",
+   "file": "skills/plan-review-gate/SKILL.md",
+   "id": "p12-desc-as-built-plan-review-gate",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use after saving a non-trivial plan or decision RFC when a fail-closed feasibility and alignment review must block execution."
+  },
+  {
+   "condition": "always",
+   "file": "skills/receiving-code-review/SKILL.md",
+   "id": "p12-desc-as-built-receiving-code-review",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use when a reviewer gives feedback on your work (PR comments, review notes) and you must verify before agreeing or implementing."
+  },
+  {
+   "condition": "always",
+   "file": "skills/registry-promote/SKILL.md",
+   "id": "p12-desc-as-built-registry-promote",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use when a built, reviewed component, pattern, ui-flow, token-set or agent-flow should be promoted to the ai-craft registry."
+  },
+  {
+   "condition": "always",
+   "file": "skills/skill-distillation/SKILL.md",
+   "id": "p12-desc-as-built-skill-distillation",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use when authoring a staged skill proposal from a gate-eligible skill-candidate ledger entry; writes to staging only."
+  },
+  {
+   "condition": "always",
+   "file": "skills/verification-before-completion/SKILL.md",
+   "id": "p12-desc-as-built-verification-before-completion",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use when about to claim work is complete, fixed or passing, or before commit, PR or task completion; fresh evidence must exist first."
+  },
+  {
+   "condition": "always",
+   "file": "skills/workspace-setup/SKILL.md",
+   "id": "p12-desc-as-built-workspace-setup",
+   "op": "descriptions",
+   "phase": "P12",
+   "source": "P3 landed the real description (the plan gave no draft for this skill, so the projection kept the pre-P3 length); P12 records the as-built text so the projected description sum equals the measured one",
+   "text": "Use when the user asks to 'set up craftflow workspace memory', 'add a north star' or 'set up cross-repo memory'."
   }
  ],
  "version": 1

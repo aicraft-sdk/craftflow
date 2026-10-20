@@ -2539,7 +2539,8 @@ def test_dispatcher_scaffold_workflow_artifact_anchored_to_project_root() -> Non
         fail(name, "could not bound ### Prompt scaffold for every agent through ### Prompt assembly rule in SKILL.md")
         return
     skill_section = skill_content[skill_start:skill_end]
-    if "skills/_shared/router-protocol.md" not in skill_section:
+    # P12: the "(shared)" tag names the canonical file plugin-relative (`_shared/router-protocol.md`), not repo-relative
+    if "_shared/router-protocol.md" not in skill_section:
         fail(name, "SKILL.md's dispatcher scaffold section no longer points at the shared doc")
         return
     if "- Workflow Artifact: $PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json" in skill_section:
@@ -3588,7 +3589,7 @@ def test_worktree_isolation_resolver_gated_on_toplevel_failure() -> None:
         fail(name, "'## 0. Resolve Project Root' heading not found in SKILL.md")
         return
     skill_section = skill_content[skill_section_start:]
-    pointer_idx = skill_section.find("skills/_shared/router-protocol.md")
+    pointer_idx = skill_section.find("_shared/router-protocol.md")  # P12: plugin-relative "(shared)" tag
     if pointer_idx == -1:
         fail(name, "SKILL.md's '## 0.' section no longer points at the shared doc")
         return
@@ -17374,12 +17375,12 @@ def test_craftflow_router_shared_protocol_extraction_no_stale_reembed() -> None:
     skill_content = skill_path.read_text(encoding="utf-8")
     shared_content = shared_path.read_text(encoding="utf-8")
 
-    if skill_content.count("skills/_shared/router-protocol.md") < 2:
+    if skill_content.count("_shared/router-protocol.md") < 2:  # P12: the "(shared)" tags name it plugin-relative
         fail(
             name,
             f"expected at least 2 references to the shared doc in SKILL.md (mandatory "
             f"reference read + at least one section pointer), found "
-            f"{skill_content.count('skills/_shared/router-protocol.md')}",
+            f"{skill_content.count('_shared/router-protocol.md')}",
         )
         return
 
@@ -18069,7 +18070,7 @@ def test_router_dispatcher_table_includes_skill_distill() -> None:
         fail(name, "could not bound ### Explicit dispatcher through ### Prompt scaffold for every agent in SKILL.md")
         return
     skill_section = skill_content[skill_start:skill_end]
-    if "skills/_shared/router-protocol.md" not in skill_section:
+    if "_shared/router-protocol.md" not in skill_section:  # P12: plugin-relative "(shared)" tag
         fail(name, "SKILL.md's Explicit dispatcher section no longer points at the shared doc")
         return
     if "| skill-distill | craftflow:skill-author |" in skill_section or \
@@ -18207,7 +18208,7 @@ def test_router_documents_skill_distill_approval_flow() -> None:
     if skill_section is None:
         fail(name, "could not bound ### Skill-Distill Approval Flow in references/post-agent-validation.md")
         return
-    if "skills/_shared/skill-distill-approval.md" not in skill_section:
+    if "_shared/skill-distill-approval.md" not in skill_section:  # P12: plugin-relative "(shared)" tag
         fail(name, "the Skill-Distill Approval Flow section no longer points at skills/_shared/skill-distill-approval.md")
         return
     if "### Skill-Distill Approval Flow" in skill_content or "craftflow_skill_promote.py" in skill_content:

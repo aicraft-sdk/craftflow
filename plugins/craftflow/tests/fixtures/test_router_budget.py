@@ -996,7 +996,8 @@ def test_adr_discloses_the_rem_fix_4_findings() -> None:
           # P11 remediation (re-derived): 580 / 421 becomes 580 / 418
           # P11 remediation 2 (re-derived): the two fast-path.md xref rows add two vanishing ids: 580 / 418 becomes 582 / 420
           # P11 remediation 3 (re-derived): the closing-sentence xref row of fast-path.md adds one vanishing id: 582 / 420 becomes 583 / 421
-          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (583, 421),
+          # P12 (re-derived): the five Shared-with-Cursor dedupe rows and the router description trigger row add two vanishing ids: 583 / 421 becomes 585 / 423
+          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (585, 423),
           f"missing={[n for n in need if n not in text]}")
 
 

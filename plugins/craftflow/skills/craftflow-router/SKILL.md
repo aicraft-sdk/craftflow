@@ -5,14 +5,14 @@ description: |
 
   Use when the user asks to implement, fix, review, plan, test, refactor, or continue code work.
 
-  Trigger keywords: build, implement, create, write, add, review, audit, debug, fix, error, bug, broken, plan, design, architect, spec, brainstorm, test, refactor, optimize, update, change, research, craftflow, craftflow.
-
   CRITICAL: Route and execute immediately. Do not stop at describing capabilities.
 ---
 
 # craftflow Router
 
 **Runtime contract only.** v10 restores trust-first orchestration: route intent, hydrate workflow state, write workflow artifacts, execute the task graph, validate agent output, and fail closed on ambiguity, skipped work, or missing persistence.
+
+`(shared)`: canonical text lives in `_shared/`, shared with Cursor.
 
 Mandatory reference read: before routing (## 1.) or dispatching any agent, read
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` once per
@@ -59,8 +59,7 @@ Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset
 
 ## 1. Intent Routing
 
-**Shared with Cursor — canonical text lives in
-`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+**(shared) `_shared/router-protocol.md` §
 "Intent Routing" (full priority/keyword/chain table, routing rules, announce-line convention).** See `references/fast-path.md`
 for the risk-keyword detection table used to choose between BUILD's fast path and full
 chain. An optional Jev hint block (Claude Code only; produced by the opt-in
@@ -71,8 +70,7 @@ consulted per the shared doc's hint-precedence rule (ERROR keywords always win).
 
 ## 0. Resolve Project Root
 
-**Shared with Cursor — canonical text lives in
-`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+**(shared) `_shared/router-protocol.md` §
 "Resolve Project Root" (single-repo/multi-repo resolution: the `git rev-parse --show-toplevel`
 check, the `1a.` multi-repo branch (resolver in `router-protocol-multirepo.md`), and the
 `DETERMINISTIC`/`AMBIGUOUS`/`NO_REPO_FOUND` outcome handling).** Runs once per session,
@@ -132,8 +130,7 @@ If a project/ memory file is missing:
 - Create it using the `craftflow:session-memory` template.
 - Read it before continuing.
 
-Required sections — shared with Cursor — canonical table lives in
-`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+Required sections — (shared) `_shared/router-protocol.md` §
 "Memory File Required Sections". `Read()` that file now if you have not already this
 session.
 
@@ -254,8 +251,7 @@ Router-owned interface fields:
 
 ### Explicit dispatcher
 
-**Shared with Cursor — canonical text lives in
-`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+**(shared) `_shared/router-protocol.md` §
 "Explicit Dispatcher (Phase-to-Agent Table)" (full phase→agent mapping).** Claude Code resolves each row via `Task()`/`TaskCreate()`
 against a registered subagent type using the `craftflow:` name directly — no host-specific
 resolution step needed here, unlike Cursor's `## Agent File Paths` literal-path mapping.
@@ -268,8 +264,7 @@ waiting on this agent.
 
 ### Prompt scaffold for every agent
 
-**Shared with Cursor — canonical text lives in
-`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` § "Dispatch
+**(shared) `_shared/router-protocol.md` § "Dispatch
 Prompt Scaffold" (full field list: `## Task
 Context` including the `$PROJECT_ROOT/.craftflow/state/workflows/{workflow_uuid}.json`
 Workflow Artifact line, `## User Request`, `## Requirements`, `## Memory Summary`, `##
@@ -281,8 +276,7 @@ system prompt, so unlike Cursor's `generalPurpose`-only dispatch, no extra pream
 
 ### Prompt assembly rule
 
-**Shared with Cursor — canonical text lives in the same
-`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` § "Dispatch
+**(shared) `_shared/router-protocol.md` § "Dispatch
 Prompt Scaffold" section referenced immediately above** (the Prompt assembly rule is the
 final subsection there): every routed prompt must be self-contained from the workflow
 artifact, approved files, and the current task contract, relying on none of prior chat
@@ -322,8 +316,7 @@ Record the assigned effort in `telemetry.effort.{agent}` in the workflow artifac
 
 ### Previous Agent Findings handoff
 
-Shared with Cursor — canonical text lives in
-`tools/craftflow-plugin/plugins/craftflow/skills/_shared/verifier-handoff.md` §
+(shared) `_shared/verifier-handoff.md` §
 "Previous Agent Findings Handoff". DEBUG skips hunter findings.
 
 **Doubt-Verify, Fix-Verify:** after `integration-verifier` PASS, read `references/verify-dispatch.md`.

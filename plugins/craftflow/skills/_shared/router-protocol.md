@@ -204,14 +204,3 @@ On `skill-author` `COMPLETE`, `Read()` `skills/_shared/skill-distill-approval.md
 | `learn-distill` | `craftflow:learn-distiller` |
 | `skill-distill` | `craftflow:skill-author` |
 | `kind:remfix` + `origin:code-reviewer|silent-failure-hunter|integration-verifier|router` | `craftflow:component-builder` |
-
-(Host-specific: this table states WHICH agent role handles each phase — the routing intent
-itself, shared across hosts. HOW each host turns an agent role into something invocable is
-host-specific and stays in each binding doc: Claude Code resolves these via `Task()`/
-`TaskCreate()` against registered subagent types using the `craftflow:` name directly;
-Cursor's `Task` tool cannot select custom subagent types by name at all, so
-`cursor-router/SKILL.md`'s `## Agent File Paths` maps each role to a literal
-`.md` file path instead. See each binding doc's own section for its resolution mechanics.
-`craftflow-router/SKILL.md` also keeps its own short trailing note on `skill-author` not
-being a `kind:remfix` origin inline, since it cross-references that file's own `## 6.`
-section numbering.)

@@ -332,12 +332,72 @@ def test_loop_cap_check_failed_ask_line_present():
     pg = art.index("- `pending_gate` is required whenever")
     check("pending_gate_entry_follows_the_pending_gate_rule", art.index(entry) > pg and art.index(entry) - pg < 600 if entry else False, "")
 
+# P12 task 2: the "Shared with Cursor" boilerplate (8 sites) collapses to one kernel-header statement plus `(shared)` tags. Each tag keeps
+# the canonical file and the quoted section; the host-specific sentences after the tag are untouched.
+SHARED_TAGS = (
+    (SKILL, "**(shared) `_shared/router-protocol.md` §\n\"Intent Routing\""),
+    (SKILL, "**(shared) `_shared/router-protocol.md` §\n\"Resolve Project Root\""),
+    (SKILL, "**(shared) `_shared/router-protocol.md` §\n\"Explicit Dispatcher (Phase-to-Agent Table)\""),
+    (SKILL, "**(shared) `_shared/router-protocol.md` § \"Dispatch\nPrompt Scaffold\" (full field list"),
+    (SKILL, "**(shared) `_shared/router-protocol.md` § \"Dispatch\nPrompt Scaffold\" section referenced immediately above**"),
+    (SKILL, "(shared) `_shared/verifier-handoff.md` §\n\"Previous Agent Findings Handoff\". DEBUG skips hunter findings."),
+    ("skills/craftflow-router/references/post-agent-validation.md", "**(shared) `_shared/skill-distill-approval.md` §\n\"Skill-Distill Approval Flow\""),
+    ("skills/craftflow-router/references/post-agent-validation.md", "(shared) `_shared/verifier-handoff.md` §\n\"Verifier Findings Handoff\"."),
+)
+
+
+def test_shared_with_cursor_boilerplate_collapsed():
+    print("\n[shared_with_cursor_boilerplate_collapsed]")
+    kernel, pav = current(SKILL), current("skills/craftflow-router/references/post-agent-validation.md")
+    check("no_shared_with_cursor_boilerplate_left", "Shared with Cursor" not in kernel and "Shared with Cursor" not in pav,
+          f"kernel={kernel.count('Shared with Cursor')} post-agent-validation={pav.count('Shared with Cursor')}")
+    header = kernel[:kernel.index("## Reference Read Map")]
+    check("kernel_header_states_the_shared_tag_once", header.count("`(shared)`: canonical text lives in `_shared/`, shared with Cursor.") == 1
+          , header[-400:])
+    missing = [t[:60] for f, t in SHARED_TAGS if t not in current(f)]
+    check("eight_shared_tags_keep_file_and_section", not missing, f"missing tags: {missing}")
+    after_map = kernel[kernel.index("## 1. Intent Routing"):]
+    check("no_full_tools_path_left_in_shared_tags", "tools/craftflow-plugin/plugins/craftflow/skills/_shared/" not in after_map,
+          f"{after_map.count('tools/craftflow-plugin/plugins/craftflow/skills/_shared/')} full paths after the Read Map")
+
+
+# P12 task 3 (A15): the Dispatcher note is a whole non-normative paragraph; it leaves the protocol verbatim and lives in docs/router-rationale.md.
+DISPATCHER_NOTE_HEAD = "(Host-specific: this table states WHICH agent role handles each phase"
+RATIONALE_HEADING = "## skills/_shared/router-protocol.md#Explicit Dispatcher (Phase-to-Agent Table)"
+
+
+def _words(text: str) -> List[str]:
+    return text.split()
+
+
+def test_dispatcher_note_moved_verbatim_to_rationale():
+    print("\n[dispatcher_note_moved_verbatim_to_rationale]")
+    proto = current("skills/_shared/router-protocol.md")
+    rationale = (PLUGIN_ROOT.parents[1] / "docs" / "router-rationale.md").read_text(encoding="utf-8")
+    base = baseline("skills/_shared/router-protocol.md") or ""
+    i = base.find(DISPATCHER_NOTE_HEAD)
+    note = base[i:base.find("section numbering.)", i) + len("section numbering.)")] if i >= 0 else ""
+    section = rationale[rationale.find(RATIONALE_HEADING):] if RATIONALE_HEADING in rationale else ""
+    check("protocol_no_longer_carries_the_dispatcher_note", DISPATCHER_NOTE_HEAD not in proto and "section numbering.)" not in proto, "the note is still in router-protocol.md")
+    check("rationale_holds_the_dispatcher_note_verbatim_under_its_heading", bool(note) and _words(note) == _words(section[len(RATIONALE_HEADING):]) [:len(_words(note))],
+          f"baseline note found={bool(note)}, heading found={bool(section)}")
+
+
+# P12 / plan P3 task 3: the router description sheds its keyword paragraph and keeps the three others, among them the guarded 'Do not stop' sentence.
+def test_router_description_keeps_the_stop_sentence_and_sheds_the_keyword_list():
+    print("\n[router_description_keeps_the_stop_sentence_and_sheds_the_keyword_list]")
+    head = current(SKILL).split("\n---\n", 1)[0]
+    check("description_keeps_do_not_stop_and_route_immediately", "Do not stop at describing capabilities." in head and "CRITICAL: Route and execute immediately." in head
+          and "Activate this skill for build, debug, review, and plan requests." in head and "Use when the user asks to implement, fix, review, plan, test, refactor, or continue code work." in head, head)
+    check("description_no_longer_carries_the_keyword_list", "Trigger keywords:" not in head, head)
+
 
 def main():
     print("test_router_policy_prose: running")
     for fn in (test_verdict_lines_verbatim_except_substitutions, test_plan_review_cap_pin_follows_the_literal_line, test_prose_policy_values_match, test_kernel_policy_table_matches_policy_json,
                test_loop_caps_table_matches_policy, test_call_lines_define_every_action, test_not_wired_remediation_264_and_plan_review_blocks_untouched,
-               test_dd9_script_resolution_sentence_once_in_shared_preparation, test_loop_cap_check_failed_ask_line_present):
+               test_dd9_script_resolution_sentence_once_in_shared_preparation, test_loop_cap_check_failed_ask_line_present, test_shared_with_cursor_boilerplate_collapsed,
+               test_dispatcher_note_moved_verbatim_to_rationale, test_router_description_keeps_the_stop_sentence_and_sheds_the_keyword_list):
         try:
             fn()
         except Exception as exc:  # a crashed test is a failed test, never a silent pass
