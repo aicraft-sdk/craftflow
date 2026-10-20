@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.33.4] - 2026-10-20
+
+### Fixes
+
+- P11 remediation 3, step 1a rows keep the branch-context check once signed, distill section pinned to the end of verify-dispatch.md, DEBUG named in the Skill-Distill closing sentence
+- P11 remediation 2, pinned distill gate shapes block by block, DEBUG joins the Skill-Distill Gate wording, narrower documentation-only classifier exemption
+- P11 remediation, qualified bake-off references, distill gate shapes for fast_path BUILD and DEBUG, Cursor Read() pointers, Future Third Router rebaseline
+
+### Refactoring
+
+- split shared router protocol and per-workflow references; update cursor-router pointers
+
+### Documentation
+
+- sign P11 rows and projection revision
+
+### Tests
+
+- re-pin the hand-derived reach and signing-burden figures after the P11 rows
+
+### Chores
+
+- re-stamp router-budget measured_at_sha to the P11 remediation 3 commit
+- re-stamp router-budget measured_at_sha to the P11 remediation 2 commit
+- re-stamp router-budget measured_at_sha to the P11 remediation commit
+- re-stamp router-budget measured_at_sha to the P11 commit
+
 ## [1.33.3] - 2026-10-20
 
 ### Fixes
