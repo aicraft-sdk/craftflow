@@ -266,7 +266,7 @@
    "class": "stage",
    "file": "skills/craftflow-router/references/plan-bakeoff.md",
    "happy_path": false,
-   "trigger": "PLAN_MODE decision_rfc or VERIFICATION_RIGOR critical_path (bake-off qualifies)",
+   "trigger": "bake-off qualifies (decision_rfc or critical_path)",
    "workflows": [
     "PLAN"
    ]

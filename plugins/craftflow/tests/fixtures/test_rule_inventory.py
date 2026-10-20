@@ -167,6 +167,26 @@ def test_classify_normative() -> None:
     check("classify_normative", not bad, repr(bad))
 
 
+def test_documentation_only_is_a_scope_phrase_not_the_obligation_word() -> None:
+    """P11 rebaseline (David chose option (a) for edf4681b29aa): `documentation only` scopes a note and is not the obligation word `only`.
+    The word still marks a rule anywhere else, another keyword in the same unit still wins, and the committed baseline changed in exactly one
+    unit (1,221 normative / 56 non-normative became 1,220 / 57; a second silent reclassification would move these counts)."""
+    def norm(text: str) -> bool:
+        return inv.classify_normative(inv.extract_units(text, K)[0], frozenset())
+    note = norm("[NOTE — documentation only, no code implied by this section]: today there are exactly 2 routers.\n")
+    cased = norm("[NOTE — Documentation Only]: background about the two routers.\n")
+    rule = norm("Use only the shared doc.\n")
+    other_keyword = norm("[NOTE — documentation only]: the router must still read it.\n")
+    near_miss = norm("The documentation is the only source.\n")  # `only` not directly after `documentation`
+    baseline = json.loads(BASELINE_JSON.read_text(encoding="utf-8"))
+    flags = {e["id"]: e["normative"] for e in baseline["entries"]}
+    counts = (sum(flags.values()), len(flags) - sum(flags.values()))
+    check("documentation_only_is_a_scope_phrase_not_the_obligation_word",
+          not note and not cased and rule and other_keyword and near_miss and flags["edf4681b29aa"] is False and counts == (1220, 57),
+          f"note={note} cased={cased} rule={rule} other_keyword={other_keyword} near_miss={near_miss} "
+          f"edf4681b29aa={flags.get('edf4681b29aa')} counts={counts}")
+
+
 def test_allowlist_forces_normative() -> None:
     u = inv.extract_units("Hunter findings are ignored.\n", K)[0]
     off = inv.classify_normative(u, frozenset(), keywords=False)

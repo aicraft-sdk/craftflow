@@ -139,3 +139,32 @@ in `references/fast-path.md`):** when the text to scan is missing or empty, defa
 still applies); a false positive would add unnecessary review overhead to genuine new-feature
 BUILD work.
 
+### Distill gate task shapes
+
+For the paths that do not load `build-graph-standard.md` (a `fast_path` BUILD, a DEBUG workflow), these repeat the two gate task shapes and the `chain_tail_task_id` rule of its `#### Learn-Distill Gate` and `#### Skill-Distill Gate`. The gate checks, eligibility rules and outcomes are in `references/fast-path.md` (`#### Learn-Distill Gate`, `#### Skill-Distill Gate`); the Skill-Distill candidate is the one with the highest `distinct_workflows`, ties broken by earliest `first_seen`. `chain_tail_task_id` starts as `verifier_task_id` (no doc-sync step).
+
+Learn-Distill task (create when `remediation_history` is non-empty):
+
+```text
+TaskCreate({
+  subject: "CRAFTFLOW learn-distiller: Distill recurring failure signatures",
+  description: "wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:learn-distill\nplan:{plan_file or 'N/A'}\nscope:N/A\nreason:Non-empty remediation_history triggered the recurrence gate\n\nRun `python3 {plugin_root}/scripts/craftflow_learn_scan.py` via Bash, read this workflow's remediation_history and event log, and distill any recurring failure signature into project/patterns.md ## Common Gotchas per your own agent contract. Emit a Router Contract when done.",
+  activeForm: "Distilling recurring failure signatures"
+}) -> learn_distill_task_id
+TaskUpdate({ taskId: learn_distill_task_id, addBlockedBy: [chain_tail_task_id] })
+```
+
+Set `chain_tail_task_id = learn_distill_task_id`. After `learn-distiller` completes, append `learn_distilled` to the event log.
+
+Skill-Distill task (create when the gate check finds an eligible candidate):
+
+```text
+TaskCreate({
+  subject: "CRAFTFLOW skill-author: Propose skill from candidate {candidate_id}",
+  description: "wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:skill-distill\nplan:{plan_file or 'N/A'}\nscope:N/A\nreason:Ledger has a gate_eligible candidate not already promoted/rejected\n\nCandidate id: {candidate_id}\n\nRead this candidate from the ledger, apply the anti-slop rubric, and stage a proposal or emit STATUS: SKIPPED per your own agent contract.",
+  activeForm: "Distilling a project skill proposal"
+}) -> skill_distill_task_id
+TaskUpdate({ taskId: skill_distill_task_id, addBlockedBy: [chain_tail_task_id] })
+```
+
+Set `chain_tail_task_id = skill_distill_task_id`. Handle the `skill-author` outcomes as `references/fast-path.md` (`#### Skill-Distill Gate`) says.

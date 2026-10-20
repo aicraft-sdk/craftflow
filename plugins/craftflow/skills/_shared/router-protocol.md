@@ -176,11 +176,11 @@ Optional sections:
 
 ## Findings handoff
 
-The previous-agent and verifier findings handoff blocks live in `skills/_shared/verifier-handoff.md`.
+`Read()` `skills/_shared/verifier-handoff.md` before dispatching `integration-verifier`.
 
 ## Skill-Distill approval
 
-The approval flow lives in `skills/_shared/skill-distill-approval.md`.
+On `skill-author` `COMPLETE`, `Read()` `skills/_shared/skill-distill-approval.md`.
 
 ## Explicit Dispatcher (Phase-to-Agent Table)
 

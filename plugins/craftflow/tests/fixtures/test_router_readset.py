@@ -1001,11 +1001,15 @@ def test_reach_feasibility_block_is_in_the_projection() -> None:
     # P10 (final text, unsigned P10 rows read by the diff): 166 / 87 / 160 and 413 become 159 / 86 / 151 and 396
     # P10 remediation (final text, the two fence rows are `pointer` rows now, stale-pointer xref rows added): 159 / 86 / 151 and 396 become 159 / 79 / 149 and 387
     # P11 (final text, drafted P11 rows read by the diff): 159 / 79 / 149 and 387 become 159 / 79 / 147 and 385
-    pinned = [g["reach_loss_split"][c]["units"] for c in classes] == [159, 79, 147] and g["reach_lost_occurrences"] == 385
+    # P11 remediation (re-derived: the qualified bake-off references, the two gate fences repeated in verify-dispatch.md, the Future Third Router
+    # rationale row): 159 / 79 / 147 and 385 become 162 / 75 / 144 and 381
+    pinned = [g["reach_loss_split"][c]["units"] for c in classes] == [162, 75, 144] and g["reach_lost_occurrences"] == 381
     check("reach_feasibility_block_is_in_the_projection",
           shape and moves and sums and d17 and split and burden and penalty and pinned
-          # P11: every file the projected read map adds now has a drafted widening row, so the effective tier counts no unlisted widening pair (it was > 0 until the P11 rows)
-          and g["reach_lost_occurrences"] > 0 and e["readmap_widened"] >= 0
+          # P11: every file the projected read map adds has a drafted widening row (seven rows, one per new stage or start file; the history file is a
+          # maintainer row and widens nothing), so the effective tier counts no unlisted widening pair: it was > 0 until the P11 rows and is exactly 0 now.
+          # `>= 0` was vacuous (a counter is never negative); a new read-map row without its widening row makes this 1 or more and fails.
+          and g["reach_lost_occurrences"] > 0 and e["readmap_widened"] == 0
           and block == full_projection()["reach_feasibility"],
           f"shape={shape} moves={moves} sums={sums} d17={d17} split={split} burden={burden} penalty={penalty} pinned={pinned}")
 
@@ -1109,7 +1113,8 @@ def test_reach_loss_split_pins_the_covered_first_numbers() -> None:
     check("reach_loss_split_pins_the_covered_first_numbers",
           # P10 remediation (re-derived): 159 / 86 / 151 and 351 / 86 / 151 become 159 / 79 / 149 and 351 / 79 / 149; 2 of the 149 are variant splits (448 B)
           # P11 (re-derived): 159 / 79 / 149 and 351 / 79 / 149 become 159 / 79 / 147 and 351 / 79 / 147; 2 of the 147 are variant splits (448 B)
-          got == {"guaranteed": [159, 79, 147], "conditional_if_reach_amended": [351, 79, 147]}
+          # P11 remediation (re-derived): 159 / 79 / 147 and 351 / 79 / 147 become 162 / 75 / 144 and 354 / 75 / 144; the same 2 variant splits (448 B)
+          got == {"guaranteed": [162, 75, 144], "conditional_if_reach_amended": [354, 75, 144]}
           and all(v == {"units": 2, "bytes": 448} for v in vs.values()),
           f"split={got} variant_split={vs}")
 
@@ -1157,8 +1162,9 @@ def test_signing_burden_buckets_are_disjoint_on_every_tier() -> None:
     # `unmapped_removed` that the burden records still count as reach-lost or vanishing: 114 / 113 become 408 / 407 (377 / 376 with contingencies)
     # P10 remediation (re-derived on the final text and the final rows, the 222 unsigned rows read by the diff): 408 / 407 (377 / 376) become 412 / 411 (381 / 380)
     # P11 (re-derived on the final text and the 156 unsigned P11 rows read by the diff): 412 / 411 (381 / 380) become 529 / 528 (498 / 497)
-    signed_overlap = {"conditional": 529, "conditional_if_reach_amended": 528, "effective": 529, "effective_without_infeasible_rows": 529,
-                      "guaranteed": 529, "with_contingencies": 498, "with_contingencies_if_reach_amended": 497}
+    # P11 remediation (re-derived on the final text and the 167 unsigned rows read by the diff): 529 / 528 (498 / 497) become 530 / 529 (499 / 498)
+    signed_overlap = {"conditional": 530, "conditional_if_reach_amended": 529, "effective": 530, "effective_without_infeasible_rows": 530,
+                      "guaranteed": 530, "with_contingencies": 499, "with_contingencies_if_reach_amended": 498}
     bad = {}
     for name, v in tiers.items():
         b = v["signing_burden"]["buckets"]
@@ -1197,14 +1203,16 @@ def test_signing_burden_counts_rows_not_occurrences() -> None:
           # P11 (re-derived): 153 vanishing occurrences (140 ids) become 158 (145 ids); the seven new stage and start files now have drafted widening rows,
           # so the 15 widening pairs (7 files) become 0; REACH-A / REACH-B (row bounds) go from 584 / 425 to 580 / 421; the if-amended tier goes from
           # 579 per-unit / 174 vanishing / 15 widening to 577 / 179 / 0
-          b["vanishing"] == {"occurrences": 158, "ids": 145} and b["widening"] == {"pairs": 0, "files": 0}
+          # P11 remediation (re-derived): 158 vanishing occurrences (145 ids) become 162 (149 ids); REACH-A / REACH-B (row bounds) go from 580 / 421 to 580 / 418;
+          # the if-amended tier goes from 577 per-unit / 179 vanishing to 573 / 183
+          b["vanishing"] == {"occurrences": 162, "ids": 149} and b["widening"] == {"pairs": 0, "files": 0}
           and (sec["ops"], sec["rows_low"], sec["rows_high_headed_spans"], sec["rows_upper_bound"]) == (41, 41, 49, 53)
           and (sec["partial_spans_without_heading"], sec["multi_section_spans"]) == (21, 7)
           and sec["needs_destination_heading"] == ["p10-pav-verifier-telemetry"]
-          and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (375 + 145 + 53 + 7, 216 + 145 + 53 + 7)
-          and g["REACH_A"]["occurrences"]["total"] == 385 + 158 + 0 + 0 and g["REACH_B"]["occurrences"]["total"] == 41 + 226 + 158 + 0
-          and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 216 + 145 + 53 + 7
-          and d["REACH_A"]["occurrences"]["total"] == 577 + 179 + 0 + 0
+          and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (371 + 149 + 53 + 7, 209 + 149 + 53 + 7)
+          and g["REACH_A"]["occurrences"]["total"] == 381 + 162 + 0 + 0 and g["REACH_B"]["occurrences"]["total"] == 41 + 219 + 162 + 0
+          and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 209 + 149 + 53 + 7
+          and d["REACH_A"]["occurrences"]["total"] == 573 + 183 + 0 + 0
           # REACH-A counts the 39 moved-without-loss occurrences, REACH-B the 42 section-move ops; they were equal (42) until P5's signed
           # plan_commit row removed one occurrence without removing a section move, and P6's six literal-to-key Rewrites rows (listed in the
           # policy map, still unsigned) took away two more and one vanishing occurrence. P8's thirteen unsigned rows (the gate summary, its bullets, the
@@ -1214,8 +1222,8 @@ def test_signing_burden_counts_rows_not_occurrences() -> None:
           # REACH-A's occurrence totals lose exactly those (guaranteed 616 to 586, if-amended 830 to 799); the row-count bounds (589 / 422) do not move.
           # P9: the if-amended tier goes from 607 per-unit / 144 vanishing / 48 widening to 605 / 147 / 38 (the definitional readings 248 to 247)
           # P10: the if-amended tier goes from 605 per-unit / 147 vanishing / 38 widening to 588 / 160 / 15 (the definitional readings 247 to 237)
-          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 0 + 226 + 179 + 0
-          and d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 226 + 179 + 0
+          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 0 + 219 + 183 + 0
+          and d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 219 + 183 + 0
           and d["definitional_D17B"]["REACH_B"]["rows_upper_bound"] < d["REACH_B"]["rows_upper_bound"] < d["REACH_A"]["rows_upper_bound"],
           f"buckets={b} sections={sec} guaranteed={(g['REACH_A']['rows_upper_bound'], g['REACH_B']['rows_upper_bound'])} amended_A_occ={d['REACH_A']['occurrences']}")
 
@@ -1237,7 +1245,8 @@ def test_bias_notes_carry_the_residue() -> None:
           # P10 (final text, drafted rows read by the diff): the drops to 0 go from 31,733 B to 31,339 B and the workflow-or-variant drops from 32,762 B to 30,180 B
           # P10 remediation (re-derived): the drops to 0 go from 31,339 B to 22,314 B and the workflow-or-variant drops from 30,180 B to 29,442 B
           # P11 (re-derived): the workflow-or-variant drops go from 29,442 B to 29,209 B
-          and (split["drops_to_0"]["bytes"], split["drops_workflow_or_variant"]["bytes"]) == (22314, 29209) and "notes" not in partial["bias"],
+          # P11 remediation (re-derived): the drops to 0 go from 22,314 B to 19,461 B and the workflow-or-variant drops from 29,209 B to 27,704 B
+          and (split["drops_to_0"]["bytes"], split["drops_workflow_or_variant"]["bytes"]) == (19461, 27704) and "notes" not in partial["bias"],
           f"notes={notes} hsc={hsc}")
 
 
@@ -1326,9 +1335,27 @@ def test_cursor_pointers_cover_shared_files() -> None:
     router-protocol.md has to exist exactly as planned and be named in cursor-router/SKILL.md, so Cursor can reach each one."""
     shared = {p.name for p in (PLUGIN_ROOT / "skills" / "_shared").glob("*.md")} - {"router-protocol.md"}
     cursor = (PLUGIN_ROOT / "skills" / "cursor-router" / "SKILL.md").read_text(encoding="utf-8")
+    protocol = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md").read_text(encoding="utf-8")
     unnamed = sorted(n for n in shared if "_shared/" + n not in cursor)
-    check("cursor_pointers_cover_shared_files", shared == P11_SHARED and not unnamed,
-          f"shared={sorted(shared)} expected={sorted(P11_SHARED)} unnamed_in_cursor_router={unnamed}")
+    # P11 remediation (hunter MED-1): naming a file is not an instruction to load it. A Read() (or an imperative `read ... and follow it`) has to
+    # sit within a few lines of at least one mention in the Cursor router AND in the protocol stub, so the moved text is actually fetched.
+    imperative = re.compile(r"`?Read\(\)`?|\b[Rr]ead\b[^.]{0,60}?_shared/")
+
+    def ordered(text: str, name: str, after: int = 400) -> bool:
+        # the Cursor router words it as 'file § "Section" (`Read()` that file now ...)', up to ~350 chars after the name; a protocol stub is one
+        # line, so its window is short (a longer one would pick up an unrelated Read() further down the file)
+        return any(imperative.search(text[max(0, m.start() - 100):m.end() + after]) for m in re.finditer(re.escape("_shared/" + name), text))
+
+    no_read_cursor = sorted(n for n in shared if not ordered(cursor, n))
+    no_read_protocol = sorted(n for n in shared if not ordered(protocol, n, after=60))
+    # controls: a bare name is not enough, and removing the instruction is detected
+    bare = "See `skills/_shared/verifier-handoff.md` for details.\n"
+    with_read = "`Read()` `skills/_shared/verifier-handoff.md` before dispatching the verifier.\n"
+    controls = not ordered(bare, "verifier-handoff.md") and ordered(with_read, "verifier-handoff.md")
+    check("cursor_pointers_cover_shared_files",
+          shared == P11_SHARED and not unnamed and not no_read_cursor and not no_read_protocol and controls,
+          f"shared={sorted(shared)} expected={sorted(P11_SHARED)} unnamed_in_cursor_router={unnamed} "
+          f"no_read_instruction_in_cursor_router={no_read_cursor} in_protocol={no_read_protocol} controls={controls}")
 
 
 def test_build_variant_files_declared() -> None:

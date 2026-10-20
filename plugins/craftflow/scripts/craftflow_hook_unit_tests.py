@@ -1635,7 +1635,11 @@ def test_router_p11_split_wiring_and_content_pins() -> None:
     for need in ("### PLAN qualify branch", "IF NOT (PLAN_MODE == 'decision_rfc' OR VERIFICATION_RIGOR == 'critical_path'):",
                  "mv 'docs/plans/{plan_file_stem}-candidate-inherit.md' 'docs/plans/{plan_file_stem}-plan.md'", "ELSE:",
                  "Persist bakeoff_triggered = true", "references/plan-bakeoff.md",
-                 "only when `PLAN_MODE == 'decision_rfc' OR VERIFICATION_RIGOR == 'critical_path'`"):
+                 "only when `PLAN_MODE == 'decision_rfc' OR VERIFICATION_RIGOR == 'critical_path'`",
+                 # P11 remediation (MED-3): the read instruction itself, imperative, file and condition in one sentence; the two halves above could
+                 # both survive a rewrite that dropped the Read() (a bake-off would then run from memory of a file nobody loaded)
+                 "read `references/plan-bakeoff.md` only when `PLAN_MODE == 'decision_rfc' OR VERIFICATION_RIGOR == 'critical_path'`; "
+                 "a plan that does not qualify never reads it."):
         if need not in pw:
             problems.append(f"plan-workflow.md lost the qualify decision text: {need!r}")
     for stale in ("### PLAN bake-off fan-out\n", "valid_count = len(results.bakeoff)", "ROUTER-OWNED CLEANUP"):
@@ -1723,6 +1727,53 @@ def test_router_p11_split_wiring_and_content_pins() -> None:
         for f in (ref + "build-graph-standard.md", ref + "build-graph-fast.md"):
             if re.sub(r"\s+", " ", pin) not in re.sub(r"\s+", " ", corpus[f]):
                 problems.append(f"{f.rsplit('/', 1)[-1]} lost the twin unit: {pin[:80]!r}")
+    # P11 remediation (hunter HIGH-1 / HIGH-2): a fast_path BUILD and a DEBUG workflow apply the Learn-Distill and Skill-Distill gates but never
+    # load build-graph-standard.md (the map allows one start row and one stage row per file, and its DEBUG and fast_path reach would collide with
+    # the BUILD:standard start row). verify-dispatch.md, which both read when integration-verifier returns PASS (the moment the gates come due),
+    # repeats the two task shapes; the two pointers name it, and the repeated fences must stay byte-identical to the standard graph's.
+    vd = corpus[ref + "verify-dispatch.md"]
+    std_graph = corpus[ref + "build-graph-standard.md"]
+    shapes = re.findall(r"```text\n(TaskCreate\(\{\n  subject: \"CRAFTFLOW (?:learn-distiller|skill-author):.*?)```", std_graph, re.S)
+    if len(shapes) != 2:
+        problems.append(f"build-graph-standard.md must hold exactly the two distill gate TaskCreate fences, found {len(shapes)}")
+    for shape in shapes:
+        if shape not in vd:
+            problems.append(f"verify-dispatch.md '### Distill gate task shapes' is not byte-identical to the standard graph's fence: {shape[:70]!r}")
+    if not re.search(r"^### Distill gate task shapes\s*$", vd, re.M):
+        problems.append("verify-dispatch.md lost the '### Distill gate task shapes' section")
+    for f, needle in ((ref + "build-graph-fast.md", "`references/verify-dispatch.md → ### Distill gate task shapes`"),
+                      (ref + "debug-workflow.md", "repeated for DEBUG in `verify-dispatch.md`")):
+        if needle not in corpus[f]:
+            problems.append(f"{f.rsplit('/', 1)[-1]} must send the gate task shapes to verify-dispatch.md ({needle!r})")
+    if ref + "verify-dispatch.md" not in {e["file"] for e in readmap["files"] if "BUILD" in e["workflows"] and "DEBUG" in e["workflows"]}:
+        problems.append("verify-dispatch.md must stay a BUILD and DEBUG read-map row: the repeated gate shapes depend on that reach")
+    # doubt F1: a fragment that moved away from the section it points at must name the file that now holds the heading; the cross-reference
+    # resolver only sees `file -> ## heading` forms, so a bare '`### PLAN task graph`' in plan-bakeoff.md (the heading stayed in
+    # plan-workflow.md) resolved to nothing and passed. Scope: the P11 family of headings and the four moved fragment files.
+    heads_by_file = {rel: {m.group(2).strip() for m in re.finditer(r"^(#{2,4}) (.+?)\s*$", text, re.M)} for rel, text in corpus.items()}
+    family = ("PLAN ", "BUILD ", "Fast Path", "Learn-Distill", "Skill-Distill", "doc-syncer", "Distill gate")
+    for rel in (ref + "plan-bakeoff.md", ref + "build-graph-standard.md", ref + "build-graph-fast.md", ref + "build-fast-path-escalation.md"):
+        own = heads_by_file[rel]
+        foreign = {h for hs in heads_by_file.values() for h in hs if h.startswith(family) and h not in own}
+        for h in sorted(foreign, key=len, reverse=True):
+            homes = [r.rsplit("/", 1)[-1] for r, hs in heads_by_file.items() if h in hs and r != rel]
+            for m in re.finditer(r"#{2,4} " + re.escape(h) + r"(?![\w-])", corpus[rel]):
+                before = corpus[rel][max(0, m.start() - 110):m.start()]
+                tail = corpus[rel][m.start():].lstrip("#").lstrip()
+                if any(tail.startswith(o) for o in (own | foreign) if len(o) > len(h)):  # a prefix of a longer heading (judged on its own turn)
+                    continue
+                if not any(home in before for home in homes):
+                    problems.append(f"{rel.rsplit('/', 1)[-1]} uses '{m.group(0)}' without naming its file ({', '.join(homes)})")
+    # reviewer F3 / hunter MED-3: the escalation flow cited 'standard BUILD sections 5 and 6 pattern from build-workflow.md'
+    esc = corpus[ref + "build-fast-path-escalation.md"]
+    if "build-workflow.md" in esc or "Chain Execution Loop" not in esc:
+        problems.append("build-fast-path-escalation.md must cite SKILL.md's Chain Execution Loop (parallel dispatch and merged findings summary), not build-workflow.md")
+    # the Cursor router and the protocol stubs must ORDER the Read() of each moved shared file (an unqualified pointer is not an instruction)
+    for fname, text in (("cursor-router/SKILL.md", cursor), ("router-protocol.md", protocol)):
+        for shared_name in ("skill-distill-approval.md", "verifier-handoff.md", "router-protocol-multirepo.md"):
+            spans = [text[max(0, m.start() - 250):m.end() + 450] for m in re.finditer(re.escape("_shared/" + shared_name), text)]
+            if not any(re.search(r"`?Read\(\)`?", s) or re.search(r"\bread\b[^.]{0,40}`?[\w/.-]*" + re.escape(shared_name), s) for s in spans):
+                problems.append(f"{fname} names _shared/{shared_name} but no Read() instruction sits next to it")
     if problems:
         fail(name, "; ".join(problems))
         return

@@ -21,15 +21,15 @@
   },
   "reach_amendment": null,
   "ceilings": {
-    "kernel_bytes": 34938,
-    "protocol_bytes": 14606,
+    "kernel_bytes": 34913,
+    "protocol_bytes": 14605,
     "reference_max_bytes": 19269,
     "description_chars": 4014,
     "readset": {
-      "BUILD": 98964,
-      "PLAN": 87194,
-      "DEBUG": 74944,
-      "REVIEW": 73000
+      "BUILD": 98942,
+      "PLAN": 87168,
+      "DEBUG": 74962,
+      "REVIEW": 72974
     }
   },
   "ceiling_raises": [
@@ -125,8 +125,8 @@
       "phase": "P11",
       "key": "kernel_bytes",
       "from": 33911,
-      "to": 34938,
-      "projected_delta": 1027,
+      "to": 34913,
+      "projected_delta": 1002,
       "at_sha": "2ee4c77d7562608537f12b957940ec0a1e1daa16"
     }
   ],
@@ -164,7 +164,7 @@
     "projection_sha256": "5b27b389a30d7205e0c07a231d218d1fd2ae16958c99fe919ca7879d84d9f832",
     "cause": "P2C: Difference 17 dropped (D17-A, reach_amendment null) and REACH-B adopted as the reach option; caps are the guaranteed effective tier of router-projection.json, exact values, ratchet-only afterwards"
   },
-  "projection_sha256": "d2052e82bec8771cbe2e076c52226f91aacaa1fff91bcbf0d7b5fb4fe7e1198b",
+  "projection_sha256": "aeccbf7a251fc8d091f6e647a0367f30b4336b8509f03207c18665edba9b25bf",
   "projection_revisions": [
     {
       "phase": "P5",
@@ -209,10 +209,10 @@
     {
       "phase": "P11",
       "from_projection_sha256": "a467a2850885b98c8ba7fa2f4f166fc46894d7ed0048d1443936894c8a690505",
-      "to_projection_sha256": "d2052e82bec8771cbe2e076c52226f91aacaa1fff91bcbf0d7b5fb4fe7e1198b",
+      "to_projection_sha256": "aeccbf7a251fc8d091f6e647a0367f30b4336b8509f03207c18665edba9b25bf",
       "fits_enforced_caps": true,
       "decided_by": "pending-David",
-      "cause": "P11 protocol and reference splits: router-protocol.md falls from 29,360 B to 14,606 B (step 1a to the new conditional stage file _shared/router-protocol-multirepo.md; the Skill-Distill Approval Flow to _shared/skill-distill-approval.md; the two findings handoffs to _shared/verifier-handoff.md; the Future Third Router note to docs/router-protocol-history.md, which is non-runtime). build-workflow.md falls from 26,565 B to 7,540 B: the standard task graph with the two distill gates and the doc-syncer SKIPPED state (build-graph-standard.md, a BUILD:standard start file), the fast-path graph (build-graph-fast.md, BUILD:fast_path start) and the Fast Path Escalation flow (build-fast-path-escalation.md, BUILD:fast_path conditional stage). plan-workflow.md falls from 26,862 B to 15,491 B: the bake-off body and chain loop step 5b move to plan-bakeoff.md (PLAN conditional stage); the qualify decision and the non-qualify path stay, so a plan that does not qualify never reads the new file. Seven read-map rows are added (the kernel rises 1,027 B in the P11 projection, the one recorded kernel raise, inside its projected delta). Difference 17 is not applied (dropped at P2C, D17-A); the hook-policy block stays in the artifact policy. The cut-plan P11 rows carry the as-built text: the xref guard needed the numeral 8 kept in three Skill-Distill pointer lines and a 60 percent token share for the cross-reference fix 1 sentence (it now names `build-graph-standard.md` (`### BUILD task graph`) or `build-graph-fast.md` (`### BUILD task graph \u2014 fast path`), so the resolver binds each heading to its file), and nine hand-found stale pointers (the kernel skill-author note, debug-workflow.md, three harness-self-checks.md sites, the fast graph intro, the Task*-tool fallback file list, plan-bakeoff.md step 5b, the Fast Path Detection sentence of build-workflow.md) have P11 replace rows (p11-xref-x-*), so the rows reproduce the working tree byte for byte. The projection's reach_feasibility reads the committed policy map, which gains 156 unsigned P11 rows (52 Rewrites, 97 Applicability, 7 Read-map widening; six signed P10 and P9 rows are re-opened); signing them can change it again and then needs its own revision entry. One baseline id (edf4681b29aa, the Future Third Router paragraph) cannot be accounted for by any row kind because the baseline classifier marks it normative: see the P11 paragraph under Pending human signature. Full-plan projection stays under enforced_caps (kernel 34170 of 34202, protocol 14606 of 14606, reference max 19097 of 19101, BUILD/PLAN/DEBUG/REVIEW 98150/86426/74176/72232 of 98180/86940/74204/72266). Live ceilings are re-ratcheted to the measured tree (kernel 34938, protocol 14606, reference max 19269, BUILD/PLAN/DEBUG/REVIEW 98964/87194/74944/73000); only kernel_bytes rises, recorded in ceiling_raises. The measured kernel sits 362 B above the P11 phase projection (the unanchored p3-kernel-when-to-use bias, which P12 closes). decided_by is pending-David."
+      "cause": "P11 protocol and reference splits: router-protocol.md falls from 29,360 B to 14,605 B (step 1a to the new conditional stage file _shared/router-protocol-multirepo.md; the Skill-Distill Approval Flow to _shared/skill-distill-approval.md; the two findings handoffs to _shared/verifier-handoff.md; the Future Third Router note to docs/router-protocol-history.md, which is non-runtime; the protocol keeps pointer paragraphs that order the Read() of each new file). build-workflow.md falls from 26,565 B to 7,535 B: the standard task graph with the two distill gates and the doc-syncer SKIPPED state (build-graph-standard.md, a BUILD:standard start file), the fast-path graph (build-graph-fast.md, BUILD:fast_path start) and the Fast Path Escalation flow (build-fast-path-escalation.md, BUILD:fast_path conditional stage). plan-workflow.md falls from 26,862 B to 15,491 B: the bake-off body and chain loop step 5b move to plan-bakeoff.md (PLAN conditional stage); the qualify decision and the non-qualify path stay, so a plan that does not qualify never reads the new file. Seven read-map rows are added (the kernel rises 1,002 B in the P11 projection, the one recorded kernel raise, inside its projected delta). Difference 17 is not applied (dropped at P2C, D17-A); the hook-policy block stays in the artifact policy. P11 review remediation (scope ALL_ISSUES): (1) plan-bakeoff.md names references/plan-workflow.md at every reference to the headings that stayed there (qualify branch, dispatch-time prompt assembly, task graph) and drops a false 'above'; (2) a fast_path BUILD and a DEBUG workflow apply the Learn-Distill and Skill-Distill gates but never loaded build-graph-standard.md. The read map allows one start row and one stage row per file, and a second row for that file would collide with the BUILD:standard start row, so no read-map row can carry the reach; the two gate task shapes and the chain-tail rule are repeated verbatim in verify-dispatch.md (### Distill gate task shapes, +2,395 B, a stage file both workflows read when integration-verifier returns PASS, which is when the gates come due), and the fast graph and debug-workflow.md point at it. The start sets do not change (verify-dispatch.md is a stage file) and the kernel gains no row; (3) the escalation flow cites SKILL.md's Chain Execution Loop instead of 'build-workflow.md sections 5 and 6'; (4) the protocol pointers and the Cursor router order a Read() of each moved shared file; (5) the bake-off trigger in the Read Map is shortened by 32 B (the kernel pays for the SKILL.md edits); (6) the Future Third Router note is classified non-normative (classifier fix, one-unit rebaseline, Rationale row). The cut-plan P11 rows carry the as-built text: the xref guard needed the numeral 8 kept in three Skill-Distill pointer lines and the numerals 5, 5 and 6 kept in the escalation fence (no new numeral may enter an xref row), so the Chain Execution Loop is cited by name. Nine hand-found stale pointers plus the remediation edits have P11 replace rows (p11-xref-x-*), so the rows reproduce the working tree byte for byte. The projection's reach_feasibility reads the committed policy map, which gains 167 unsigned P11 rows; signing them can change it again and then needs its own revision entry. Full-plan projection stays under enforced_caps (kernel 34145 of 34202, protocol 14605 of 14606, reference max 19097 of 19101, BUILD/PLAN/DEBUG/REVIEW 98128/86400/74194/72206 of 98180/86940/74204/72266). Live ceilings are re-ratcheted to the measured tree (kernel 34913, protocol 14605, reference max 19269, BUILD/PLAN/DEBUG/REVIEW 98942/87168/74962/72974); only kernel_bytes rises against origin/main (33,911 to 34,913, +1,002, projected delta 1,002), recorded in ceiling_raises. The measured kernel sits 362 B above the P11 phase projection (the unanchored p3-kernel-when-to-use bias, which P12 closes). decided_by is pending-David."
     }
   ],
   "enforce": false,

@@ -459,8 +459,8 @@ total plan-gap-reviewer passes, stop and follow § 6 "When a phase fails" (ask t
 do not loop indefinitely).
 
 **Do NOT consult Claude Code's own `craftflow-router/SKILL.md` or its
-`references/plan-workflow.md` / `references/remediation-and-research.md` to figure out
-PLAN mechanics.** Those files describe Claude Code's `TaskCreate({...}) -> planner_task_id`
+`references/plan-workflow.md` / `references/plan-bakeoff.md` /
+`references/remediation-and-research.md` to figure out PLAN mechanics.** Those files describe Claude Code's `TaskCreate({...}) -> planner_task_id`
 task-tracking system — a completely different mechanism from Cursor's real `Task` tool.
 Their syntax superficially resembles the already-overridden-as-skippable
 `TaskUpdate`/`TaskList`/`TaskGet` calls in § 9, but `TaskCreate` there is NOT one of
@@ -808,7 +808,9 @@ rules (a missing or malformed contract is a BLOCKED case, same as any other phas
   workflow's memory notes, leave the candidate's ledger status untouched (it will be
   retried the next time this gate fires on a future workflow), and proceed directly to
   § 8 Memory Finalization.
-- `STATUS: COMPLETE` (requires non-empty `PROPOSAL_PATH` and `CANDIDATE_ID`) → continue
+- `STATUS: COMPLETE` (requires non-empty `PROPOSAL_PATH` and `CANDIDATE_ID`) → `Read()`
+  `tools/craftflow-plugin/plugins/craftflow/skills/_shared/skill-distill-approval.md` now
+  (the four options, the exact promote/reject invocations, the re-ask rule), then continue
   to Step 4. This is the only outcome that pauses the workflow for a human answer.
 
 ### Step 4 — Synchronous confirmation-based approval (router's own turn)

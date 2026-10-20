@@ -1,6 +1,6 @@
 # Non-normative units at 0439c33932463d257b881ce50f136ab7661c0a39
 
-Total: 2698 bytes over 24 whole units.
+Total: 3636 bytes over 25 whole units.
 
 ## skills/craftflow-router/SKILL.md (13 units, 730 bytes)
 
@@ -18,10 +18,11 @@ Total: 2698 bytes over 24 whole units.
 - L1147 [write-agent yaml contracts] 16 B: Expected fields:
 - L1224 [write-agent contract schema validation (pilot: component-builder, planner)] 469 B: **Known gap (not fixed by this pilot):** `skills/cursor-router/SKILL.md`'s own "Verdict by agent" table still documents `component-builder`/`planner` using the old flat field names, because Cursor dispatches the same `agents/component-builder.md`/`agents/planner.md` files and will therefore receive the new nested output without its own routing doc being updated. This is a known, tracked follow-up, not an oversight — see the schema-validation plan's Risks section.
 
-## skills/_shared/router-protocol.md (3 units, 887 bytes)
+## skills/_shared/router-protocol.md (4 units, 1825 bytes)
 
 - L190 [jev auto-detect consent request contract] 86 B: See `docs/ai/decisions/0038-craftflow-jev-auto-detect-consent.md` for the full design.
 - L205 [intent routing] 6 B: Rules:
+- L376 [future third router (note, not a current abstraction)] 938 B: [NOTE — documentation only, no code implied by this section]: today there are exactly 2 routers (`craftflow-router/SKILL.md` for Claude Code, `cursor-router/SKILL.md` for Cursor), and this file plus each binding doc's own host-specific sections already avoid scattering per-host conditionals across call sites. Building a shared "runtime-adapter factory" abstraction now would be speculative — there is no third runtime to abstract for. If a third runtime/router is ever added, the recommended shape is a single factory function that picks the correct tool name/example syntax per runtime (one function, one switch point) rather than `if (runtime === ...)` conditionals scattered across binding docs — see `docs/research/2026-08-29-agent-teams-ai-borrowable-ideas.md` idea #5 (pattern source: agent-teams-ai's `memberMessagingProtocol.js`) for the full rationale. Revisit this note, not the router split itself, when that day comes.
 - L411 [explicit dispatcher (phase-to-agent table)] 795 B: (Host-specific: this table states WHICH agent role handles each phase — the routing intent itself, shared across hosts. HOW each host turns an agent role into something invocable is host-specific and stays in each binding doc: Claude Code resolves these via `Task()`/ `TaskCreate()` against registered subagent types using the `craftflow:` name directly; Cursor's `Task` tool cannot select custom subagent types by name at all, so `cursor-router/SKILL.md`'s `## Agent File Paths` maps each role to a literal `.md` file path instead. See each binding doc's own section for its resolution mechanics. `craftflow-router/SKILL.md` also keeps its own short trailing note on `skill-author` not being a `kind:remfix` origin inline, since it cross-references that file's own `## 6.` section numbering.)
 
 ## skills/craftflow-router/references/workflow-artifact-and-hook-policy.md (5 units, 524 bytes)

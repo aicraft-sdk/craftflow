@@ -158,7 +158,7 @@ Phase 2 of the same plan adds a `skill-author` agent
 candidate, applies the anti-slop rubric
 (`skills/skill-distillation/references/rubric.md`), and — only if it
 survives — stages a proposal. Phase 3 wires this into both routers:
-`craftflow-router/references/post-agent-validation.md`'s Skill-Distill Approval Flow pointer to the shared protocol (`AskUserQuestion`
+`craftflow-router/references/post-agent-validation.md`'s Skill-Distill Approval Flow pointer to `_shared/skill-distill-approval.md` (`AskUserQuestion`
 with Approve / Approve + register in SKILL_HINTS / Reject / Defer) and
 `cursor-router/SKILL.md` § 5a (a synchronous plain-text confirmation
 exchange, since Cursor has no `AskUserQuestion` equivalent). Neither script

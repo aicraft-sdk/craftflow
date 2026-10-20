@@ -16,17 +16,17 @@ also removes the smaller, latent equivalent race in the real-`Task()` world, whe
 
 ### PLAN bake-off fan-out
 
-Runs immediately after `### PLAN qualify branch`'s `ELSE` arm persists `bakeoff_triggered`,
+Runs immediately after `references/plan-workflow.md → ### PLAN qualify branch`'s `ELSE` arm persists `bakeoff_triggered`,
 `bakeoff_n`, and `bakeoff_models`.
 
 **N-1 parallel candidate dispatch:**
 ```text
-FOR each model in bakeoff_models (the fixed rotation slice from `### PLAN qualify branch` — no
+FOR each model in bakeoff_models (the fixed rotation slice from `references/plan-workflow.md → ### PLAN qualify branch` — no
     separate availability filtering occurs before this loop; an unavailable model is handled
     identically to any other dispatch-time tool-level failure, see below):
   TaskCreate({
     subject: f"CRAFTFLOW planner: Bake-off candidate ({model})",
-    description: f"wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:plan-bakeoff-candidate-{model}\nplan:N/A\nscope:N/A\nreason:Parallel bake-off candidate ({model}) — Target Plan File assembled at dispatch time, see ### PLAN dispatch-time prompt assembly, never embedded here\n\nChoose the correct plan mode and verification rigor exactly as the scout did. Create an independent planning artifact — do NOT read the scout's or any other candidate's output.",
+    description: f"wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:plan-bakeoff-candidate-{model}\nplan:N/A\nscope:N/A\nreason:Parallel bake-off candidate ({model}) — Target Plan File assembled at dispatch time, see `references/plan-workflow.md → ### PLAN dispatch-time prompt assembly`, never embedded here\n\nChoose the correct plan mode and verification rigor exactly as the scout did. Create an independent planning artifact — do NOT read the scout's or any other candidate's output.",
     activeForm: f"Creating bake-off candidate ({model})"
   }) -> candidate_task_id[model]
   Persist task_ids.plan_bakeoff_candidates[model] = candidate_task_id[model].
@@ -64,7 +64,7 @@ reason, exclude it from `results.bakeoff[]`, and continue.
 (never the judge, never the failed candidate's own agent) reconciles that candidate's OWN assigned
 target file. A failed candidate may still have successfully written a file before its contract
 came back malformed or missing. The judge is only ever given, and is prompt-restricted to delete
-only, `results.bakeoff[]`'s paths (`### PLAN dispatch-time prompt assembly`) — which excludes
+only, `results.bakeoff[]`'s paths (`references/plan-workflow.md → ### PLAN dispatch-time prompt assembly`) — which excludes
 failed candidates by construction — so without this step a failed candidate's leftover file would
 never be deleted by anyone, and `### PLAN post-judge validation`'s Glob-zero-matches check would
 then incorrectly hard-stop an otherwise-successful degraded bake-off (the design's own Error
@@ -90,7 +90,7 @@ failed candidate, its own leftover file already reconciled per the cleanup above
     the one case where plan-create is genuinely re-run from scratch). Treat its output as the
     final plan_file exactly as the non-qualify branch does. bakeoff_triggered stays true (for
     telemetry honesty — a bake-off WAS attempted) but bakeoff_all_failed = true is also persisted.
-    Once this fresh planner task returns validly: construct Block B (`### PLAN task graph`) NOW,
+    Once this fresh planner task returns validly: construct Block B (`references/plan-workflow.md → ### PLAN task graph`) NOW,
     with upstream_task_id = this fresh planner task's own task id — this is the THIRD and last of
     the three Block B call sites (alongside non-qualify and post-judge success below).
 ```
@@ -100,7 +100,7 @@ failed candidate, its own leftover file already reconciled per the cleanup above
 ```text
 TaskCreate({
   subject: "CRAFTFLOW plan-bakeoff-judge: Synthesize final plan",
-  description: f"wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:plan-bakeoff-judge\nplan:N/A\nscope:N/A\nreason:Synthesize {valid_count} bake-off candidates into one final plan — Target Plan File and Candidates assembled at dispatch time, see ### PLAN dispatch-time prompt assembly, never embedded here\n\nRead every candidate file. Compare against the original user request and design file. Produce exactly one synthesized plan at the Target Plan File path, then delete every candidate file.",
+  description: f"wf:{workflow_uuid}\nkind:agent\norigin:router\nphase:plan-bakeoff-judge\nplan:N/A\nscope:N/A\nreason:Synthesize {valid_count} bake-off candidates into one final plan — Target Plan File and Candidates assembled at dispatch time, see `references/plan-workflow.md → ### PLAN dispatch-time prompt assembly`, never embedded here\n\nRead every candidate file. Compare against the original user request and design file. Produce exactly one synthesized plan at the Target Plan File path, then delete every candidate file.",
   activeForm: "Synthesizing bake-off candidates"
 }) -> judge_task_id
 Persist task_ids.plan_bakeoff_judge = judge_task_id.
@@ -120,7 +120,7 @@ Glob(f"docs/plans/{plan_file_stem}-candidate-*.md") — MUST return zero matches
   "APPROVE + critical issues becomes CHANGES_REQUESTED" override pattern) — hard stop, re-run
   inline verification.
 On success: persist plan_file = judge's PLAN_FILE (== the canonical path).
-# Construct Block B NOW (`### PLAN task graph`) — this is the FIRST point plan-review-gap-1/
+# Construct Block B NOW (`references/plan-workflow.md → ### PLAN task graph`) — this is the FIRST point plan-review-gap-1/
 # re-plan/plan-review-gap-2/memory-finalize are created on the qualify path;
 # upstream_task_id = judge_task_id.
 <invoke Block B, upstream_task_id = judge_task_id>
@@ -130,7 +130,7 @@ On success: persist plan_file = judge's PLAN_FILE (== the canonical path).
 
 **Task*-tool-fallback note (cross-reference, not new logic):** every individual
 `TaskCreate()`/`TaskUpdate({ addBlockedBy })` call site in `### PLAN bake-off fan-out`,
-`### PLAN judge dispatch`, and Block B (`### PLAN task graph`) above is covered by the existing
+`### PLAN judge dispatch`, and Block B (`references/plan-workflow.md → ### PLAN task graph`) is covered by the existing
 generalized Task*-tool-fallback rule in `SKILL.md § 6` (`references/task-tool-fallback.md`) without further modification — when
 `capabilities.task_tools_available == false`, skip each call and append the corresponding
 `phase_status`/`normalized_phases` entry (`plan-bakeoff-candidate-{model}` / `plan-bakeoff-judge`
@@ -138,7 +138,7 @@ generalized Task*-tool-fallback rule in `SKILL.md § 6` (`references/task-tool-f
 what the Block A/Block B split above supplies instead — is WHEN Block B's entries get appended**:
 the fallback rule only says a skipped `TaskCreate()` becomes a `phase_status` append at the point
 the (skipped) call would have happened; it says nothing about deferring that point to after a
-branch resolves. That deferral is this mechanism's own structural change (`### PLAN task graph`
+branch resolves. That deferral is this mechanism's own structural change (`references/plan-workflow.md → ### PLAN task graph`
 Block B), layered on top of the pre-existing, unmodified fallback mechanism, not something the
 fallback rule already provided. Dispatch itself falls through to the `Agent()`-tool path per
 `SKILL.md § 7`'s existing Task*-tool-fallback rule (`references/task-tool-fallback.md`), substituting the same `'n/a — task-tool

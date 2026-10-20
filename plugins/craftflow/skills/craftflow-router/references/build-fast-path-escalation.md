@@ -8,7 +8,7 @@ When `build_mode == "fast_path"` AND integration-verifier returns FAIL:
 1. Update artifact: build_mode → "fast_path_escalated", fast_path_escalated → true
 2. Append event: {"event":"fast_path_escalated","reason":"verifier FAIL on fast path","ts":"{iso_now}"}
 3. Announce: "-> FAST-PATH BUILD [ESCALATED] (verifier FAIL — reviewer + hunter spawned)"
-4. Spawn reviewer + hunter in parallel (identical to standard BUILD §5 pattern):
+4. Spawn reviewer + hunter in parallel (identical to the standard BUILD dispatch, step 5 of `SKILL.md`'s Chain Execution Loop):
 
 **Arch Lint (advisory):** before dispatching code-reviewer, run the check per `references/harness-self-checks.md § Arch Lint` and fold any findings into its dispatch prompt.
 
@@ -25,7 +25,7 @@ TaskCreate({
 }) -> escalated_hunter_task_id
 
 5. Wait for BOTH reviewer + hunter to complete.
-6. Build merged findings summary (standard BUILD §5 + §6 pattern from build-workflow.md).
+6. Build the router-owned merged findings summary (steps 5 and 6 of `SKILL.md`'s Chain Execution Loop, as for standard BUILD review + hunt).
 7. Apply 1a-SCOPE rule (RESTORED on escalated path — same threshold as standard parallel review phase):
    - If totalCritical ≥ 1 AND totalHigh ≥ 1 (from escalated reviewer+hunter output) → run the "When `1a-SCOPE` fires" procedure from `references/remediation-and-research.md` `### Scope resolution` (including its Jev-assisted step 2), then stop. Wait for reply before creating REM-FIX unless step 2 auto-decided.
    - Otherwise → auto-proceed with ALL_ISSUES (standard rule 1a applies)

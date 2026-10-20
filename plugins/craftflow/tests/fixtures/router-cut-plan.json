@@ -1827,7 +1827,7 @@
    "id": "p11-proto-verifier-handoff",
    "op": "move",
    "phase": "P11",
-   "pointer_text": "## Findings handoff\n\nThe previous-agent and verifier findings handoff blocks live in `skills/_shared/verifier-handoff.md`.\n\n",
+   "pointer_text": "## Findings handoff\n\n`Read()` `skills/_shared/verifier-handoff.md` before dispatching `integration-verifier`.\n\n",
    "source": "plan P11 Files: verifier-handoff.md (:272-307)",
    "src": "skills/_shared/router-protocol.md",
    "start_anchor": "## Previous Agent Findings Handoff",
@@ -1841,7 +1841,7 @@
    "id": "p11-proto-skill-distill-approval",
    "op": "move",
    "phase": "P11",
-   "pointer_text": "## Skill-Distill approval\n\nThe approval flow lives in `skills/_shared/skill-distill-approval.md`.\n\n",
+   "pointer_text": "## Skill-Distill approval\n\nOn `skill-author` `COMPLETE`, `Read()` `skills/_shared/skill-distill-approval.md`.\n\n",
    "source": "plan P11 Files: skill-distill-approval.md (:309-372)",
    "src": "skills/_shared/router-protocol.md",
    "start_anchor": "## Skill-Distill Approval Flow",
@@ -2172,7 +2172,7 @@
    "source": "manual-review claim: the Skill-Distill Approval Flow is reachable as the section the sentence names (SKILL.md:161)",
    "start_anchor": "- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (§ 8) is carved out as a de",
    "status": "drafted",
-   "text": "- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (§ 8, `skill-distill-approval.md`) is carved out as a de\n"
+   "text": "- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (`skill-distill-approval.md`, was § 8) is carved out as a de\n"
   },
   {
    "condition": "always",
@@ -2194,7 +2194,7 @@
    "source": "manual-review claim: SKILL.md section 8 still holds the Skill-Distill Approval Flow (build-workflow.md:143, moved by p11-bw-graph-standard)",
    "start_anchor": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`SKILL.md` § 8, `references/post-agent-validation.md`) before Memory Update proceeds.",
    "status": "drafted",
-   "text": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (§ 8, `_shared/skill-distill-approval.md`) before Memory Update proceeds.\n"
+   "text": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`_shared/skill-distill-approval.md`, was § 8) before Memory Update proceeds.\n"
   },
   {
    "condition": "always",
@@ -2324,7 +2324,7 @@
     "class": "stage",
     "file": "skills/craftflow-router/references/plan-bakeoff.md",
     "happy_path": false,
-    "trigger": "PLAN_MODE decision_rfc or VERIFICATION_RIGOR critical_path (bake-off qualifies)",
+    "trigger": "bake-off qualifies (decision_rfc or critical_path)",
     "workflows": [
      "PLAN"
     ]
@@ -2371,13 +2371,43 @@
   },
   {
    "condition": "always",
+   "file": "skills/craftflow-router/references/build-fast-path-escalation.md",
+   "id": "p11-xref-x-build-fast-path-escalation",
+   "op": "replace",
+   "phase": "P11",
+   "source": "reviewer F3 / hunter MED-3: 'standard BUILD section 5 and 6 pattern from build-workflow.md' named a file and sections that do not hold it; the parallel dispatch and the merged findings summary are SKILL.md section 12 steps 5 and 6",
+   "start_anchor": "4. Spawn reviewer + hunter in parallel (identical to standard BUILD §5 pattern):",
+   "text": "4. Spawn reviewer + hunter in parallel (identical to the standard BUILD dispatch, step 5 of `SKILL.md`'s Chain Execution Loop):\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/build-fast-path-escalation.md",
+   "id": "p11-xref-x-build-fast-path-escalation-2",
+   "op": "replace",
+   "phase": "P11",
+   "source": "reviewer F3 / hunter MED-3: 'standard BUILD section 5 and 6 pattern from build-workflow.md' named a file and sections that do not hold it; the parallel dispatch and the merged findings summary are SKILL.md section 12 steps 5 and 6",
+   "start_anchor": "6. Build merged findings summary (standard BUILD §5 + §6 pattern from build-workflow.md).",
+   "text": "6. Build the router-owned merged findings summary (steps 5 and 6 of `SKILL.md`'s Chain Execution Loop, as for standard BUILD review + hunt).\n"
+  },
+  {
+   "condition": "always",
    "file": "skills/craftflow-router/references/build-graph-fast.md",
    "id": "p11-xref-x-build-graph-fast",
    "op": "replace",
    "phase": "P11",
-   "source": "stale pointer: 'above' no longer resolves; the standard graph is in build-graph-standard.md",
+   "source": "stale pointer (first row) and hunter HIGH-1 (second row): 'above' no longer resolves, and the fast graph no longer defers the distill task shapes to build-graph-standard.md, which fast_path BUILD does not load; it carries both shapes itself",
    "start_anchor": "When `build_mode == \"fast_path\"`, use this reduced task graph instead of the standard BUILD task graph above.",
    "text": "When `build_mode == \"fast_path\"`, use this reduced task graph instead of the standard BUILD task graph in `build-graph-standard.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/build-graph-fast.md",
+   "id": "p11-xref-x-build-graph-fast-2",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer (first row) and hunter HIGH-1 (second row): 'above' no longer resolves, and the fast graph no longer defers the distill task shapes to build-graph-standard.md, which fast_path BUILD does not load; it carries both shapes itself",
+   "start_anchor": "Track `chain_tail_task_id` starting as `verifier_task_id` (no doc-sync on fast path). Apply the SAME Learn-Distill Gate and Skill-Distill Gate described in `build-graph-standard.md` — identical gate checks, identical `phase:learn-distill` / `phase:skill-distill` `TaskCreate` shape, identical `chain_tail_task_id` update rule — the only difference is the starting chain tail (`verifier_task_id` here vs `doc_sync_task_id` in standard BUILD). On a clean fast-path pass, `remediation_history` is empty so the Learn-Distill Gate never fires (see `fast-path.md`'s own Learn-Distill Gate note); the Skill-Distill Gate is independent of `remediation_history` and can still fire on a clean fast-path pass if the ledger has an eligible candidate. On an escalated fast path (verifier FAIL → reviewer/hunter/REM-FIX → re-verify), `remediation_history` is populated and `learn-distill` runs exactly like standard BUILD.",
+   "text": "Track `chain_tail_task_id` starting as `verifier_task_id` (no doc-sync on fast path). Apply the SAME Learn-Distill Gate and Skill-Distill Gate described in `build-graph-standard.md` — identical gate checks, identical `phase:learn-distill` / `phase:skill-distill` `TaskCreate` shape, identical `chain_tail_task_id` update rule (the shapes and the rule are repeated for this path in `references/verify-dispatch.md → ### Distill gate task shapes`, loaded at verifier PASS) — the only difference is the starting chain tail (`verifier_task_id` here vs `doc_sync_task_id` in standard BUILD). On a clean fast-path pass, `remediation_history` is empty so the Learn-Distill Gate never fires (see `fast-path.md`'s own Learn-Distill Gate note); the Skill-Distill Gate is independent of `remediation_history` and can still fire on a clean fast-path pass if the ledger has an eligible candidate. On an escalated fast path (verifier FAIL → reviewer/hunter/REM-FIX → re-verify), `remediation_history` is populated and `learn-distill` runs exactly like standard BUILD.\n"
   },
   {
    "condition": "always",
@@ -2395,9 +2425,9 @@
    "id": "p11-xref-x-debug-workflow",
    "op": "replace",
    "phase": "P11",
-   "source": "stale pointer: DEBUG applies the same Learn-Distill and Skill-Distill gates, documented in the standard graph, which moved to build-graph-standard.md",
+   "source": "stale pointer and hunter HIGH-2: DEBUG applies the Learn-Distill and Skill-Distill gates documented in the standard graph, which moved to build-graph-standard.md and which DEBUG does not load at start; the paragraph now orders a Read() of it before the gates (read-map row, DEBUG stage)",
    "start_anchor": "DEBUG has no doc-sync step, so `chain_tail_task_id` starts as `verifier_task_id` directly (unlike BUILD, where it starts as `doc_sync_task_id`). Apply the SAME Learn-Distill Gate and Skill-Distill Gate documented in `build-workflow.md` (identical gate checks, identical `phase:learn-distill` / `phase:skill-distill` `TaskCreate` shape, identical `chain_tail_task_id` update rule) before creating Memory Update:",
-   "text": "DEBUG has no doc-sync step, so `chain_tail_task_id` starts as `verifier_task_id` directly (unlike BUILD, where it starts as `doc_sync_task_id`). Apply the SAME Learn-Distill Gate and Skill-Distill Gate documented in `build-graph-standard.md` (identical gate checks, identical `phase:learn-distill` / `phase:skill-distill` `TaskCreate` shape, identical `chain_tail_task_id` update rule) before creating Memory Update:\n"
+   "text": "DEBUG has no doc-sync step, so `chain_tail_task_id` starts as `verifier_task_id` directly (unlike BUILD, where it starts as `doc_sync_task_id`). Apply the SAME Learn-Distill Gate and Skill-Distill Gate documented in `build-graph-standard.md` (identical gate checks, identical `phase:learn-distill` / `phase:skill-distill` `TaskCreate` shape, identical `chain_tail_task_id` update rule; repeated for DEBUG in `verify-dispatch.md`) before creating Memory Update:\n"
   },
   {
    "condition": "always",
@@ -2435,7 +2465,97 @@
    "id": "p11-xref-x-plan-bakeoff",
    "op": "replace",
    "phase": "P11",
-   "source": "stale pointer: step 5b cites the degraded-bake-off tolerance rule as plan-workflow.md's; it sits in `### PLAN bake-off fan-out`, which moved with step 5b to plan-bakeoff.md",
+   "source": "stale pointer: step 5b cites the degraded-bake-off tolerance rule as plan-workflow.md's (it sits in `### PLAN bake-off fan-out`, which moved with step 5b), and doubt F1: unqualified references to `### PLAN qualify branch`, `### PLAN dispatch-time prompt assembly` and `### PLAN task graph`, which stayed in plan-workflow.md",
+   "start_anchor": "Runs immediately after `### PLAN qualify branch`'s `ELSE` arm persists `bakeoff_triggered`,",
+   "text": "Runs immediately after `references/plan-workflow.md → ### PLAN qualify branch`'s `ELSE` arm persists `bakeoff_triggered`,\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-bakeoff.md",
+   "id": "p11-xref-x-plan-bakeoff-2",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: step 5b cites the degraded-bake-off tolerance rule as plan-workflow.md's (it sits in `### PLAN bake-off fan-out`, which moved with step 5b), and doubt F1: unqualified references to `### PLAN qualify branch`, `### PLAN dispatch-time prompt assembly` and `### PLAN task graph`, which stayed in plan-workflow.md",
+   "start_anchor": "FOR each model in bakeoff_models (the fixed rotation slice from `### PLAN qualify branch` — no",
+   "text": "FOR each model in bakeoff_models (the fixed rotation slice from `references/plan-workflow.md → ### PLAN qualify branch` — no\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-bakeoff.md",
+   "id": "p11-xref-x-plan-bakeoff-3",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: step 5b cites the degraded-bake-off tolerance rule as plan-workflow.md's (it sits in `### PLAN bake-off fan-out`, which moved with step 5b), and doubt F1: unqualified references to `### PLAN qualify branch`, `### PLAN dispatch-time prompt assembly` and `### PLAN task graph`, which stayed in plan-workflow.md",
+   "start_anchor": "    description: f\"wf:{workflow_uuid}\\nkind:agent\\norigin:router\\nphase:plan-bakeoff-candidate-{model}\\nplan:N/A\\nscope:N/A\\nreason:Parallel bake-off candidate ({model}) — Target Plan File assembled at dispatch time, see ### PLAN dispatch-time prompt assembly, never embedded here\\n\\nChoose the correct plan mode and verification rigor exactly as the scout did. Create an independent planning artifact — do NOT read the scout's or any other candidate's output.\",",
+   "text": "    description: f\"wf:{workflow_uuid}\\nkind:agent\\norigin:router\\nphase:plan-bakeoff-candidate-{model}\\nplan:N/A\\nscope:N/A\\nreason:Parallel bake-off candidate ({model}) — Target Plan File assembled at dispatch time, see `references/plan-workflow.md → ### PLAN dispatch-time prompt assembly`, never embedded here\\n\\nChoose the correct plan mode and verification rigor exactly as the scout did. Create an independent planning artifact — do NOT read the scout's or any other candidate's output.\",\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-bakeoff.md",
+   "id": "p11-xref-x-plan-bakeoff-4",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: step 5b cites the degraded-bake-off tolerance rule as plan-workflow.md's (it sits in `### PLAN bake-off fan-out`, which moved with step 5b), and doubt F1: unqualified references to `### PLAN qualify branch`, `### PLAN dispatch-time prompt assembly` and `### PLAN task graph`, which stayed in plan-workflow.md",
+   "start_anchor": "only, `results.bakeoff[]`'s paths (`### PLAN dispatch-time prompt assembly`) — which excludes",
+   "text": "only, `results.bakeoff[]`'s paths (`references/plan-workflow.md → ### PLAN dispatch-time prompt assembly`) — which excludes\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-bakeoff.md",
+   "id": "p11-xref-x-plan-bakeoff-5",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: step 5b cites the degraded-bake-off tolerance rule as plan-workflow.md's (it sits in `### PLAN bake-off fan-out`, which moved with step 5b), and doubt F1: unqualified references to `### PLAN qualify branch`, `### PLAN dispatch-time prompt assembly` and `### PLAN task graph`, which stayed in plan-workflow.md",
+   "start_anchor": "    Once this fresh planner task returns validly: construct Block B (`### PLAN task graph`) NOW,",
+   "text": "    Once this fresh planner task returns validly: construct Block B (`references/plan-workflow.md → ### PLAN task graph`) NOW,\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-bakeoff.md",
+   "id": "p11-xref-x-plan-bakeoff-6",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: step 5b cites the degraded-bake-off tolerance rule as plan-workflow.md's (it sits in `### PLAN bake-off fan-out`, which moved with step 5b), and doubt F1: unqualified references to `### PLAN qualify branch`, `### PLAN dispatch-time prompt assembly` and `### PLAN task graph`, which stayed in plan-workflow.md",
+   "start_anchor": "  description: f\"wf:{workflow_uuid}\\nkind:agent\\norigin:router\\nphase:plan-bakeoff-judge\\nplan:N/A\\nscope:N/A\\nreason:Synthesize {valid_count} bake-off candidates into one final plan — Target Plan File and Candidates assembled at dispatch time, see ### PLAN dispatch-time prompt assembly, never embedded here\\n\\nRead every candidate file. Compare against the original user request and design file. Produce exactly one synthesized plan at the Target Plan File path, then delete every candidate file.\",",
+   "text": "  description: f\"wf:{workflow_uuid}\\nkind:agent\\norigin:router\\nphase:plan-bakeoff-judge\\nplan:N/A\\nscope:N/A\\nreason:Synthesize {valid_count} bake-off candidates into one final plan — Target Plan File and Candidates assembled at dispatch time, see `references/plan-workflow.md → ### PLAN dispatch-time prompt assembly`, never embedded here\\n\\nRead every candidate file. Compare against the original user request and design file. Produce exactly one synthesized plan at the Target Plan File path, then delete every candidate file.\",\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-bakeoff.md",
+   "id": "p11-xref-x-plan-bakeoff-7",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: step 5b cites the degraded-bake-off tolerance rule as plan-workflow.md's (it sits in `### PLAN bake-off fan-out`, which moved with step 5b), and doubt F1: unqualified references to `### PLAN qualify branch`, `### PLAN dispatch-time prompt assembly` and `### PLAN task graph`, which stayed in plan-workflow.md",
+   "start_anchor": "# Construct Block B NOW (`### PLAN task graph`) — this is the FIRST point plan-review-gap-1/",
+   "text": "# Construct Block B NOW (`references/plan-workflow.md → ### PLAN task graph`) — this is the FIRST point plan-review-gap-1/\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-bakeoff.md",
+   "id": "p11-xref-x-plan-bakeoff-8",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: step 5b cites the degraded-bake-off tolerance rule as plan-workflow.md's (it sits in `### PLAN bake-off fan-out`, which moved with step 5b), and doubt F1: unqualified references to `### PLAN qualify branch`, `### PLAN dispatch-time prompt assembly` and `### PLAN task graph`, which stayed in plan-workflow.md",
+   "start_anchor": "`### PLAN judge dispatch`, and Block B (`### PLAN task graph`) above is covered by the existing",
+   "text": "`### PLAN judge dispatch`, and Block B (`references/plan-workflow.md → ### PLAN task graph`) is covered by the existing\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-bakeoff.md",
+   "id": "p11-xref-x-plan-bakeoff-9",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: step 5b cites the degraded-bake-off tolerance rule as plan-workflow.md's (it sits in `### PLAN bake-off fan-out`, which moved with step 5b), and doubt F1: unqualified references to `### PLAN qualify branch`, `### PLAN dispatch-time prompt assembly` and `### PLAN task graph`, which stayed in plan-workflow.md",
+   "start_anchor": "branch resolves. That deferral is this mechanism's own structural change (`### PLAN task graph`",
+   "text": "branch resolves. That deferral is this mechanism's own structural change (`references/plan-workflow.md → ### PLAN task graph`\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-bakeoff.md",
+   "id": "p11-xref-x-plan-bakeoff-10",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: step 5b cites the degraded-bake-off tolerance rule as plan-workflow.md's (it sits in `### PLAN bake-off fan-out`, which moved with step 5b), and doubt F1: unqualified references to `### PLAN qualify branch`, `### PLAN dispatch-time prompt assembly` and `### PLAN task graph`, which stayed in plan-workflow.md",
    "start_anchor": "     others — see `references/plan-workflow.md`'s degraded-bake-off tolerance rule (a scoped",
    "text": "     others — see `### PLAN bake-off fan-out`'s degraded-bake-off tolerance rule (a scoped\n"
   },
@@ -2448,6 +2568,16 @@
    "source": "the list of files with TaskCreate call sites gains the new graph, escalation and bake-off files",
    "start_anchor": "`references/debug-workflow.md`, `references/review-workflow.md`, `references/plan-workflow.md`,",
    "text": "`references/build-graph-standard.md`, `references/build-graph-fast.md`,\n`references/build-fast-path-escalation.md`, `references/debug-workflow.md`,\n`references/review-workflow.md`, `references/plan-workflow.md`, `references/plan-bakeoff.md`,\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/verify-dispatch.md",
+   "id": "p11-xref-x-verify-dispatch-append",
+   "op": "insert",
+   "phase": "P11",
+   "position": "end_of_file",
+   "source": "hunter HIGH-1 / HIGH-2: a fast_path BUILD and a DEBUG workflow apply the Learn-Distill and Skill-Distill gates but never load build-graph-standard.md; the two gate task shapes are repeated here, in the stage file both read when integration-verifier returns PASS (no read-map row can add a second stage or start row for build-graph-standard.md)",
+   "text": "### Distill gate task shapes\n\nFor the paths that do not load `build-graph-standard.md` (a `fast_path` BUILD, a DEBUG workflow), these repeat the two gate task shapes and the `chain_tail_task_id` rule of its `#### Learn-Distill Gate` and `#### Skill-Distill Gate`. The gate checks, eligibility rules and outcomes are in `references/fast-path.md` (`#### Learn-Distill Gate`, `#### Skill-Distill Gate`); the Skill-Distill candidate is the one with the highest `distinct_workflows`, ties broken by earliest `first_seen`. `chain_tail_task_id` starts as `verifier_task_id` (no doc-sync step).\n\nLearn-Distill task (create when `remediation_history` is non-empty):\n\n```text\nTaskCreate({\n  subject: \"CRAFTFLOW learn-distiller: Distill recurring failure signatures\",\n  description: \"wf:{workflow_uuid}\\nkind:agent\\norigin:router\\nphase:learn-distill\\nplan:{plan_file or 'N/A'}\\nscope:N/A\\nreason:Non-empty remediation_history triggered the recurrence gate\\n\\nRun `python3 {plugin_root}/scripts/craftflow_learn_scan.py` via Bash, read this workflow's remediation_history and event log, and distill any recurring failure signature into project/patterns.md ## Common Gotchas per your own agent contract. Emit a Router Contract when done.\",\n  activeForm: \"Distilling recurring failure signatures\"\n}) -> learn_distill_task_id\nTaskUpdate({ taskId: learn_distill_task_id, addBlockedBy: [chain_tail_task_id] })\n```\n\nSet `chain_tail_task_id = learn_distill_task_id`. After `learn-distiller` completes, append `learn_distilled` to the event log.\n\nSkill-Distill task (create when the gate check finds an eligible candidate):\n\n```text\nTaskCreate({\n  subject: \"CRAFTFLOW skill-author: Propose skill from candidate {candidate_id}\",\n  description: \"wf:{workflow_uuid}\\nkind:agent\\norigin:router\\nphase:skill-distill\\nplan:{plan_file or 'N/A'}\\nscope:N/A\\nreason:Ledger has a gate_eligible candidate not already promoted/rejected\\n\\nCandidate id: {candidate_id}\\n\\nRead this candidate from the ledger, apply the anti-slop rubric, and stage a proposal or emit STATUS: SKIPPED per your own agent contract.\",\n  activeForm: \"Distilling a project skill proposal\"\n}) -> skill_distill_task_id\nTaskUpdate({ taskId: skill_distill_task_id, addBlockedBy: [chain_tail_task_id] })\n```\n\nSet `chain_tail_task_id = skill_distill_task_id`. Handle the `skill-author` outcomes as `references/fast-path.md` (`#### Skill-Distill Gate`) says.\n"
   },
   {
    "anchor": "**Runtime contract only.** v10 restores trust-first orchestration: route intent, hydrate workflow state, write workflow artifacts, execute the task graph, validate agent output, and fail closed on ambiguity, skipped work, or missing persistence.",

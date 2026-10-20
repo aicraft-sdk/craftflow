@@ -54,7 +54,7 @@ Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset
 | start | build_mode standard | `references/build-graph-standard.md` | BUILD | standard | yes |
 | start | build_mode fast_path | `references/build-graph-fast.md` | BUILD | fast_path | yes |
 | stage | fast-path verifier FAIL | `references/build-fast-path-escalation.md` | BUILD | fast_path | no |
-| stage | PLAN_MODE decision_rfc or VERIFICATION_RIGOR critical_path (bake-off qualifies) | `references/plan-bakeoff.md` | PLAN | - | no |
+| stage | bake-off qualifies (decision_rfc or critical_path) | `references/plan-bakeoff.md` | PLAN | - | no |
 <!-- readmap:end -->
 
 ## 1. Intent Routing
@@ -145,7 +145,7 @@ JUST_GO:
 - Read `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Session Settings`.
 - If `AUTO_PROCEED: true`, set `JUST_GO=true`.
 - While `JUST_GO=true`, auto-default all non-REVERT AskUserQuestion gates to the recommended option and log the choice in `## Decisions`.
-- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (§ 8, `skill-distill-approval.md`) is carved out as a de
+- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (`skill-distill-approval.md`, was § 8) is carved out as a de
   facto REVERT-class gate under JUST_GO — see its own "JUST_GO carve-out" for the fail-closed
   default (`Defer`, never `Approve`).
 

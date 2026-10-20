@@ -295,7 +295,7 @@ check_contains(
 check_contains(
     "all-candidates-failed fallback constructs Block B with upstream_task_id = the fresh planner's own task id",
     bakeoff_text,
-    "construct Block B (`### PLAN task graph`) NOW,\n"
+    "construct Block B (`references/plan-workflow.md → ### PLAN task graph`) NOW,\n"
     "    with upstream_task_id = this fresh planner task's own task id",
 )
 

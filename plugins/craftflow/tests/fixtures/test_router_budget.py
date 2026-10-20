@@ -902,7 +902,8 @@ def test_adr_discloses_the_rem_fix_3_findings() -> None:
           # P10 (its drafted rows are read the same way, and the relocation is real in the live tree): 159 / 86 / 151, and the 3,913 B kernel penalty
           # (the one single-token unit the P2 analysis disclosed) is 0 because the one-word units stay in the kernel as stand-ins (ADR P10 notes)
           # P11 (its drafted rows are read the same way; the split sends one more unit to a covered bucket): 159 / 79 / 149 becomes 159 / 79 / 147
-          all(n in text for n in need) and "309 of them into happy-path files" not in text and split == [159, 79, 147]
+          # P11 remediation (the qualified bake-off references, the gate fences repeated in verify-dispatch.md, the Future Third Router rationale row): 162 / 75 / 144
+          all(n in text for n in need) and "309 of them into happy-path files" not in text and split == [162, 75, 144]
           and proj["reach_a_kernel_penalty_bytes"] == 0,
           f"missing={[n for n in need if n not in text]} split={split}")
 
@@ -992,7 +993,8 @@ def test_adr_discloses_the_rem_fix_4_findings() -> None:
           # change the REACH-A upper bound once more: 589 / 422 to 588 / 422; P10's drafted rows and the real relocation make it 579 / 420;
           # the P10 remediation (pointer rows for the two fences, fifteen xref rows) makes it 584 / 425
           # P11's drafted rows (the protocol, build and plan splits) make it 580 / 421
-          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (580, 421),
+          # P11 remediation (re-derived): 580 / 421 becomes 580 / 418
+          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (580, 418),
           f"missing={[n for n in need if n not in text]}")
 
 

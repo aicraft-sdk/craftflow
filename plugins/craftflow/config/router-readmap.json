@@ -34,7 +34,7 @@
     {"file": "skills/craftflow-router/references/build-graph-standard.md", "class": "start", "workflows": ["BUILD"], "trigger": "build_mode standard", "happy_path": true, "variant": "standard"},
     {"file": "skills/craftflow-router/references/build-graph-fast.md", "class": "start", "workflows": ["BUILD"], "trigger": "build_mode fast_path", "happy_path": true, "variant": "fast_path"},
     {"file": "skills/craftflow-router/references/build-fast-path-escalation.md", "class": "stage", "workflows": ["BUILD"], "trigger": "fast-path verifier FAIL", "happy_path": false, "variant": "fast_path"},
-    {"file": "skills/craftflow-router/references/plan-bakeoff.md", "class": "stage", "workflows": ["PLAN"], "trigger": "PLAN_MODE decision_rfc or VERIFICATION_RIGOR critical_path (bake-off qualifies)", "happy_path": false},
+    {"file": "skills/craftflow-router/references/plan-bakeoff.md", "class": "stage", "workflows": ["PLAN"], "trigger": "bake-off qualifies (decision_rfc or critical_path)", "happy_path": false},
     {"file": "tools/craftflow-plugin/docs/router-protocol-history.md", "class": "maintainer", "workflows": [], "trigger": "maintainers only"}
   ]
 }
