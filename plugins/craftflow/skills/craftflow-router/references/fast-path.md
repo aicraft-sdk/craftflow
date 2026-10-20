@@ -69,7 +69,7 @@ Fast-path note: fast-path BUILD with a clean verifier pass never enters the gate
 
 #### Skill-Distill Gate
 
-`skill-distill` is dispatched at the end of BUILD (standard and fast-path) ONLY when the skill-candidate ledger has at least one new `gate_eligible` candidate not already `promoted`/`rejected`. This is a separate, more specific gate than Learn-Distill's above — it does not depend on `remediation_history` at all, and it can fire on a clean pass (no remediation needed) if the ledger has an eligible candidate left over from prior workflows.
+`skill-distill` is dispatched at the end of BUILD (standard and fast-path) and DEBUG ONLY when the skill-candidate ledger has at least one new `gate_eligible` candidate not already `promoted`/`rejected`. This is a separate, more specific gate than Learn-Distill's above — it does not depend on `remediation_history` at all, and it can fire on a clean pass (no remediation needed) if the ledger has an eligible candidate left over from prior workflows.
 
 **Gate check:** `python3 {plugin_root}/scripts/craftflow_skill_ledger.py --query --ledger .craftflow/state/project/skill-candidates.json`. A candidate qualifies when `distinct_workflows >= 2` (`gate_eligible()`'s own threshold — plain `--query` does not pre-filter, so the router applies this filter itself) AND `status == "candidate"` (excludes `proposed`, `promoted`, `rejected`). Note: `status` is one of `candidate|proposed|promoted|rejected` only — "stale" is never an assignable status value; stale `candidate` entries (>90 days, no new evidence) are instead pruned (deleted outright) by `--prune`, never transitioned to a "stale" status.
 
@@ -123,4 +123,4 @@ Router announces path before child task creation (one line each):
 
 On fast path, the `## Previous Agent Findings` section is OMITTED from the verifier prompt (no reviewer/hunter ran). The verifier runs its own independent scenario coverage rather than reconciling reviewer/hunter findings.
 
-On escalated path, the standard merged findings handoff is used (same as standard BUILD §5 pattern).
+On escalated path, the standard merged findings handoff is used (as in `SKILL.md` Chain Execution Loop step 5).

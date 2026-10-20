@@ -1741,8 +1741,52 @@ def test_router_p11_split_wiring_and_content_pins() -> None:
             problems.append(f"verify-dispatch.md '### Distill gate task shapes' is not byte-identical to the standard graph's fence: {shape[:70]!r}")
     if not re.search(r"^### Distill gate task shapes\s*$", vd, re.M):
         problems.append("verify-dispatch.md lost the '### Distill gate task shapes' section")
+    # doubt cycle 2 F1: the section repeats more than the two fences (scope sentence, two "create when" triggers, two chain-tail lines), and a
+    # copy that says the opposite (Leave chain_tail_task_id unchanged; create when remediation_history is empty; a standard-BUILD-only scope)
+    # passed the fence check alone. The section is pinned block by block, in BOTH directions: every block of the section must be one of the
+    # seven expected blocks and every expected block must be present once, so a fence, paragraph or sentence added to verify-dispatch.md alone
+    # fails too; and the standard graph's own wording that the copies mirror (the trigger bullets, the two chain-tail lines) is pinned there.
+    section = re.search(r"^### Distill gate task shapes\s*\n(.*?)(?=^#{1,3} |\Z)", vd, re.M | re.S)
+    learn_tail = "Set `chain_tail_task_id = learn_distill_task_id`. After `learn-distiller` completes, append `learn_distilled` to the event log."
+    skill_tail_head = "Set `chain_tail_task_id = skill_distill_task_id`."
+    if len(shapes) == 2:
+        expected_blocks = [
+            "A `fast_path` BUILD or a DEBUG workflow does not load `build-graph-standard.md`; these are its `#### Learn-Distill Gate` and `#### Skill-Distill Gate` "
+            "task shapes and `chain_tail_task_id` rule. Checks, eligibility and outcomes: `references/fast-path.md`. The Skill-Distill candidate has the highest "
+            "`distinct_workflows`, ties broken by earliest `first_seen`. `chain_tail_task_id` starts as `verifier_task_id`.",
+            "Learn-Distill task (create when `remediation_history` is non-empty):",
+            "```text\n" + shapes[0] + "```",
+            learn_tail,
+            "Skill-Distill task (create when the gate check finds an eligible candidate):",
+            "```text\n" + shapes[1] + "```",
+            skill_tail_head + " Handle the `skill-author` outcomes as `references/fast-path.md` (`#### Skill-Distill Gate`) says.",
+        ]
+        got_blocks, buf, in_fence = [], [], False  # blocks are separated by blank lines outside fences
+        for ln in (section.group(1).strip("\n").split("\n") if section else []):
+            if ln.startswith("```"):
+                in_fence = not in_fence
+            if not ln.strip() and not in_fence:
+                if buf:
+                    got_blocks.append("\n".join(buf))
+                    buf = []
+            else:
+                buf.append(ln)
+        if buf:
+            got_blocks.append("\n".join(buf))
+        if got_blocks != expected_blocks:
+            extra = [b[:80] for b in got_blocks if b not in expected_blocks]
+            missing = [b[:80] for b in expected_blocks if b not in got_blocks]
+            problems.append(f"verify-dispatch.md '### Distill gate task shapes' must hold exactly its seven pinned blocks; unexpected {extra!r}, missing {missing!r}"
+                            f"{'' if not (not extra and not missing) else ', blocks out of order or repeated'}")
+    for what, pin in (("the Learn-Distill chain-tail paragraph (twin ae886a9f5381)", learn_tail), ("the Skill-Distill chain-tail sentence", skill_tail_head),
+                      ("the 'Empty' branch", "- Empty → skip `learn-distill` task creation entirely. `chain_tail_task_id` stays unchanged."),
+                      ("the 'Non-empty' branch", "- Non-empty →"),
+                      ("the Skill-Distill 'Zero candidates' branch", "- Zero candidates satisfy both → skip `skill-distill` task creation entirely. `chain_tail_task_id` stays unchanged."),
+                      ("the Skill-Distill 'One or more' branch", "- One or more satisfy both → pick the one with the highest `distinct_workflows` (ties broken by earliest `first_seen`) and create:")):
+        if pin not in std_graph:
+            problems.append(f"build-graph-standard.md lost {what}, which the verify-dispatch.md copy mirrors: {pin[:70]!r}")
     for f, needle in ((ref + "build-graph-fast.md", "`references/verify-dispatch.md → ### Distill gate task shapes`"),
-                      (ref + "debug-workflow.md", "repeated for DEBUG in `verify-dispatch.md`")):
+                      (ref + "debug-workflow.md", "repeated for DEBUG in `references/verify-dispatch.md → ### Distill gate task shapes`, loaded at `integration-verifier` PASS")):
         if needle not in corpus[f]:
             problems.append(f"{f.rsplit('/', 1)[-1]} must send the gate task shapes to verify-dispatch.md ({needle!r})")
     if ref + "verify-dispatch.md" not in {e["file"] for e in readmap["files"] if "BUILD" in e["workflows"] and "DEBUG" in e["workflows"]}:
@@ -1754,7 +1798,10 @@ def test_router_p11_split_wiring_and_content_pins() -> None:
     family = ("PLAN ", "BUILD ", "Fast Path", "Learn-Distill", "Skill-Distill", "doc-syncer", "Distill gate")
     for rel in (ref + "plan-bakeoff.md", ref + "build-graph-standard.md", ref + "build-graph-fast.md", ref + "build-fast-path-escalation.md"):
         own = heads_by_file[rel]
-        foreign = {h for hs in heads_by_file.values() for h in hs if h.startswith(family) and h not in own}
+        # doubt cycle 2 hunter LOW: the family prefix list missed a plan-workflow.md heading outside it (the Intent Interview Gate, the inline
+        # brainstorming handoff), so plan-bakeoff.md (the one fragment that stayed beside a PLAN file) also checks every plan-workflow.md heading
+        stayed = heads_by_file[ref + "plan-workflow.md"] if rel == ref + "plan-bakeoff.md" else set()
+        foreign = {h for hs in heads_by_file.values() for h in hs if (h.startswith(family) or h in stayed) and h not in own}
         for h in sorted(foreign, key=len, reverse=True):
             homes = [r.rsplit("/", 1)[-1] for r, hs in heads_by_file.items() if h in hs and r != rel]
             for m in re.finditer(r"#{2,4} " + re.escape(h) + r"(?![\w-])", corpus[rel]):
@@ -1768,6 +1815,15 @@ def test_router_p11_split_wiring_and_content_pins() -> None:
     esc = corpus[ref + "build-fast-path-escalation.md"]
     if "build-workflow.md" in esc or "Chain Execution Loop" not in esc:
         problems.append("build-fast-path-escalation.md must cite SKILL.md's Chain Execution Loop (parallel dispatch and merged findings summary), not build-workflow.md")
+    # doubt cycle 2 hunter MED-B / verifier A3: fast-path.md's Skill-Distill Gate is also the DEBUG gate (debug-workflow.md and verify-dispatch.md depend
+    # on it), and its merged-findings sentence cites the Chain Execution Loop instead of the retired 'standard BUILD section 5 pattern'
+    fp = re.sub(r"\s+", " ", corpus[ref + "fast-path.md"])
+    for need in ("`skill-distill` is dispatched at the end of BUILD (standard and fast-path) and DEBUG ONLY when the skill-candidate ledger",
+                 "(as in `SKILL.md` Chain Execution Loop step 5)"):
+        if need not in fp:
+            problems.append(f"fast-path.md lost: {need!r}")
+    if "BUILD §5" in fp or "BUILD (standard and fast-path) ONLY" in fp:
+        problems.append("fast-path.md still carries a retired phrase ('BUILD §5' or 'BUILD (standard and fast-path) ONLY')")
     # the Cursor router and the protocol stubs must ORDER the Read() of each moved shared file (an unqualified pointer is not an instruction)
     for fname, text in (("cursor-router/SKILL.md", cursor), ("router-protocol.md", protocol)):
         for shared_name in ("skill-distill-approval.md", "verifier-handoff.md", "router-protocol-multirepo.md"):

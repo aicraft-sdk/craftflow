@@ -174,17 +174,24 @@ def test_documentation_only_is_a_scope_phrase_not_the_obligation_word() -> None:
     def norm(text: str) -> bool:
         return inv.classify_normative(inv.extract_units(text, K)[0], frozenset())
     note = norm("[NOTE — documentation only, no code implied by this section]: today there are exactly 2 routers.\n")
-    cased = norm("[NOTE — Documentation Only]: background about the two routers.\n")
-    rule = norm("Use only the shared doc.\n")
-    other_keyword = norm("[NOTE — documentation only]: the router must still read it.\n")
+    cased = norm("[NOTE — Documentation Only, No Code implied]: background about the two routers.\n")
+    # P11 remediation 2 (verifier A1): the exemption is the exact scope phrase `documentation only, no code`, not every `documentation only`.
+    # The first control began with an imperative (`Use`), so it stayed normative even if `only` were dropped from KEYWORDS; this one has no
+    # imperative first word and no other keyword, so `only` alone makes it normative.
+    rule = norm("The router reads only the shared doc.\n")
+    bare_phrase = norm("[NOTE — documentation only]: background about the two routers.\n")  # outside the allowed scope: still the obligation word
+    rule_phrase = norm("The router reads the documentation only when the user asks.\n")  # a rule whose object is documentation: still normative
+    cased_bare = norm("[NOTE — Documentation Only]: background about the two routers.\n")
+    other_keyword = norm("[NOTE — documentation only, no code]: the router must still read it.\n")
     near_miss = norm("The documentation is the only source.\n")  # `only` not directly after `documentation`
     baseline = json.loads(BASELINE_JSON.read_text(encoding="utf-8"))
     flags = {e["id"]: e["normative"] for e in baseline["entries"]}
     counts = (sum(flags.values()), len(flags) - sum(flags.values()))
     check("documentation_only_is_a_scope_phrase_not_the_obligation_word",
-          not note and not cased and rule and other_keyword and near_miss and flags["edf4681b29aa"] is False and counts == (1220, 57),
-          f"note={note} cased={cased} rule={rule} other_keyword={other_keyword} near_miss={near_miss} "
-          f"edf4681b29aa={flags.get('edf4681b29aa')} counts={counts}")
+          not note and not cased and rule and bare_phrase and rule_phrase and cased_bare and other_keyword and near_miss
+          and flags["edf4681b29aa"] is False and counts == (1220, 57),
+          f"note={note} cased={cased} rule={rule} bare_phrase={bare_phrase} rule_phrase={rule_phrase} cased_bare={cased_bare} "
+          f"other_keyword={other_keyword} near_miss={near_miss} edf4681b29aa={flags.get('edf4681b29aa')} counts={counts}")
 
 
 def test_allowlist_forces_normative() -> None:

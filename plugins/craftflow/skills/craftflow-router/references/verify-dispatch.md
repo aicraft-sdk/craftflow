@@ -141,7 +141,7 @@ BUILD work.
 
 ### Distill gate task shapes
 
-For the paths that do not load `build-graph-standard.md` (a `fast_path` BUILD, a DEBUG workflow), these repeat the two gate task shapes and the `chain_tail_task_id` rule of its `#### Learn-Distill Gate` and `#### Skill-Distill Gate`. The gate checks, eligibility rules and outcomes are in `references/fast-path.md` (`#### Learn-Distill Gate`, `#### Skill-Distill Gate`); the Skill-Distill candidate is the one with the highest `distinct_workflows`, ties broken by earliest `first_seen`. `chain_tail_task_id` starts as `verifier_task_id` (no doc-sync step).
+A `fast_path` BUILD or a DEBUG workflow does not load `build-graph-standard.md`; these are its `#### Learn-Distill Gate` and `#### Skill-Distill Gate` task shapes and `chain_tail_task_id` rule. Checks, eligibility and outcomes: `references/fast-path.md`. The Skill-Distill candidate has the highest `distinct_workflows`, ties broken by earliest `first_seen`. `chain_tail_task_id` starts as `verifier_task_id`.
 
 Learn-Distill task (create when `remediation_history` is non-empty):
 

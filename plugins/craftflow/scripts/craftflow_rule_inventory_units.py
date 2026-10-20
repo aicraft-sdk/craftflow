@@ -16,9 +16,10 @@ from typing import FrozenSet, List, Optional, Set, Tuple
 import craftflow_router_corpus as cor
 from craftflow_rule_inventory_frontmatter import keys_unit_text, parse_strict
 
-# `documentation only` scopes a note ("[NOTE - documentation only, no code implied]"); it is not the obligation word `only`
-# (P11 rebaseline of the Future Third Router note, edf4681b29aa: the one baseline unit that carries the phrase).
-KEYWORDS = re.compile(r"(?i)\b(never|must|do not|always|(?<!documentation )only|required|requires|shall|fail closed)\b|MUST|MANDATORY|\[EASY TO MISS")
+# `documentation only, no code` scopes a note ("[NOTE - documentation only, no code implied]"); it is not the obligation word `only`
+# (P11 rebaseline of the Future Third Router note, edf4681b29aa: the one baseline unit that carries the phrase). Only that exact scope
+# phrase is exempt: a bare `documentation only` or `the documentation only when ...` still reads as the obligation word.
+KEYWORDS = re.compile(r"(?i)\b(never|must|do not|always|(?:(?<!documentation )|(?<=documentation )(?!only, no code\b))only|required|requires|shall|fail closed)\b|MUST|MANDATORY|\[EASY TO MISS")
 VERBS3 = re.compile(r"(?i)\b(skips?|stops?|blocks?|denies|fails?|advances?|halts?|aborts?|should|anything (?:other than|else)"
                     r"|authoritative)\b|\+=|→|->")
 IMPERATIVES = frozenset(

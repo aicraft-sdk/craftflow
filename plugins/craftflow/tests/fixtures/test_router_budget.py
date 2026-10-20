@@ -994,7 +994,8 @@ def test_adr_discloses_the_rem_fix_4_findings() -> None:
           # the P10 remediation (pointer rows for the two fences, fifteen xref rows) makes it 584 / 425
           # P11's drafted rows (the protocol, build and plan splits) make it 580 / 421
           # P11 remediation (re-derived): 580 / 421 becomes 580 / 418
-          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (580, 418),
+          # P11 remediation 2 (re-derived): the two fast-path.md xref rows add two vanishing ids: 580 / 418 becomes 582 / 420
+          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (582, 420),
           f"missing={[n for n in need if n not in text]}")
 
 

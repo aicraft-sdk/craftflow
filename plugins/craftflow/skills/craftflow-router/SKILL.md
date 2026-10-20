@@ -145,7 +145,7 @@ JUST_GO:
 - Read `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Session Settings`.
 - If `AUTO_PROCEED: true`, set `JUST_GO=true`.
 - While `JUST_GO=true`, auto-default all non-REVERT AskUserQuestion gates to the recommended option and log the choice in `## Decisions`.
-- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (`skill-distill-approval.md`, was § 8) is carved out as a de
+- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (`_shared/skill-distill-approval.md`, was § 8) is carved out as a de
   facto REVERT-class gate under JUST_GO — see its own "JUST_GO carve-out" for the fail-closed
   default (`Defer`, never `Approve`).
 

@@ -28,7 +28,7 @@ TaskCreate({
 TaskUpdate({ taskId: verifier_task_id, addBlockedBy: [reviewer_task_id] })
 ```
 
-DEBUG has no doc-sync step, so `chain_tail_task_id` starts as `verifier_task_id` directly (unlike BUILD, where it starts as `doc_sync_task_id`). Apply the SAME Learn-Distill Gate and Skill-Distill Gate documented in `build-graph-standard.md` (identical gate checks, identical `phase:learn-distill` / `phase:skill-distill` `TaskCreate` shape, identical `chain_tail_task_id` update rule; repeated for DEBUG in `verify-dispatch.md`) before creating Memory Update:
+DEBUG has no doc-sync step, so `chain_tail_task_id` starts as `verifier_task_id`. Apply the SAME Learn-Distill Gate and Skill-Distill Gate documented in `build-graph-standard.md` (identical checks, `phase:learn-distill` / `phase:skill-distill` `TaskCreate` shapes and `chain_tail_task_id` rule; repeated for DEBUG in `references/verify-dispatch.md → ### Distill gate task shapes`, loaded at `integration-verifier` PASS) before creating Memory Update:
 
 - `references/fast-path.md`'s own Learn-Distill Gate section already states `learn-distill` is dispatched "at the end of BUILD (standard and fast-path) and DEBUG workflows" — DEBUG was already in scope for that gate by design, it simply had no `TaskCreate` to back it, exactly like BUILD's dead-wiring gap.
 - The Skill-Distill Gate's eligibility check (`craftflow_skill_ledger.py --query`) is workflow-type agnostic — it reads a project-wide ledger, not anything DEBUG-specific — so there is no reason to exclude DEBUG from it once BUILD has it.
