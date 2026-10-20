@@ -1380,7 +1380,7 @@ def test_router_p10_kernel_relocation_wiring() -> None:
         ("Task Metadata Contract before a child TaskCreate", ("Task Metadata Contract", "references/workflow-start.md", "TaskCreate")),
         ("pending work resumes through resume.md", ("Pending work to resume", "references/resume.md")),
         ("chain loop step 6 validate output",("validate output (§ 8)", "- capture memory payload immediately")),
-        ("chain loop steps 5a and 5b", ("5a", "5b", "references/remediation-and-research.md", "references/plan-workflow.md")),
+        ("chain loop steps 5a and 5b", ("5a", "5b", "references/remediation-and-research.md", "references/plan-bakeoff.md")),
         ("PLAN-only Intent Interview Gate", ("Intent Interview Gate", "PLAN only", "references/plan-workflow.md")),
     )
     for label, needles in triggers:
@@ -1397,8 +1397,11 @@ def test_router_p10_kernel_relocation_wiring() -> None:
     if not five_a or "Wait for BOTH" not in five_a.group(0) or "PLAN" not in five_a.group(0) or "DEBUG" not in five_a.group(0):
         fail(name, "remediation-and-research.md must hold step 5a (research parallel dispatch, wait for BOTH) and name PLAN and DEBUG")
         return
-    if re.search(r"^5a\. If both", pw, re.M) or not re.search(r"^5b\. If N-1 `plan-bakeoff-candidate-\*`", pw, re.M):
-        fail(name, "plan-workflow.md must keep step 5b (bake-off) and no longer hold step 5a")
+    # P11: step 5b moved with the bake-off to references/plan-bakeoff.md; plan-workflow.md holds neither 5a nor 5b.
+    pb = corpus[ref + "plan-bakeoff.md"]
+    if re.search(r"^5a\. If both", pw + pb, re.M) or re.search(r"^5b\. If N-1", pw, re.M) \
+            or not re.search(r"^5b\. If N-1 `plan-bakeoff-candidate-\*`", pb, re.M):
+        fail(name, "plan-bakeoff.md must hold step 5b (bake-off) and neither it nor plan-workflow.md may hold step 5a")
         return
     readmap = json.loads((PLUGIN_ROOT / "config" / "router-readmap.json").read_text(encoding="utf-8"))
     rr_rows = [e for e in readmap["files"] if e["file"].endswith("references/remediation-and-research.md")]
@@ -1451,17 +1454,23 @@ def test_router_corpus_has_no_stale_moved_section_pointers() -> None:
     kernel = corpus["skills/craftflow-router/SKILL.md"]
     bw, fp, hsc = corpus[ref + "build-workflow.md"], corpus[ref + "fast-path.md"], corpus[ref + "harness-self-checks.md"]
     pw, ttf = corpus[ref + "plan-workflow.md"], corpus[ref + "task-tool-fallback.md"]
+    # P11: the BUILD graphs left build-workflow.md (the Clean-State Check paragraph is in both graph files) and the bake-off body
+    # left plan-workflow.md (its fallback and contract-override pointers sit in plan-bakeoff.md), so those checks read the new files.
+    bg_std, bg_fast = corpus[ref + "build-graph-standard.md"], corpus[ref + "build-graph-fast.md"]
+    pw_all = pw + "\n\n" + corpus[ref + "plan-bakeoff.md"]
     checks = [
-        need("kernel skill-author note", kernel, r"`skill-author` is deliberately NOT", "references/build-workflow.md"),
+        need("kernel skill-author note", kernel, r"`skill-author` is deliberately NOT", "build-graph-standard.md"),
         need("kernel policy table worktree_merge", kernel, r"\| `worktree_merge` \|.*\| worktree\.md \|$", "worktree.md"),
-        need("build-workflow Skill-Distill approval", bw, r"apply the Skill-Distill Approval Flow", "post-agent-validation.md"),
+        need("build-graph-standard Skill-Distill approval", corpus[ref + "build-graph-standard.md"], r"apply the Skill-Distill Approval Flow",
+             "_shared/skill-distill-approval.md"),
         gone("build-workflow clean-state check", bw, r"`SKILL\.md`'s `?Worktree Isolation"),
-        need("build-workflow clean-state check", bw, r"no worktree exists", "references/worktree.md"),
-        need("fast-path Skill-Distill approval", fp, r"apply the Skill-Distill Approval Flow", "post-agent-validation.md"),
+        need("build-graph-standard clean-state check", bg_std, r"no worktree exists", "references/worktree.md"),
+        need("build-graph-fast clean-state check", bg_fast, r"no worktree exists", "references/worktree.md"),
+        need("fast-path Skill-Distill approval", fp, r"apply the Skill-Distill Approval Flow", "_shared/skill-distill-approval.md"),
         need("harness-self-checks contract overrides", hsc, r"verdict-extraction rules in\s+`SKILL.md` § 8", "post-agent-validation.md"),
         need("plan-workflow parent creation", pw, r"`SKILL\.md § 6`'s Parent workflow creation", "workflow-start.md"),
-        need("plan-workflow task-tool fallback rule", pw, r"`SKILL\.md § (6|7)`'s (fallback|existing)", "task-tool-fallback.md"),
-        need("plan-workflow contract overrides", pw, r"`SKILL\.md § 8`", "post-agent-validation.md"),
+        need("plan-workflow and plan-bakeoff task-tool fallback rule", pw_all, r"`SKILL\.md § (6|7)`'s (fallback|existing)", "task-tool-fallback.md"),
+        need("plan-workflow and plan-bakeoff contract overrides", pw_all, r"`SKILL\.md § 8`", "post-agent-validation.md"),
         gone("plan-workflow chain step 5/5a", pw, r"`SKILL\.md § 12` step 5/5a"),
         # R2 (doubt cycle 2): "structured agent results" is bullet 2 of `### After every agent completion` step 5 in
         # post-agent-validation.md, not chain loop step 5a (research dispatch) in remediation-and-research.md.
@@ -1472,7 +1481,7 @@ def test_router_corpus_has_no_stale_moved_section_pointers() -> None:
         need("task-tool-fallback section map (post-agent)", ttf, r"^Each section was moved verbatim", "references/post-agent-validation.md"),
         need("task-tool-fallback section map (workflow-start)", ttf, r"^Each section was moved verbatim", "references/workflow-start.md"),
         need("task-tool-fallback stale-true coverage list", ttf, r"Stale `true` capability", "references/verify-dispatch.md"),
-        need("router-protocol Parent workflow creation", corpus["skills/_shared/router-protocol.md"],
+        need("router-protocol-multirepo Parent workflow creation", corpus["skills/_shared/router-protocol-multirepo.md"],
              r"at\s+\*\*Parent workflow creation\*\* \(`## 6\.`", "workflow-start.md"),
     ]
     problems = [c for c in checks if c]
@@ -1574,6 +1583,146 @@ def test_router_p10_moved_fragments_are_content_pinned() -> None:
     deny_paras = [p for p in re.split(r"\n\s*\n", kernel) if "`state-read-compaction`" in p]
     if not deny_paras or not all("references/memory-load-workspace.md" in p and "Memory Load" in p for p in deny_paras):
         problems.append("the kernel paragraph naming the `state-read-compaction` deny must send it to references/memory-load-workspace.md")
+    if problems:
+        fail(name, "; ".join(problems))
+        return
+    ok(name)
+
+
+def test_router_p11_split_wiring_and_content_pins() -> None:
+    # P11 wiring proof: each moved block sits once in its planned file; the protocol and the build/plan workflow files keep a plain
+    # pointer; the qualify decision stays in plan-workflow.md so a plan that does not qualify never reads plan-bakeoff.md; the Cursor
+    # router names the new _shared files; the read map carries a trigger for each new file; and the moved fragments are content-pinned
+    # (a fenced block or a bullet that moves whole has no inventory identity of its own once reworded, so a weakened rule in the new
+    # file would pass the location checks alone).
+    name = "router/p11-split-wiring-and-content-pins"
+    corpus = router_corpus.read_corpus(PLUGIN_ROOT)
+    ref = "skills/craftflow-router/references/"
+    shared = "skills/_shared/"
+    protocol = corpus[shared + "router-protocol.md"]
+    problems: "list[str]" = []
+    homes = (
+        ("## Skill-Distill Approval Flow", shared + "skill-distill-approval.md"),
+        ("## Previous Agent Findings Handoff", shared + "verifier-handoff.md"),
+        ("## Verifier Findings Handoff", shared + "verifier-handoff.md"),
+        ("### BUILD task graph", ref + "build-graph-standard.md"), ("#### Learn-Distill Gate", ref + "build-graph-standard.md"),
+        ("#### Skill-Distill Gate", ref + "build-graph-standard.md"), ("### doc-syncer SKIPPED state", ref + "build-graph-standard.md"),
+        ("### BUILD task graph — fast path", ref + "build-graph-fast.md"), ("### Fast Path Escalation", ref + "build-fast-path-escalation.md"),
+        ("### PLAN bake-off fan-out", ref + "plan-bakeoff.md"), ("### PLAN judge dispatch", ref + "plan-bakeoff.md"),
+        ("### PLAN post-judge validation", ref + "plan-bakeoff.md"), ("## Chain loop step 5b (PLAN)", ref + "plan-bakeoff.md"),
+    )
+    allowed_extra = {  # headings the kernel and fast-path.md legitimately repeat (pointer heading; the fast-path gate notes)
+        "### BUILD task graph": {"skills/craftflow-router/SKILL.md"},
+        "#### Learn-Distill Gate": {ref + "fast-path.md"},
+        "#### Skill-Distill Gate": {ref + "fast-path.md"},
+    }
+    for heading, home in homes:
+        found = [rel for rel, text in corpus.items() if re.search(r"^" + re.escape(heading) + r"\s*$", text, re.M)]
+        if home not in found or set(found) - {home} - allowed_extra.get(heading, set()):
+            problems.append(f"{heading!r} must live in {home} and nowhere else but {sorted(allowed_extra.get(heading, set()))}; found in {found}")
+    for needle in ("skills/_shared/router-protocol-multirepo.md", "skills/_shared/verifier-handoff.md", "skills/_shared/skill-distill-approval.md"):
+        if needle not in protocol:
+            problems.append(f"router-protocol.md lost its pointer to {needle}")
+    for stale in ("craftflow_resolve_workspace_root.py", "craftflow_skill_promote.py", "Build `## Previous Agent Findings` exactly"):
+        if stale in protocol:
+            problems.append(f"router-protocol.md still carries moved text: {stale!r}")
+    bw, pw = corpus[ref + "build-workflow.md"], corpus[ref + "plan-workflow.md"]
+    if "### BUILD preparation" not in bw or "build-graph-standard.md" not in bw or "build-fast-path-escalation.md" not in bw:
+        problems.append("build-workflow.md must keep BUILD preparation and point at the graph and escalation files")
+    for stale in ("TaskCreate({\n  subject: \"CRAFTFLOW component-builder", "#### Skill-Distill Gate", "Agents skipped:"):
+        if stale in bw:
+            problems.append(f"build-workflow.md still carries moved text: {stale!r}")
+    for need in ("### PLAN qualify branch", "IF NOT (PLAN_MODE == 'decision_rfc' OR VERIFICATION_RIGOR == 'critical_path'):",
+                 "mv 'docs/plans/{plan_file_stem}-candidate-inherit.md' 'docs/plans/{plan_file_stem}-plan.md'", "ELSE:",
+                 "Persist bakeoff_triggered = true", "references/plan-bakeoff.md",
+                 "only when `PLAN_MODE == 'decision_rfc' OR VERIFICATION_RIGOR == 'critical_path'`"):
+        if need not in pw:
+            problems.append(f"plan-workflow.md lost the qualify decision text: {need!r}")
+    for stale in ("### PLAN bake-off fan-out\n", "valid_count = len(results.bakeoff)", "ROUTER-OWNED CLEANUP"):
+        if stale in pw:
+            problems.append(f"plan-workflow.md still carries bake-off body text: {stale!r}")
+    cursor = (PLUGIN_ROOT / "skills" / "cursor-router" / "SKILL.md").read_text(encoding="utf-8")
+    for needle in ("_shared/router-protocol-multirepo.md", "_shared/verifier-handoff.md", "_shared/skill-distill-approval.md"):
+        if needle not in cursor:
+            problems.append(f"cursor-router/SKILL.md does not name {needle}")
+    if cursor.count("skills/_shared/router-protocol.md") < 2:
+        problems.append("cursor-router/SKILL.md must keep at least two references to skills/_shared/router-protocol.md")
+    readmap = json.loads((PLUGIN_ROOT / "config" / "router-readmap.json").read_text(encoding="utf-8"))
+    rows = {e["file"]: e for e in readmap["files"]}
+    want = {
+        shared + "router-protocol-multirepo.md": ("stage", "TOPLEVEL_EXIT != 0"),
+        shared + "skill-distill-approval.md": ("stage", "skill-author COMPLETE"),
+        shared + "verifier-handoff.md": ("stage", "before integration-verifier dispatch"),
+        ref + "build-graph-standard.md": ("start", "build_mode standard"),
+        ref + "build-graph-fast.md": ("start", "build_mode fast_path"),
+        ref + "build-fast-path-escalation.md": ("stage", "fast-path verifier FAIL"),
+        ref + "plan-bakeoff.md": ("stage", "bake-off qualifies"),
+    }
+    for f, (cls, trig) in want.items():
+        row = rows.get(f)
+        if not row or row["class"] != cls or trig not in row["trigger"]:
+            problems.append(f"read map row for {f} must be class {cls} with a trigger naming {trig!r}: {row}")
+    kernel = corpus["skills/craftflow-router/SKILL.md"]
+    prose = re.sub(r"<!-- readmap:begin -->.*?<!-- readmap:end -->", "", kernel, flags=re.S)
+    for needle in ("references/build-graph-standard.md", "references/build-graph-fast.md", "references/build-fast-path-escalation.md", "references/plan-bakeoff.md"):
+        if needle not in prose:
+            problems.append(f"the kernel prose outside the Read Map does not name {needle}")
+    pins = {
+        shared + "router-protocol-multirepo.md": (
+            "**If `RESOLVE_EXIT != 0`** (the script itself could not complete the scan, e.g. cwd unreadable): do not parse `$RESOLVE_RESULT`. Treat identically to `NO_REPO_FOUND` below.",
+            "this `AskUserQuestion` gate is NEVER auto-defaulted under `JUST_GO=true`",
+            "never splice request text into a shell string",
+            "The script never mutates git or filesystem state",
+            "This capture is explicitly UNREACHABLE when `RESOLVE_EXIT != 0`",
+        ),
+        shared + "skill-distill-approval.md": (
+            "- **Never** auto-select **Approve** or **Approve + register in SKILL_HINTS** — both require an explicit human answer regardless of `AUTO_PROCEED`.",
+            "Otherwise (no router-derivable reject reason), the fail-closed default is **Defer**.",
+            "Never guess, never fall through to a default on an ambiguous reply",
+            "On non-zero exit, do not advance the workflow",
+        ),
+        shared + "verifier-handoff.md": (
+            "Never invoke verifier without that section when review/hunt already ran.",
+            "**fast-path exception:** When `build_mode == \"fast_path\"`, omit `## Previous Agent Findings` from the verifier prompt entirely",
+            "DEBUG skips hunter findings.",
+        ),
+        ref + "build-graph-standard.md": (
+            "`distinct_workflows >= 2` (the same threshold `gate_eligible()` applies internally",
+            "`STATUS: SKIPPED` → passing state — proceed straight to Memory Update, no `AskUserQuestion`.",
+            "The router must not block Memory Update when the SKIPPED contract is present and `SKIP_REASON` is non-empty.",
+        ),
+        ref + "build-graph-fast.md": (
+            "Agents skipped: code-reviewer, silent-failure-hunter, doc-syncer.",
+            "**Verifier FAIL on fast path:** Do NOT advance phase cursor.",
+        ),
+        ref + "build-fast-path-escalation.md": (
+            "1. Update artifact: build_mode → \"fast_path_escalated\", fast_path_escalated → true",
+            "**Doc-syncer on escalated path:** SKIP.",
+        ),
+        ref + "plan-bakeoff.md": (
+            "valid_count = len(results.bakeoff)  # includes the scout if it's still valid",
+            "**ROUTER-OWNED CLEANUP.**",
+            "IF valid_count == 0: abandon the bake-off. Dispatch ONE fresh planner task, model: inherit,",
+            "5b. If N-1 `plan-bakeoff-candidate-*` tasks are all runnable in the same round (PLAN workflow,",
+        ),
+    }
+    for f, items in pins.items():
+        flat_text = re.sub(r"\s+", " ", corpus[f])
+        for pin in items:
+            if re.sub(r"\s+", " ", pin) not in flat_text:
+                problems.append(f"{f.rsplit('/', 1)[-1]} lost: {pin[:90]!r}")
+    # Units that sat in BOTH BUILD graphs at the baseline (identical text) are copied into both graph files. The inventory narrows one id the
+    # same way for every occurrence, so the standard copy is the one it checks; the fast-path copy is pinned here, and both must stay identical.
+    twins = (
+        "**Feature Backlog (advisory):** before creating the Memory Update task below, when `integration-verifier` returned PASS on the final phase, run the complete + VCR calls per `references/harness-self-checks.md § Feature Backlog`.",
+        "**Clean-State Check (advisory):** when `worktree_mode != \"auto_created\"` (no worktree exists — `references/worktree.md` covers the worktree-exists case) and `integration-verifier` returned PASS on the final phase, also run the clean-state check per `references/harness-self-checks.md § Clean-State Check`",
+        "subject: \"CRAFTFLOW Memory Update: Persist workflow learnings\"",
+        "Follow references/memory-finalize.md § Memory Update task instructions",
+    )
+    for pin in twins:
+        for f in (ref + "build-graph-standard.md", ref + "build-graph-fast.md"):
+            if re.sub(r"\s+", " ", pin) not in re.sub(r"\s+", " ", corpus[f]):
+                problems.append(f"{f.rsplit('/', 1)[-1]} lost the twin unit: {pin[:80]!r}")
     if problems:
         fail(name, "; ".join(problems))
         return
@@ -1970,12 +2119,19 @@ def test_worktree_isolation_reuses_project_root_no_duplicate_resolution() -> Non
     if not shared_path.exists():
         fail(name, f"shared router-protocol.md not found at {shared_path}")
         return
-    shared_content = shared_path.read_text(encoding="utf-8")
-    if content.count("craftflow_resolve_workspace_root.py") != 0:
-        fail(name, f"expected 0 references to the resolver script in SKILL.md (fully delegated to the shared doc), found {content.count('craftflow_resolve_workspace_root.py')}")
+    # P11 retarget (K): step 1a moved to _shared/router-protocol-multirepo.md, so the single resolver call site sits there and
+    # the protocol keeps only the pointer; together still exactly one real resolution call site.
+    multirepo_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol-multirepo.md"
+    if not multirepo_path.exists():
+        fail(name, f"router-protocol-multirepo.md not found at {multirepo_path}")
+        return
+    proto_content = shared_path.read_text(encoding="utf-8")
+    shared_content = multirepo_path.read_text(encoding="utf-8")
+    if content.count("craftflow_resolve_workspace_root.py") != 0 or proto_content.count("craftflow_resolve_workspace_root.py") != 0:
+        fail(name, "expected 0 references to the resolver script in SKILL.md and in router-protocol.md (delegated to router-protocol-multirepo.md)")
         return
     if shared_content.count("craftflow_resolve_workspace_root.py") != 1:
-        fail(name, f"expected exactly 1 reference to the resolver script in the shared doc, found {shared_content.count('craftflow_resolve_workspace_root.py')}")
+        fail(name, f"expected exactly 1 reference to the resolver script in router-protocol-multirepo.md, found {shared_content.count('craftflow_resolve_workspace_root.py')}")
         return
     # P10 retarget (K): Worktree Isolation steps 1-3 moved from SKILL.md to references/build-workflow.md, so the heading is
     # unique corpus-wide and the section is read without a file hint (it follows its text if a later phase moves it again).
@@ -2784,7 +2940,11 @@ def test_router_snippets_avoid_llm_quoted_requests_and_eval() -> None:
     # is asserted there (and in the shared doc, each checked separately); the kernel must not carry a quoted-request form either.
     start_md = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "workflow-start.md").read_text(encoding="utf-8")
     shared = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md").read_text(encoding="utf-8")
-    for label, text, needs_flag in (("SKILL.md", skill, False), ("workflow-start.md", start_md, True), ("router-protocol.md", shared, True)):
+    # P11 retarget (K): step 1a moved to _shared/router-protocol-multirepo.md, where the --request-file mint now sits; the protocol
+    # keeps only the pointer and must not carry a quoted request form either.
+    multirepo = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol-multirepo.md").read_text(encoding="utf-8")
+    for label, text, needs_flag in (("SKILL.md", skill, False), ("workflow-start.md", start_md, True), ("router-protocol.md", shared, False),
+                                    ("router-protocol-multirepo.md", multirepo, True)):
         if "USER_REQUEST_SHELL_ESCAPED" in text:
             fail(name, f"{label} still passes the request as an LLM-quoted shell string")
             return
@@ -3149,9 +3309,11 @@ def test_router_request_paths_are_write_guard_safe() -> None:
             fail(name, f"session scratchpad request path {scratch} is denied by the Write guard")
             return
     skill = _router_corpus_text()
-    shared = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md").read_text(encoding="utf-8")
-    if "TMPDIR" in shared or "/tmp/cf-request" in shared or "scratchpad" not in shared:
-        fail(name, "router-protocol 1a must use the session scratchpad dir, not TMPDIR or /tmp")
+    # P11 retarget (K): step 1a moved to _shared/router-protocol-multirepo.md; the protocol keeps the pointer (no temp-path text either)
+    shared = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol-multirepo.md").read_text(encoding="utf-8")
+    proto = (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md").read_text(encoding="utf-8")
+    if "TMPDIR" in shared or "/tmp/cf-request" in shared or "scratchpad" not in shared or "TMPDIR" in proto or "/tmp/cf-request" in proto:
+        fail(name, "router-protocol-multirepo 1a must use the session scratchpad dir, not TMPDIR or /tmp")
         return
     if ".router-request-{session_id}.txt" not in skill or "--session-id" not in skill:
         fail(name, "SKILL.md must use a per-session request file named via craftflow_workflow_id.py --session-id")
@@ -3254,13 +3416,24 @@ def test_worktree_isolation_resolver_gated_on_toplevel_failure() -> None:
         fail(name, f"shared router-protocol.md not found at {shared_path}")
         return
     skill_content = skill_path.read_text(encoding="utf-8")
+    # P11 retarget (K): the resolver reference moved with step 1a to _shared/router-protocol-multirepo.md. The protocol must keep
+    # the TOPLEVEL_EXIT != 0 gate and a pointer that names the file; the resolver text must sit only in the file behind that gate.
     shared_content = shared_path.read_text(encoding="utf-8")
+    multirepo_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol-multirepo.md"
+    if not multirepo_path.exists():
+        fail(name, f"router-protocol-multirepo.md not found at {multirepo_path}")
+        return
+    multirepo_content = multirepo_path.read_text(encoding="utf-8")
 
     shared_section_start = shared_content.find("## Resolve Project Root")
     if shared_section_start == -1:
         fail(name, "'## Resolve Project Root' section not found in shared doc")
         return
-    shared_section = shared_content[shared_section_start:]
+    if "craftflow_resolve_workspace_root.py" in shared_content or "skills/_shared/router-protocol-multirepo.md" not in shared_content[shared_section_start:]:
+        fail(name, "router-protocol.md must point at router-protocol-multirepo.md from step 1a and not inline the resolver call")
+        return
+    # gate (protocol list) first, then the file the pointer sends the router to
+    shared_section = shared_content[shared_section_start:] + "\n" + multirepo_content
     gate_idx = shared_section.find("TOPLEVEL_EXIT != 0")
     resolver_idx = shared_section.find("craftflow_resolve_workspace_root.py")
     if gate_idx == -1:
@@ -17120,12 +17293,29 @@ def test_craftflow_router_shared_protocol_extraction_no_stale_reembed() -> None:
         "Line 1: `CONTRACT {\"s\":\"...\",\"b\":...,\"cr\":...}`",
         "`## Fix Verification: LOAD_BEARING|NOT_LOAD_BEARING|SIBLING_FOUND`",
     )
+    # P11 retarget (K): three blocks left the protocol for their own _shared files; each marker must sit in its new file and be
+    # absent from both SKILL.md and the protocol (no stale re-embedded copy). Every other marker stays in the protocol.
+    shared_dir = PLUGIN_ROOT / "skills" / "_shared"
+    moved_to = {}
     for marker in moved_markers:
+        if "RESOLVE_OUTCOME=" in marker or "WORKSPACE_WRITABLE_PATHS_JSON=" in marker or "NEVER auto-defaulted" in marker:
+            moved_to[marker] = "router-protocol-multirepo.md"
+        elif "craftflow_skill_promote.py" in marker or "at least doubles" in marker:
+            moved_to[marker] = "skill-distill-approval.md"
+        elif "### Code Reviewer" in marker or "hunter critical issues" in marker or "omit `## Previous Agent Findings`" in marker:
+            moved_to[marker] = "verifier-handoff.md"
+        else:
+            moved_to[marker] = "router-protocol.md"
+    for marker in moved_markers:
+        home = moved_to[marker]
         if marker in skill_content:
             fail(name, f"SKILL.md still contains moved literal content (stale re-embedded copy): {marker!r}")
             return
-        if marker not in shared_content:
-            fail(name, f"shared doc missing expected extracted content: {marker!r}")
+        if marker not in (shared_dir / home).read_text(encoding="utf-8"):
+            fail(name, f"{home} missing expected extracted content: {marker!r}")
+            return
+        if home != "router-protocol.md" and marker in shared_content:
+            fail(name, f"router-protocol.md still holds content that moved to {home} (stale re-embedded copy): {marker!r}")
             return
     ok(name)
 
@@ -17230,12 +17420,19 @@ def test_cursor_router_shared_protocol_extraction_batch1_no_stale_reembed() -> N
         "### Code Reviewer\n**Verdict:** {Approve|Changes Requested}",
         "{hunter critical issues or \"None / not in this workflow\"}",
     )
+    # P11 retarget (K): the Previous Agent Findings template block moved to _shared/verifier-handoff.md; the Memory File Required
+    # Sections table row stays in the protocol. A marker must be in its own home and not in the protocol once it moved.
+    handoff_content = (PLUGIN_ROOT / "skills" / "_shared" / "verifier-handoff.md").read_text(encoding="utf-8")
     for marker in moved_markers:
+        in_handoff = "Code Reviewer" in marker or "hunter critical issues" in marker
         if marker in skill_content:
             fail(name, f"cursor-router SKILL.md still contains moved literal content (stale re-embedded copy): {marker!r}")
             return
-        if marker not in shared_content:
+        if marker not in (handoff_content if in_handoff else shared_content):
             fail(name, f"shared doc missing expected extracted content: {marker!r}")
+            return
+        if in_handoff and marker in shared_content:
+            fail(name, f"router-protocol.md still holds the findings handoff block that moved to verifier-handoff.md: {marker!r}")
             return
     ok(name)
 
@@ -17416,12 +17613,17 @@ _MEMORY_FINALIZE_DOC_EXPECTED_COUNTS = {
     "memory-finalize.md": 1,
     "plan-workflow.md": 0,
     "build-workflow.md": 0,
+    "build-graph-standard.md": 0,
+    "build-graph-fast.md": 0,
     "debug-workflow.md": 0,
     "review-workflow.md": 0,
 }
+# P11: the two BUILD Memory Update pointer descriptions moved with the task graphs (standard 1, fast path 1); the sum is still 2.
 _MEMORY_UPDATE_POINTER_COUNTS = {
     "plan-workflow.md": 1,
-    "build-workflow.md": 2,
+    "build-workflow.md": 0,
+    "build-graph-standard.md": 1,
+    "build-graph-fast.md": 1,
     "debug-workflow.md": 1,
     "review-workflow.md": 1,
 }
@@ -17857,7 +18059,15 @@ def test_router_documents_skill_distill_approval_flow() -> None:
         fail(name, f"shared router-protocol.md not found at {shared_path}")
         return
     skill_content = skill_path.read_text(encoding="utf-8")
+    # P11 retarget (K): the flow moved to _shared/skill-distill-approval.md; the protocol keeps a pointer paragraph only.
+    shared_path = PLUGIN_ROOT / "skills" / "_shared" / "skill-distill-approval.md"
+    if not shared_path.exists():
+        fail(name, f"skill-distill-approval.md not found at {shared_path}")
+        return
     shared_content = shared_path.read_text(encoding="utf-8")
+    if "craftflow_skill_promote.py" in (PLUGIN_ROOT / "skills" / "_shared" / "router-protocol.md").read_text(encoding="utf-8"):
+        fail(name, "router-protocol.md still re-embeds the Skill-Distill Approval Flow after it moved to skill-distill-approval.md")
+        return
 
     # P10 retarget (K): section 8 moved to references/post-agent-validation.md, so the pointer section is read from there
     # (the shared doc has a same-text heading, so the file hint is required); the kernel itself must not re-embed the flow.
@@ -17865,8 +18075,8 @@ def test_router_documents_skill_distill_approval_flow() -> None:
     if skill_section is None:
         fail(name, "could not bound ### Skill-Distill Approval Flow in references/post-agent-validation.md")
         return
-    if "skills/_shared/router-protocol.md" not in skill_section:
-        fail(name, "the Skill-Distill Approval Flow section no longer points at the shared doc")
+    if "skills/_shared/skill-distill-approval.md" not in skill_section:
+        fail(name, "the Skill-Distill Approval Flow section no longer points at skills/_shared/skill-distill-approval.md")
         return
     if "### Skill-Distill Approval Flow" in skill_content or "craftflow_skill_promote.py" in skill_content:
         fail(name, "SKILL.md re-embeds the Skill-Distill Approval Flow after section 8 moved out of the kernel")
@@ -17890,7 +18100,8 @@ def test_router_documents_skill_distill_approval_flow() -> None:
 
 def test_build_workflow_wires_learn_distill_taskcreate() -> None:
     name = "build-workflow/wires-learn-distill-taskcreate"
-    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "build-workflow.md"
+    # P11 retarget (F): the standard BUILD task graph moved to references/build-graph-standard.md.
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "build-graph-standard.md"
     if not path.exists():
         fail(name, f"build-workflow.md not found at {path}")
         return
@@ -17906,7 +18117,7 @@ def test_build_workflow_wires_learn_distill_taskcreate() -> None:
 
 def test_build_workflow_wires_skill_distill_taskcreate() -> None:
     name = "build-workflow/wires-skill-distill-taskcreate"
-    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "build-workflow.md"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "build-graph-standard.md"  # P11 retarget (F)
     if not path.exists():
         fail(name, f"build-workflow.md not found at {path}")
         return
@@ -17926,7 +18137,7 @@ def test_build_workflow_wires_skill_distill_taskcreate() -> None:
 
 def test_build_workflow_fast_path_graph_wires_learn_and_skill_distill() -> None:
     name = "build-workflow/fast-path-graph-wires-learn-and-skill-distill"
-    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "build-workflow.md"
+    path = PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "build-graph-fast.md"  # P11 retarget (F)
     if not path.exists():
         fail(name, f"build-workflow.md not found at {path}")
         return
@@ -20941,10 +21152,17 @@ def test_workspace_root_config_read_gated_inside_step_1a() -> None:
     if not shared_path.exists():
         fail(name, f"shared router-protocol.md not found at {shared_path}")
         return
-    content = shared_path.read_text(encoding="utf-8")
+    # P11 retarget (K): step 1a's body moved to _shared/router-protocol-multirepo.md; the protocol keeps the single-repo branch
+    # and the pointer paragraph, so the 1a body is read from the new file and the single-repo branch from the protocol.
+    proto = shared_path.read_text(encoding="utf-8")
+    multirepo_path = PLUGIN_ROOT / "skills" / "_shared" / "router-protocol-multirepo.md"
+    if not multirepo_path.exists():
+        fail(name, f"router-protocol-multirepo.md not found at {multirepo_path}")
+        return
+    content = multirepo_path.read_text(encoding="utf-8")
     section_start = content.find("**1a. Multi-repo workspace root resolution**")
     if section_start == -1:
-        fail(name, "step 1a section not found in shared doc")
+        fail(name, "step 1a section not found in router-protocol-multirepo.md")
         return
     next_heading = content.find("\n## ", section_start + 1)
     section = content[section_start: next_heading if next_heading != -1 else None]
@@ -20952,9 +21170,13 @@ def test_workspace_root_config_read_gated_inside_step_1a() -> None:
         fail(name, "workspace_writable_paths read/parse not found inside step 1a's own section")
         return
     # Confirm it is NOT also present in the single-repo (TOPLEVEL_EXIT == 0) branch text, which
-    # sits just above step 1a in the same 'Resolve Project Root' section.
-    zero_section_start = content.find("## Resolve Project Root")
-    single_repo_branch = content[zero_section_start:section_start]
+    # sits just above the step 1a pointer in the protocol's 'Resolve Project Root' section.
+    zero_section_start = proto.find("## Resolve Project Root")
+    pointer_start = proto.find("**1a. Multi-repo workspace root resolution**")
+    if zero_section_start == -1 or pointer_start == -1:
+        fail(name, "router-protocol.md lost its Resolve Project Root section or its step 1a pointer")
+        return
+    single_repo_branch = proto[zero_section_start:]  # the single-repo branch, the pointer paragraph and everything after
     if "workspace_writable_paths" in single_repo_branch:
         fail(name, "workspace_writable_paths read must not appear in the single-repo (TOPLEVEL_EXIT == 0) branch")
         return
@@ -29158,6 +29380,7 @@ def main() -> int:
     test_router_p10_kernel_relocation_wiring()
     test_router_corpus_has_no_stale_moved_section_pointers()
     test_router_p10_moved_fragments_are_content_pinned()
+    test_router_p11_split_wiring_and_content_pins()
     test_plugin_has_no_dangling_section_13_references()
     test_workflow_artifact_schema_documents_task_tools_available()
     test_self_dispatch_guard_present_in_task_update_agents()

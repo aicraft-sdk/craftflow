@@ -1204,7 +1204,13 @@ def test_router_context_boundary_reference_contract():
 
 
 def test_router_pointer_counts():
-    assert _read(REFS / "build-workflow.md").count(_POINTER) == 2
+    # P11: the two BUILD pointers moved with the task graphs (standard graph, fast-path graph); the sum over the three BUILD
+    # files stays 2 and each file that holds one is pinned on its own.
+    build_files = ("build-workflow.md", "build-graph-standard.md", "build-graph-fast.md")
+    assert sum(_read(REFS / n).count(_POINTER) for n in build_files) == 2
+    assert _read(REFS / "build-workflow.md").count(_POINTER) == 0
+    assert _read(REFS / "build-graph-standard.md").count(_POINTER) == 1
+    assert _read(REFS / "build-graph-fast.md").count(_POINTER) == 1
     rr = _read(REFS / "remediation-and-research.md")
     assert rr.count(_POINTER) == 2
     assert _read(REFS / "plan-workflow.md").count(_POINTER) == 0
@@ -1221,7 +1227,7 @@ def test_router_pointer_counts():
 
 def test_router_pointers_avoid_memory_finalize_markers():
     texts = [_read(REFS / "context-boundary.md")]
-    for name in ("build-workflow.md", "remediation-and-research.md"):
+    for name in ("build-workflow.md", "build-graph-standard.md", "build-graph-fast.md", "remediation-and-research.md"):
         texts.extend(ln for ln in _read(REFS / name).splitlines() if _POINTER in ln)
     for t in texts:
         for marker in _FINALIZE_MARKERS:

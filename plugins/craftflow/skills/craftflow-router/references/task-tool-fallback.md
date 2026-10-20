@@ -28,7 +28,9 @@ this section runs exactly as documented today — no behavior change on that pat
 ### Task*-tool fallback for per-type task graphs and remediation/research task sites
 
 Wherever any `TaskCreate()` call site in `references/build-workflow.md`,
-`references/debug-workflow.md`, `references/review-workflow.md`, `references/plan-workflow.md`,
+`references/build-graph-standard.md`, `references/build-graph-fast.md`,
+`references/build-fast-path-escalation.md`, `references/debug-workflow.md`,
+`references/review-workflow.md`, `references/plan-workflow.md`, `references/plan-bakeoff.md`,
 or `references/remediation-and-research.md` would create a child task, and
 `capabilities.task_tools_available == false`: skip that `TaskCreate()` call and instead append a
 `{phase}` entry with `status: "pending"` directly into the workflow artifact's `phase_status` map

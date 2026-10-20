@@ -14,9 +14,15 @@ ROUTER_ARTIFACT_POLICY_REFERENCE = (
     ROUTER_REFERENCES_DIR / "workflow-artifact-and-hook-policy.md"
 )
 ROUTER_BUILD_REFERENCE = ROUTER_REFERENCES_DIR / "build-workflow.md"
+# P11: the BUILD task graph, its fast-path twin and the fast-path escalation flow left build-workflow.md for three files.
+ROUTER_BUILD_GRAPH_STANDARD_REFERENCE = ROUTER_REFERENCES_DIR / "build-graph-standard.md"
+ROUTER_BUILD_GRAPH_FAST_REFERENCE = ROUTER_REFERENCES_DIR / "build-graph-fast.md"
+ROUTER_BUILD_ESCALATION_REFERENCE = ROUTER_REFERENCES_DIR / "build-fast-path-escalation.md"
 ROUTER_DEBUG_REFERENCE = ROUTER_REFERENCES_DIR / "debug-workflow.md"
 ROUTER_REVIEW_REFERENCE = ROUTER_REFERENCES_DIR / "review-workflow.md"
 ROUTER_PLAN_REFERENCE = ROUTER_REFERENCES_DIR / "plan-workflow.md"
+# P11: the bake-off fan-out, judge dispatch and post-judge validation left plan-workflow.md for plan-bakeoff.md.
+ROUTER_PLAN_BAKEOFF_REFERENCE = ROUTER_REFERENCES_DIR / "plan-bakeoff.md"
 ROUTER_REMEDIATION_REFERENCE = ROUTER_REFERENCES_DIR / "remediation-and-research.md"
 README = ROOT / "README.md"
 CHANGELOG = ROOT / "CHANGELOG.md"
@@ -413,9 +419,13 @@ def main() -> int:
         "## 2a. Workflow Artifact And Hook Policy",
         "references/workflow-artifact-and-hook-policy.md",
         "references/build-workflow.md",
+        "references/build-graph-standard.md",
+        "references/build-graph-fast.md",
+        "references/build-fast-path-escalation.md",
         "references/debug-workflow.md",
         "references/review-workflow.md",
         "references/plan-workflow.md",
+        "references/plan-bakeoff.md",
         "references/remediation-and-research.md",
         "references/worktree.md",
         "references/memory-finalize.md",
@@ -487,9 +497,16 @@ def main() -> int:
         ),
         ROUTER_BUILD_REFERENCE: (
             "### BUILD preparation",
-            "### BUILD task graph",
             "plan_trust_gate",
         ),
+        ROUTER_BUILD_GRAPH_STANDARD_REFERENCE: (
+            "### BUILD task graph",
+            "#### Learn-Distill Gate",
+            "#### Skill-Distill Gate",
+            "### doc-syncer SKIPPED state",
+        ),
+        ROUTER_BUILD_GRAPH_FAST_REFERENCE: ("### BUILD task graph — fast path",),
+        ROUTER_BUILD_ESCALATION_REFERENCE: ("### Fast Path Escalation",),
         ROUTER_DEBUG_REFERENCE: (
             "### DEBUG preparation",
             "### DEBUG task graph",
@@ -504,6 +521,11 @@ def main() -> int:
             "### PLAN preparation",
             "### PLAN task graph",
             "decision_rfc",
+        ),
+        ROUTER_PLAN_BAKEOFF_REFERENCE: (
+            "### PLAN bake-off fan-out",
+            "### PLAN judge dispatch",
+            "### PLAN post-judge validation",
         ),
         ROUTER_REMEDIATION_REFERENCE: (
             "## 9. Remediation And Workflow Rules",

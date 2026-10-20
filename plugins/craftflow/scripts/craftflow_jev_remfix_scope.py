@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Standalone CLI -- Jev (TypeSafe AI) assisted decision for the router's
 `1a-SCOPE` REM-FIX gate (references/remediation-and-research.md, and its
-escalated-path twin in references/build-workflow.md, which delegates to the
+escalated-path twin in references/build-fast-path-escalation.md, which delegates to the
 same router-doc procedure rather than calling this script a second time).
 Invoked inline by the router, never a hook. Never raises; always exits 0 and
 prints exactly one line of JSON. See

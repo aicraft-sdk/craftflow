@@ -30,6 +30,9 @@ PROTO = "skills/_shared/router-protocol.md"
 REFS = "skills/craftflow-router/references/"
 K, FP, RR = SKILL, REFS + "fast-path.md", REFS + "remediation-and-research.md"
 BW, PW = REFS + "build-workflow.md", REFS + "plan-workflow.md"
+# P11: the standard BUILD task graph (with the Learn-Distill gate bullets) and step 1a of the protocol left their files
+BGS = REFS + "build-graph-standard.md"
+MULTIREPO = "skills/_shared/router-protocol-multirepo.md"
 WHO = "David Gracia (2026-10-08)"
 RMX = {"version": 1, "files": [
     {"file": K, "class": "kernel", "workflows": ["ALL"], "trigger": "skill load", "happy_path": True},
@@ -146,9 +149,9 @@ def test_d2_a7b_live_read_map_widening_e2e() -> None:
     old = "- Empty → skip `learn-distill` task creation entirely. `chain_tail_task_id` stays unchanged.\n"
     with tempfile.TemporaryDirectory() as tmp:
         root = scratch(tmp)
-        text = (root / BW).read_text(encoding="utf-8")
+        text = (root / BGS).read_text(encoding="utf-8")  # P11: the bullet moved from build-workflow.md to build-graph-standard.md
         chain = heading_chain(text, text[:text.index(old)].count("\n") + 1)
-        edit(root, BW, old, "")
+        edit(root, BGS, old, "")
         with open(root / PW, "a", encoding="utf-8") as fh:
             fh.write("\n" + chain + "\n" + old)
         rm_path = root / "config" / "router-readmap.json"

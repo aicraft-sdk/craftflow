@@ -151,7 +151,7 @@ Convergence rule:
 ### Skill-Distill Approval Flow
 
 **Shared with Cursor — canonical text lives in
-`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/skill-distill-approval.md` §
 "Skill-Distill Approval Flow" (the four options (Approve / Approve + register in SKILL_HINTS / Reject / Defer), the exact
 `craftflow_skill_promote.py`/`craftflow_skill_ledger.py` invocations, the non-matching-reply
 re-ask rule, the JUST_GO carve-out (never auto-Approve), and the `STATUS: SKIPPED`/
@@ -217,6 +217,6 @@ Use telemetry to explain latency. Do not use it to auto-reduce verification scop
 ### Verifier findings handoff
 
 Shared with Cursor — canonical text lives in
-`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/verifier-handoff.md` §
 "Verifier Findings Handoff".
 

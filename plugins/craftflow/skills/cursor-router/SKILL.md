@@ -346,9 +346,10 @@ Cursor's `Task`-dispatch model: instead of a `## Worktree` block appended to a
    - If `TOPLEVEL_EXIT == 0`: unchanged single-repo path, `PROJECT_ROOT` is set.
    - If `TOPLEVEL_EXIT != 0`: cwd is a multi-repo workspace root (not itself a git repo but
      containing immediate-child nested git repos). Resolve exactly per
-     `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
-     "Resolve Project Root"'s "1a. Multi-repo workspace root resolution" step (`Read()`
-     that file now if you have not already this session): invoke the same
+     `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol-multirepo.md` §
+     "Router protocol: multi-repo workspace root resolution" (the "1a. Multi-repo workspace root
+     resolution" step that `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+     "Resolve Project Root" points at; `Read()` that file now if you have not already this session): invoke the same
      `craftflow_resolve_workspace_root.py` helper (located via the same
      `installed_plugins.json` lookup) with `--cwd "$(pwd)" --request "<user request>"` (the Claude-only `--request-file` + session-scratchpad flow in router-protocol 1a does not apply on Cursor; `--request` still works here), and:
      - `DETERMINISTIC` → set `PROJECT_ROOT` to the returned `project_root`.
@@ -603,13 +604,14 @@ a `## Previous Agent Findings` section — this is load-bearing, not decoration.
 building the integration-verifier dispatch prompt AND code-reviewer and/or
 silent-failure-hunter ran this round (standard BUILD/DEBUG chain), append this section
 to the template above, in the exact sub-block format given in
-`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/verifier-handoff.md` §
 "Previous Agent Findings Handoff" (`Read()` that file now if you have not already this
 session).
 
 - **Fast path (no reviewer/hunter ran this round):** omit the `## Previous Agent
-  Findings` section entirely — same fast-path-omission logic given in the shared doc's
-  § "Verifier Findings Handoff".
+  Findings` section entirely — same fast-path-omission logic given in
+  `tools/craftflow-plugin/plugins/craftflow/skills/_shared/verifier-handoff.md` §
+  "Verifier Findings Handoff".
 - **DEBUG chain:** Silent Failure Hunter is not in the chain — omit its sub-block (or
   state "not in this workflow" per the format above); Code Reviewer's sub-block still
   applies.
@@ -735,9 +737,9 @@ added to this file without touching Claude Code files.
 
 This section wires the post-implementation skill-distillation feature's `skill-distill`
 phase into Cursor's task-dispatch model, replacing the "deferred to v2" status this file
-previously carried. It mirrors Claude Code's `references/build-workflow.md` "#### Skill-
+previously carried. It mirrors Claude Code's `references/build-graph-standard.md` "#### Skill-
 Distill Gate" and the shared doc's
-(`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md`) §
+(`tools/craftflow-plugin/plugins/craftflow/skills/_shared/skill-distill-approval.md`) §
 "Skill-Distill Approval Flow" in intent, using this file's own established mechanisms
 instead of `TaskCreate`/`AskUserQuestion`
 (neither exists in Cursor): a real `Task` dispatch (§ 5's dispatch loop) for the

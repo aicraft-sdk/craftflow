@@ -1836,7 +1836,7 @@
   {
    "condition": "always",
    "dst": "skills/_shared/skill-distill-approval.md",
-   "dst_header": "# Skill-Distill approval flow (shared)\n\n",
+   "dst_header": "# Shared doc: approving a staged skill proposal\n\n",
    "end_anchor": "tool. See that file's own section for its host-specific mechanics.)\n",
    "id": "p11-proto-skill-distill-approval",
    "op": "move",
@@ -2047,7 +2047,7 @@
    "phase": "P11",
    "source": "plan P11 cross-reference fix 1",
    "start_anchor": "- Use the `### BUILD preparation` and `### BUILD task graph` blocks in that file as the canonical BUILD law.",
-   "text": "- Use `### BUILD preparation` in that file and the task-graph file for the chosen `build_mode` (`references/build-graph-standard.md` or `references/build-graph-fast.md`, per the Read Map) as the canonical BUILD law.\n"
+   "text": "- Use `### BUILD preparation` in that file and `build-graph-standard.md` (`### BUILD task graph`) or `build-graph-fast.md` (`### BUILD task graph — fast path`) as the canonical BUILD law.\n"
   },
   {
    "condition": "always",
@@ -2172,7 +2172,7 @@
    "source": "manual-review claim: the Skill-Distill Approval Flow is reachable as the section the sentence names (SKILL.md:161)",
    "start_anchor": "- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (§ 8) is carved out as a de",
    "status": "drafted",
-   "text": "- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (`skill-distill-approval.md`) is carved out as a de\n"
+   "text": "- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (§ 8, `skill-distill-approval.md`) is carved out as a de\n"
   },
   {
    "condition": "always",
@@ -2183,7 +2183,7 @@
    "source": "manual-review claim: SKILL.md section 8 still holds the Skill-Distill Approval Flow (fast-path.md:97)",
    "start_anchor": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`craftflow-router/SKILL.md` § 8, `references/post-agent-validation.md`) — `AskUserQuestion` with Approve / Approve + register in SKILL_HINTS / Reject / Defer — before proceeding to `memory-finalize`. Append `skill_proposed` to the event log, then `skill_promoted` or `skill_rejected` once the user's choice is executed (no event for Defer — the candidate is unchanged). Under `JUST_GO=true`, this gate is a de facto REVERT-class gate (fail-closed default `Defer`) — see `SKILL.md` § 8's JUST_GO carve-out; never auto-select Approve or Approve + SKILL_HINTS.",
    "status": "drafted",
-   "text": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`_shared/skill-distill-approval.md`) — `AskUserQuestion` with Approve / Approve + register in SKILL_HINTS / Reject / Defer — before proceeding to `memory-finalize`. Append `skill_proposed` to the event log, then `skill_promoted` or `skill_rejected` once the user's choice is executed (no event for Defer — the candidate is unchanged). Under `JUST_GO=true`, this gate is a de facto REVERT-class gate (fail-closed default `Defer`) — see that file's JUST_GO carve-out; never auto-select Approve or Approve + SKILL_HINTS.\n"
+   "text": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`_shared/skill-distill-approval.md`, was § 8) — `AskUserQuestion` with Approve / Approve + register in SKILL_HINTS / Reject / Defer — before proceeding to `memory-finalize`. Append `skill_proposed` to the event log, then `skill_promoted` or `skill_rejected` once the user's choice is executed (no event for Defer — the candidate is unchanged). Under `JUST_GO=true`, this gate is a de facto REVERT-class gate (fail-closed default `Defer`) — see that file's JUST_GO carve-out (was § 8's); never auto-select Approve or Approve + SKILL_HINTS.\n"
   },
   {
    "condition": "always",
@@ -2194,7 +2194,7 @@
    "source": "manual-review claim: SKILL.md section 8 still holds the Skill-Distill Approval Flow (build-workflow.md:143, moved by p11-bw-graph-standard)",
    "start_anchor": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`SKILL.md` § 8, `references/post-agent-validation.md`) before Memory Update proceeds.",
    "status": "drafted",
-   "text": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (`_shared/skill-distill-approval.md`) before Memory Update proceeds.\n"
+   "text": "- `STATUS: COMPLETE` → apply the Skill-Distill Approval Flow (§ 8, `_shared/skill-distill-approval.md`) before Memory Update proceeds.\n"
   },
   {
    "condition": "always",
@@ -2358,6 +2358,96 @@
     "workflows": []
    },
    "source": "plan P11: unloaded destination docs; maintainer entries cover no workflow and are not rendered in the kernel table"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/SKILL.md",
+   "id": "p11-xref-x-kernel-skill-author",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer found while verifying the build split: the kernel skill-author note cites the Skill-Distill Gate, which moved to build-graph-standard.md with the standard graph",
+   "start_anchor": "is a proposal-authoring/availability issue. See `## 6.` and `references/build-workflow.md → #### Skill-Distill Gate`",
+   "text": "is a proposal-authoring/availability issue. See `## 6.` and `build-graph-standard.md → #### Skill-Distill Gate`\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/build-graph-fast.md",
+   "id": "p11-xref-x-build-graph-fast",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: 'above' no longer resolves; the standard graph is in build-graph-standard.md",
+   "start_anchor": "When `build_mode == \"fast_path\"`, use this reduced task graph instead of the standard BUILD task graph above.",
+   "text": "When `build_mode == \"fast_path\"`, use this reduced task graph instead of the standard BUILD task graph in `build-graph-standard.md`.\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/build-workflow.md",
+   "id": "p11-xref-x-build-workflow",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer found while verifying the split",
+   "start_anchor": "Before BUILD child task creation, read `references/fast-path.md` (contains canonical keyword table and escalation protocol).",
+   "text": "Before BUILD child task creation, read `references/fast-path.md` (contains canonical keyword table and escalation cap).\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/debug-workflow.md",
+   "id": "p11-xref-x-debug-workflow",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: DEBUG applies the same Learn-Distill and Skill-Distill gates, documented in the standard graph, which moved to build-graph-standard.md",
+   "start_anchor": "DEBUG has no doc-sync step, so `chain_tail_task_id` starts as `verifier_task_id` directly (unlike BUILD, where it starts as `doc_sync_task_id`). Apply the SAME Learn-Distill Gate and Skill-Distill Gate documented in `build-workflow.md` (identical gate checks, identical `phase:learn-distill` / `phase:skill-distill` `TaskCreate` shape, identical `chain_tail_task_id` update rule) before creating Memory Update:",
+   "text": "DEBUG has no doc-sync step, so `chain_tail_task_id` starts as `verifier_task_id` directly (unlike BUILD, where it starts as `doc_sync_task_id`). Apply the SAME Learn-Distill Gate and Skill-Distill Gate documented in `build-graph-standard.md` (identical gate checks, identical `phase:learn-distill` / `phase:skill-distill` `TaskCreate` shape, identical `chain_tail_task_id` update rule) before creating Memory Update:\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/harness-self-checks.md",
+   "id": "p11-xref-x-harness-self-checks",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: the fast-path 'Agents skipped' list, the fast_path_escalated event and the two BUILD Memory Update blocks moved to build-graph-fast.md, build-fast-path-escalation.md and the two graph files",
+   "start_anchor": "`code-reviewer` never runs there (see `build-workflow.md`'s fast-path \"Agents skipped\" list).",
+   "text": "`code-reviewer` never runs there (see `build-graph-fast.md`'s \"Agents skipped\" list).\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/harness-self-checks.md",
+   "id": "p11-xref-x-harness-self-checks-2",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: the fast-path 'Agents skipped' list, the fast_path_escalated event and the two BUILD Memory Update blocks moved to build-graph-fast.md, build-fast-path-escalation.md and the two graph files",
+   "start_anchor": "`build-workflow.md`'s `fast_path_escalated` event). Continue dispatch WITHOUT the findings",
+   "text": "`build-fast-path-escalation.md`'s `fast_path_escalated` event). Continue dispatch WITHOUT the findings\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/harness-self-checks.md",
+   "id": "p11-xref-x-harness-self-checks-3",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: the fast-path 'Agents skipped' list, the fast_path_escalated event and the two BUILD Memory Update blocks moved to build-graph-fast.md, build-fast-path-escalation.md and the two graph files",
+   "start_anchor": "**Complete** — BUILD memory-finalize (`build-workflow.md`, both the standard and fast-path",
+   "text": "**Complete** — BUILD memory-finalize (`build-graph-standard.md` and `build-graph-fast.md`, both the standard and fast-path\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/plan-bakeoff.md",
+   "id": "p11-xref-x-plan-bakeoff",
+   "op": "replace",
+   "phase": "P11",
+   "source": "stale pointer: step 5b cites the degraded-bake-off tolerance rule as plan-workflow.md's; it sits in `### PLAN bake-off fan-out`, which moved with step 5b to plan-bakeoff.md",
+   "start_anchor": "     others — see `references/plan-workflow.md`'s degraded-bake-off tolerance rule (a scoped",
+   "text": "     others — see `### PLAN bake-off fan-out`'s degraded-bake-off tolerance rule (a scoped\n"
+  },
+  {
+   "condition": "always",
+   "file": "skills/craftflow-router/references/task-tool-fallback.md",
+   "id": "p11-xref-x-task-tool-fallback",
+   "op": "replace",
+   "phase": "P11",
+   "source": "the list of files with TaskCreate call sites gains the new graph, escalation and bake-off files",
+   "start_anchor": "`references/debug-workflow.md`, `references/review-workflow.md`, `references/plan-workflow.md`,",
+   "text": "`references/build-graph-standard.md`, `references/build-graph-fast.md`,\n`references/build-fast-path-escalation.md`, `references/debug-workflow.md`,\n`references/review-workflow.md`, `references/plan-workflow.md`, `references/plan-bakeoff.md`,\n"
   },
   {
    "anchor": "**Runtime contract only.** v10 restores trust-first orchestration: route intent, hydrate workflow state, write workflow artifacts, execute the task graph, validate agent output, and fail closed on ambiguity, skipped work, or missing persistence.",

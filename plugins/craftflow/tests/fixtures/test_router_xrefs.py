@@ -258,13 +258,14 @@ KNOWN = [
     (SK, "memory file required sections", "router-protocol.md", 1),
     (SK, "explicit dispatcher (phase-to-agent table)", "router-protocol.md", 1),
     (SK, "dispatch prompt scaffold", "router-protocol.md", 2),
-    (SK, "previous agent findings handoff", "router-protocol.md", 1),
+    (SK, "previous agent findings handoff", "verifier-handoff.md", 1),  # P11 cross-reference fix 5
     (PAV, "agent verdict headings", "router-protocol.md", 1),  # P10: section 8 moved to post-agent-validation.md
-    (PAV, "skill-distill approval flow", "router-protocol.md", 1),
-    (PAV, "verifier findings handoff", "router-protocol.md", 1),
+    (PAV, "skill-distill approval flow", "skill-distill-approval.md", 1),  # P11 cross-reference fix 6
+    (PAV, "verifier findings handoff", "verifier-handoff.md", 1),  # P11 cross-reference fix 7
     (SK, "build preparation", "build-workflow.md", 1),
-    (SK, "build task graph", "build-workflow.md", 2),
-    (SK, "fast path escalation", "build-workflow.md", 1),
+    (SK, "build task graph — fast path", "build-graph-fast.md", 1),  # P11 cross-reference fix 8 (the standard file is named without a heading)
+    (SK, "skill-distill gate", "build-graph-standard.md", 1),  # P11: the skill-author note
+    (SK, "fast path escalation", "build-fast-path-escalation.md", 1),  # P11 cross-reference fix 9
     (VD, "gate table", "fast-path.md", 1),  # P10: Doubt-Verify and Fix-Verify moved to verify-dispatch.md
     (VD, "fix_verify_keyword_scan — keyword table", "verify-dispatch.md", 1),  # cross-reference fix 3
     (BW, "risk_keyword_scan — keyword table", "fast-path.md", 1),  # P10: Fast Path Detection moved to build-workflow.md
@@ -273,15 +274,16 @@ KNOWN = [
     (VD, "12. chain execution loop", "SKILL.md", 1),
     (WS, "5. workflow preparation", "SKILL.md", 1),  # P10: the section 0a body moved to workflow-start.md
     (WS, "2a. workflow artifact and hook policy", "SKILL.md", 1),
-    (HSC, "build task graph", "build-workflow.md", 1),
-    (HSC, "fast path escalation", "build-workflow.md", 1),
+    (HSC, "build task graph", "build-graph-standard.md", 1),  # P11 cross-reference fix 10
+    (HSC, "fast path escalation", "build-fast-path-escalation.md", 1),  # P11 cross-reference fix 10
     (HSC, "review task graph", "review-workflow.md", 1),
     (HSC, "dispatch prompt scaffold", "router-protocol.md", 1),
     (CUR, "resolve project root", "router-protocol.md", 1),
+    (CUR, "router protocol: multi-repo workspace root resolution", "router-protocol-multirepo.md", 1),  # P11 Cursor pointer
     (CUR, "dispatch prompt scaffold", "router-protocol.md", 1),
-    (CUR, "previous agent findings handoff", "router-protocol.md", 1),
-    (CUR, "verifier findings handoff", "router-protocol.md", 1),
-    (CUR, "skill-distill approval flow", "router-protocol.md", 1),
+    (CUR, "previous agent findings handoff", "verifier-handoff.md", 1),  # P11 Cursor pointer
+    (CUR, "verifier findings handoff", "verifier-handoff.md", 1),  # P11 Cursor pointer
+    (CUR, "skill-distill approval flow", "skill-distill-approval.md", 1),  # P11 Cursor pointer
 ]
 
 

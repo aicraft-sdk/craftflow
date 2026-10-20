@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Router relocation drills (P1 REM-FIX 3): simulate the plan's P11 section moves on scratch copies.
-(The P8, P9 and P10 drills retired when those phases made their moves for real.)
+"""Router relocation drills (P1 REM-FIX 3): simulate planned section moves on scratch copies.
+(The P8, P9, P10 and P11 drills retired when those phases made their moves for real; no drill remains, only the control run.)
 
 Run: python3 tests/fixtures/router_relocation_drills.py [--drills a,b] [--list] [--jobs N] [--keep] [--verbose]
 (the `x_*` variants are probes the heading-uniqueness invariant must reject; they run only when named in --drills)
 
 For each drill the harness copies `tools/craftflow-plugin` (minus `ref-*`) to a temp dir, moves verbatim router sections
-between files the way the plan's P11 file lists do, runs the hook suite and the router-reading fixtures on the
+between files the way a plan's file lists do, runs the hook suite and the router-reading fixtures on the
 copy, and prints every failing test with its `router-test-anchors.md` row (`kind/owner`, or `UNCLASSIFIED`).
 A `control` run (no move) is executed first; whatever fails there is environmental (the copy is not a git checkout of
 the repo: ADR-exists tests, git-lock rule-inventory tests) and is subtracted from every drill.
@@ -166,50 +166,14 @@ def d_control(t: Tree) -> None:
     return None
 
 
-def d_p11_proto_split(t: Tree) -> None:
-    """P11: step 1a of `## Resolve Project Root` moves to _shared/router-protocol-multirepo.md."""
-    lines = _read(t.protocol)
-    s = line_index(lines, "   **1a. Multi-repo workspace root resolution**")
-    e = line_index(lines, "(Host-specific note: both hosts run this exact algorithm", s)
-    block = cut(t.protocol, s, e, ["   **1a.** Multi-repo workspace root resolution: see `_shared/router-protocol-multirepo.md`.", ""])
-    put(t.shared / "router-protocol-multirepo.md", block, "# Multi-repo workspace root resolution (step 1a)")
-
-
-def d_p11_hookpolicy(t: Tree) -> None:
-    """P11: the `Hook policy:` block (the end of workflow-artifact-and-hook-policy.md) moves to hooks/README.md, outside the corpus."""
-    path = t.refs / "workflow-artifact-and-hook-policy.md"
-    lines = _read(path)
-    s = line_index(lines, "Hook policy:")
-    block = cut(path, s, len(lines), ["Hook policy: see `hooks/README.md`.", ""])
-    put(t.root / "hooks" / "README.md", block)
-
-
-def d_p11_build_split(t: Tree) -> None:
-    """P11: references/build-workflow.md splits into build-graph-standard, build-graph-fast and build-fast-path-escalation."""
-    path = t.refs / "build-workflow.md"
-    lines = _read(path)
-    std, _ = span(lines, "### BUILD task graph")
-    fast, fast_end = span(lines, "### BUILD task graph — fast path")
-    esc, esc_end = span(lines, "### Fast Path Escalation")
-    parts = {"build-graph-standard.md": lines[std:fast], "build-graph-fast.md": lines[fast:esc],
-             "build-fast-path-escalation.md": lines[esc:esc_end]}
-    if fast_end > esc:
-        raise DrillError("the fast task graph overlaps the escalation section of build-workflow.md")
-    # P10 appended Fast Path Detection and Worktree Isolation steps 1-3 after the escalation section; they stay in build-workflow.md
-    _write(path, lines[:std] + ["BUILD task graphs: see `build-graph-standard.md`, `build-graph-fast.md` and `build-fast-path-escalation.md`.", ""] + lines[esc_end:])
-    for name, block in parts.items():
-        put(t.refs / name, block)
-
-
 # name -> (phase, one-line description, function)
 # (empty: the x_p10_memload_dup variant retired with the P10 drills; the heading-uniqueness check is exercised on synthetic corpora)
 VARIANTS: Dict[str, Tuple[int, str, Callable[[Tree], None]]] = {}
 
+# (P11 made its moves for real and retired its three drills; the hook-policy move did not happen because Difference 17 was dropped.
+# No relocation phase remains with a drill: P12 has none.)
 DRILLS: Dict[str, Tuple[int, str, Callable[[Tree], None]]] = {
     "control": (0, "no move (environmental baseline)", d_control),
-    "p11_hookpolicy": (11, "`Hook policy:` block (:261-277) -> hooks/README.md (outside the corpus)", d_p11_hookpolicy),
-    "p11_proto_split": (11, "step 1a -> _shared/router-protocol-multirepo.md", d_p11_proto_split),
-    "p11_build_split": (11, "build-workflow.md -> graph-standard / graph-fast / escalation", d_p11_build_split),
 }
 ALL_DRILLS = {**DRILLS, **VARIANTS}
 

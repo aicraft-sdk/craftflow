@@ -119,7 +119,7 @@ It validates the publication-critical contract:
 ## Skill Candidate Ledger (router-invoked, not a registered hook)
 
 Phase 1 of `docs/plans/2026-07-29-craftflow-skill-distillation-plan.md` ships
-a standalone recurrence miner. As of Phase 3, all three of `craftflow-router/references/build-workflow.md`
+a standalone recurrence miner. As of Phase 3, all three of `craftflow-router/references/build-graph-standard.md`
 (the Skill-Distill Gate's `--query` check), `craftflow-router/references/memory-finalize.md`
 (the unconditional `--observe` step in Memory Finalization) and `cursor-router/SKILL.md` (§ 5a
 Skill-Distill Gate) invoke it directly via Bash — it is still not registered

@@ -9,10 +9,10 @@ available this session.
 ## Arch Lint
 
 **When:** immediately before creating any `code-reviewer` `TaskCreate` — standard BUILD
-(`build-workflow.md` § `### BUILD task graph`), fast-path BUILD escalation's re-review spawn
-(`build-workflow.md` § `### Fast Path Escalation`), and REVIEW (`review-workflow.md` §
+(`build-graph-standard.md` § `### BUILD task graph`), fast-path BUILD escalation's re-review spawn
+(`build-fast-path-escalation.md` § `### Fast Path Escalation`), and REVIEW (`review-workflow.md` §
 `### REVIEW task graph`). Skipped entirely on a clean (non-escalated) fast-path BUILD, since
-`code-reviewer` never runs there (see `build-workflow.md`'s fast-path "Agents skipped" list).
+`code-reviewer` never runs there (see `build-graph-fast.md`'s "Agents skipped" list).
 
 ```bash
 python3 {plugin_root}/scripts/craftflow_arch_lint.py --project-root . --format json
@@ -31,7 +31,7 @@ Non-zero exit or unparseable stdout: capture the script's stderr content (where 
 diagnostic lives, not just the exit code) into `error`, and append
 `{"event":"arch_lint_failed","error":"{stderr_content}","ts":"{iso_now}"}` to
 `.craftflow/state/workflows/{workflow_uuid}.events.jsonl` (same convention as
-`build-workflow.md`'s `fast_path_escalated` event). Continue dispatch WITHOUT the findings
+`build-fast-path-escalation.md`'s `fast_path_escalated` event). Continue dispatch WITHOUT the findings
 section — never block or retry.
 
 ## Clean-State Check
@@ -81,7 +81,7 @@ python3 {plugin_root}/scripts/craftflow_feature_backlog.py --state-dir .craftflo
   --activate {matching_id}
 ```
 
-**Complete** — BUILD memory-finalize (`build-workflow.md`, both the standard and fast-path
+**Complete** — BUILD memory-finalize (`build-graph-standard.md` and `build-graph-fast.md`, both the standard and fast-path
 "CRAFTFLOW Memory Update: Persist workflow learnings" tasks), only when `integration-verifier`
 returned `PASS` on the final phase (the workflow is actually finishing, not stopping partial or
 blocked):

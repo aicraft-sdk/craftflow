@@ -27,6 +27,14 @@
     {"file": "skills/craftflow-router/references/resume.md", "class": "stage", "workflows": ["ALL"], "trigger": "resume or live scope marker", "happy_path": false},
     {"file": "skills/craftflow-router/references/post-agent-validation.md", "class": "stage", "workflows": ["ALL"], "trigger": "agent returns", "happy_path": true},
     {"file": "skills/craftflow-router/references/verify-dispatch.md", "class": "stage", "workflows": ["BUILD", "DEBUG"], "trigger": "integration-verifier PASS", "happy_path": true},
-    {"file": "skills/craftflow-router/references/memory-load-workspace.md", "class": "stage", "workflows": ["ALL"], "trigger": "workspace marker found, or a state-read-compaction deny during Memory Load", "happy_path": false}
+    {"file": "skills/craftflow-router/references/memory-load-workspace.md", "class": "stage", "workflows": ["ALL"], "trigger": "workspace marker found, or a state-read-compaction deny during Memory Load", "happy_path": false},
+    {"file": "skills/_shared/router-protocol-multirepo.md", "class": "stage", "workflows": ["ALL"], "trigger": "TOPLEVEL_EXIT != 0", "happy_path": false},
+    {"file": "skills/_shared/skill-distill-approval.md", "class": "stage", "workflows": ["BUILD", "DEBUG"], "trigger": "skill-author COMPLETE", "happy_path": false},
+    {"file": "skills/_shared/verifier-handoff.md", "class": "stage", "workflows": ["BUILD", "DEBUG"], "trigger": "before integration-verifier dispatch", "happy_path": true},
+    {"file": "skills/craftflow-router/references/build-graph-standard.md", "class": "start", "workflows": ["BUILD"], "trigger": "build_mode standard", "happy_path": true, "variant": "standard"},
+    {"file": "skills/craftflow-router/references/build-graph-fast.md", "class": "start", "workflows": ["BUILD"], "trigger": "build_mode fast_path", "happy_path": true, "variant": "fast_path"},
+    {"file": "skills/craftflow-router/references/build-fast-path-escalation.md", "class": "stage", "workflows": ["BUILD"], "trigger": "fast-path verifier FAIL", "happy_path": false, "variant": "fast_path"},
+    {"file": "skills/craftflow-router/references/plan-bakeoff.md", "class": "stage", "workflows": ["PLAN"], "trigger": "PLAN_MODE decision_rfc or VERIFICATION_RIGOR critical_path (bake-off qualifies)", "happy_path": false},
+    {"file": "tools/craftflow-plugin/docs/router-protocol-history.md", "class": "maintainer", "workflows": [], "trigger": "maintainers only"}
   ]
 }

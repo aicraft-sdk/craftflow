@@ -20,8 +20,9 @@ ROUTER_PROTOCOL_MD_PATH = os.path.join(_FIXTURES_DIR, "../../skills/_shared/rout
 PLAN_WORKFLOW_MD_PATH = os.path.join(
     _FIXTURES_DIR, "../../skills/craftflow-router/references/plan-workflow.md"
 )
+PLAN_BAKEOFF_MD_PATH = os.path.join(_FIXTURES_DIR, "../../skills/craftflow-router/references/plan-bakeoff.md")
 # P10 (K retarget): section 3 (the phase enum) moved to workflow-start.md; section 8 (the write-agent table and the Contract
-# overrides table) moved to post-agent-validation.md; chain-loop step 5b moved to plan-workflow.md with step 5a.
+# overrides table) moved to post-agent-validation.md; chain-loop step 5b moved to plan-workflow.md with step 5a (P11: on to plan-bakeoff.md).
 WORKFLOW_START_MD_PATH = os.path.join(_FIXTURES_DIR, "../../skills/craftflow-router/references/workflow-start.md")
 POST_AGENT_MD_PATH = os.path.join(_FIXTURES_DIR, "../../skills/craftflow-router/references/post-agent-validation.md")
 
@@ -207,6 +208,9 @@ print("\n[test_dispatch_time_prompt_assembly_covers_bakeoff]")
 
 with open(PLAN_WORKFLOW_MD_PATH, "r", encoding="utf-8") as f:
     plan_workflow_text = f.read()
+# P11 (K retarget): the bake-off fan-out, judge dispatch, post-judge validation and chain-loop step 5b moved to plan-bakeoff.md.
+with open(PLAN_BAKEOFF_MD_PATH, "r", encoding="utf-8") as f:
+    bakeoff_text = f.read()
 
 check_contains(
     "dispatch-time prompt assembly derives Target Plan File per candidate model from the phase suffix",
@@ -234,63 +238,63 @@ check_contains(
 print("\n[test_bakeoff_fanout_block]")
 
 check_contains(
-    "plan-workflow.md has a '### PLAN bake-off fan-out' section heading",
-    plan_workflow_text,
+    "plan-bakeoff.md has a '### PLAN bake-off fan-out' section heading",
+    bakeoff_text,
     "### PLAN bake-off fan-out",
 )
 
 check_contains(
     "N-1 dispatch loop creates one task per model with phase:plan-bakeoff-candidate-{model}",
-    plan_workflow_text,
+    bakeoff_text,
     "phase:plan-bakeoff-candidate-{model}",
 )
 
 check_contains(
     "N-1 dispatch loop has no addBlockedBy among candidates (all parallel)",
-    plan_workflow_text,
+    bakeoff_text,
     "# No addBlockedBy — all N-1 are parallel, no ordering among themselves.",
 )
 
 check_contains(
     "degraded-tolerance rule marks a failing candidate bakeoff_candidate_failed and excludes it",
-    plan_workflow_text,
+    bakeoff_text,
     "Mark that candidate `bakeoff_candidate_failed`, persist to `bakeoff_candidate_failures` with the\n"
     "reason, exclude it from `results.bakeoff[]`, and continue.",
 )
 
 check_contains(
     "router-owned cleanup section is explicitly labeled ROUTER-OWNED CLEANUP",
-    plan_workflow_text,
+    bakeoff_text,
     "**ROUTER-OWNED CLEANUP.**",
 )
 
 check_contains(
     "router-owned cleanup Globs the failed candidate's OWN assigned path only",
-    plan_workflow_text,
+    bakeoff_text,
     'Glob(f"docs/plans/{plan_file_stem}-candidate-{model}.md")',
 )
 
 check_contains(
     "router-owned cleanup deletes via an exact literal rm path, never a wildcard",
-    plan_workflow_text,
+    bakeoff_text,
     "Bash(f\"rm 'docs/plans/{plan_file_stem}-candidate-{model}.md'\")",
 )
 
 check_contains(
     "all-candidates-failed fallback dispatches one fresh planner with model: inherit and no override",
-    plan_workflow_text,
+    bakeoff_text,
     "IF valid_count == 0: abandon the bake-off. Dispatch ONE fresh planner task, model: inherit,",
 )
 
 check_contains(
     "all-candidates-failed fallback persists bakeoff_all_failed = true",
-    plan_workflow_text,
+    bakeoff_text,
     "bakeoff_all_failed = true is also persisted.",
 )
 
 check_contains(
     "all-candidates-failed fallback constructs Block B with upstream_task_id = the fresh planner's own task id",
-    plan_workflow_text,
+    bakeoff_text,
     "construct Block B (`### PLAN task graph`) NOW,\n"
     "    with upstream_task_id = this fresh planner task's own task id",
 )
@@ -301,44 +305,44 @@ check_contains(
 print("\n[test_judge_dispatch_and_post_judge_validation_blocks]")
 
 check_contains(
-    "plan-workflow.md has a '### PLAN judge dispatch' section heading",
-    plan_workflow_text,
+    "plan-bakeoff.md has a '### PLAN judge dispatch' section heading",
+    bakeoff_text,
     "### PLAN judge dispatch",
 )
 
 check_contains(
     "judge dispatch creates a task with phase:plan-bakeoff-judge",
-    plan_workflow_text,
+    bakeoff_text,
     "phase:plan-bakeoff-judge",
 )
 
 check_contains(
     "judge dispatch blocks on every valid candidate's task_id",
-    plan_workflow_text,
+    bakeoff_text,
     "TaskUpdate({ taskId: judge_task_id, addBlockedBy: [every valid candidate's task_id] })",
 )
 
 check_contains(
-    "plan-workflow.md has a '### PLAN post-judge validation' section heading",
-    plan_workflow_text,
+    "plan-bakeoff.md has a '### PLAN post-judge validation' section heading",
+    bakeoff_text,
     "### PLAN post-judge validation",
 )
 
 check_contains(
     "post-judge Glob check for leftover candidate files MUST return zero matches",
-    plan_workflow_text,
+    bakeoff_text,
     'Glob(f"docs/plans/{plan_file_stem}-candidate-*.md") — MUST return zero matches.',
 )
 
 check_contains(
     "post-judge success constructs Block B with upstream_task_id = judge_task_id",
-    plan_workflow_text,
+    bakeoff_text,
     "<invoke Block B, upstream_task_id = judge_task_id>",
 )
 
 check_contains(
     "Task*-tool-fallback note cross-references the existing SKILL.md § 6 generalized rule",
-    plan_workflow_text,
+    bakeoff_text,
     "**Task*-tool-fallback note (cross-reference, not new logic):**",
 )
 
@@ -386,21 +390,21 @@ print("\n[test_skill_md_chain_loop_has_5b_bakeoff_step]")
 
 check_count(
     "§ 12 Chain Execution Loop has exactly one '5b.' bake-off dispatch step",
-    plan_workflow_text,
+    bakeoff_text,
     "5b. If N-1 `plan-bakeoff-candidate-*` tasks are all runnable in the same round (PLAN workflow,",
     1,
 )
 
 check_contains(
     "step 5b waits for all dispatched candidates before creating the plan-bakeoff-judge task",
-    plan_workflow_text,
+    bakeoff_text,
     "Wait for ALL dispatched candidates to return (validly or failed) before creating the\n"
     "     `plan-bakeoff-judge` task.",
 )
 
 check_contains(
     "step 5b falls back to sequential dispatch and logs event=parallel_fallback",
-    plan_workflow_text,
+    bakeoff_text,
     "fall back to sequential dispatch, one\n"
     "     candidate at a time. Log `event=parallel_fallback` in the event log.",
 )
@@ -408,7 +412,7 @@ check_contains(
 check_contains(
     "step 5b cross-references PLAN dispatch-time prompt assembly and PLAN bake-off fan-out"
     " (not the incorrect PLAN task graph section)",
-    plan_workflow_text,
+    bakeoff_text,
     "see `references/plan-workflow.md → ### PLAN\n"
     "     dispatch-time prompt assembly` for the exact per-candidate model/target-file construction\n"
     "     formula and `### PLAN bake-off fan-out` for the actual per-candidate dispatch loop)",

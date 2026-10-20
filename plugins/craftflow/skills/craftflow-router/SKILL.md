@@ -48,6 +48,13 @@ Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset
 | stage | agent returns | `references/post-agent-validation.md` | ALL | - | yes |
 | stage | integration-verifier PASS | `references/verify-dispatch.md` | BUILD, DEBUG | - | yes |
 | stage | workspace marker found, or a state-read-compaction deny during Memory Load | `references/memory-load-workspace.md` | ALL | - | no |
+| stage | TOPLEVEL_EXIT != 0 | `_shared/router-protocol-multirepo.md` | ALL | - | no |
+| stage | skill-author COMPLETE | `_shared/skill-distill-approval.md` | BUILD, DEBUG | - | no |
+| stage | before integration-verifier dispatch | `_shared/verifier-handoff.md` | BUILD, DEBUG | - | yes |
+| start | build_mode standard | `references/build-graph-standard.md` | BUILD | standard | yes |
+| start | build_mode fast_path | `references/build-graph-fast.md` | BUILD | fast_path | yes |
+| stage | fast-path verifier FAIL | `references/build-fast-path-escalation.md` | BUILD | fast_path | no |
+| stage | PLAN_MODE decision_rfc or VERIFICATION_RIGOR critical_path (bake-off qualifies) | `references/plan-bakeoff.md` | PLAN | - | no |
 <!-- readmap:end -->
 
 ## 1. Intent Routing
@@ -67,7 +74,7 @@ consulted per the shared doc's hint-precedence rule (ERROR keywords always win).
 **Shared with Cursor — canonical text lives in
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
 "Resolve Project Root" (single-repo/multi-repo resolution: the `git rev-parse --show-toplevel`
-check, the `1a.` multi-repo branch with its dedicated resolver script, and the
+check, the `1a.` multi-repo branch (resolver in `router-protocol-multirepo.md`), and the
 `DETERMINISTIC`/`AMBIGUOUS`/`NO_REPO_FOUND` outcome handling).** Runs once per session,
 before `## 1.` routing and before any `.craftflow/state/...` path is touched. `PROJECT_ROOT`
 resolved here is reused verbatim by every later step in this document (memory load,
@@ -138,7 +145,7 @@ JUST_GO:
 - Read `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Session Settings`.
 - If `AUTO_PROCEED: true`, set `JUST_GO=true`.
 - While `JUST_GO=true`, auto-default all non-REVERT AskUserQuestion gates to the recommended option and log the choice in `## Decisions`.
-- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (§ 8) is carved out as a de
+- Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (§ 8, `skill-distill-approval.md`) is carved out as a de
   facto REVERT-class gate under JUST_GO — see its own "JUST_GO carve-out" for the fail-closed
   default (`Defer`, never `Approve`).
 
@@ -191,8 +198,8 @@ Router-owned interface fields:
 ### BUILD preparation
 
 - Before any BUILD-specific readiness decision or child-task creation, immediately read `references/build-workflow.md`.
-- Use the `### BUILD preparation` and `### BUILD task graph` blocks in that file as the canonical BUILD law.
-- Before fast-path routing (performed during BUILD preparation), read `references/fast-path.md` for the canonical keyword table, agent dispatch table, gate table, and escalation protocol.
+- Use `### BUILD preparation` in that file and `build-graph-standard.md` (`### BUILD task graph`) or `build-graph-fast.md` (`### BUILD task graph — fast path`) as the canonical BUILD law.
+- Before fast-path routing (performed during BUILD preparation), read `references/fast-path.md` for the canonical keyword table, agent dispatch table, gate table and escalation cap; the fast-path escalation flow is in `references/build-fast-path-escalation.md` (Read Map).
 - Before any `code-reviewer` dispatch (BUILD or REVIEW), read `references/harness-self-checks.md` for the arch-lint wiring; the detail lives there, not here, to keep this file from growing further.
 
 4. Final-phase `integration-verifier` PASS, before memory-finalize, `worktree_mode == "auto_created"`:
@@ -218,7 +225,7 @@ Router-owned interface fields:
 
 ### BUILD task graph
 
-- See `references/build-workflow.md` and apply its `### BUILD task graph` block verbatim before creating BUILD child tasks.
+- See `references/build-graph-standard.md` (standard) or `references/build-graph-fast.md` (`### BUILD task graph — fast path`, fast_path) and apply its task graph block verbatim before creating BUILD child tasks.
 
 ### DEBUG task graph
 
@@ -255,7 +262,7 @@ resolution step needed here, unlike Cursor's `## Agent File Paths` literal-path 
 
 `skill-author` is deliberately NOT a `kind:remfix` origin. A `skill-distill` task returning
 `STATUS: FAIL` (or never returning) is not a code defect for `component-builder` to fix — it
-is a proposal-authoring/availability issue. See `## 6.` and `references/build-workflow.md → #### Skill-Distill Gate`
+is a proposal-authoring/availability issue. See `## 6.` and `build-graph-standard.md → #### Skill-Distill Gate`
 for the exact non-blocking handling: no REM-FIX is created, the chain is never stalled
 waiting on this agent.
 
@@ -316,7 +323,7 @@ Record the assigned effort in `telemetry.effort.{agent}` in the workflow artifac
 ### Previous Agent Findings handoff
 
 Shared with Cursor — canonical text lives in
-`tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` §
+`tools/craftflow-plugin/plugins/craftflow/skills/_shared/verifier-handoff.md` §
 "Previous Agent Findings Handoff". DEBUG skips hunter findings.
 
 **Doubt-Verify, Fix-Verify:** after `integration-verifier` PASS, read `references/verify-dispatch.md`.
@@ -394,7 +401,7 @@ After any agent returns, read `references/post-agent-validation.md` (once per co
    - If `build_mode` is null (legacy artifact or non-BUILD workflow): treat as `"standard"` — skip this step, continue to step 5.
    - code-reviewer and silent-failure-hunter tasks were NOT created — skip step 5 parallel dispatch check for them
    - When integration-verifier completes with FAIL:
-     - Read `references/build-workflow.md → ### Fast Path Escalation` block and execute it
+     - Read `references/build-fast-path-escalation.md → ### Fast Path Escalation` block and execute it
      - Do not advance phase cursor
 5. If `code-reviewer` and `silent-failure-hunter` are both ready in BUILD (build_mode == "standard" only):
    - mark both in_progress first
@@ -415,7 +422,7 @@ After any agent returns, read `references/post-agent-validation.md` (once per co
 7. Repeat until all tasks in the active `wf:` are completed.
 ```
 
-`SKILL.md → ## 12. Chain Execution Loop` 5a (research): `references/remediation-and-research.md`; 5b (bake-off): `references/plan-workflow.md`. In task-tool fallback mode, step 1 and agent-completion steps 1-3: `references/task-tool-fallback.md`.
+`SKILL.md → ## 12. Chain Execution Loop` 5a (research): `references/remediation-and-research.md`; 5b (bake-off): `references/plan-bakeoff.md`. In task-tool fallback mode, step 1 and agent-completion steps 1-3: `references/task-tool-fallback.md`.
 
 ## 14. Hard Rules
 

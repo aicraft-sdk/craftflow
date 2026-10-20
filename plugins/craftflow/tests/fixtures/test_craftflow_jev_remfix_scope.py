@@ -402,7 +402,8 @@ def test_remfix_scope_call_site_is_structurally_isolated_to_1a_scope() -> None:
 
 
 def test_build_workflow_escalated_path_delegates_instead_of_duplicating() -> None:
-    build_doc = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "build-workflow.md").read_text()
+    # P11 retarget (F): the escalated-path twin moved with the Fast Path Escalation flow to build-fast-path-escalation.md.
+    build_doc = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "build-fast-path-escalation.md").read_text()
     remediation_doc = (PLUGIN_ROOT / "skills" / "craftflow-router" / "references" / "remediation-and-research.md").read_text()
     checks = (
         "craftflow_jev_remfix_scope.py" not in build_doc,  # never duplicated here
@@ -418,7 +419,7 @@ def test_build_workflow_escalated_path_delegates_instead_of_duplicating() -> Non
         "do NOT create a second REM-FIX task for the same finding" in build_doc,
     )
     if all(checks):
-        ok("build-workflow.md's escalated 1a-SCOPE path delegates to Scope resolution rather than duplicating the Jev call")
+        ok("build-fast-path-escalation.md's escalated 1a-SCOPE path delegates to Scope resolution rather than duplicating the Jev call")
     else:
         fail("build-workflow-delegates", f"checks={checks!r}")
 

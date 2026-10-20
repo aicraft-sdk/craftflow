@@ -1310,6 +1310,33 @@ def test_stage_files_have_triggers() -> None:
     check("p10_files_are_at_most_20000_bytes", all(v <= 20000 for v in sizes.values()), f"sizes={sizes}")
 
 
+P11_SHARED = {"router-protocol-multirepo.md", "skill-distill-approval.md", "verifier-handoff.md"}
+
+
+def test_cursor_pointers_cover_shared_files() -> None:
+    """P11: the shared protocol is split into three more files under skills/_shared/; every _shared/*.md other than
+    router-protocol.md has to exist exactly as planned and be named in cursor-router/SKILL.md, so Cursor can reach each one."""
+    shared = {p.name for p in (PLUGIN_ROOT / "skills" / "_shared").glob("*.md")} - {"router-protocol.md"}
+    cursor = (PLUGIN_ROOT / "skills" / "cursor-router" / "SKILL.md").read_text(encoding="utf-8")
+    unnamed = sorted(n for n in shared if "_shared/" + n not in cursor)
+    check("cursor_pointers_cover_shared_files", shared == P11_SHARED and not unnamed,
+          f"shared={sorted(shared)} expected={sorted(P11_SHARED)} unnamed_in_cursor_router={unnamed}")
+
+
+def test_build_variant_files_declared() -> None:
+    """P11: build-graph-standard.md is a BUILD start file for variant standard and build-graph-fast.md one for variant fast_path;
+    each file exists."""
+    rm = rs.load_map(LIVE_MAP)
+    want = {"build-graph-standard.md": "standard", "build-graph-fast.md": "fast_path"}
+    got = {}
+    for name in want:
+        rows = [e for e in rm["files"] if e["file"] == REF + name]
+        got[name] = (rows[0].get("variant"), rows[0]["class"], rows[0]["workflows"]) if len(rows) == 1 else (len(rows),)
+    exists = all((PLUGIN_ROOT / REF / n).is_file() for n in want)
+    declared = all(got[n] == (v, "start", ["BUILD"]) for n, v in want.items())
+    check("build_variant_files_declared", exists and declared, f"got={got} exists={exists}")
+
+
 def main() -> int:
     for name in sorted(n for n in globals() if n.startswith("test_")):
         try:

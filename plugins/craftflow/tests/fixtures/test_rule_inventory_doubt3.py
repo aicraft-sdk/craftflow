@@ -137,34 +137,32 @@ def _run(root: Path, lines: List[str], rel: str = K):
 
 def test_b1_real_skill_branch_delete_move_e2e() -> None:
     """P8 retarget (see test_r1_real_skill_4e_branch_swap_e2e): step 4's branch-delete items left SKILL.md, so the attack moves a real failure
-    branch of `## Resolve Project Root` in the shared protocol: the `RESOLVE_EXIT != 0` item is lifted out from under step 1a and placed
-    before the `TOPLEVEL_EXIT != 0` item one level up."""
+    branch of step 1a. P11 moved step 1a to `_shared/router-protocol-multirepo.md`, so the `RESOLVE_EXIT != 0` item is lifted out from
+    under its place at the top of step 1a and appended after the `NO_REPO_FOUND` item at the end of the file."""
     with tempfile.TemporaryDirectory() as tmp:
         root = d.scratch(tmp)
         control, _ = d.real_diff(root)
-        lines = _lines_of(root, d.PROTO)
+        lines = _lines_of(root, d.MULTIREPO)
         a = next(i for i, x in enumerate(lines) if x.strip().startswith("- **If `RESOLVE_EXIT != 0`**"))
         b = next(i for i in range(a + 1, len(lines)) if lines[i].strip().startswith("- **Otherwise**, parse the outcome"))
-        dest = next(i for i, x in enumerate(lines) if x.strip().startswith("- **If `TOPLEVEL_EXIT != 0`**"))
-        seg = [x[2:] if x.startswith("  ") else x for x in lines[a:b]]
-        moved = lines[:dest] + seg + lines[dest:a] + lines[b:]
-        r, res = _run(root, moved, d.PROTO)
+        moved = lines[:a] + lines[b:] + [""] + lines[a:b]
+        r, res = _run(root, moved, d.MULTIREPO)
     check("B1 e2e control: the unmodified scratch copy passes", control.returncode == 0, control.stdout[-200:])
-    check("B1 e2e: the `RESOLVE_EXIT != 0` failure item moved before the `TOPLEVEL_EXIT != 0` item fails closed",
+    check("B1 e2e: the `RESOLVE_EXIT != 0` failure item moved to the end of step 1a fails closed",
           r.returncode == 1 and res.get("unmapped_removed", 0) >= 1, f"rc={r.returncode} {res} {r.stderr[-200:]}")
 
 
 def test_b2_real_skill_fence_swap_e2e() -> None:
-    """P8 retarget: the `git merge` / copy-fallback fences of step 4 left SKILL.md; the same fence swap runs on the two fences of
-    `## Resolve Project Root` step 1 and 1a (`git rev-parse --show-toplevel` and the `CRAFTFLOW_INSTALL` resolver call)."""
+    """P8 retarget: the `git merge` / copy-fallback fences of step 4 left SKILL.md; P11 moved step 1a to `_shared/router-protocol-multirepo.md`,
+    so the same fence swap runs on two fences of step 1a (the `CRAFTFLOW_INSTALL` resolver call and the `RESOLVE_OUTCOME` parse)."""
     with tempfile.TemporaryDirectory() as tmp:
         root = d.scratch(tmp)
-        lines = _lines_of(root, d.PROTO)
-        m0, m1 = _fence_span(lines, "PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)")
-        c0, c1 = _fence_span(lines, "CRAFTFLOW_INSTALL=$(python3")
+        lines = _lines_of(root, d.MULTIREPO)
+        m0, m1 = _fence_span(lines, "CRAFTFLOW_INSTALL=$(python3")
+        c0, c1 = _fence_span(lines, "RESOLVE_OUTCOME=$(printf")
         swapped = lines[:m0] + lines[c0:c1 + 1] + lines[m1 + 1:c0] + lines[m0:m1 + 1] + lines[c1 + 1:]
-        r, res = _run(root, swapped, d.PROTO)
-    check("B2 e2e: the `git rev-parse` fence swapped with the resolver-call fence fails closed",
+        r, res = _run(root, swapped, d.MULTIREPO)
+    check("B2 e2e: the resolver-call fence swapped with the outcome-parse fence fails closed",
           r.returncode == 1 and res.get("unmapped_removed", 0) >= 1, f"rc={r.returncode} {res} {r.stderr[-200:]}")
 
 

@@ -795,7 +795,7 @@ def test_computed_fits_projects_the_full_plan_with_the_recorded_amendment() -> N
         b = capped_budget(cap, amend)
         out[(cap, amend)] = computed_fits(b, effective_values(b))
     b = capped_budget(100000)
-    stale = effective_values(b)(b["merged_phases"])["readset.BUILD"]  # what the merged-phases-only projection used to compare (P2 alone)
+    stale = effective_values(b)(["P2"])["readset.BUILD"]  # what the merged-phases-only projection used to compare (P2 alone; P11 pins P2, not the live merged list)
     full = effective_values(b)(list(prj.ALL_PHASES))["readset.BUILD"]
     seen = []
     computed_fits(b, lambda phases: seen.append(list(phases)) or {k: 0 for k in KEYS})
@@ -901,7 +901,8 @@ def test_adr_discloses_the_rem_fix_3_findings() -> None:
           # P10 remediation (final text and rows; the two fence rows are `pointer` rows now): 159 / 86 / 151 becomes 159 / 79 / 149
           # P10 (its drafted rows are read the same way, and the relocation is real in the live tree): 159 / 86 / 151, and the 3,913 B kernel penalty
           # (the one single-token unit the P2 analysis disclosed) is 0 because the one-word units stay in the kernel as stand-ins (ADR P10 notes)
-          all(n in text for n in need) and "309 of them into happy-path files" not in text and split == [159, 79, 149]
+          # P11 (its drafted rows are read the same way; the split sends one more unit to a covered bucket): 159 / 79 / 149 becomes 159 / 79 / 147
+          all(n in text for n in need) and "309 of them into happy-path files" not in text and split == [159, 79, 147]
           and proj["reach_a_kernel_penalty_bytes"] == 0,
           f"missing={[n for n in need if n not in text]} split={split}")
 
@@ -990,7 +991,8 @@ def test_adr_discloses_the_rem_fix_4_findings() -> None:
           # and P9's drafted rows (the section 13 move, the pointer, xref and dedupe rows and the two widening rows for the new stage files)
           # change the REACH-A upper bound once more: 589 / 422 to 588 / 422; P10's drafted rows and the real relocation make it 579 / 420;
           # the P10 remediation (pointer rows for the two fences, fifteen xref rows) makes it 584 / 425
-          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (584, 425),
+          # P11's drafted rows (the protocol, build and plan splits) make it 580 / 421
+          and (sb["REACH_A"]["rows_upper_bound"], sb["REACH_B"]["rows_upper_bound"]) == (580, 421),
           f"missing={[n for n in need if n not in text]}")
 
 
