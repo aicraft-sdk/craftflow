@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.33.3] - 2026-10-20
+
+### Fixes
+
+- P10 remediation, doubt cycle 2: content pins for the moved fragments, structured agent results pointer, five re-opened signed rows
+- P10 remediation, pointer rows for the two split fences, stale-pointer xref rows, regenerated cut plan, projection, budget and ADR notes
+- P10 remediation, section 5 resume pointer and the shared NO_REPO_FOUND unit back to verbatim
+- P10 remediation, kernel trigger sentences, scope-marker grep, research step 5a for DEBUG, stale moved-section pointers and hardened wiring tests
+
+### Refactoring
+
+- router kernel with stage-gated resume, post-agent, verify-dispatch and workflow-start references
+
+### Documentation
+
+- sign P10 rows and projection revision
+- point the step 5a workspace-walk references at memory-load-workspace.md
+
+### Chores
+
+- re-stamp router-budget measured_at_sha to the P10 doubt cycle 2 remediation commit
+- re-stamp router-budget measured_at_sha to the P10 remediation commit
+- re-stamp router-budget measured_at_sha to the P10 commit
+
 ## [1.33.2] - 2026-10-17
 
 ### Fixes
