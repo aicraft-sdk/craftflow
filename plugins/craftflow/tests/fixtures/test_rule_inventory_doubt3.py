@@ -137,18 +137,25 @@ def _run(root: Path, lines: List[str], rel: str = K):
 
 def test_b1_real_skill_branch_delete_move_e2e() -> None:
     """P8 retarget (see test_r1_real_skill_4e_branch_swap_e2e): step 4's branch-delete items left SKILL.md, so the attack moves a real failure
-    branch of step 1a. P11 moved step 1a to `_shared/router-protocol-multirepo.md`, so the `RESOLVE_EXIT != 0` item is lifted out from
-    under its place at the top of step 1a and appended after the `NO_REPO_FOUND` item at the end of the file."""
+    branch of step 1a. P11 moved step 1a to `_shared/router-protocol-multirepo.md`. P11 remediation 3 (doubt cycle 3 F1) retargets the P11
+    form of this test: it moved the childless `RESOLVE_EXIT != 0` item to the end of the file, which changes nothing the inventory records
+    (the new file is flat, so the item has no enclosing item or label to lose; sibling ORDER is not an inventory fact) and only looked
+    caught while the move was excused by `pointer` rows or the tree was unsigned. That order attack is pinned by the step 1a skeleton check of
+    `test_router_p11_split_wiring_and_content_pins` (hook suite). This test keeps the intent, a rule moved out of its failure branch, on a
+    change the inventory does see: the `DETERMINISTIC` branch's fence and `PROJECT_ROOT` paragraph are lifted out of that branch and
+    land under the `AMBIGUOUS` branch."""
     with tempfile.TemporaryDirectory() as tmp:
         root = d.scratch(tmp)
         control, _ = d.real_diff(root)
         lines = _lines_of(root, d.MULTIREPO)
-        a = next(i for i, x in enumerate(lines) if x.strip().startswith("- **If `RESOLVE_EXIT != 0`**"))
-        b = next(i for i in range(a + 1, len(lines)) if lines[i].strip().startswith("- **Otherwise**, parse the outcome"))
-        moved = lines[:a] + lines[b:] + [""] + lines[a:b]
+        det = next(i for i, x in enumerate(lines) if x.startswith("     - **`DETERMINISTIC`**"))
+        kids = next(i for i in range(det + 1, len(lines)) if lines[i].strip().startswith("```bash"))
+        amb = next(i for i in range(kids, len(lines)) if lines[i].startswith("     - **`AMBIGUOUS`**"))
+        nrf = next(i for i in range(amb, len(lines)) if lines[i].startswith("     - **`NO_REPO_FOUND`**"))
+        moved = lines[:kids] + lines[amb:nrf] + lines[kids:amb] + lines[nrf:]
         r, res = _run(root, moved, d.MULTIREPO)
     check("B1 e2e control: the unmodified scratch copy passes", control.returncode == 0, control.stdout[-200:])
-    check("B1 e2e: the `RESOLVE_EXIT != 0` failure item moved to the end of step 1a fails closed",
+    check("B1 e2e: the `DETERMINISTIC` branch's fence and paragraph moved under the `AMBIGUOUS` branch fails closed",
           r.returncode == 1 and res.get("unmapped_removed", 0) >= 1, f"rc={r.returncode} {res} {r.stderr[-200:]}")
 
 
@@ -224,9 +231,11 @@ def test_b4_after_corpus_is_the_working_tree() -> None:
         lines = _lines_of(root)
         at = next(i for i, x in enumerate(lines) if x.startswith("## 14. Hard Rules"))
         r, res = _run(root, lines[:at] + lines[at + 1:])
-    check("B4 sentinel: control present plus policy-mapped deletions plus signed rewrites equals the baseline occurrence count",
+    # P11 remediation 3 (doubt cycle 3 F1): the Rationale row (P11) added a fourth bucket, `rationale`; the sum left it out and read 1332 for 1333
+    check("B4 sentinel: control present plus policy-mapped deletions plus signed rewrites plus rationale rows equals the baseline occurrence count",
           control.returncode == 0
-          and base.get("present", 0) + base.get("policy_mapped", 0) + base.get("reworded", 0) == base.get("baseline_occurrences"),
+          and base.get("present", 0) + base.get("policy_mapped", 0) + base.get("reworded", 0) + base.get("rationale", 0)
+          == base.get("baseline_occurrences"),
           repr(base))
     check("B4 sentinel: a scratch edit to a corpus file changes `present` (the after corpus is the working tree)",
           res.get("present", 0) < base.get("present", 0) or r.returncode == 1, f"{res.get('present')} vs {base.get('present')}")

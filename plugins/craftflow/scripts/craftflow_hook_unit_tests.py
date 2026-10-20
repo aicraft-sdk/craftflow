@@ -1727,6 +1727,18 @@ def test_router_p11_split_wiring_and_content_pins() -> None:
         for f in (ref + "build-graph-standard.md", ref + "build-graph-fast.md"):
             if re.sub(r"\s+", " ", pin) not in re.sub(r"\s+", " ", corpus[f]):
                 problems.append(f"{f.rsplit('/', 1)[-1]} lost the twin unit: {pin[:80]!r}")
+    # P11 remediation 3 (doubt cycle 3 F1): step 1a moved to a flat file whose list items have no enclosing item left to compare, so the
+    # inventory cannot see the ORDER of its siblings (a childless failure branch moved to the end of the file keeps its place in every
+    # id/label/chain), and a branch nested under another branch is only caught through the chain. The skeleton is pinned here: every anchor
+    # once, with its exact indentation (the indentation is the nesting), in this order.
+    mr_lines = corpus["skills/_shared/router-protocol-multirepo.md"].split("\n")
+    skeleton = ("   **1a. Multi-repo workspace root resolution**", "   CRAFTFLOW_INSTALL=$(python3", "   (A non-zero `CRAFTFLOW_INSTALL_EXIT`",
+                "   - **If `RESOLVE_EXIT != 0`**", "   - **Otherwise**, parse the outcome:", "     RESOLVE_OUTCOME=$(printf",
+                "     Also capture the workspace-root file allowlist", "     WORKSPACE_WRITABLE_PATHS_JSON=$(printf",
+                "     - **`DETERMINISTIC`**", "     - **`AMBIGUOUS`**", "     - **`NO_REPO_FOUND`**")
+    at_lines = [[n for n, ln in enumerate(mr_lines) if ln.startswith(a)] for a in skeleton]
+    if any(len(x) != 1 for x in at_lines) or [x[0] for x in at_lines if x] != sorted(x[0] for x in at_lines if x):
+        problems.append(f"router-protocol-multirepo.md step 1a skeleton must hold each anchor once at its exact indentation, in order: {list(zip(skeleton, at_lines))!r}")
     # P11 remediation (hunter HIGH-1 / HIGH-2): a fast_path BUILD and a DEBUG workflow apply the Learn-Distill and Skill-Distill gates but never
     # load build-graph-standard.md (the map allows one start row and one stage row per file, and its DEBUG and fast_path reach would collide with
     # the BUILD:standard start row). verify-dispatch.md, which both read when integration-verifier returns PASS (the moment the gates come due),
@@ -1746,7 +1758,20 @@ def test_router_p11_split_wiring_and_content_pins() -> None:
     # passed the fence check alone. The section is pinned block by block, in BOTH directions: every block of the section must be one of the
     # seven expected blocks and every expected block must be present once, so a fence, paragraph or sentence added to verify-dispatch.md alone
     # fails too; and the standard graph's own wording that the copies mirror (the trigger bullets, the two chain-tail lines) is pinned there.
-    section = re.search(r"^### Distill gate task shapes\s*\n(.*?)(?=^#{1,3} |\Z)", vd, re.M | re.S)
+    # Remediation 3 (doubt cycle 3 F2): the section is read to the end of the file, not to the next heading, and the file's full heading list is
+    # pinned (fence-aware, in order, this section last), so a heading-led section appended after it (a `## DEBUG distill override` that says to
+    # leave `chain_tail_task_id` unchanged) fails here instead of sitting outside the block check.
+    vd_heads, in_vd_fence = [], False
+    for ln in vd.split("\n"):
+        if ln.startswith("```"):
+            in_vd_fence = not in_vd_fence
+        elif not in_vd_fence and re.match(r"#{1,6} ", ln):
+            vd_heads.append(ln.rstrip())
+    expected_vd_heads = ["# Verify dispatch", "### Doubt-Verify Dispatch Rule", "### Fix-Verify Dispatch Rule",
+                         "#### fix_verify_keyword_scan — Keyword Table", "### Distill gate task shapes"]
+    if vd_heads != expected_vd_heads:
+        problems.append(f"verify-dispatch.md headings must be exactly {expected_vd_heads!r} (the '### Distill gate task shapes' section last); got {vd_heads!r}")
+    section = re.search(r"^### Distill gate task shapes\s*\n(.*)\Z", vd, re.M | re.S)
     learn_tail = "Set `chain_tail_task_id = learn_distill_task_id`. After `learn-distiller` completes, append `learn_distilled` to the event log."
     skill_tail_head = "Set `chain_tail_task_id = skill_distill_task_id`."
     if len(shapes) == 2:

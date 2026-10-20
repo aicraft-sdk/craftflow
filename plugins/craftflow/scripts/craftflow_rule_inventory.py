@@ -348,9 +348,41 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
             key = (e["id"], o["heading_ctx"], o["file"], tuple(o["heading_path"]), o["label_ctx"], tuple(o["parent_ctx"]))
             wanted.setdefault((e["id"], tuple(o["heading_path"]), o["label_ctx"], tuple(o["parent_ctx"])), []).append(
                 narrowed.get(key, occ_cov[key]))
+    # A section-move may carry only a branch of a list whose outer item, label paragraph or preceding paragraph stayed behind (step 1a of the
+    # shared protocol moved this way). The moved units then cannot hold those parts of their baseline place, so a unit that sits in a
+    # section-move destination is compared a second time with (a) the leading list-item ancestors that are NOT units of the destination
+    # dropped from its baseline chain, (b) a trailing preceding-paragraph marker (`@id`) dropped when that paragraph is not in the destination
+    # and (c) its label emptied (a fence or table outside any list item ends a label, so a branch moved out of its numbered item loses the
+    # label after its first fence). Ancestors and paragraphs that moved along stay in the chain, and the heading path and the rest of the
+    # chain must still match exactly, so a branch moved, nested, swapped or lifted inside the destination is a missing baseline occurrence.
+    moved_in = []
+    for src, dst, f in moves:
+        ids_in = {ctx_renames.get(e["id"], e["id"]) for e in after["entries"] for o in e["occurrences"]
+                  if file_is(f, o["file"]) and o["heading_path"][:len(dst)] == dst}
+        moved_in.append((src, ids_in))
+
+    def without_stayed_behind(gid: str, place: list) -> List[list]:
+        """Other places a moved unit may hold in its destination, as [path, label, chain] (see the comment above)."""
+        path, label, ctx = place
+        for src, ids_in in moved_in:
+            if list(path[:len(src)]) == src and gid in ids_in:
+                k = 0
+                while k < len(ctx) and not ctx[k].startswith("@") and ctx[k] not in ids_in:
+                    k += 1
+                chain = ctx[k:]
+                if chain and chain[-1].startswith("@") and chain[-1][1:] not in ids_in:
+                    chain = chain[:-1]
+                chains = [ctx] + ([chain] if chain != ctx else [])
+                names = [label] + ([""] if label else [])
+                return [[path, n, c] for n in names for c in chains if (n, c) != (label, ctx)]
+        return []
+
     for (gid, *place), reqs in sorted(wanted.items()):
         supply = groups.get((gid, *place), [])
         hit, missed, leftover = _match(reqs, supply)
+        for alt in (without_stayed_behind(gid, place) if missed else []):
+            more, missed, spare = _match(missed, groups.get((gid, *alt), []))
+            hit, leftover = hit + more, leftover + spare
         res["baseline_occurrences"] += len(reqs)
         res["present"] += hit
         res["occurrence_deficit"] += len(missed)

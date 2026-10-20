@@ -80,7 +80,7 @@ Fast-path note: fast-path BUILD with a clean verifier pass never enters the gate
 - `STATUS: SKIPPED` → passing state, append `skill_distill_skipped` (if not already logged this workflow) and proceed straight to `memory-finalize`, no `AskUserQuestion`. (Distinct from `skill_candidates_observed`, which is reserved for the unconditional `--observe` step at memory-finalize — see `references/memory-finalize.md → ## 13. Memory Finalization`.)
 - `STATUS: FAIL` or no return (stuck/timeout) → `skill-author` is NOT a `kind:remfix` origin (no code-defect remediation applies to a proposal-authoring failure). Do not create a REM-FIX task and do not block the chain. Append `skill_distill_failed` to the event log with the failure reason if available, leave the candidate's ledger status unchanged (still `candidate`, so it is flagged for retry the next time this gate fires on a future workflow), and proceed straight to `memory-finalize` using `chain_tail_task_id` as it stood before this gate fired.
 
-Runs identically on standard BUILD and both fast-path variants (clean and escalated) — the gate check itself has no fast-path-specific behavior, unlike Learn-Distill's `remediation_history` dependency.
+Runs identically on standard BUILD, both fast-path variants (clean and escalated) and DEBUG — the gate check has no fast-path-specific behavior, unlike Learn-Distill's `remediation_history` dependency.
 
 #### Gate Table
 

@@ -236,6 +236,56 @@ def test_rh3_section_move_one_row_moves_a_whole_section_across_files() -> None:
           repr(nodst))
 
 
+# ------------------------------------------------------------------------------------------------ P11 remediation 3 (doubt cycle 3 F1)
+# A branch of a numbered step moves into its own file while the numbered item itself stays behind (step 1a of the shared protocol moved to
+# `_shared/router-protocol-multirepo.md` this way). The moved units lose their outermost ancestor, so a `section-move` row alone could not
+# match them and a `pointer` row per unit excused them instead, which also excused a branch moved INSIDE the new file once the rows were signed.
+
+OUTER = "1. Outer step to run first today.\n"
+BRANCHES = ("   - **If the merge failed** (exit non-zero).\n     - Do NOT delete the branch.\n"
+            "   - **If the merge succeeded**.\n     - Delete the branch.\n")
+BRANCH_SRC = "## 3 Build\n\n### Resolve\n\n" + OUTER + BRANCHES
+BRANCH_STAY = "## 3 Build\n\n### Resolve\n\n" + OUTER
+BRANCH_FILE = "## Moved branches\n\n" + BRANCHES
+
+
+def branch_run(moved: str, stay: str = BRANCH_STAY, *, row: bool = True) -> dict:
+    rows = [rw(f"{BW}#3 build > resolve", f"{K}#moved branches", "section-move")] if row else []
+    return run({BW: BRANCH_SRC}, {BW: stay, K: moved}, rewrites=rows)
+
+
+def test_f1_section_move_matches_units_whose_outer_item_stayed_behind() -> None:
+    ok = branch_run(BRANCH_FILE)
+    check("F1 a branch moved to its own file with its numbered item left behind passes with ONE signed section-move row",
+          not failed(ok) and ok["unmapped_removed"] == 0 and ok["present"] == 5, repr(ok))
+    ctl = branch_run(BRANCH_FILE, row=False)
+    check("F1 control: the same move without the section-move row fails", failed(ctl) and ctl["unmapped_removed"] >= 4, repr(ctl))
+
+
+def test_f1_branch_changes_inside_the_moved_file_still_fail_closed() -> None:
+    swapped = BRANCH_FILE.replace("Do NOT delete the branch.", "TMP").replace("Delete the branch.", "Do NOT delete the branch.").replace("TMP", "Delete the branch.")
+    res = branch_run(swapped)
+    check("F1 children swapped between the two branches inside the moved file fail closed", failed(res) and res["unmapped_removed"] >= 1, repr(res))
+    nested = BRANCH_FILE.replace("   - **If the merge succeeded**.\n     - Delete the branch.\n",
+                                 "     - **If the merge succeeded**.\n       - Delete the branch.\n")
+    res = branch_run(nested)
+    check("F1 the second branch nested one level deeper, under the first, fails closed", failed(res) and res["unmapped_removed"] >= 1, repr(res))
+    lifted = BRANCH_FILE.replace("     - Do NOT delete the branch.\n", "").replace("## Moved branches\n\n", "## Moved branches\n\n- Do NOT delete the branch.\n")
+    res = branch_run(lifted)
+    check("F1 a child lifted out of its branch to the top of the moved file fails closed", failed(res) and res["unmapped_removed"] >= 1, repr(res))
+
+
+def test_f1_ancestors_that_moved_too_are_not_stripped() -> None:
+    both = "## Moved branches\n\n" + OUTER + BRANCHES
+    ok = run({BW: BRANCH_SRC}, {BW: "## 3 Build\n\n### Resolve\n\nSee the file.\n", K: both},
+             rewrites=[rw(f"{BW}#3 build > resolve", f"{K}#moved branches", "section-move")])
+    check("F1 control: the numbered item moved with its branches keeps the full chain and passes", not failed(ok) and ok["unmapped_removed"] == 0, repr(ok))
+    lifted = both.replace("   - **If the merge failed** (exit non-zero).\n     - Do NOT delete the branch.\n", "- Do NOT delete the branch.\n")
+    res = run({BW: BRANCH_SRC}, {BW: "## 3 Build\n\n### Resolve\n\nSee the file.\n", K: lifted},
+              rewrites=[rw(f"{BW}#3 build > resolve", f"{K}#moved branches", "section-move")])
+    check("F1 a child that left its branch although the numbered item moved too is not excused", failed(res) and res["unmapped_removed"] >= 1, repr(res))
+
+
 # ------------------------------------------------------------------------------------------------ R-M1 / H-M1
 
 

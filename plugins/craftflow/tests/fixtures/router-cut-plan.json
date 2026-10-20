@@ -2451,6 +2451,16 @@
   },
   {
    "condition": "always",
+   "file": "skills/craftflow-router/references/fast-path.md",
+   "id": "p11-xref-x-fast-path-3",
+   "op": "replace",
+   "phase": "P11",
+   "source": "doubt cycle 3 F4: the Skill-Distill Gate closing sentence leaves DEBUG out while the paragraph above it and debug-workflow.md apply the gate to DEBUG (byte-neutral: 'itself' dropped)",
+   "start_anchor": "Runs identically on standard BUILD and both fast-path variants (clean and escalated) — the gate check itself has no fast-path-specific behavior, unlike Learn-Distill's `remediation_history` dependency.",
+   "text": "Runs identically on standard BUILD, both fast-path variants (clean and escalated) and DEBUG — the gate check has no fast-path-specific behavior, unlike Learn-Distill's `remediation_history` dependency.\n"
+  },
+  {
+   "condition": "always",
    "file": "skills/craftflow-router/references/harness-self-checks.md",
    "id": "p11-xref-x-harness-self-checks",
    "op": "replace",

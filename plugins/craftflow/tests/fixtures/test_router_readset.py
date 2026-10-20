@@ -1164,8 +1164,9 @@ def test_signing_burden_buckets_are_disjoint_on_every_tier() -> None:
     # P11 (re-derived on the final text and the 156 unsigned P11 rows read by the diff): 412 / 411 (381 / 380) become 529 / 528 (498 / 497)
     # P11 remediation (re-derived on the final text and the 167 unsigned rows read by the diff): 529 / 528 (498 / 497) become 530 / 529 (499 / 498)
     # P11 remediation 2 (re-derived on the final text and the 169 unsigned rows read by the diff): 530 / 529 (499 / 498) become 532 / 531 (501 / 500)
-    signed_overlap = {"conditional": 532, "conditional_if_reach_amended": 531, "effective": 532, "effective_without_infeasible_rows": 532,
-                      "guaranteed": 532, "with_contingencies": 501, "with_contingencies_if_reach_amended": 500}
+    # P11 remediation 3 (re-derived on the final text and the 156 unsigned rows read by the diff): 532 / 531 (501 / 500) become 533 / 532 (502 / 501)
+    signed_overlap = {"conditional": 533, "conditional_if_reach_amended": 532, "effective": 533, "effective_without_infeasible_rows": 533,
+                      "guaranteed": 533, "with_contingencies": 502, "with_contingencies_if_reach_amended": 501}
     bad = {}
     for name, v in tiers.items():
         b = v["signing_burden"]["buckets"]
@@ -1209,14 +1210,17 @@ def test_signing_burden_counts_rows_not_occurrences() -> None:
           # P11 remediation 2 (re-derived): the two xref rows for fast-path.md (31e097187433, a00b0ce2515c) turn two more baseline ids into vanishing ids:
           # 162 vanishing occurrences (149 ids) become 164 (151 ids); REACH-A / REACH-B (row bounds) go from 580 / 418 to 582 / 420; the if-amended tier
           # goes from 573 per-unit / 183 vanishing to 573 / 185; the split buckets (381 / 162 / 75 / 144) and their bytes do not move
-          b["vanishing"] == {"occurrences": 164, "ids": 151} and b["widening"] == {"pairs": 0, "files": 0}
+          # P11 remediation 3 (re-derived): the xref row for the closing sentence of fast-path.md's Skill-Distill Gate (d011cfa36fd4) turns one more baseline id
+          # into a vanishing id and the fifteen step-1a `pointer` rows are replaced by one `section-move` row: 164 vanishing occurrences (151 ids) become 165 (152 ids);
+          # REACH-A / REACH-B (row bounds) go from 582 / 420 to 583 / 421; the if-amended tier goes from 573 per-unit / 185 vanishing to 573 / 186
+          b["vanishing"] == {"occurrences": 165, "ids": 152} and b["widening"] == {"pairs": 0, "files": 0}
           and (sec["ops"], sec["rows_low"], sec["rows_high_headed_spans"], sec["rows_upper_bound"]) == (41, 41, 49, 53)
           and (sec["partial_spans_without_heading"], sec["multi_section_spans"]) == (21, 7)
           and sec["needs_destination_heading"] == ["p10-pav-verifier-telemetry"]
-          and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (371 + 151 + 53 + 7, 209 + 151 + 53 + 7)
-          and g["REACH_A"]["occurrences"]["total"] == 381 + 164 + 0 + 0 and g["REACH_B"]["occurrences"]["total"] == 41 + 219 + 164 + 0
-          and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 209 + 151 + 53 + 7
-          and d["REACH_A"]["occurrences"]["total"] == 573 + 185 + 0 + 0
+          and (g["REACH_A"]["rows_upper_bound"], g["REACH_B"]["rows_upper_bound"]) == (371 + 152 + 53 + 7, 209 + 152 + 53 + 7)
+          and g["REACH_A"]["occurrences"]["total"] == 381 + 165 + 0 + 0 and g["REACH_B"]["occurrences"]["total"] == 41 + 219 + 165 + 0
+          and gd["REACH_A"]["rows_upper_bound"] == gd["REACH_B"]["rows_upper_bound"] == 209 + 152 + 53 + 7
+          and d["REACH_A"]["occurrences"]["total"] == 573 + 186 + 0 + 0
           # REACH-A counts the 39 moved-without-loss occurrences, REACH-B the 42 section-move ops; they were equal (42) until P5's signed
           # plan_commit row removed one occurrence without removing a section move, and P6's six literal-to-key Rewrites rows (listed in the
           # policy map, still unsigned) took away two more and one vanishing occurrence. P8's thirteen unsigned rows (the gate summary, its bullets, the
@@ -1226,8 +1230,8 @@ def test_signing_burden_counts_rows_not_occurrences() -> None:
           # REACH-A's occurrence totals lose exactly those (guaranteed 616 to 586, if-amended 830 to 799); the row-count bounds (589 / 422) do not move.
           # P9: the if-amended tier goes from 607 per-unit / 144 vanishing / 48 widening to 605 / 147 / 38 (the definitional readings 248 to 247)
           # P10: the if-amended tier goes from 605 per-unit / 147 vanishing / 38 widening to 588 / 160 / 15 (the definitional readings 247 to 237)
-          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 0 + 219 + 185 + 0
-          and d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 219 + 185 + 0
+          and d["definitional_D17B"]["REACH_A"]["occurrences"]["total"] == 0 + 219 + 186 + 0
+          and d["definitional_D17B"]["REACH_B"]["occurrences"]["total"] == 42 + 219 + 186 + 0
           and d["definitional_D17B"]["REACH_B"]["rows_upper_bound"] < d["REACH_B"]["rows_upper_bound"] < d["REACH_A"]["rows_upper_bound"],
           f"buckets={b} sections={sec} guaranteed={(g['REACH_A']['rows_upper_bound'], g['REACH_B']['rows_upper_bound'])} amended_A_occ={d['REACH_A']['occurrences']}")
 
