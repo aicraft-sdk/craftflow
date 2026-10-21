@@ -652,6 +652,36 @@ def test_enforce_requires_caps() -> None:
           and rule({"enforce": False, "enforced_caps": None}), "enforce: true with null enforced_caps")
 
 
+def enforce_ratchet_problems(b: dict, origin: Optional[dict]) -> List[str]:
+    """enforce only ratchets up. Two forms: (1) origin/main has `enforce: true` and this budget has false; (2) this budget lists P12
+    in merged_phases (P12 turned the caps on) while `enforce` is false, which holds where origin/main has no budget file or an older one."""
+    problems = []
+    if origin is not None and origin.get("enforce") is True and b["enforce"] is not True:
+        problems.append("enforce is false but origin/main's router-budget.json has true")
+    if "P12" in b["merged_phases"] and b["enforce"] is not True:
+        problems.append("enforce is false while P12 is in merged_phases (P12 enabled the enforced caps)")
+    return problems
+
+
+def test_enforce_ratchet_vs_origin_main() -> None:
+    live = load_budget()
+    on = dict(live, enforce=True, merged_phases=["P2", "P12"])
+    off_p12 = dict(on, enforce=False)
+    off_early = dict(on, enforce=False, merged_phases=["P2", "P11"])
+    f11 = dict(off_p12, ceilings=dict(live["ceilings"], kernel_bytes=34203))
+    controls = {
+        "on_with_origin_on": enforce_ratchet_problems(on, {"enforce": True}) == [],
+        "off_after_origin_on": len(enforce_ratchet_problems(off_early, {"enforce": True})) == 1,
+        "off_with_p12_merged": len(enforce_ratchet_problems(off_p12, None)) == 1,
+        "off_with_p12_merged_and_origin_off": len(enforce_ratchet_problems(off_p12, {"enforce": False})) == 1,
+        "off_before_p12_origin_off": enforce_ratchet_problems(off_early, {"enforce": False}) == [],
+        "f11_off_and_kernel_over_cap": len(enforce_ratchet_problems(f11, None)) == 1,
+    }
+    status, origin = origin_budget()
+    problems = enforce_ratchet_problems(live, origin)  # status skip/new -> origin None: the P12-in-merged_phases form still runs
+    check("enforce_ratchet_vs_origin_main", all(controls.values()) and not problems, f"controls={controls} live={problems} origin_status={status}")
+
+
 def test_ceilings_le_enforced_caps_when_enforced() -> None:
     b = load_budget()
     if not b["enforce"]:

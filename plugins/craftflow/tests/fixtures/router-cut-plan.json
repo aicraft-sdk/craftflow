@@ -2634,7 +2634,7 @@
    "phase": "P12",
    "position": "after_anchor",
    "source": "plan P12 task 2: one statement in the kernel header (as built: the statement is the kept copy of every dedupe row)",
-   "text": "\n`(shared)`: canonical text lives in `_shared/`, shared with Cursor.\n"
+   "text": "\n`(shared)`: canonical text lives in `skills/_shared/`, with Cursor.\n"
   },
   {
    "condition": "always",
@@ -3266,7 +3266,7 @@
    "id": "p12-rationale-dispatcher-note",
    "op": "replace",
    "phase": "P12",
-   "source": "plan P12 task 3 (A15): the whole non-normative Host-specific paragraph (baseline id 1be8628b06e4, 793 B) moves verbatim to docs/router-rationale.md",
+   "source": "plan P12 task 3 (A15): the whole non-normative Host-specific paragraph (baseline id 1be8628b06e4, 795 B) moves verbatim to docs/router-rationale.md",
    "start_anchor": "| `kind:remfix` + `origin:code-reviewer|silent-failure-hunter|integration-verifier|router` | `craftflow:component-builder` |",
    "text": "| `kind:remfix` + `origin:code-reviewer|silent-failure-hunter|integration-verifier|router` | `craftflow:component-builder` |\n"
   },

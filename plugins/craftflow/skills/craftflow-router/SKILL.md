@@ -12,7 +12,7 @@ description: |
 
 **Runtime contract only.** v10 restores trust-first orchestration: route intent, hydrate workflow state, write workflow artifacts, execute the task graph, validate agent output, and fail closed on ambiguity, skipped work, or missing persistence.
 
-`(shared)`: canonical text lives in `_shared/`, shared with Cursor.
+`(shared)`: canonical text lives in `skills/_shared/`, with Cursor.
 
 Mandatory reference read: before routing (## 1.) or dispatching any agent, read
 `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` once per

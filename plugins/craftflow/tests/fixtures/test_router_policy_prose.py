@@ -332,7 +332,7 @@ def test_loop_cap_check_failed_ask_line_present():
     pg = art.index("- `pending_gate` is required whenever")
     check("pending_gate_entry_follows_the_pending_gate_rule", art.index(entry) > pg and art.index(entry) - pg < 600 if entry else False, "")
 
-# P12 task 2: the "Shared with Cursor" boilerplate (8 sites) collapses to one kernel-header statement plus `(shared)` tags. Each tag keeps
+# P12 task 2: the "Shared with Cursor" boilerplate (9 sites: 7 in the kernel, 2 in post-agent-validation.md) collapses to one kernel-header statement plus `(shared)` tags. Each tag keeps
 # the canonical file and the quoted section; the host-specific sentences after the tag are untouched.
 SHARED_TAGS = (
     (SKILL, "**(shared) `_shared/router-protocol.md` §\n\"Intent Routing\""),
@@ -340,6 +340,7 @@ SHARED_TAGS = (
     (SKILL, "**(shared) `_shared/router-protocol.md` §\n\"Explicit Dispatcher (Phase-to-Agent Table)\""),
     (SKILL, "**(shared) `_shared/router-protocol.md` § \"Dispatch\nPrompt Scaffold\" (full field list"),
     (SKILL, "**(shared) `_shared/router-protocol.md` § \"Dispatch\nPrompt Scaffold\" section referenced immediately above**"),
+    (SKILL, "Required sections — (shared) `_shared/router-protocol.md` §\n\"Memory File Required Sections\""),
     (SKILL, "(shared) `_shared/verifier-handoff.md` §\n\"Previous Agent Findings Handoff\". DEBUG skips hunter findings."),
     ("skills/craftflow-router/references/post-agent-validation.md", "**(shared) `_shared/skill-distill-approval.md` §\n\"Skill-Distill Approval Flow\""),
     ("skills/craftflow-router/references/post-agent-validation.md", "(shared) `_shared/verifier-handoff.md` §\n\"Verifier Findings Handoff\"."),
@@ -352,10 +353,10 @@ def test_shared_with_cursor_boilerplate_collapsed():
     check("no_shared_with_cursor_boilerplate_left", "Shared with Cursor" not in kernel and "Shared with Cursor" not in pav,
           f"kernel={kernel.count('Shared with Cursor')} post-agent-validation={pav.count('Shared with Cursor')}")
     header = kernel[:kernel.index("## Reference Read Map")]
-    check("kernel_header_states_the_shared_tag_once", header.count("`(shared)`: canonical text lives in `_shared/`, shared with Cursor.") == 1
+    check("kernel_header_states_the_shared_tag_once", header.count("`(shared)`: canonical text lives in `skills/_shared/`, with Cursor.") == 1
           , header[-400:])
     missing = [t[:60] for f, t in SHARED_TAGS if t not in current(f)]
-    check("eight_shared_tags_keep_file_and_section", not missing, f"missing tags: {missing}")
+    check("nine_shared_tags_keep_file_and_section", len(SHARED_TAGS) == 9 and not missing, f"{len(SHARED_TAGS)} tags pinned; missing tags: {missing}")
     after_map = kernel[kernel.index("## 1. Intent Routing"):]
     check("no_full_tools_path_left_in_shared_tags", "tools/craftflow-plugin/plugins/craftflow/skills/_shared/" not in after_map,
           f"{after_map.count('tools/craftflow-plugin/plugins/craftflow/skills/_shared/')} full paths after the Read Map")
