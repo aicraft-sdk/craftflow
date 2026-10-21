@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.33.5] - 2026-10-21
+
+### Fixes
+
+- pin enforce true, anchor shared-pointer needles on the tag, name skills/_shared in the kernel header
+
+### Refactoring
+
+- policy-mapped deletions, rationale relocation, enforce P2C router budget caps
+
+### Documentation
+
+- sign P12 rows and projection revision
+- state the P2C confirmation depends on the narrower router description; note the header and needle changes
+
+### Tests
+
+- key the enforce ratchet on phase order and require projection revisions to name merged phases
+
+### Chores
+
+- re-stamp router-budget measured_at_sha to the P12 remediation commit
+- re-stamp router-budget measured_at_sha to the P12 commit
+
 ## [1.33.4] - 2026-10-20
 
 ### Fixes
