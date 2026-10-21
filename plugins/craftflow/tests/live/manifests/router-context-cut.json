@@ -1,0 +1,72 @@
+{
+  "name": "router-context-cut",
+  "workdir": ".",
+  "required_env": [],
+  "environment": {
+    "CI": "true"
+  },
+  "healthcheck": [
+    {
+      "name": "claude CLI present",
+      "command": "claude --version",
+      "expected": "exit 0, claude version printed"
+    },
+    {
+      "name": "policy.json validates",
+      "command": "python3 plugins/craftflow/scripts/craftflow_policy.py --validate | grep -q '\"status\": \"ok\"'",
+      "expected": "exit 0; craftflow_policy.py --validate prints status ok"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "LV-1 Load probe: --plugin-dir overrides the installed craftflow",
+      "mode": "proof",
+      "given": "an empty craftflow-managed scratch project (fresh git repo with .craftflow/state), CLAUDE_PLUGIN_ROOT / CLAUDE_CODE_SESSION_ID unset and CLAUDE_PROJECT_DIR pointing at the scratch project",
+      "when": "claude -p --plugin-dir plugins/craftflow --model haiku --debug-file <file> runs a one-word prompt",
+      "then": "the debug log contains 'from --plugin-dir overrides installed version' at least once, proving the candidate plugin (not the installed one) is what the other scenarios exercise",
+      "command": "python3 plugins/craftflow/tests/live/router_context_cut_roundtrip.py --plugin-dir plugins/craftflow --only load_probe",
+      "expected": "exit 0; {\"load_probe\":\"PASS\",...,\"evidence_class\":\"A\"}",
+      "timeout_seconds": 300
+    },
+    {
+      "name": "LV-2 Read-set parity: baseline 214,055 and candidate within the enforced BUILD cap",
+      "mode": "proof",
+      "given": "the baseline commit pinned in router-baseline.lock.json read through --ref with the frozen router-readmap.baseline.json (A4), and the candidate working tree with its live read map",
+      "when": "craftflow_router_readset.py --workflow BUILD --json runs against each",
+      "then": "the baseline start_total is exactly 214055 and the candidate start_total is <= enforced_caps.readset.BUILD from router-budget.json; the gap to the 60,000 goal is printed on stderr and stated in the impact report",
+      "command": "python3 plugins/craftflow/tests/live/router_context_cut_roundtrip.py --plugin-dir plugins/craftflow --only lv2",
+      "expected": "exit 0; {\"lv2\":\"PASS\",...}",
+      "timeout_seconds": 300
+    },
+    {
+      "name": "LV-3 EnterPlanMode denied live (or LIMITATION when the host does not offer the tool in -p mode)",
+      "mode": "proof",
+      "given": "the candidate plugin loaded via --plugin-dir in a craftflow-managed scratch project",
+      "when": "a haiku session is told 'Call the EnterPlanMode tool now, nothing else' with stream-json output so the tool call is observable",
+      "then": "the hook log shows a native_plan_mode_denied row; if the tool was never called, LIMITATION:enterplanmode_not_offered (HV-4 must cover it); a call without a deny row is a FAIL",
+      "command": "python3 plugins/craftflow/tests/live/router_context_cut_roundtrip.py --plugin-dir plugins/craftflow --only lv3",
+      "expected": "exit 0; {\"lv3\":\"PASS\"|\"LIMITATION:enterplanmode_not_offered\",...}",
+      "timeout_seconds": 600
+    },
+    {
+      "name": "LV-4 Plan commit denied live",
+      "mode": "proof",
+      "given": "a craftflow-managed scratch repo with docs/plans/x.md present and gitignored",
+      "when": "a haiku session is told to run 'git add -f docs/plans/x.md' with Bash allowed",
+      "then": "git diff --cached --name-only is empty and the hook log shows a plan_commit_denied row",
+      "command": "python3 plugins/craftflow/tests/live/router_context_cut_roundtrip.py --plugin-dir plugins/craftflow --only lv4",
+      "expected": "exit 0; {\"lv4\":\"PASS\",...}",
+      "timeout_seconds": 600
+    },
+    {
+      "name": "LV-5 Ordinary commit allowed live",
+      "mode": "proof",
+      "given": "the same kind of scratch repo with an untracked src/a.txt",
+      "when": "a haiku session is told to run 'git add src/a.txt && git commit -m t' with Bash allowed",
+      "then": "HEAD is a commit 't' containing src/a.txt and the hook log has no plan_commit_denied row",
+      "command": "python3 plugins/craftflow/tests/live/router_context_cut_roundtrip.py --plugin-dir plugins/craftflow --only lv5",
+      "expected": "exit 0; {\"lv5\":\"PASS\",...}",
+      "timeout_seconds": 600
+    }
+  ]
+}
