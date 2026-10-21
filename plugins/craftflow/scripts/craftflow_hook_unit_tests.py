@@ -3591,7 +3591,11 @@ def test_worktree_isolation_resolver_gated_on_toplevel_failure() -> None:
         return
     skill_section = skill_content[skill_section_start:]
     # P12: the "(shared)" tag, bounded to the '## 0.' section (up to '## 0a.'), so later sections' tags cannot satisfy it
-    section_0 = skill_section[: skill_section.find("\n## 0a.")]
+    section_0_end = skill_section.find("\n## 0a.")
+    if section_0_end == -1:
+        fail(name, "'## 0a.' heading not found in SKILL.md (it bounds the '## 0.' section)")
+        return
+    section_0 = skill_section[:section_0_end]
     pointer_idx = section_0.find("(shared) `_shared/router-protocol.md`")
     if pointer_idx == -1:
         fail(name, "SKILL.md's '## 0.' section no longer points at the shared doc")

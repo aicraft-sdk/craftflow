@@ -25,6 +25,7 @@ sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 
 import craftflow_router_corpus as cor  # noqa: E402
 import craftflow_router_readset as rs  # noqa: E402
+import craftflow_router_readset_guard as grd  # noqa: E402
 import craftflow_router_readset_project as prj  # noqa: E402
 
 FIXTURES = PLUGIN_ROOT / "tests" / "fixtures"
@@ -652,15 +653,33 @@ def test_enforce_requires_caps() -> None:
           and rule({"enforce": False, "enforced_caps": None}), "enforce: true with null enforced_caps")
 
 
+def phase_is_at_or_after_p12(phase: str) -> bool:
+    """Order, not spelling: a phase after P12 (P13) turns the caps on as well. An id that is neither a known phase nor a rowless
+    one (P12a, P13x) fails closed -- it counts as at/after P12."""
+    if phase in grd.ROWLESS_PHASES:
+        return False
+    if phase not in grd.ALL_PHASES:
+        return True
+    return grd.ALL_PHASES.index(phase) >= grd.ALL_PHASES.index("P12")
+
+
 def enforce_ratchet_problems(b: dict, origin: Optional[dict]) -> List[str]:
-    """enforce only ratchets up. Two forms: (1) origin/main has `enforce: true` and this budget has false; (2) this budget lists P12
-    in merged_phases (P12 turned the caps on) while `enforce` is false, which holds where origin/main has no budget file or an older one."""
+    """enforce only ratchets up. Two forms: (1) origin/main has `enforce: true` and this budget has false; (2) this budget lists a phase at
+    or after P12 in merged_phases (P12 turned the caps on, later phases keep them on) while `enforce` is not true, which holds where
+    origin/main has no budget file or an older one. Form 2 is keyed on the phase order in ALL_PHASES, not the literal "P12"."""
     problems = []
-    if origin is not None and origin.get("enforce") is True and b["enforce"] is not True:
+    if origin is not None and origin.get("enforce") is True and b.get("enforce") is not True:
         problems.append("enforce is false but origin/main's router-budget.json has true")
-    if "P12" in b["merged_phases"] and b["enforce"] is not True:
-        problems.append("enforce is false while P12 is in merged_phases (P12 enabled the enforced caps)")
+    late = [p for p in b["merged_phases"] if phase_is_at_or_after_p12(p)]
+    if late and b.get("enforce") is not True:
+        problems.append(f"enforce is not true while {late} is in merged_phases (P12 enabled the enforced caps)")
     return problems
+
+
+def revision_phase_problems(b: dict) -> List[str]:
+    """Every projection_revisions[].phase names a merged phase: a relabelled last phase cannot leave its revision entry behind."""
+    merged = set(b["merged_phases"])
+    return [f"projection_revisions names phase {r.get('phase')!r}, not in merged_phases" for r in b["projection_revisions"] if r.get("phase") not in merged]
 
 
 def test_enforce_ratchet_vs_origin_main() -> None:
@@ -669,6 +688,9 @@ def test_enforce_ratchet_vs_origin_main() -> None:
     off_p12 = dict(on, enforce=False)
     off_early = dict(on, enforce=False, merged_phases=["P2", "P11"])
     f11 = dict(off_p12, ceilings=dict(live["ceilings"], kernel_bytes=34203))
+    off_p13 = dict(on, enforce=False, merged_phases=["P2", "P13"], last_phase="P13")
+    off_p12a = dict(on, enforce=False, merged_phases=["P2", "P12a"], last_phase="P12a")
+    no_key = {k: v for k, v in off_p12.items() if k != "enforce"}
     controls = {
         "on_with_origin_on": enforce_ratchet_problems(on, {"enforce": True}) == [],
         "off_after_origin_on": len(enforce_ratchet_problems(off_early, {"enforce": True})) == 1,
@@ -676,10 +698,31 @@ def test_enforce_ratchet_vs_origin_main() -> None:
         "off_with_p12_merged_and_origin_off": len(enforce_ratchet_problems(off_p12, {"enforce": False})) == 1,
         "off_before_p12_origin_off": enforce_ratchet_problems(off_early, {"enforce": False}) == [],
         "f11_off_and_kernel_over_cap": len(enforce_ratchet_problems(f11, None)) == 1,
+        "off_with_p13_relabel": len(enforce_ratchet_problems(off_p13, None)) == 1,
+        "off_with_p13_relabel_origin_off": len(enforce_ratchet_problems(off_p13, {"enforce": False})) == 1,
+        "off_with_unknown_p12a": len(enforce_ratchet_problems(off_p12a, None)) == 1,
+        "enforce_key_deleted": len(enforce_ratchet_problems(no_key, None)) == 1,
+        "p2c_is_not_late": enforce_ratchet_problems(dict(on, enforce=False, merged_phases=["P2", "P2C"]), None) == [],
     }
     status, origin = origin_budget()
-    problems = enforce_ratchet_problems(live, origin)  # status skip/new -> origin None: the P12-in-merged_phases form still runs
+    problems = enforce_ratchet_problems(live, origin)  # status skip/new -> origin None: the phase-order form still runs
     check("enforce_ratchet_vs_origin_main", all(controls.values()) and not problems, f"controls={controls} live={problems} origin_status={status}")
+
+
+def test_revision_phases_are_merged_phases() -> None:
+    """A relabelled last phase (P12 -> P13) leaves the P12 revision entry naming a phase that is not merged: the entry is the tell."""
+    live = load_budget()
+    relabel = dict(live, merged_phases=live["merged_phases"][:-1] + ["P13"], last_phase="P13")
+    ceiling_34203 = dict(relabel, ceilings=dict(live["ceilings"], kernel_bytes=34203), enforce=True)
+    controls = {
+        "relabel_p13": len(revision_phase_problems(relabel)) == 1,
+        "relabel_p13_with_ceiling_34203": len(revision_phase_problems(ceiling_34203)) == 1,
+        "all_revisions_merged": revision_phase_problems(dict(live, projection_revisions=[{"phase": "P5"}])) == [],
+        "no_revisions": revision_phase_problems(dict(live, projection_revisions=[])) == [],
+        "revision_for_unmerged_phase": len(revision_phase_problems(dict(live, projection_revisions=[{"phase": "P13"}]))) == 1,
+    }
+    problems = revision_phase_problems(live)
+    check("revision_phases_are_merged_phases", all(controls.values()) and not problems, f"controls={controls} live={problems}")
 
 
 def test_ceilings_le_enforced_caps_when_enforced() -> None:
