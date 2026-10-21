@@ -9,6 +9,13 @@
                           The tool being called but NOT denied is a FAIL, never a limitation.
   LV-4 plan commit denied a haiku session told to `git add -f docs/plans/x.md` leaves the index empty and logs plan_commit_denied.
   LV-5 ordinary commit    a haiku session told to `git add src/a.txt && git commit -m t` commits src/a.txt, no plan_commit_denied row.
+                          This is a NEGATIVE CONTROL: it also passes with no hook at all, so it only means something together
+                          with LV-4 (the hook denies) and the load probe (the candidate is what ran).
+
+Evidence class: "A" only when the load probe PASSed in the same run; otherwise "B-SIMULATED" (a per-step --only run other than
+load_probe is therefore always B-SIMULATED; the full run, with no --only, is the Class A source for the impact report's --lv).
+LV-3 reports the limitation only when claude exited 0 and its stream shows the session really ran; any other exit is
+FAIL:claude_session_failed. Hook-log lines that are not valid JSON are counted in each step's stderr detail (skipped_log_lines).
 
 Env isolation: nested `claude -p` gets os.environ minus CLAUDE_PLUGIN_ROOT, CLAUDE_CODE_SESSION_ID and CLAUDE_PROJECT_DIR, plus
 CLAUDE_PROJECT_DIR=<scratch project>; the stop-gate and context-nudge user overrides point at paths that never exist. The repo's own
@@ -71,7 +78,8 @@ def claude(plugin, project, scr, prompt, extra=()):
 
 def git(project, *args):
     cmd = ["git", "-C", str(project), *args]
-    rc, out, err = run(cmd, os.environ.copy(), project)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}  # ambient GIT_DIR etc. must not redirect -C
+    rc, out, err = run(cmd, env, project)
     if rc != 0:
         raise RuntimeError("git %s failed: %s" % (" ".join(args), (out + err)[:200]))
     return out
@@ -96,15 +104,49 @@ def make_project(scr, name, with_plan):
 
 
 def hook_rows(project):
+    """(parsed rows, count of non-blank lines that were not valid JSON); skipped lines are reported, never silent."""
     path = Path(project) / ".craftflow" / "state" / "craftflow-hook-events.log"
-    rows = []
+    rows, skipped = [], 0
     if path.is_file():
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
             try:
                 rows.append(json.loads(line))
             except ValueError:
-                continue
-    return rows
+                skipped += 1
+    return rows, skipped
+
+
+def session_completed(rc, stream_json):
+    """True only when claude exited 0 AND the stream shows the session really ran (a system init or a result event)."""
+    if rc != 0:
+        return False
+    for line in stream_json.splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(ev, dict) and (ev.get("type") == "result" or (ev.get("type") == "system" and ev.get("subtype") == "init")):
+            return True
+    return False
+
+
+def lv3_outcome(rc, stream_json, called, denied_rows):
+    """One LV-3 attempt: 'PASS', a 'FAIL:...' string, or None (session ran, tool never offered: retry, then LIMITATION).
+    A limitation is only ever reachable from a session that really ran."""
+    if denied_rows:
+        return "PASS"
+    if called:
+        return "FAIL:enterplanmode_called_but_not_denied"
+    if not session_completed(rc, stream_json):
+        return "FAIL:claude_session_failed(rc=%s)" % rc
+    return None
+
+
+def evidence_class(summary):
+    """Class A only with a passing load probe in this run; a NOT_RUN or failed probe proves nothing about what was loaded."""
+    return "A" if summary.get("load_probe") == "PASS" else "B-SIMULATED"
 
 
 def tool_uses(stream_json):
@@ -165,12 +207,12 @@ def step_lv3(plugin, scr):
         rc, out, err = claude(plugin, project, scr, "Call the EnterPlanMode tool now, nothing else",
                               ("--output-format", "stream-json", "--verbose"))
         called = "EnterPlanMode" in tool_uses(out)
-        denied = [r for r in hook_rows(project) if r.get("event") == "native_plan_mode_denied"]
-        log("lv3 attempt %d: rc=%s tool_called=%s denied_rows=%d" % (attempt, rc, called, len(denied)))
-        if denied:
-            return "PASS"
-        if called:
-            return "FAIL:enterplanmode_called_but_not_denied"
+        rows, skipped = hook_rows(project)
+        denied = [r for r in rows if r.get("event") == "native_plan_mode_denied"]
+        log("lv3 attempt %d: rc=%s tool_called=%s denied_rows=%d skipped_log_lines=%d" % (attempt, rc, called, len(denied), skipped))
+        outcome = lv3_outcome(rc, out, called, len(denied))
+        if outcome is not None:
+            return outcome
     return LIMITATION_ENTERPLANMODE
 
 
@@ -181,8 +223,9 @@ def step_lv4(plugin, scr):
         claude(plugin, project, scr, "Run this exact bash command and nothing else: git add -f docs/plans/x.md",
                ("--allowedTools=Bash",))
         staged = git(project, "diff", "--cached", "--name-only").strip()
-        denied = [r for r in hook_rows(project) if r.get("event") == "plan_commit_denied"]
-        log("lv4 attempt %d: staged=%r denied_rows=%d" % (attempt, staged, len(denied)))
+        rows, skipped = hook_rows(project)
+        denied = [r for r in rows if r.get("event") == "plan_commit_denied"]
+        log("lv4 attempt %d: staged=%r denied_rows=%d skipped_log_lines=%d" % (attempt, staged, len(denied), skipped))
         if staged:
             return "FAIL:plan_staged=%r" % staged
         if denied:
@@ -200,8 +243,9 @@ def step_lv5(plugin, scr):
         claude(plugin, project, scr, "Run this exact bash command and nothing else: git add src/a.txt && git commit -m t",
                ("--allowedTools=Bash",))
         committed = git(project, "show", "--name-only", "--format=%s", "HEAD").split()
-        denied = [r for r in hook_rows(project) if r.get("event") == "plan_commit_denied"]
-        log("lv5 attempt %d: head=%r denied_rows=%d" % (attempt, committed, len(denied)))
+        rows, skipped = hook_rows(project)
+        denied = [r for r in rows if r.get("event") == "plan_commit_denied"]
+        log("lv5 attempt %d: head=%r denied_rows=%d skipped_log_lines=%d" % (attempt, committed, len(denied), skipped))
         if denied:
             return "FAIL:ordinary_commit_denied"
         if committed[:1] == ["t"] and "src/a.txt" in committed:
@@ -215,7 +259,8 @@ NEEDS_CLAUDE = {"load_probe", "lv3", "lv4", "lv5"}
 
 
 def all_ok(summary, steps):
-    return all(summary[s] == "PASS" or (s == "lv3" and summary[s] == LIMITATION_ENTERPLANMODE) for s in steps)
+    """Every named step ran and passed (lv3 may be the limitation). NOT_RUN is a failure, and an empty step list proves nothing."""
+    return bool(steps) and all(summary[s] == "PASS" or (s == "lv3" and summary[s] == LIMITATION_ENTERPLANMODE) for s in steps)
 
 
 def main(argv=None):
@@ -237,10 +282,12 @@ def main(argv=None):
             summary[s] = RUNNERS[s](plugin, scr)
             if s == "load_probe" and summary[s] != "PASS":
                 break  # the candidate may not be what is loaded: nothing after this is evidence
-        if summary["load_probe"] in ("PASS", "NOT_RUN"):  # a failed probe means the candidate may not be what was loaded
-            summary["evidence_class"] = "A"
+        summary["evidence_class"] = evidence_class(summary)
+        if summary["evidence_class"] != "A":
+            log("evidence_class B-SIMULATED: no passing load probe in this run, so nothing here proves the candidate plugin was "
+                "loaded. Per-step --only runs are always B-SIMULATED except load_probe; the full run is the Class A source.")
         print(json.dumps(summary))
-        return 0 if all_ok(summary, [s for s in steps if summary[s] != "NOT_RUN"] or steps) else 1
+        return 0 if all_ok(summary, steps) else 1
     except Exception as exc:  # noqa: BLE001 - driver reports a clean FAIL row, never a traceback
         log("FAIL: unexpected error: %s: %s" % (type(exc).__name__, exc))
         print(json.dumps(summary))

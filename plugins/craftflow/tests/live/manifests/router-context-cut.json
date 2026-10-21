@@ -59,14 +59,24 @@
       "timeout_seconds": 600
     },
     {
-      "name": "LV-5 Ordinary commit allowed live",
+      "name": "LV-5 Ordinary commit allowed live (negative control)",
       "mode": "proof",
       "given": "the same kind of scratch repo with an untracked src/a.txt",
       "when": "a haiku session is told to run 'git add src/a.txt && git commit -m t' with Bash allowed",
-      "then": "HEAD is a commit 't' containing src/a.txt and the hook log has no plan_commit_denied row",
+      "then": "HEAD is a commit 't' containing src/a.txt and the hook log has no plan_commit_denied row. This passes with no hook at all, so it is a negative control that means something only together with LV-4 and the load probe",
       "command": "python3 plugins/craftflow/tests/live/router_context_cut_roundtrip.py --plugin-dir plugins/craftflow --only lv5",
-      "expected": "exit 0; {\"lv5\":\"PASS\",...}",
+      "expected": "exit 0; {\"lv5\":\"PASS\",...,\"evidence_class\":\"B-SIMULATED\"} (a per-step run has no load probe, so it is never Class A)",
       "timeout_seconds": 600
+    },
+    {
+      "name": "Full lane: LV-1..LV-5 in one run (the Class A source for the impact report)",
+      "mode": "proof",
+      "given": "the candidate plugin and a working claude CLI",
+      "when": "the driver runs every step with no --only; its summary line is passed to craftflow_router_context_impact.py --lv",
+      "then": "load_probe, lv2, lv4 and lv5 are PASS and lv3 is PASS or LIMITATION:enterplanmode_not_offered (only when claude exited 0 and its stream shows the session ran); evidence_class is A because the load probe passed in this same run",
+      "command": "python3 plugins/craftflow/tests/live/router_context_cut_roundtrip.py --plugin-dir plugins/craftflow",
+      "expected": "exit 0; {\"load_probe\":\"PASS\",\"lv2\":\"PASS\",\"lv3\":\"PASS\"|\"LIMITATION:enterplanmode_not_offered\",\"lv4\":\"PASS\",\"lv5\":\"PASS\",\"evidence_class\":\"A\"}",
+      "timeout_seconds": 1800
     }
   ]
 }
