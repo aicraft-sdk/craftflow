@@ -198,6 +198,10 @@ def render(data: dict, hv: Optional[dict] = None, lv: Optional[dict] = None) -> 
     a(f"- Date: {data['date']}")
     a(f"- Baseline: `{base}` (frozen read map `tests/fixtures/router-readmap.baseline.json`)")
     a(f"- Candidate: `{head}`" + (" (working tree had uncommitted changes under the plugin when measured)" if data["head_dirty"] else ""))
+    pending = [f"{h} {side} {pt}" for h in HV_IDS for side in ("baseline", "candidate") for pt in ("a", "b")
+               if _hv_cell(hv, h, side, pt) == "PENDING"]
+    a("- Status: DRAFT (human `/context` A/B pending: " + str(len(pending)) + " of 8 cells)" if pending
+      else "- Status: COMPLETE (all eight `/context` cells filled)")
     a("- Reproduce: `python3 scripts/craftflow_router_context_impact.py --baseline <BASELINE_SHA> --out <report.md>` "
       "(from `tools/craftflow-plugin/plugins/craftflow/`)")
     a("")

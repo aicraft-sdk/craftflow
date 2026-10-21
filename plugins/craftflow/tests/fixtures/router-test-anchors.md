@@ -219,6 +219,7 @@ Excluded tests. `tests/fixtures/router_test_enumerate.py` flags a test when its 
 - Not listed: fx::test_router_context_impact.py::test_render_hv_cells_filled_from_captures — renders a hand-built data dict into report text (router-looking paths appear only in the dict); the live router is not read.
 - Not listed: fx::test_router_context_impact.py::test_render_lv_pending_and_filled — renders a hand-built data dict into report text (router-looking paths appear only in the dict); the live router is not read.
 - Not listed: fx::test_router_context_impact.py::test_render_addendum_is_draft — renders a hand-built data dict into report text (router-looking paths appear only in the dict); the live router is not read.
+- Not listed: fx::test_router_context_impact.py::test_render_status_draft_until_hv_complete — renders a hand-built data dict into report text (router-looking paths appear only in the dict); the live router is not read.
 - Not listed: fx::test_router_context_impact.py::test_render_is_pure — renders a hand-built data dict into report text (router-looking paths appear only in the dict); the live router is not read.
 - Not listed: fx::test_gate_check.py::test_doubt_grid — runs `craftflow_gate_check.py` against scratch artifacts; `SKILL.md` appears only in a progress line, so no router prose is asserted.
 - Not listed: fx::test_gate_check.py::test_fix_verify_grid — runs `craftflow_gate_check.py` against scratch artifacts; `SKILL.md` appears only in a progress line, so no router prose is asserted.

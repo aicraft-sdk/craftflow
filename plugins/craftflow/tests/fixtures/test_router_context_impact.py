@@ -270,6 +270,12 @@ def test_cli_bad_hv_file_exits_2() -> None:
         check("cli_bad_hv_exit_2", code == 2, f"{code} {se[-200:]}")
 
 
+def test_render_status_draft_until_hv_complete() -> None:
+    check("render_status_draft_when_pending", "Status: DRAFT" in imp.render(synthetic()), "pending HV cells must mark the report DRAFT")
+    full = {h: {"baseline": {"a": 1, "b": 2}, "candidate": {"a": 1, "b": 2}} for h in ("HV-1", "HV-2")}
+    check("render_status_complete_when_filled", "Status: COMPLETE" in imp.render(synthetic(), hv=full), "all eight cells filled")
+
+
 def test_render_is_pure() -> None:
     d = synthetic()
     before = copy.deepcopy(d)
