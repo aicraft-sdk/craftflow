@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Router context-cut before/after impact report (plan P13 task 1).
 
-  --baseline SHA --out PATH [--date YYYY-MM-DD] [--hv HV.json] [--lv LV.json] [--plugin-root DIR] [--no-inventory]
+  --baseline SHA --out PATH [--date YYYY-MM-DD] [--hv HV.json] [--lv LV.json] [--plugin-root DIR] [--no-inventory] [--allow-non-lock]
 
 Measures every router read set and size at the baseline commit (bytes read through `git show`, paired with the FROZEN
 `tests/fixtures/router-readmap.baseline.json`, so later renames cannot move it) and at the working tree (the live
@@ -12,16 +12,23 @@ projection (`router-projection.json`, effective tier), so the gap to the goal is
   --hv FILE   David's `/context` captures: {"HV-1": {"baseline": {"a": N, "b": N}, "candidate": {"a": N, "b": N}}, "HV-2": ...}
               (a = right after the routing announce, b = at memory-finalize; N = tokens as `/context` prints them). Cells
               that are absent stay PENDING; numbers are never invented.
-  --lv FILE   the summary JSON line printed by tests/live/router_context_cut_roundtrip.py. Absent -> PENDING.
+  --lv FILE   the summary JSON line printed by a FULL run of tests/live/router_context_cut_roundtrip.py (keys load_probe, lv2..lv5,
+              evidence_class; each result PASS, FAIL:*, or for lv3 only LIMITATION:enterplanmode_not_offered). Absent -> PENDING.
+  --allow-non-lock  accept a --baseline that is not the sha pinned in router-baseline.lock.json; the report is then headed
+              NON-LOCK BASELINE and stays DRAFT. Without the flag such a baseline is an error.
+
+Status is COMPLETE only when all eight /context cells are filled, every LV result passed (evidence class A), the baseline is the
+lock sha, and the inventory diff exited 0; otherwise the Status line says DRAFT and why.
 
 Prints one JSON summary line on stdout. Exit 0 = report written; 1 = report written but the inventory diff did not exit 0;
-2 = error (nothing written). Bytes are not tokens. Python 3.9 compatible.
+2 = error (nothing written; includes subprocess timeouts and malformed HV/LV input). Bytes are not tokens. Python 3.9 compatible.
 """
 from __future__ import annotations
 
 import argparse
 import datetime
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +49,9 @@ GATED = (("kernel_bytes", "Kernel (SKILL.md)"), ("protocol_bytes", "Protocol (ro
          ("reference_max_bytes", "Largest reference"), ("description_chars", "Skill description sum (chars)"),
          ("readset.BUILD", "BUILD read set"), ("readset.PLAN", "PLAN read set"),
          ("readset.DEBUG", "DEBUG read set"), ("readset.REVIEW", "REVIEW read set"))
+LV_KEYS = ("load_probe", "lv2", "lv3", "lv4", "lv5")
+LV3_LIMITATION = "LIMITATION:enterplanmode_not_offered"
+LV_CLASSES = ("A", "B-SIMULATED")
 HV_IDS = ("HV-1", "HV-2")
 HV_LABELS = {"HV-1": "fast-path BUILD", "HV-2": "PLAN"}
 LV_ROWS = (("load_probe", "LV-1 load probe"), ("lv2", "LV-2 read-set parity"), ("lv3", "LV-3 EnterPlanMode denied live"),
@@ -70,9 +80,39 @@ def _get(d: dict, dotted: str):
     return d
 
 
+def _git_env() -> dict:
+    """The environment for git calls: ambient GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE etc. must not redirect `-C <root>`."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
+def _git(root: Path, *a: str):
+    return subprocess.run(["git", "-C", str(root), *a], capture_output=True, text=True, timeout=60, env=_git_env())
+
+
+def check_baseline(root, baseline: str, allow_non_lock: bool) -> tuple:
+    """(resolved baseline sha, is_non_lock). The baseline must be a real commit; it must equal the sha pinned in
+    router-baseline.lock.json unless `allow_non_lock` (a wrong baseline would silently change every `before` number)."""
+    root = Path(root)
+
+    def resolve(ref: str) -> str:
+        p = _git(root, "rev-parse", "--verify", "--quiet", ref + "^{commit}")
+        if p.returncode != 0 or not p.stdout.strip():
+            raise ImpactError(f"baseline {ref!r} is not a commit in this repository")
+        return p.stdout.strip()
+    try:
+        lock_ref = cor.load_json(root / FIX / "router-baseline.lock.json")["baseline_sha"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ImpactError(f"cannot read router-baseline.lock.json: {type(exc).__name__}: {exc}") from exc
+    sha, lock_sha = resolve(baseline), resolve(lock_ref)
+    non_lock = sha != lock_sha
+    if non_lock and not allow_non_lock:
+        raise ImpactError(f"baseline {sha} is not the sha pinned in router-baseline.lock.json ({lock_sha}); "
+                          "pass --allow-non-lock for an exploratory (DRAFT) report")
+    return sha, non_lock
+
+
 def _head_sha(root: Path) -> tuple:
-    def git(*a):
-        return subprocess.run(["git", "-C", str(root), *a], capture_output=True, text=True, timeout=60)
+    git = lambda *a: _git(root, *a)  # noqa: E731
     sha = git("rev-parse", "HEAD")
     dirty = git("status", "--porcelain", "--", ".")
     if sha.returncode != 0:
@@ -88,16 +128,17 @@ def inventory_diff(root: Path) -> tuple:
            "--baseline", str(fx / "router-rule-inventory.baseline.json"), "--policy-map", str(policy_map),
            "--readmap", str(root / "config" / "router-readmap.json"),
            "--readmap-baseline", str(fx / "router-readmap.baseline.json"), "--lock", str(fx / "router-baseline.lock.json")]
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=_git_env())
     try:
         return json.loads(p.stdout.strip().splitlines()[-1]), p.returncode
     except (IndexError, ValueError):
         return None, p.returncode
 
 
-def collect(root, baseline: str, run_inventory: bool = True, date: Optional[str] = None) -> dict:
+def collect(root, baseline: str, run_inventory: bool = True, date: Optional[str] = None, allow_non_lock: bool = False) -> dict:
     """Everything the report needs, measured now. Raises ImpactError (never returns partial data)."""
     root = Path(root)
+    baseline, non_lock = check_baseline(root, baseline, allow_non_lock)
     try:
         base_map = rs.load_map(root / FIX / "router-readmap.baseline.json")
         head_map = rs.load_map(root / "config" / "router-readmap.json")
@@ -148,7 +189,7 @@ def collect(root, baseline: str, run_inventory: bool = True, date: Optional[str]
     files = sorted(set(base_sizes) | set(head_sizes))
     per_file = [{"file": f, "base": base_sizes.get(f), "head": head_sizes.get(f)} for f in files]
     inventory, inv_exit = inventory_diff(root) if run_inventory else (None, None)
-    return {"baseline_ref": baseline, "head_sha": head_sha, "head_dirty": dirty,
+    return {"baseline_ref": baseline, "non_lock_baseline": non_lock, "head_sha": head_sha, "head_dirty": dirty,
             "date": date or datetime.date.today().isoformat(), "rows": rows, "build_definitions": defs, "gated": gated,
             "per_file": per_file,
             "descriptions": {"base": base_desc, "head": head_desc, "goal": budget["targets"]["description_chars"],
@@ -169,18 +210,48 @@ def load_hv(raw) -> dict:
             if side not in ("baseline", "candidate") or not isinstance(points, dict):
                 raise ImpactError(f"{hv}: side must be 'baseline' or 'candidate' with an object of points, got {side!r}")
             for point, n in points.items():
-                if point not in ("a", "b") or isinstance(n, bool) or not isinstance(n, int) or n < 0:
-                    raise ImpactError(f"{hv}.{side}.{point}: need a non-negative integer for point a|b, got {n!r}")
+                if point not in ("a", "b") or isinstance(n, bool) or not isinstance(n, int) or n < 1:
+                    raise ImpactError(f"{hv}.{side}.{point}: need a positive integer (a zero reading is an invalid capture) "
+                                      f"for point a|b, got {n!r}")
             out[hv][side] = dict(points)
     return out
 
 
+def load_lv(raw) -> dict:
+    """Validate the live-lane summary. Exact key set; results PASS, FAIL:<reason>, or (lv3 only) the EnterPlanMode limitation."""
+    if not isinstance(raw, dict):
+        raise ImpactError("LV file must be a JSON object (the summary line of a full live-lane run)")
+    want = set(LV_KEYS) | {"evidence_class"}
+    if set(raw) != want:
+        raise ImpactError(f"LV keys must be exactly {sorted(want)}; missing {sorted(want - set(raw))}, unknown {sorted(set(raw) - want)}")
+    for key in LV_KEYS:
+        v = raw[key]
+        good = isinstance(v, str) and (v == "PASS" or (v.startswith("FAIL:") and len(v) > 5) or (key == "lv3" and v == LV3_LIMITATION))
+        if not good:
+            raise ImpactError(f"LV {key}: need PASS, FAIL:<reason>{' or ' + LV3_LIMITATION if key == 'lv3' else ''}, got {v!r}")
+    if raw["evidence_class"] not in LV_CLASSES:
+        raise ImpactError(f"LV evidence_class must be one of {LV_CLASSES}, got {raw['evidence_class']!r}")
+    return dict(raw)
+
+
+def lv_problems(lv: dict) -> List[str]:
+    """Reasons an LV summary is not a clean pass (empty list = every LV is PASS or the lv3 limitation, evidence class A)."""
+    bad = [f"{k}={lv[k]}" for k in LV_KEYS if not (lv[k] == "PASS" or (k == "lv3" and lv[k] == LV3_LIMITATION))]
+    if lv["evidence_class"] != "A":
+        bad.append(f"evidence_class={lv['evidence_class']}")
+    return bad
+
+
 # --------------------------------------------------------------------------------------------- rendering
 
-def _gap(measured: int, goal: int) -> str:
+def _unit(key: str) -> str:
+    return "chars" if key == "description_chars" else "B"
+
+
+def _gap(measured: int, goal: int, unit: str = "B") -> str:
     if measured <= goal:
-        return f"Goal met ({fmt(goal - measured)} B under)"
-    return f"{fmt(measured - goal)} B above the goal ({(measured - goal) / goal * 100:.0f}% over; goal not reached)"
+        return f"Goal met ({fmt(goal - measured)} {unit} under)"
+    return f"{fmt(measured - goal)} {unit} above the goal ({(measured - goal) / goal * 100:.0f}% over; goal not reached)"
 
 
 def _hv_cell(hv: Optional[dict], hv_id: str, side: str, point: str) -> str:
@@ -198,10 +269,26 @@ def render(data: dict, hv: Optional[dict] = None, lv: Optional[dict] = None) -> 
     a(f"- Date: {data['date']}")
     a(f"- Baseline: `{base}` (frozen read map `tests/fixtures/router-readmap.baseline.json`)")
     a(f"- Candidate: `{head}`" + (" (working tree had uncommitted changes under the plugin when measured)" if data["head_dirty"] else ""))
+    if data.get("non_lock_baseline"):
+        a("- **NON-LOCK BASELINE**: this baseline is not the sha pinned in `router-baseline.lock.json`; the before numbers are exploratory.")
     pending = [f"{h} {side} {pt}" for h in HV_IDS for side in ("baseline", "candidate") for pt in ("a", "b")
                if _hv_cell(hv, h, side, pt) == "PENDING"]
-    a("- Status: DRAFT (human `/context` A/B pending: " + str(len(pending)) + " of 8 cells)" if pending
-      else "- Status: COMPLETE (all eight `/context` cells filled)")
+    reasons: List[str] = []
+    if pending:
+        reasons.append("human `/context` A/B pending: " + str(len(pending)) + " of 8 cells")
+    if lv is None:
+        reasons.append("LV lane result not supplied")
+    else:
+        lvp = lv_problems(lv)
+        if lvp:
+            reasons.append("LV lane not clean: " + ", ".join(lvp))
+    if data.get("non_lock_baseline"):
+        reasons.append("non-lock baseline")
+    if data.get("inventory") is None or data.get("inventory_exit") not in (0,):
+        reasons.append(f"inventory diff not clean (exit {data.get('inventory_exit')}, "
+                       f"{'accounting unparsable or not collected' if data.get('inventory') is None else 'non-zero exit'})")
+    a("- Status: DRAFT (" + "; ".join(reasons) + ")" if reasons
+      else "- Status: COMPLETE (all eight `/context` cells filled, every LV result passed, inventory diff exit 0)")
     a("- Reproduce: `python3 scripts/craftflow_router_context_impact.py --baseline <BASELINE_SHA> --out <report.md>` "
       "(from `tools/craftflow-plugin/plugins/craftflow/`)")
     a("")
@@ -237,11 +324,11 @@ def render(data: dict, hv: Optional[dict] = None, lv: Optional[dict] = None) -> 
     a("|---|---:|---:|---:|---:|---:|---|")
     for g in data["gated"]:
         a(f"| {g['label']} | {fmt(g['baseline'])} | {fmt(g['goal'])} | {fmt(g['enforced'])} | {fmt(g['measured'])} "
-          f"| {fmt(g['projection'])} | {_gap(g['measured'], g['goal'])} |")
+          f"| {fmt(g['projection'])} | {_gap(g['measured'], g['goal'], _unit(g['key']))} |")
     a("")
     over = [g for g in data["gated"] if g["measured"] > g["goal"]]
     if over:
-        a("**Gap, stated plainly:** " + "; ".join(f"{g['label']} is {fmt(g['measured'] - g['goal'])} B above its goal of {fmt(g['goal'])}"
+        a("**Gap, stated plainly:** " + "; ".join(f"{g['label']} is {fmt(g['measured'] - g['goal'])} {_unit(g['key'])} above its goal of {fmt(g['goal'])}"
                                                     for g in over) + ". The goal is not reached for these values; the enforced caps "
           "sit above the goal by design of the P2C decision, and measured stays at or below the enforced cap.")
     else:
@@ -285,10 +372,16 @@ def render(data: dict, hv: Optional[dict] = None, lv: Optional[dict] = None) -> 
         a("| Scenario | Result |")
         a("|---|---|")
         for key, label in LV_ROWS:
-            a(f"| {label} | {lv.get(key, 'missing')} |")
+            a(f"| {label} | {lv[key]} |")
         a("")
-        a(f"Evidence class: {lv.get('evidence_class', 'n/a')}. LV-3 is PASS or `LIMITATION:enterplanmode_not_offered`; the limitation "
-          "is covered by the interactive check on the human list.")
+        a(f"Evidence class: {lv['evidence_class']} (A only when the load probe passed in the same full run).")
+        if lv["lv3"] == LV3_LIMITATION:
+            a("LV-3 recorded the limitation `LIMITATION:enterplanmode_not_offered` (the session ran but the host never offered the tool); "
+              "it is covered by the interactive check on the human list.")
+        problems = lv_problems(lv)
+        if problems:
+            a("Not every LV result passed: " + ", ".join(problems) + ". The report stays DRAFT.")
+        a("LV-5 is a negative control: it passes with no hook at all, so it is meaningful only together with LV-4 and the load probe.")
     a("")
     a("## Human verification: `/context` A/B")
     a("")
@@ -345,16 +438,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--lv")
     ap.add_argument("--plugin-root")
     ap.add_argument("--no-inventory", action="store_true")
+    ap.add_argument("--allow-non-lock", action="store_true")
     args = ap.parse_args(argv)
     root = Path(args.plugin_root or PLUGIN_ROOT)
     try:
         baseline = args.baseline or cor.load_json(root / FIX / "router-baseline.lock.json")["baseline_sha"]
         hv = load_hv(_read_json(args.hv, "HV")) if args.hv else None
-        lv = _read_json(args.lv, "LV") if args.lv else None
-        data = collect(root, baseline, run_inventory=not args.no_inventory, date=args.date)
+        lv = load_lv(_read_json(args.lv, "LV")) if args.lv else None
+        data = collect(root, baseline, run_inventory=not args.no_inventory, date=args.date, allow_non_lock=args.allow_non_lock)
         text = render(data, hv=hv, lv=lv)
         Path(args.out).write_text(text, encoding="utf-8")
-    except (ImpactError, OSError, ValueError, KeyError) as exc:
+    except subprocess.TimeoutExpired as exc:
+        print(f"error: a subprocess timed out after {exc.timeout}s ({' '.join(map(str, exc.cmd))[:120]}); nothing written", file=sys.stderr)
+        return 2
+    except (ImpactError, OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as exc:
         print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
     b = [r for r in data["rows"] if r["workflow"] == "BUILD" and r["variant"] == "standard"][0]

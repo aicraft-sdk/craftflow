@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,8 +19,10 @@ from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
+sys.path.insert(0, str(PLUGIN_ROOT / "tests" / "live"))
 
 import craftflow_router_context_impact as imp  # noqa: E402
+import router_context_cut_roundtrip as drv  # noqa: E402
 
 FIXTURES = PLUGIN_ROOT / "tests" / "fixtures"
 SCRIPT = PLUGIN_ROOT / "scripts" / "craftflow_router_context_impact.py"
@@ -49,6 +53,28 @@ def check(name: str, cond: bool, reason: str = "") -> None:
 
 def baseline_sha() -> str:
     return json.loads(LOCK.read_text(encoding="utf-8"))["baseline_sha"]
+
+
+def good_lv(**over) -> dict:
+    """A passing live-lane summary with the driver's real keys."""
+    lv = {"load_probe": "PASS", "lv2": "PASS", "lv3": "PASS", "lv4": "PASS", "lv5": "PASS", "evidence_class": "A"}
+    lv.update(over)
+    return lv
+
+
+def full_hv() -> dict:
+    return {h: {"baseline": {"a": 1, "b": 2}, "candidate": {"a": 1, "b": 2}} for h in ("HV-1", "HV-2")}
+
+
+def expect_impact_error(name: str, fn, needle: str = "") -> None:
+    try:
+        fn()
+    except imp.ImpactError as exc:
+        check(name, needle in str(exc), f"error did not mention {needle!r}: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        fail(name, f"wrong exception {type(exc).__name__}: {exc}")
+    else:
+        fail(name, "no ImpactError")
 
 
 def synthetic() -> dict:
@@ -154,10 +180,21 @@ def test_render_hv_cells_filled_from_captures() -> None:
 
 def test_render_lv_pending_and_filled() -> None:
     check("render_lv_pending", "PENDING" in imp.render(synthetic()).split("## Live verification")[1].split("##")[0], "LV section pending by default")
-    lv = {"load_probe": "PASS", "lv1": "PASS", "lv2": "PASS", "lv3": "LIMITATION:enterplanmode_not_offered", "lv4": "PASS", "lv5": "PASS"}
+    lv = good_lv(lv3="LIMITATION:enterplanmode_not_offered")
     text = imp.render(synthetic(), lv=lv)
     sect = text.split("## Live verification")[1].split("\n## ")[0]
-    check("render_lv_filled", "LIMITATION:enterplanmode_not_offered" in sect and "PENDING" not in sect.split("HV")[0], sect[:400])
+    rows = [ln for ln in sect.splitlines() if ln.startswith("| LV-")]
+    check("render_lv_filled", len(rows) == 5 and "LIMITATION:enterplanmode_not_offered" in sect and "missing" not in sect
+          and "PENDING" not in sect, sect[:500])
+    check("render_lv_limitation_sentence_conditional", "limitation" in sect.lower() and "Evidence class: A" in sect, sect[-400:])
+
+
+def test_render_lv_sentence_follows_results() -> None:
+    sect = imp.render(synthetic(), lv=good_lv()).split("## Live verification")[1].split("\n## ")[0]
+    check("render_lv_all_pass_no_limitation_claim", "LIMITATION" not in sect, sect[-300:])
+    bad = imp.render(synthetic(), lv=good_lv(lv2="FAIL:x", load_probe="FAIL:rc=1"))
+    sect = bad.split("## Live verification")[1].split("\n## ")[0]
+    check("render_lv_fail_rows_shown", "FAIL:x" in sect and "FAIL:rc=1" in sect, sect[:400])
 
 
 def test_render_addendum_is_draft() -> None:
@@ -188,6 +225,32 @@ def test_hv_loader_rejects_bad_shapes() -> None:
         fail("hv_loader_rejects_bool", "bool accepted as a byte count")
 
 
+def test_hv_loader_rejects_zero_reading() -> None:
+    expect_impact_error("hv_loader_rejects_zero", lambda: imp.load_hv({"HV-1": {"baseline": {"a": 0}}}))
+    expect_impact_error("hv_loader_rejects_negative", lambda: imp.load_hv({"HV-1": {"baseline": {"a": -5}}}))
+    check("hv_loader_accepts_one", imp.load_hv({"HV-1": {"baseline": {"a": 1}}}) == {"HV-1": {"baseline": {"a": 1}}}, "n=1 is valid")
+
+
+def test_lv_loader_accepts_real_summary() -> None:
+    lv = good_lv(lv3="LIMITATION:enterplanmode_not_offered", lv5="FAIL:src_a_txt_not_committed(head=[])")
+    check("lv_loader_accepts_pass_fail_limitation", imp.load_lv(lv) == lv, "valid summary must round-trip")
+    check("lv_loader_accepts_class_b", imp.load_lv(good_lv(evidence_class="B-SIMULATED"))["evidence_class"] == "B-SIMULATED", "")
+
+
+def test_lv_loader_rejects_bad_shapes() -> None:
+    expect_impact_error("lv_loader_rejects_list", lambda: imp.load_lv([]))
+    expect_impact_error("lv_loader_rejects_empty_object", lambda: imp.load_lv({}))
+    missing = good_lv()
+    del missing["lv4"]
+    expect_impact_error("lv_loader_rejects_missing_key", lambda: imp.load_lv(missing))
+    expect_impact_error("lv_loader_rejects_unknown_key", lambda: imp.load_lv(good_lv(lv1="PASS")))
+    expect_impact_error("lv_loader_rejects_bare_fail", lambda: imp.load_lv(good_lv(load_probe="FAIL")))
+    expect_impact_error("lv_loader_rejects_not_run", lambda: imp.load_lv(good_lv(lv2="NOT_RUN")))
+    expect_impact_error("lv_loader_rejects_limitation_outside_lv3", lambda: imp.load_lv(good_lv(lv4="LIMITATION:enterplanmode_not_offered")))
+    expect_impact_error("lv_loader_rejects_non_string", lambda: imp.load_lv(good_lv(lv5=True)))
+    expect_impact_error("lv_loader_rejects_bad_class", lambda: imp.load_lv(good_lv(evidence_class="C")))
+
+
 def test_collect_baseline_is_frozen_214055() -> None:
     data = imp.collect(PLUGIN_ROOT, baseline_sha(), run_inventory=False)
     build = [r for r in data["rows"] if r["workflow"] == "BUILD" and r["variant"] == "standard"][0]
@@ -203,7 +266,8 @@ def test_collect_head_matches_readset_tool() -> None:
     data = imp.collect(PLUGIN_ROOT, baseline_sha(), run_inventory=False)
     want = rs.compute("BUILD", PLUGIN_ROOT, budget_path=Path("/nonexistent"))["start_total"]
     got = [r for r in data["rows"] if r["workflow"] == "BUILD" and r["variant"] == "standard"][0]["head_start"]
-    check("collect_head_equals_readset_tool", got == want, f"{got} != {want}")
+    check("collect_head_equals_readset_tool_self_consistency", got == want, f"{got} != {want}")
+    check("collect_head_build_standard_literal_97407", got == 97407, f"BUILD standard start_total is {got}; the BUILD standard literal is 97,407")
 
 
 def test_collect_gated_measured_within_enforced() -> None:
@@ -272,8 +336,203 @@ def test_cli_bad_hv_file_exits_2() -> None:
 
 def test_render_status_draft_until_hv_complete() -> None:
     check("render_status_draft_when_pending", "Status: DRAFT" in imp.render(synthetic()), "pending HV cells must mark the report DRAFT")
-    full = {h: {"baseline": {"a": 1, "b": 2}, "candidate": {"a": 1, "b": 2}} for h in ("HV-1", "HV-2")}
-    check("render_status_complete_when_filled", "Status: COMPLETE" in imp.render(synthetic(), hv=full), "all eight cells filled")
+    check("render_status_complete_needs_lv", "Status: COMPLETE" in imp.render(synthetic(), hv=full_hv(), lv=good_lv()), "HV full and LV all pass")
+
+
+def status_line(text: str) -> str:
+    return [ln for ln in text.splitlines() if ln.startswith("- Status:")][0]
+
+
+def test_render_status_not_complete_with_only_hv() -> None:
+    line = status_line(imp.render(synthetic(), hv=full_hv()))
+    check("render_status_draft_hv_only", line.startswith("- Status: DRAFT") and "LV" in line, line)
+
+
+def test_render_status_draft_on_failed_lv() -> None:
+    for name, lv in (("fail_row", good_lv(lv2="FAIL:x")), ("fail_probe", good_lv(load_probe="FAIL:rc=1")),
+                     ("class_b", good_lv(evidence_class="B-SIMULATED"))):
+        line = status_line(imp.render(synthetic(), hv=full_hv(), lv=lv))
+        check("render_status_draft_" + name, line.startswith("- Status: DRAFT"), line)
+    ok_limit = imp.render(synthetic(), hv=full_hv(), lv=good_lv(lv3="LIMITATION:enterplanmode_not_offered"))
+    check("render_status_complete_with_lv3_limitation", "Status: COMPLETE" in ok_limit, "the LV-3 limitation is allowed")
+
+
+def test_render_status_draft_when_inventory_failed() -> None:
+    d = synthetic()
+    d["inventory_exit"] = 1
+    line = status_line(imp.render(d, hv=full_hv(), lv=good_lv()))
+    check("render_status_draft_on_inventory_failure", line.startswith("- Status: DRAFT") and "inventory" in line.lower(), line)
+    d = synthetic()
+    d["inventory"], d["inventory_exit"] = None, 3
+    line = status_line(imp.render(d, hv=full_hv(), lv=good_lv()))
+    check("render_status_draft_on_unparsable_inventory", line.startswith("- Status: DRAFT") and "inventory" in line.lower(), line)
+
+
+def test_render_non_lock_baseline_marked() -> None:
+    d = synthetic()
+    d["non_lock_baseline"] = True
+    text = imp.render(d, hv=full_hv(), lv=good_lv())
+    check("render_non_lock_header", "NON-LOCK BASELINE" in text.split("## Disclosures")[0], text[:400])
+    check("render_non_lock_draft", status_line(text).startswith("- Status: DRAFT"), status_line(text))
+
+
+def test_gap_uses_the_right_unit() -> None:
+    d = synthetic()
+    d["gated"].append({"key": "description_chars", "label": "Skill description sum (chars)", "baseline": 5000, "goal": 4000,
+                       "enforced": 5081, "measured": 4207, "projection": 4100})
+    row = [ln for ln in imp.render(d).splitlines() if ln.startswith("| Skill description sum")][0]
+    check("gap_description_in_chars", "207 chars above the goal" in row and "207 B" not in row, row)
+    d["gated"][2]["measured"] = 3900
+    row = [ln for ln in imp.render(d).splitlines() if ln.startswith("| Skill description sum")][0]
+    check("gap_description_met_in_chars", "100 chars under" in row, row)
+
+
+def head_sha() -> str:
+    return subprocess.run(["git", "-C", str(PLUGIN_ROOT), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+
+def test_check_baseline_resolves_against_lock() -> None:
+    sha = baseline_sha()
+    got = imp.check_baseline(PLUGIN_ROOT, sha, allow_non_lock=False)
+    check("check_baseline_lock_ok", got == (sha, False), str(got))
+    head = head_sha()
+    expect_impact_error("check_baseline_non_lock_rejected", lambda: imp.check_baseline(PLUGIN_ROOT, head, allow_non_lock=False))
+    check("check_baseline_non_lock_allowed", imp.check_baseline(PLUGIN_ROOT, head, allow_non_lock=True) == (head, True), "")
+    expect_impact_error("check_baseline_unknown_commit", lambda: imp.check_baseline(PLUGIN_ROOT, "f" * 40, allow_non_lock=True))
+
+
+def test_cli_non_lock_baseline_exits_2_unless_allowed() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        code, _so, se = run_cli("--baseline", head_sha(), "--out", str(Path(td) / "x.md"), "--no-inventory")
+        check("cli_non_lock_exit_2", code == 2 and "lock" in se.lower(), f"{code} {se[-200:]}")
+        check("cli_non_lock_writes_nothing", not (Path(td) / "x.md").exists(), "report written")
+
+
+def test_cli_lv_exit_2_on_bad_shapes() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        for name, payload in (("list", []), ("empty", {}), ("missing_keys", {"lv2": "FAIL:x", "load_probe": "FAIL"})):
+            lv = Path(td) / (name + ".json")
+            lv.write_text(json.dumps(payload), encoding="utf-8")
+            code, _so, se = run_cli("--baseline", baseline_sha(), "--out", str(Path(td) / "x.md"), "--no-inventory", "--lv", str(lv))
+            check("cli_lv_" + name + "_exit_2", code == 2 and "Traceback" not in se, f"{code} {se[-200:]}")
+        hv = Path(td) / "hv.json"
+        hv.write_text("[]", encoding="utf-8")
+        code, _so, se = run_cli("--baseline", baseline_sha(), "--out", str(Path(td) / "x.md"), "--no-inventory", "--hv", str(hv))
+        check("cli_hv_list_exit_2", code == 2 and "Traceback" not in se, f"{code} {se[-200:]}")
+
+
+def test_cli_zero_hv_rejected_and_failing_lv_never_complete() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        hv = Path(td) / "hv.json"
+        hv.write_text(json.dumps({h: {s: {"a": 0, "b": 0} for s in ("baseline", "candidate")} for h in ("HV-1", "HV-2")}), encoding="utf-8")
+        code, _so, se = run_cli("--baseline", baseline_sha(), "--out", str(Path(td) / "x.md"), "--no-inventory", "--hv", str(hv))
+        check("cli_zero_hv_exit_2", code == 2, f"{code} {se[-200:]}")
+        lv = Path(td) / "lv.json"
+        lv.write_text(json.dumps(good_lv(lv2="FAIL:x", load_probe="FAIL:rc=1")), encoding="utf-8")
+        hv.write_text(json.dumps(full_hv()), encoding="utf-8")
+        code, _so, se = run_cli("--baseline", baseline_sha(), "--out", str(Path(td) / "x.md"), "--no-inventory", "--hv", str(hv), "--lv", str(lv))
+        text = (Path(td) / "x.md").read_text(encoding="utf-8") if (Path(td) / "x.md").is_file() else ""
+        check("cli_failing_lv_stays_draft", code == 0 and "Status: DRAFT" in text and "Status: COMPLETE" not in text, f"{code} {se[-200:]}")
+
+
+def test_timeout_maps_to_exit_2() -> None:
+    real = subprocess.run
+
+    def boom(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="git", timeout=60)
+    subprocess.run = boom
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            err = tempfile.TemporaryFile("w+")
+            saved, sys.stderr = sys.stderr, err
+            try:
+                code = imp.main(["--baseline", baseline_sha(), "--out", str(Path(td) / "x.md"), "--no-inventory"])
+            finally:
+                sys.stderr = saved
+            err.seek(0)
+            msg = err.read()
+            check("timeout_exit_2", code == 2 and "timed out" in msg.lower() and not (Path(td) / "x.md").exists(), f"{code} {msg[-200:]}")
+    finally:
+        subprocess.run = real
+
+
+def test_collect_missing_or_empty_readmap_baseline() -> None:
+    with tempfile.TemporaryDirectory(dir=str(PLUGIN_ROOT / "tests")) as td:  # inside the repo so the baseline sha still resolves
+        root = Path(td)
+        (root / "tests" / "fixtures").mkdir(parents=True)
+        (root / "config").mkdir()
+        # the lock (and the repo for sha resolution) must resolve, so a failure below is about the read map, not the lock
+        shutil.copy(LOCK, root / "tests" / "fixtures" / "router-baseline.lock.json")
+        expect_impact_error("collect_missing_readmap_baseline", lambda: imp.collect(root, baseline_sha(), run_inventory=False), "readmap")
+        (root / "tests" / "fixtures" / "router-readmap.baseline.json").write_text("", encoding="utf-8")
+        expect_impact_error("collect_empty_readmap_baseline", lambda: imp.collect(root, baseline_sha(), run_inventory=False), "readmap")
+        (root / "tests" / "fixtures" / "router-readmap.baseline.json").write_text("{}", encoding="utf-8")
+        expect_impact_error("collect_empty_object_readmap_baseline", lambda: imp.collect(root, baseline_sha(), run_inventory=False), "readmap")
+
+
+def test_git_env_is_scrubbed() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "r"
+        repo.mkdir()
+        subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True, capture_output=True)
+        keys = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+        saved = {k: os.environ.get(k) for k in keys}
+        for k in keys:
+            os.environ[k] = str(Path(td) / "nope")
+        try:
+            out = drv.git(repo, "rev-parse", "--show-toplevel").strip()
+            check("driver_git_ignores_ambient_git_env", Path(out).resolve() == repo.resolve(), out)
+            sha, _dirty = imp._head_sha(PLUGIN_ROOT)
+            check("impact_head_sha_ignores_ambient_git_env", len(sha) == 40, sha)
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+
+STREAM_OK = '{"type":"system","subtype":"init"}\n{"type":"result","subtype":"success"}\n'
+
+
+def test_driver_lv3_requires_a_real_session() -> None:
+    check("driver_session_completed_ok", drv.session_completed(0, STREAM_OK), "rc 0 with init/result is a real session")
+    check("driver_session_rc_nonzero", not drv.session_completed(124, STREAM_OK), "rc 124 is not a completed session")
+    check("driver_session_no_events", not drv.session_completed(0, ""), "empty stream is not a completed session")
+    check("driver_session_garbage_stream", not drv.session_completed(0, "not json\n"), "unparsable stream is not a session")
+    for name, rc, out in (("timeout", 124, ""), ("auth_failure", 1, ""), ("no_events", 0, "")):
+        got = str(drv.lv3_outcome(rc, out, False, 0))
+        check("driver_lv3_" + name + "_is_fail", got.startswith("FAIL:claude_session_failed"), got)
+    check("driver_lv3_not_offered_retries", drv.lv3_outcome(0, STREAM_OK, False, 0) is None, "ran, tool not called, no row: retry then limitation")
+    check("driver_lv3_called_not_denied", drv.lv3_outcome(0, STREAM_OK, True, 0) == "FAIL:enterplanmode_called_but_not_denied", "")
+    check("driver_lv3_denied_passes", drv.lv3_outcome(0, STREAM_OK, True, 1) == "PASS", "")
+
+
+def test_driver_evidence_class_needs_a_load_proof() -> None:
+    base = {s: "NOT_RUN" for s in drv.STEPS}
+    check("driver_class_a_only_with_load_pass", drv.evidence_class(dict(base, load_probe="PASS")) == "A", "")
+    check("driver_class_b_when_not_run", drv.evidence_class(dict(base, lv3="PASS")) == "B-SIMULATED", "NOT_RUN load probe is no proof")
+    check("driver_class_b_when_failed", drv.evidence_class(dict(base, load_probe="FAIL:rc=1,marker_hits=0")) == "B-SIMULATED", "")
+
+
+def test_driver_all_ok_counts_not_run_as_failure() -> None:
+    base = {s: "NOT_RUN" for s in drv.STEPS}
+    check("driver_all_ok_single_step", drv.all_ok(dict(base, lv4="PASS"), ("lv4",)), "")
+    check("driver_all_ok_lv3_limitation", drv.all_ok(dict(base, lv3=drv.LIMITATION_ENTERPLANMODE), ("lv3",)), "")
+    check("driver_all_ok_rejects_not_run", not drv.all_ok(dict(base, load_probe="FAIL:x"), drv.STEPS), "unrun steps are not ok")
+    check("driver_all_ok_rejects_empty", not drv.all_ok(base, ()), "no steps run proves nothing")
+
+
+def test_driver_hook_rows_count_skipped_lines() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        log = Path(td) / ".craftflow" / "state"
+        log.mkdir(parents=True)
+        (log / "craftflow-hook-events.log").write_text('{"event":"plan_commit_denied"}\nnot json\n\n{"event":"x"}\n', encoding="utf-8")
+        rows, skipped = drv.hook_rows(td)
+        check("driver_hook_rows_parsed_and_skipped", [r["event"] for r in rows] == ["plan_commit_denied", "x"] and skipped == 1,
+              f"{rows} skipped={skipped}")
+        rows, skipped = drv.hook_rows(Path(td) / "absent")
+        check("driver_hook_rows_absent_log", rows == [] and skipped == 0, "")
 
 
 def test_render_is_pure() -> None:
