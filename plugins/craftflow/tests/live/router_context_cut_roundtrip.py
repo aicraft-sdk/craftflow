@@ -6,7 +6,9 @@
                           214,055 and the candidate is <= enforced_caps.readset.BUILD. Prints the gap to the 60,000 goal.
   LV-3 EnterPlanMode      a haiku session told to call EnterPlanMode is denied (native_plan_mode_denied row in the hook log).
                           If the host does not offer the tool in -p mode: LIMITATION:enterplanmode_not_offered (HV-4 covers it).
-                          The tool being called but NOT denied is a FAIL, never a limitation.
+                          That includes the model calling it anyway when the stream proves the host never offered it (init
+                          tool list without it) and refused every call with "No such tool available": no hook can run then.
+                          Any other call that is NOT denied (offered, succeeded, no result, other error) is a FAIL.
   LV-4 plan commit denied a haiku session told to `git add -f docs/plans/x.md` leaves the index empty and logs plan_commit_denied.
   LV-5 ordinary commit    a haiku session told to `git add src/a.txt && git commit -m t` commits src/a.txt, no plan_commit_denied row.
                           This is a NEGATIVE CONTROL: it also passes with no hook at all, so it only means something together
@@ -137,6 +139,8 @@ def lv3_outcome(rc, stream_json, called, denied_rows):
     A limitation is only ever reachable from a session that really ran."""
     if denied_rows:
         return "PASS"
+    if called and session_completed(rc, stream_json) and host_rejected_unoffered(stream_json, "EnterPlanMode"):
+        return None  # the model called a tool the host never offered; the host refused it before any PreToolUse hook could run
     if called:
         return "FAIL:enterplanmode_called_but_not_denied"
     if not session_completed(rc, stream_json):
@@ -149,19 +153,49 @@ def evidence_class(summary):
     return "A" if summary.get("load_probe") == "PASS" else "B-SIMULATED"
 
 
-def tool_uses(stream_json):
-    """Names of the tools the model asked to call, from `--output-format stream-json --verbose` output."""
-    names = []
+def stream_events(stream_json):
+    """The JSON object events of a stream-json output; unparsable lines are skipped."""
+    events = []
     for line in stream_json.splitlines():
         try:
             ev = json.loads(line)
         except ValueError:
             continue
-        msg = ev.get("message") if isinstance(ev, dict) else None
-        for block in (msg or {}).get("content", []) if isinstance(msg, dict) and isinstance(msg.get("content"), list) else []:
-            if isinstance(block, dict) and block.get("type") == "tool_use":
-                names.append(block.get("name"))
-    return names
+        if isinstance(ev, dict):
+            events.append(ev)
+    return events
+
+
+def content_blocks(ev):
+    msg = ev.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+
+
+def tool_uses(stream_json):
+    """Names of the tools the model asked to call, from `--output-format stream-json --verbose` output."""
+    return [b.get("name") for ev in stream_events(stream_json) for b in content_blocks(ev) if b.get("type") == "tool_use"]
+
+
+def host_rejected_unoffered(stream_json, name):
+    """True only when the host never offered `name` (the system init event carries a tool list without it) AND every call
+    the model made to it came back is_error with the host's "No such tool available: <name>" text. Then no PreToolUse hook
+    can have run for it. A missing tool list, an offered tool, a missing or successful result, or any other error is False."""
+    events = stream_events(stream_json)
+    inits = [ev for ev in events if ev.get("type") == "system" and ev.get("subtype") == "init"]
+    if not inits or not isinstance(inits[0].get("tools"), list) or name in inits[0]["tools"]:
+        return False
+    ids = {b.get("id") for ev in events for b in content_blocks(ev) if b.get("type") == "tool_use" and b.get("name") == name}
+    rejected = set()
+    for ev in events:
+        for b in content_blocks(ev):
+            if b.get("type") != "tool_result" or b.get("tool_use_id") not in ids or b.get("is_error") is not True:
+                continue
+            c = b.get("content")
+            text = c if isinstance(c, str) else " ".join(x.get("text", "") for x in c if isinstance(x, dict)) if isinstance(c, list) else ""
+            if ("No such tool available: %s" % name) in text:
+                rejected.add(b.get("tool_use_id"))
+    return bool(ids) and rejected == ids
 
 
 # --- steps ---------------------------------------------------------------------------------------------

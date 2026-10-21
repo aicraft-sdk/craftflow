@@ -508,6 +508,61 @@ def test_driver_lv3_requires_a_real_session() -> None:
     check("driver_lv3_denied_passes", drv.lv3_outcome(0, STREAM_OK, True, 1) == "PASS", "")
 
 
+def lv3_stream(tools, called, result=None, is_error=True) -> str:
+    """A `-p --output-format stream-json --verbose` stream shaped like the real LV-3 runs (init tool list, tool_use, result)."""
+    ev = [{"type": "system", "subtype": "init", "tools": tools}]
+    if called:
+        ev.append({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "EnterPlanMode", "input": {}}]}})
+        if result is not None:
+            ev.append({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": result, "is_error": is_error}]}})
+    ev.append({"type": "result", "subtype": "success"})
+    return "".join(json.dumps(e) + "\n" for e in ev)
+
+
+HOST_UNKNOWN = ("<tool_use_error>Error: No such tool available: EnterPlanMode. EnterPlanMode is disabled for this session, "
+                "in subagents as well as here.</tool_use_error>")
+
+
+def test_driver_lv3_unoffered_tool_called_is_the_limitation() -> None:
+    # Real -p behaviour (2026-10-21, r3): EnterPlanMode is absent from the init tool list, the model calls it anyway, and the
+    # host answers "No such tool available" before any PreToolUse hook can run. That is the not-offered limitation, not a FAIL.
+    s = lv3_stream(["Bash", "Read"], True, [{"type": "text", "text": HOST_UNKNOWN}])
+    check("driver_lv3_unoffered_called_rejected_retries", drv.lv3_outcome(0, s, True, 0) is None, str(drv.lv3_outcome(0, s, True, 0)))
+    s = lv3_stream(["Bash", "Read"], True, HOST_UNKNOWN)
+    check("driver_lv3_unoffered_called_rejected_str_content", drv.lv3_outcome(0, s, True, 0) is None, "string tool_result content")
+    s = lv3_stream(["Bash", "Read"], False)
+    check("driver_lv3_unoffered_not_called_retries", drv.lv3_outcome(0, s, False, 0) is None, "model never called it")
+
+
+def test_driver_lv3_called_without_host_rejection_stays_fail() -> None:
+    want = "FAIL:enterplanmode_called_but_not_denied"
+    cases = (
+        ("offered_and_called", lv3_stream(["Bash", "EnterPlanMode"], True, HOST_UNKNOWN)),
+        ("unoffered_tool_succeeded", lv3_stream(["Bash"], True, "Entered plan mode", is_error=False)),
+        ("unoffered_no_tool_result", lv3_stream(["Bash"], True)),
+        ("unoffered_other_error", lv3_stream(["Bash"], True, "<tool_use_error>permission denied</tool_use_error>")),
+    )
+    for name, s in cases:
+        got = drv.lv3_outcome(0, s, True, 0)
+        check("driver_lv3_" + name + "_is_fail", got == want, str(got))
+    s = lv3_stream(["Bash"], True, HOST_UNKNOWN)
+    got = str(drv.lv3_outcome(1, s, True, 0))
+    check("driver_lv3_unoffered_rejected_needs_completed_session", got.startswith("FAIL:"), got)
+
+
+def test_driver_step_lv3_reports_limitation_for_rejected_call() -> None:
+    real = drv.claude
+    drv.claude = lambda *a, **k: (0, lv3_stream(["Bash"], True, HOST_UNKNOWN), "")
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            got = drv.step_lv3(Path(td), Path(td))
+    finally:
+        drv.claude = real
+    check("driver_step_lv3_rejected_call_is_limitation", got == drv.LIMITATION_ENTERPLANMODE, got)
+
+
 def test_driver_evidence_class_needs_a_load_proof() -> None:
     base = {s: "NOT_RUN" for s in drv.STEPS}
     check("driver_class_a_only_with_load_pass", drv.evidence_class(dict(base, load_probe="PASS")) == "A", "")
