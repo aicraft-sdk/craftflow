@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime
-import fcntl
 import json
 import os
 import stat
@@ -27,6 +26,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import craftflow_fcntl_compat as fcntl  # noqa: E402  (fcntl on POSIX; an msvcrt-backed flock on Windows)
 import craftflow_stop_gate_core as core  # noqa: E402
 import craftflow_stop_gate_report as report  # noqa: E402
 

@@ -16,19 +16,28 @@ Constraints (see design doc — do not relax without updating the design):
 - Resolves the scripts directory via Path(__file__).parent (never a
   hardcoded path, never CLAUDE_PLUGIN_ROOT).
 - Resolves the interpreter as the bare literal "python3" on PATH, matching
-  hooks.json's own existing command pattern -- never sys.executable.
+  hooks.json's own existing command pattern -- never sys.executable, except
+  on Windows (os.name == "nt"), where it is sys.executable: see INTERPRETER.
 """
 from __future__ import annotations
 
 import json
 import os
+import queue
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
 PER_SCRIPT_TIMEOUT_SECONDS = 5
-INTERPRETER = "python3"
+# Windows: hooks.json's `python3` runs under Git Bash, which finds the POSIX
+# ~/bin/python3 shim that execs the real interpreter. subprocess.run goes
+# through CreateProcess instead, which ignores that shim and resolves a bare
+# "python3" to the Microsoft Store alias stub, so every sibling would falsely
+# "fail to import". There the interpreter running this checker -- the one the
+# shim exec()d -- is the right one to test with.
+INTERPRETER = sys.executable if os.name == "nt" else "python3"
 # If fewer than this many sibling scripts are ever discovered, that itself
 # indicates this checker's OWN directory resolution is broken (e.g. a future
 # packaging change, an unexpected __file__ resolution surprise -- this repo
@@ -46,8 +55,8 @@ MIN_EXPECTED_SIBLING_SCRIPTS = 5
 DISCOVERY_TIMEOUT_SECONDS = 2
 # Internal soft deadline for the whole per-script sweep, checked AFTER each
 # script finishes. Must stay well under the registered SessionStart hook
-# timeout (15s in hooks/hooks.json) -- with ~33 real siblings today,
-# PER_SCRIPT_TIMEOUT_SECONDS(5) x 33 = 165s worst case with no deadline at
+# timeout (15s in hooks/hooks.json) -- with ~98 real siblings today,
+# PER_SCRIPT_TIMEOUT_SECONDS(5) x 98 = 490s worst case with no deadline at
 # all, which Claude Code's own hook-timeout mechanism would kill long before
 # a single already-detected failure is ever printed (batched-then-printed
 # design + no deadline = silent loss, one layer down from the exact
@@ -55,7 +64,10 @@ DISCOVERY_TIMEOUT_SECONDS = 2
 # Because the deadline is only checked AFTER a script finishes, the true
 # worst-case wall time is bounded by DISCOVERY_TIMEOUT_SECONDS +
 # SELFCHECK_TIME_BUDGET_SECONDS + PER_SCRIPT_TIMEOUT_SECONDS (one script's
-# own worst case can still complete after the sweep budget is exceeded) =
+# own worst case can still complete after the sweep budget is exceeded; with
+# SWEEP_WORKERS > 1 up to that many such checks run side by side, but no
+# worker starts a check once the deadline has been seen to pass, so each of
+# them also started before it and ends within one per-script timeout) =
 # 2 + 5 + 5 = 12s, leaving a ~3s margin under the 15s hook timeout for
 # process startup/shutdown overhead. test_selfcheck_internal_budget_stays_
 # under_registered_hook_timeout (craftflow_hook_unit_tests.py) asserts this
@@ -63,6 +75,9 @@ DISCOVERY_TIMEOUT_SECONDS = 2
 # either side without updating the other fails the test suite instead of
 # silently reopening this exact class of bug.
 SELFCHECK_TIME_BUDGET_SECONDS = 5
+# Bounded concurrency so the ~98-script sweep fits the 5 s budget on Windows, where process spawn is ~10x slower than
+# Linux (~45 of 98 sequential checks fit in 5 s there). 1 restores the historical sequential sweep.
+SWEEP_WORKERS = min(4, os.cpu_count() or 1)
 # P4: the `craftflow_policy.py --validate` subprocess. Its wall time is charged INSIDE SELFCHECK_TIME_BUDGET_SECONDS (main()
 # shortens the sweep deadline by what the policy and version checks spent), so the 12s worst case above does not grow.
 POLICY_TIMEOUT_SECONDS = 2
@@ -218,9 +233,10 @@ def check_version_drift(plugin_root: Path) -> str | None:
 def run_selfcheck(
     scripts_dir: Path, siblings: list[Path], deadline: float | None = None
 ) -> tuple[list[tuple[str, str]], int, int]:
-    """Check each of the given sibling scripts, in order, up to an optional
-    soft time deadline (seconds). Returns (failures, checked_count,
-    total_count). Discovery is the caller's responsibility (see
+    """Check each of the given sibling scripts, in order (SWEEP_WORKERS at a
+    time when that is above 1), up to an optional soft time deadline
+    (seconds). Returns (failures, checked_count, total_count), failures in
+    sibling order. Discovery is the caller's responsibility (see
     discover_sibling_scripts) -- this function never re-globs, so its own
     bounded discovery timeout is not duplicated or bypassed here.
 
@@ -230,6 +246,8 @@ def run_selfcheck(
     deadline, not by having genuinely checked everything -- callers must not
     treat that as "clean" silence.
     """
+    if SWEEP_WORKERS > 1:
+        return _run_selfcheck_concurrent(scripts_dir, siblings, deadline)
     failures: list[tuple[str, str]] = []
     start = time.monotonic()
     checked = 0
@@ -238,7 +256,7 @@ def run_selfcheck(
             reason = check_script(scripts_dir, script_path)
         except Exception as exc:
             # Per-item isolation: one script's unexpected error (e.g. a real
-            # resource-pressure OSError from spawning ~35 sequential python3
+            # resource-pressure OSError from spawning ~98 sequential python3
             # subprocesses) must never erase already-collected results for
             # every other script checked in this run -- that would recreate,
             # one layer down, the exact silent-failure mode this feature
@@ -250,6 +268,69 @@ def run_selfcheck(
         if deadline is not None and (time.monotonic() - start) > deadline:
             break
     return failures, checked, len(siblings)
+
+
+def _run_selfcheck_concurrent(
+    scripts_dir: Path, siblings: list[Path], deadline: float | None
+) -> tuple[list[tuple[str, str]], int, int]:
+    """run_selfcheck's contract with SWEEP_WORKERS checks in flight at once.
+
+    Workers take sibling indexes in sibling order from a queue. Each records
+    its script's result and only THEN evaluates the deadline, as the
+    sequential loop does; once any worker sees it passed, no worker starts
+    another check. Every check still running then began before the deadline
+    and ends within PER_SCRIPT_TIMEOUT_SECONDS (subprocess.run kills it), so
+    the 12s worst case documented above SELFCHECK_TIME_BUDGET_SECONDS holds,
+    and joining every worker before returning never waits longer than that.
+
+    Plain threads, not concurrent.futures.ThreadPoolExecutor: a pool worker
+    picks up its next queued item the moment it publishes a result, racing a
+    shutdown(cancel_futures=True) issued after the deadline, so one more
+    check could START after it and stretch the worst case to two per-script
+    timeouts; the pool's threads are also joined at interpreter exit anyway.
+    Daemon threads (as in discover_sibling_scripts) only matter if this
+    thread is interrupted before its joins; normally each one is joined, so
+    no check's subprocess is left running past the sweep.
+    """
+    pending: queue.Queue[int] = queue.Queue()
+    for index in range(len(siblings)):
+        pending.put(index)
+    results: dict[int, str | None] = {}
+    results_lock = threading.Lock()
+    stop = threading.Event()
+    start = time.monotonic()
+
+    def _worker() -> None:
+        while not stop.is_set():
+            try:
+                index = pending.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                reason = check_script(scripts_dir, siblings[index])
+            except Exception as exc:
+                # Same per-item isolation as the sequential loop: one script's
+                # unexpected error must never erase the others' results.
+                reason = f"self-check error while testing this script: {exc}"
+            with results_lock:
+                results[index] = reason
+            if deadline is not None and (time.monotonic() - start) > deadline:
+                stop.set()
+
+    threads: list[threading.Thread] = []
+    for _ in range(min(SWEEP_WORKERS, len(siblings)) - 1):
+        thread = threading.Thread(target=_worker, daemon=True)
+        try:
+            thread.start()
+        except RuntimeError:
+            break  # no more threads available: the ones already started, plus this one, drain the queue
+        threads.append(thread)
+    # This thread is a worker too, so the sweep still runs (sequentially) if no extra thread could be started.
+    _worker()
+    for thread in threads:
+        thread.join()
+    failures = [(siblings[i].name, reason) for i, reason in sorted(results.items()) if reason is not None]
+    return failures, len(results), len(siblings)
 
 
 def emit_context(message: str) -> None:

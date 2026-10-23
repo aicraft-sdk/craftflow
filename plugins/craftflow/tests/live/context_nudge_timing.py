@@ -185,7 +185,7 @@ def prepare_baseline(ref, tmp):
     base = Path(tmp) / "base_scripts"
     base.mkdir(parents=True, exist_ok=True)
     (base / "craftflow_context_nudge.py").write_bytes(blob)
-    for name in ("craftflow_hooklib.py", "craftflow_transcript_usage.py"):
+    for name in ("craftflow_hooklib.py", "craftflow_fcntl_compat.py", "craftflow_transcript_usage.py"):
         shutil.copyfile(str(SCRIPTS / name), str(base / name))
     return base / "craftflow_context_nudge.py"
 

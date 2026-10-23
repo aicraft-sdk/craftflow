@@ -830,7 +830,7 @@ def test_no_root_mismatch_key_when_roots_agree(tmp):
 
 @tmpscene
 def test_concurrent_artifact_write_flock(tmp):
-    import fcntl
+    import craftflow_fcntl_compat as fcntl
     s = Scene(tmp)
     (s.root / "README.md").write_text("dirty\n")  # a gate outcome: it writes pending_gate
     lock_file = s.artifact_path.with_name(s.artifact_path.name + ".lock")
