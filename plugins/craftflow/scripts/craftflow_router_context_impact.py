@@ -17,8 +17,9 @@ projection (`router-projection.json`, effective tier), so the gap to the goal is
   --allow-non-lock  accept a --baseline that is not the sha pinned in router-baseline.lock.json; the report is then headed
               NON-LOCK BASELINE and stays DRAFT. Without the flag such a baseline is an error.
 
-Status is COMPLETE only when all eight /context cells are filled, every LV result passed (evidence class A), the baseline is the
-lock sha, and the inventory diff exited 0; otherwise the Status line says DRAFT and why.
+Status is COMPLETE only when all eight /context cells are filled, every LV result passed or is the recorded LV-3 limitation
+(evidence class A; when LV-3 is the limitation the HV-4 note must also be recorded as PASS), the baseline is the lock sha, and
+the inventory diff exited 0; otherwise the Status line says DRAFT and why.
 
 Prints one JSON summary line on stdout. Exit 0 = report written; 1 = report written but the inventory diff did not exit 0;
 2 = error (nothing written; includes subprocess timeouts and malformed HV/LV input). Bytes are not tokens. Python 3.9 compatible.
@@ -51,6 +52,7 @@ GATED = (("kernel_bytes", "Kernel (SKILL.md)"), ("protocol_bytes", "Protocol (ro
          ("readset.DEBUG", "DEBUG read set"), ("readset.REVIEW", "REVIEW read set"))
 LV_KEYS = ("load_probe", "lv2", "lv3", "lv4", "lv5")
 LV3_LIMITATION = "LIMITATION:enterplanmode_not_offered"
+INPUTS_DIR = "docs/benchmarks/2026-10-21-router-context-cut-r2.inputs/"
 LV_CLASSES = ("A", "B-SIMULATED")
 HV_IDS = ("HV-1", "HV-2")
 HV_LABELS = {"HV-1": "fast-path BUILD", "HV-2": "PLAN"}
@@ -224,8 +226,11 @@ def load_hv_notes(raw) -> dict:
         raise ImpactError("HV notes must be an object with only 'method' and 'outcomes'")
 
     def text(v, where):
-        if not isinstance(v, str) or not v.strip() or "\n" in v or "\r" in v or len(v) > 900:
+        if not isinstance(v, str) or not v.strip() or len(v) > 900:
             raise ImpactError(f"HV notes {where}: need a single-line string of 1..900 characters")
+        # Notes are pasted into Markdown: refuse table/HTML characters and every character str.splitlines() treats as a line break.
+        if any(ch in "<>|" or len(("x" + ch + "x").splitlines()) > 1 for ch in set(v)):
+            raise ImpactError(f"HV notes {where}: must not contain '<', '>', '|' or any line-break character")
         return v.strip()
 
     out: dict = {}
@@ -298,21 +303,29 @@ def render(data: dict, hv: Optional[dict] = None, lv: Optional[dict] = None, not
     reasons: List[str] = []
     if pending:
         reasons.append("human `/context` A/B pending: " + str(len(pending)) + " of 8 cells")
+    hv4 = ((notes or {}).get("outcomes") or {}).get("HV-4")
+    hv4_pass = isinstance(hv4, str) and hv4.startswith("PASS")
+    lv3_limited = lv is not None and lv["lv3"] == LV3_LIMITATION
     if lv is None:
         reasons.append("LV lane result not supplied")
     else:
         lvp = lv_problems(lv)
         if lvp:
             reasons.append("LV lane not clean: " + ", ".join(lvp))
+        if lv3_limited and not hv4_pass:
+            reasons.append("LV-3 is the not-offered limitation and HV-4 is not recorded as PASS")
     if data.get("non_lock_baseline"):
         reasons.append("non-lock baseline")
     if data.get("inventory") is None or data.get("inventory_exit") not in (0,):
         reasons.append(f"inventory diff not clean (exit {data.get('inventory_exit')}, "
                        f"{'accounting unparsable or not collected' if data.get('inventory') is None else 'non-zero exit'})")
     a("- Status: DRAFT (" + "; ".join(reasons) + ")" if reasons
-      else "- Status: COMPLETE (all eight human-verification token cells filled, every LV result passed, inventory diff exit 0)")
-    a("- Reproduce: `python3 scripts/craftflow_router_context_impact.py --baseline <BASELINE_SHA> --out <report.md>` "
-      "(from `tools/craftflow-plugin/plugins/craftflow/`)")
+      else "- Status: COMPLETE (all eight human-verification token cells filled, every LV result passed or is the recorded LV-3 "
+           "limitation" + (" with HV-4 recorded as PASS" if lv3_limited else "") + ", inventory diff exit 0)")
+    a("- Reproduce: `python3 tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_router_context_impact.py "
+      "--baseline <BASELINE_SHA> --out docs/benchmarks/2026-10-21-router-context-cut-r2.md "
+      f"--hv {INPUTS_DIR}hv.json --lv {INPUTS_DIR}lv.json --hv-notes {INPUTS_DIR}hv-notes.json` (from the repository root; "
+      f"`{INPUTS_DIR}hv4-hook-log-row.json` is the HV-4 evidence row)")
     a("")
     a("## Disclosures")
     a("")
@@ -399,7 +412,9 @@ def render(data: dict, hv: Optional[dict] = None, lv: Optional[dict] = None, not
         a(f"Evidence class: {lv['evidence_class']} (A only when the load probe passed in the same full run).")
         if lv["lv3"] == LV3_LIMITATION:
             a("LV-3 recorded the limitation `LIMITATION:enterplanmode_not_offered` (the session ran but the host never offered the tool); "
-              "it is covered by the interactive check on the human list.")
+              + ("it is covered by HV-4, the interactive check, which is recorded as PASS below."
+                 if (((notes or {}).get("outcomes") or {}).get("HV-4") or "").startswith("PASS")
+                 else "it is not covered: HV-4, the interactive check, is not recorded as PASS, so the report stays DRAFT."))
         problems = lv_problems(lv)
         if problems:
             a("Not every LV result passed: " + ", ".join(problems) + ". The report stays DRAFT.")
@@ -408,8 +423,7 @@ def render(data: dict, hv: Optional[dict] = None, lv: Optional[dict] = None, not
     a("## Human verification: `/context` A/B")
     a("")
     if notes and "method" in notes:
-        a("Method: " + notes["method"] + " Values are tokens (not bytes). Capture point a is right after the routing announce; "
-          "b is when memory-finalize completes. A cell is PENDING until a number is recorded.")
+        a("Method: " + notes["method"] + " Values are tokens (not bytes).")
     else:
         a("Captured by David with `claude --plugin-dir <baseline plugin>` and `claude --plugin-dir <candidate plugin>`. Values are tokens as "
           "`/context` prints them (not bytes). Capture point a is right after the routing announce; b is when memory-finalize completes. "

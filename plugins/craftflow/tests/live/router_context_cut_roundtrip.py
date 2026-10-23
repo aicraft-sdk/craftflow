@@ -135,8 +135,8 @@ def session_completed(rc, stream_json):
 
 
 def lv3_outcome(rc, stream_json, called, denied_rows):
-    """One LV-3 attempt: 'PASS', a 'FAIL:...' string, or None (session ran, tool never offered: retry, then LIMITATION).
-    A limitation is only ever reachable from a session that really ran."""
+    """One LV-3 attempt: 'PASS', a 'FAIL:...' string, or None (session ran and the init tool list provably lacks EnterPlanMode:
+    retry, then LIMITATION). A limitation is only ever reachable from a session that really ran with a tool list."""
     if denied_rows:
         return "PASS"
     if called and session_completed(rc, stream_json) and host_rejected_unoffered(stream_json, "EnterPlanMode"):
@@ -145,6 +145,20 @@ def lv3_outcome(rc, stream_json, called, denied_rows):
         return "FAIL:enterplanmode_called_but_not_denied"
     if not session_completed(rc, stream_json):
         return "FAIL:claude_session_failed(rc=%s)" % rc
+    tools = init_tools(stream_json)
+    if tools is None:
+        return "FAIL:enterplanmode_no_tool_list"  # cannot prove the tool was not offered
+    if "EnterPlanMode" in tools:
+        return "FAIL:enterplanmode_offered_not_called"  # offered but never exercised: unproven, not a pass
+    return None  # provably not offered and never called
+
+
+def init_tools(stream_json):
+    """The tool-name list of the first system init event, or None when the stream has none."""
+    for ev in stream_events(stream_json):
+        if ev.get("type") == "system" and ev.get("subtype") == "init":
+            tools = ev.get("tools")
+            return tools if isinstance(tools, list) else None
     return None
 
 

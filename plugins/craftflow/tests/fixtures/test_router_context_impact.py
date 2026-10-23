@@ -354,8 +354,9 @@ def test_render_status_draft_on_failed_lv() -> None:
                      ("class_b", good_lv(evidence_class="B-SIMULATED"))):
         line = status_line(imp.render(synthetic(), hv=full_hv(), lv=lv))
         check("render_status_draft_" + name, line.startswith("- Status: DRAFT"), line)
-    ok_limit = imp.render(synthetic(), hv=full_hv(), lv=good_lv(lv3="LIMITATION:enterplanmode_not_offered"))
-    check("render_status_complete_with_lv3_limitation", "Status: COMPLETE" in ok_limit, "the LV-3 limitation is allowed")
+    ok_limit = imp.render(synthetic(), hv=full_hv(), lv=good_lv(lv3="LIMITATION:enterplanmode_not_offered"),
+                          notes={"outcomes": {"HV-4": "PASS: denied interactively"}})
+    check("render_status_complete_with_lv3_limitation", "Status: COMPLETE" in ok_limit, "the LV-3 limitation plus an HV-4 PASS is allowed")
 
 
 def test_render_status_draft_when_inventory_failed() -> None:
@@ -504,7 +505,8 @@ def test_driver_lv3_requires_a_real_session() -> None:
     for name, rc, out in (("timeout", 124, ""), ("auth_failure", 1, ""), ("no_events", 0, "")):
         got = str(drv.lv3_outcome(rc, out, False, 0))
         check("driver_lv3_" + name + "_is_fail", got.startswith("FAIL:claude_session_failed"), got)
-    check("driver_lv3_not_offered_retries", drv.lv3_outcome(0, STREAM_OK, False, 0) is None, "ran, tool not called, no row: retry then limitation")
+    check("driver_lv3_no_tool_list_is_fail", drv.lv3_outcome(0, STREAM_OK, False, 0) == "FAIL:enterplanmode_no_tool_list",
+          "a session without an init tool list cannot prove the tool was not offered")
     check("driver_lv3_called_not_denied", drv.lv3_outcome(0, STREAM_OK, True, 0) == "FAIL:enterplanmode_called_but_not_denied", "")
     check("driver_lv3_denied_passes", drv.lv3_outcome(0, STREAM_OK, True, 1) == "PASS", "")
 
@@ -534,7 +536,22 @@ def test_driver_lv3_unoffered_tool_called_is_the_limitation() -> None:
     s = lv3_stream(["Bash", "Read"], True, HOST_UNKNOWN)
     check("driver_lv3_unoffered_called_rejected_str_content", drv.lv3_outcome(0, s, True, 0) is None, "string tool_result content")
     s = lv3_stream(["Bash", "Read"], False)
-    check("driver_lv3_unoffered_not_called_retries", drv.lv3_outcome(0, s, False, 0) is None, "model never called it")
+    check("driver_lv3_unoffered_not_called_retries", drv.lv3_outcome(0, s, False, 0) is None, "provably not offered, never called")
+
+
+def test_driver_lv3_never_called_needs_a_provably_absent_tool() -> None:
+    got = drv.lv3_outcome(0, lv3_stream(["Bash", "EnterPlanMode"], False), False, 0)
+    check("driver_lv3_offered_not_called_is_fail", got == "FAIL:enterplanmode_offered_not_called", str(got))
+    got = drv.lv3_outcome(0, lv3_stream(["Bash"], False), False, 0)
+    check("driver_lv3_absent_not_called_is_none", got is None, str(got))
+    for name, s in (("no_init", '{"type":"result","subtype":"success"}\n'),
+                    ("init_without_tools", STREAM_OK),
+                    ("tools_not_a_list", '{"type":"system","subtype":"init","tools":"Bash"}\n{"type":"result","subtype":"success"}\n')):
+        got = drv.lv3_outcome(0, s, False, 0)
+        check("driver_lv3_" + name + "_never_called_is_fail", got == "FAIL:enterplanmode_no_tool_list", str(got))
+    got = str(drv.lv3_outcome(1, lv3_stream(["Bash"], False), False, 0))
+    check("driver_lv3_absent_not_called_failed_session_is_fail", got.startswith("FAIL:claude_session_failed"), got)
+    check("driver_lv3_hook_row_wins_over_tool_list", drv.lv3_outcome(0, lv3_stream(["Bash", "EnterPlanMode"], False), False, 1) == "PASS", "")
 
 
 def test_driver_lv3_called_without_host_rejection_stays_fail() -> None:
@@ -612,6 +629,64 @@ def test_hv_notes_loader_and_render() -> None:
           "method note must replace the hard-coded capture sentence")
     check("hv_notes_list_outcomes", "- HV-3: PASS: router invoked" in text and "- HV-4: PASS: denied" in text and "none is recorded here" not in text,
           "outcomes must replace the 'none is recorded' sentence")
+
+
+LIMIT = "LIMITATION:enterplanmode_not_offered"
+
+
+def test_render_lv3_limitation_needs_hv4_pass() -> None:
+    lim = good_lv(lv3=LIMIT)
+    cases = (
+        ("missing_notes", None, False),
+        ("missing_hv4", {"outcomes": {"HV-3": "PASS: ok"}}, False),
+        ("fail_hv4", {"outcomes": {"HV-4": "FAIL: not denied"}}, False),
+        ("pass_hv4", {"outcomes": {"HV-4": "PASS: denied"}}, True),
+    )
+    for name, notes, complete in cases:
+        text = imp.render(synthetic(), hv=full_hv(), lv=lim, notes=notes)
+        line = status_line(text)
+        if complete:
+            check("lv3_limit_" + name + "_complete", line.startswith("- Status: COMPLETE"), line)
+            check("lv3_limit_" + name + "_sentence_covered", "covered by HV-4" in text and "not covered" not in text, "PASS HV-4 covers the limitation")
+        else:
+            check("lv3_limit_" + name + "_draft", line.startswith("- Status: DRAFT")
+                  and "LV-3 is the not-offered limitation and HV-4 is not recorded as PASS" in line, line)
+            check("lv3_limit_" + name + "_sentence_truthful", "not covered" in text and "covered by HV-4" not in text,
+                  "without an HV-4 PASS the limitation sentence must not claim coverage")
+    line = status_line(imp.render(synthetic(), hv=full_hv(), lv=good_lv(), notes=None))
+    check("lv3_pass_needs_no_hv4", line.startswith("- Status: COMPLETE") and "HV-4" not in line, line)
+
+
+def test_render_status_wording_matches_the_limitation() -> None:
+    plain = status_line(imp.render(synthetic(), hv=full_hv(), lv=good_lv()))
+    check("status_wording_not_false_claim", "every LV result passed or is the recorded LV-3 limitation" in plain, plain)
+    lim = status_line(imp.render(synthetic(), hv=full_hv(), lv=good_lv(lv3=LIMIT), notes={"outcomes": {"HV-4": "PASS: x"}}))
+    check("status_wording_names_hv4_when_limited", "HV-4 recorded as PASS" in lim, lim)
+
+
+def test_render_method_note_defines_both_capture_points() -> None:
+    text = imp.render(synthetic(), notes={"method": "a = first model call after the router skill result, b = last model call of the session."})
+    line = [ln for ln in text.splitlines() if ln.startswith("Method:")][0]
+    check("method_note_drops_fixed_point_sentence", "Capture point a is right after the routing announce" not in line
+          and "memory-finalize" not in line and "Values are tokens (not bytes)." in line, line)
+    check("method_note_keeps_notes_definition", "b = last model call of the session." in line, line)
+
+
+def test_render_reproduce_line_names_the_inputs() -> None:
+    line = [ln for ln in imp.render(synthetic()).splitlines() if ln.startswith("- Reproduce:")][0]
+    for want in ("--hv ", "--lv ", "--hv-notes ", "docs/benchmarks/2026-10-21-router-context-cut-r2.inputs/hv.json",
+                 "lv.json", "hv-notes.json", "--baseline", "--out"):
+        check("reproduce_line_has_" + want.strip(), want in line, line)
+    check("reproduce_line_repo_relative", "tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_router_context_impact.py" in line, line)
+
+
+def test_hv_notes_loader_rejects_markup_and_line_breaks() -> None:
+    for name, ch in (("lt", "<"), ("gt", ">"), ("pipe", "|"), ("ls", "\u2028"), ("ps", "\u2029"), ("nel", "\u0085"),
+                     ("vt", "\x0b"), ("ff", "\x0c"), ("fs", "\x1c"), ("gs", "\x1d"), ("rs", "\x1e")):
+        expect_impact_error("hv_notes_rejects_" + name + "_in_method", lambda c=ch: imp.load_hv_notes({"method": "a" + c + "b"}))
+        expect_impact_error("hv_notes_rejects_" + name + "_in_outcome", lambda c=ch: imp.load_hv_notes({"outcomes": {"HV-3": "a" + c + "b"}}))
+    kept = {"method": "uses `claude -p` (see ADR-0073), a = first call; b: last; 50% fine, \"quoted\" & ok."}
+    check("hv_notes_keeps_backticks_and_punctuation", imp.load_hv_notes(kept) == kept, "ordinary punctuation stays allowed")
 
 
 def main() -> int:
