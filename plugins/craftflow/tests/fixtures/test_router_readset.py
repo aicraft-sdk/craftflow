@@ -715,8 +715,20 @@ def test_effective_block_uses_the_recorded_conditions() -> None:
     state_ok = (recorded["effective"]["tier"] == assumed) if budget["reach_amendment"] else \
         ((recorded["effective"]["tier"] == recorded["tiers"]["guaranteed"]) != enterplan_on
          and flag_off["effective"]["tier"] == flag_off["tiers"]["guaranteed"] and assumed != recorded["tiers"]["guaranteed"])
+    # The gap between `guaranteed` and `effective` must be exactly the bytes of the two flag-tagged delete rows (each anchor line plus its
+    # newline: 358 kernel + 322 protocol = 680), in every workflow variant; with the flag off the gap is zero (the control).
+    deleted = sum(len(r["start_anchor"].encode("utf-8")) + 1 for r in json.loads(CUTPLAN.read_text(encoding="utf-8"))["rows"]
+                  if r.get("condition") == "live_verified_enterplanmode" and r["op"] == "delete")
+
+    def gaps(out: dict) -> list:
+        g, e = out["tiers"]["guaranteed"], out["effective"]["tier"]
+        return [g[w] - e[w] for w in ("DEBUG", "PLAN", "REVIEW")] + [g["BUILD"][v] - e["BUILD"][v] for v in ("fast_path", "max", "standard")]
+
+    gap_ok = deleted == 680
+    if not budget["reach_amendment"]:
+        gap_ok = gap_ok and gaps(recorded) == [deleted if enterplan_on else 0] * 6 and gaps(flag_off) == [0] * 6
     check("effective_block_uses_the_recorded_conditions",
-          {k: recorded["effective_conditions"][k] for k in budget["conditions"]} == budget["conditions"]
+          gap_ok and {k: recorded["effective_conditions"][k] for k in budget["conditions"]} == budget["conditions"]
           and recorded["effective_conditions"]["reach_amendment"] == budget["reach_amendment"] and recorded["effective_conditions_source"] == "router-budget.json"
           and state_ok
           and all_off["effective"]["tier"] == all_off["tiers"]["guaranteed"] and all_off["effective_conditions_source"] == "cli",
