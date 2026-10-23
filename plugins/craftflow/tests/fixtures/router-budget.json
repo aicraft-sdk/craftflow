@@ -229,7 +229,7 @@
       "from_projection_sha256": "953f1646bdb5e395beac81749f35c9da831996ee70d2b1e07bd77f5b9470fb98",
       "to_projection_sha256": "2f4febd314ed2d55c53e911a22f53ab984da0f750db989d0258361fd92662d2f",
       "fits_enforced_caps": true,
-      "decided_by": "pending-David",
+      "decided_by": "David",
       "cause": "P13 task 4: the two EnterPlanMode prose rules are deleted. David decided on 2026-10-23, on the strength of HV-4 (an interactive claude --plugin-dir session on f0d00f73: \"enter plan mode now\" was denied with craftflow-policy: native_plan_mode=never and the project hook log holds a native_plan_mode_denied row; the claude -p lane could not prove it, LV-3 was LIMITATION:enterplanmode_not_offered). The kernel loses its 'Never use EnterPlanMode' bullet (358 B, 34,155 to 33,797) and the shared protocol loses its 'NEVER use Claude Code's native plan mode' bullet (322 B, 13,808 to 13,486). The cut-plan rows p12-delete-enterplanmode-kernel and p12-delete-enterplanmode-protocol move from phase P12 to P13 and conditions.live_verified_enterplanmode becomes true; policy-map rows a01e2c640767 and c403449266e4 become deleted / live_verified true (Reviewed by pending-David). Every start set falls by 680 B: BUILD/PLAN/DEBUG/REVIEW 97407/85613/73399/71419 to 96727/84933/72719/70739 (measured); live ceilings are re-ratcheted to the measured tree (kernel 33797, protocol 13486; reference max 19097 and descriptions 3793 unchanged), none rises, so ceiling_raises gains no entry. enforced_caps, targets and enforce are untouched. The projection's reach_feasibility reads the committed policy map, which holds 2 unsigned rows (the P13 rows); signing them can change it again and then needs its own revision entry. decided_by is pending-David."
     }
   ],
