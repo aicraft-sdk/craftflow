@@ -1,7 +1,7 @@
 {
   "baseline_ref": "0439c33932463d257b881ce50f136ab7661c0a39",
   "measured_at_sha": "491ed3d9bb9a77a9b63704e6b7819591a7c45946",
-  "last_phase": "P12",
+  "last_phase": "P13",
   "merged_phases": [
     "P2",
     "P2C",
@@ -14,23 +14,24 @@
     "P9",
     "P10",
     "P11",
-    "P12"
+    "P12",
+    "P13"
   ],
   "conditions": {
     "difference_17": true,
-    "live_verified_enterplanmode": false
+    "live_verified_enterplanmode": true
   },
   "reach_amendment": null,
   "ceilings": {
-    "kernel_bytes": 34155,
-    "protocol_bytes": 13808,
+    "kernel_bytes": 33797,
+    "protocol_bytes": 13486,
     "reference_max_bytes": 19097,
     "description_chars": 3793,
     "readset": {
-      "BUILD": 97407,
-      "PLAN": 85613,
-      "DEBUG": 73399,
-      "REVIEW": 71419
+      "BUILD": 96727,
+      "PLAN": 84933,
+      "DEBUG": 72719,
+      "REVIEW": 70739
     }
   },
   "ceiling_raises": [
@@ -165,7 +166,7 @@
     "projection_sha256": "5b27b389a30d7205e0c07a231d218d1fd2ae16958c99fe919ca7879d84d9f832",
     "cause": "P2C: Difference 17 dropped (D17-A, reach_amendment null) and REACH-B adopted as the reach option; caps are the guaranteed effective tier of router-projection.json, exact values, ratchet-only afterwards"
   },
-  "projection_sha256": "953f1646bdb5e395beac81749f35c9da831996ee70d2b1e07bd77f5b9470fb98",
+  "projection_sha256": "2f4febd314ed2d55c53e911a22f53ab984da0f750db989d0258361fd92662d2f",
   "projection_revisions": [
     {
       "phase": "P5",
@@ -222,6 +223,14 @@
       "fits_enforced_caps": true,
       "decided_by": "David",
       "cause": "P12 policy-mapped deletions, rationale relocation and enforcement of the P2C caps. Task 1 deletes nothing new: every live_verified deleted row (plan_commit at P5, worktree_merge at P8) is already deleted, and the two EnterPlanMode rows stay pending-prose-deletion because conditions.live_verified_enterplanmode is false (LV-3 and HV-4 are P13). Task 2: the \"Shared with Cursor\" boilerplate collapses to the tag (shared) at nine sites (the plan counted eight; the ninth is the lower-case Required sections lead at Memory Load) with one kernel header sentence as the kept copy; the eight drafted p12-shared-* cut-plan rows are applied as drafted and a ninth row is added. Task 3: the Dispatcher note (baseline id 1be8628b06e4, 795 B) moves verbatim from router-protocol.md to docs/router-rationale.md with a Rationale row (carry item from P11; the other classifier candidates in the start files are labels, Read() pointers or instructions and stay, as listed in the policy map). The router description sheds its Trigger keywords paragraph (223 B, Rewrites row 46d6f6359eeb, kind trigger): plan P3 task 3 deferred the router description, the unapplied p3-kernel-when-to-use row (+290 B) is void (est_bytes 0, no When To Use section is added) and the projection's 362 B kernel gap to the P11 tree was exactly that description. Sixteen descriptions rows record the as-built descriptions P3 landed for skills the plan gave no draft for (the projection kept their pre-P3 length). Contingencies C1-C4 are not applied: ADR-0073 Budget decision (P2C) records none as approved. Four P11 xref rows (Resolve Project Root, Previous Agent Findings, Skill-Distill Approval Flow and Verifier Findings Handoff pointers) are re-opened because their new ids changed. The policy map holds 11 unsigned rows (10 Rewrites, 1 Rationale); the projection's reach_feasibility counts them, so signing can change it again and then needs its own revision entry. Full-plan projection and the measured tree both sit under every enforced cap: kernel 34155 of 34202, protocol 13808 of 14606, reference max 19097 of 19101, descriptions 3793 of 5081, BUILD/PLAN/DEBUG/REVIEW 97361/85613/73399/71419 projected and 97407/85613/73399/71419 measured of 98180/86940/74204/72266. Live ceilings are re-ratcheted to the measured tree (all fall against origin/main, so ceiling_raises gains no entry) and enforce flips to true. REM-FIX (P12 doubt cycle 1, scope ALL_ISSUES): the kernel header sentence now reads \"(shared): canonical text lives in skills/_shared/, with Cursor.\" (it names the directory; byte-neutral, the kernel stays 34155 B; the new unit id 268002857f02 replaces be81e409f118 in the five dedupe rows and four xref rows that list it as the kept copy); the nine-site count is pinned by test_shared_with_cursor_boilerplate_collapsed (the ninth, Required sections, joins SHARED_TAGS); the Dispatcher note measures 795 B, not 793 B; test_enforce_ratchet_vs_origin_main pins enforce true (it fails when origin/main has true and this file false, and when enforce is false while P12 is in merged_phases); the five retargeted hook needles match the (shared) tag text only. The projection changed only in cutplan_sha256 (the header row text); every projected figure is unchanged, the policy map still holds 11 unsigned rows (10 Rewrites, 1 Rationale) and no ceiling rises. ADR-0073 states that the P2C confirmation holds only if the signer accepts the narrower router-description trigger surface (row 46d6f6359eeb). decided_by is pending-David."
+    },
+    {
+      "phase": "P13",
+      "from_projection_sha256": "953f1646bdb5e395beac81749f35c9da831996ee70d2b1e07bd77f5b9470fb98",
+      "to_projection_sha256": "2f4febd314ed2d55c53e911a22f53ab984da0f750db989d0258361fd92662d2f",
+      "fits_enforced_caps": true,
+      "decided_by": "pending-David",
+      "cause": "P13 task 4: the two EnterPlanMode prose rules are deleted. David decided on 2026-10-23, on the strength of HV-4 (an interactive claude --plugin-dir session on f0d00f73: \"enter plan mode now\" was denied with craftflow-policy: native_plan_mode=never and the project hook log holds a native_plan_mode_denied row; the claude -p lane could not prove it, LV-3 was LIMITATION:enterplanmode_not_offered). The kernel loses its 'Never use EnterPlanMode' bullet (358 B, 34,155 to 33,797) and the shared protocol loses its 'NEVER use Claude Code's native plan mode' bullet (322 B, 13,808 to 13,486). The cut-plan rows p12-delete-enterplanmode-kernel and p12-delete-enterplanmode-protocol move from phase P12 to P13 and conditions.live_verified_enterplanmode becomes true; policy-map rows a01e2c640767 and c403449266e4 become deleted / live_verified true (Reviewed by pending-David). Every start set falls by 680 B: BUILD/PLAN/DEBUG/REVIEW 97407/85613/73399/71419 to 96727/84933/72719/70739 (measured); live ceilings are re-ratcheted to the measured tree (kernel 33797, protocol 13486; reference max 19097 and descriptions 3793 unchanged), none rises, so ceiling_raises gains no entry. enforced_caps, targets and enforce are untouched. The projection's reach_feasibility reads the committed policy map, which holds 2 unsigned rows (the P13 rows); signing them can change it again and then needs its own revision entry. decided_by is pending-David."
     }
   ],
   "enforce": true,

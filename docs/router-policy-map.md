@@ -23,6 +23,8 @@ account for a removed occurrence. The script and the test named in a row must ex
 | Baseline ID or group (file:start-end@sha) | Policy key | Enforcing script::function | Test | Status | live_verified | Reviewed by | Evidence |
 |---|---|---|---|---|---|---|---|
 | f41d16afa416 | plan_commit | craftflow_pretooluse_bash_guard.py::plan_pathspec_violations | test_policy_guards.py::plan_commit_staged_probe_denies | deleted | true | David Gracia (2026-10-15) | live `claude -p --plugin-dir` probe 2026-10-15 (haiku, scratch managed repo): `git add -f docs/plans/live-plan.md` denied with the plan_commit=never message, nothing staged, `plan_commit_denied` logged; control `git add control.txt` staged |
+| a01e2c640767 | native_plan_mode | craftflow_pretooluse_guard.py::_handle_enter_plan_mode | test_policy_guards.py::enterplanmode_denied_by_default | deleted | true | pending-David | HV-4 (P13): interactive `claude --plugin-dir` session on f0d00f73, 2026-10-23: "enter plan mode now" was denied with `craftflow-policy: native_plan_mode=never — route planning through the Craftflow PLAN workflow instead of Claude Code's native plan mode`; the project hook log holds a `native_plan_mode_denied` row (policy_status ok, native_plan_mode never). The `claude -p` lane (LV-3) was LIMITATION:enterplanmode_not_offered, so HV-4 is the proof (P13) |
+| c403449266e4 | native_plan_mode | craftflow_pretooluse_guard.py::_handle_enter_plan_mode | test_policy_guards.py::enterplanmode_denied_by_default | deleted | true | pending-David | HV-4 (P13): interactive `claude --plugin-dir` session on f0d00f73, 2026-10-23: "enter plan mode now" was denied with `craftflow-policy: native_plan_mode=never — route planning through the Craftflow PLAN workflow instead of Claude Code's native plan mode`; the project hook log holds a `native_plan_mode_denied` row (policy_status ok, native_plan_mode never). The `claude -p` lane (LV-3) was LIMITATION:enterplanmode_not_offered, so HV-4 is the proof (P13) |
 | 0600a1be9270, 07b5f4c83b70, 0e697b746505, 0fb2fe390de2, 15f8b2298a92, 1b2655482484, 20b540d96d08, 20d7a9a9ada3, 2874d10c541b, 29f7203fbde2, 2f5588bfa26e, 30307ca86ee9, 32c8865918fb, 3564eb52d73f, 365c86e93611, 414d7bc58559, 424f3676b24e, 496209c69131, 515990f3adc2, 55d87f6608d3, 5606d64a58fc, 57064d296c16, 5b24bac42e89, 5d44678a8c8c, 5d53194f38fd, 624cffe01286, 641a4fc0f499, 6591cde71bf0, 7071aadfae53, 74f9c3d59bc0, 7f03b57f75bc, 89733d670d8f, 8a5090e28835, 8c26c8f91c97, 8f164dc0f842, 91b0890f6ef9, 91bc31aa66e7, 920f2387bdda, 9471d6d61266, a6518b56c748, abffb1ebc21c, acdc11f60141, ae44666e6085, bcc88e42886d, c0a247ea8d50, c0ad81c9c468, c577b86dd699, c7b29414f19b, c9a8490b1c02, cc35d7127a3d, ccfa946a5e08, cfdc024fec13, d5ccd76cfe50, d85016555964, daff4ec339d4, dffb60671b88, e071721c49ab, e0d893afd420, e80c088f885b, ee29e4350412, f3dd2498e41e, f7f6ac7b0bb1, fbe89d3379ca, fea3c7a096bd, ff598b22e81f | worktree_merge | craftflow_worktree_finalize.py::main | test_worktree_finalize.py | deleted | true | David Gracia (2026-10-17) | live claude -p --plugin-dir BUILD in a scratch managed repo ended in craftflow_worktree_finalize.py merged_and_removed; worktree and branch gone; artifact worktree_mode merged_and_removed (P8 probe, 2026-10-16) |
 
 ## Rewrites
@@ -775,7 +777,7 @@ Three draft rows:
   Policy table has no target until the phase that renders that table lands.
 - `a01e2c640767` (SKILL.md) and `c403449266e4` (`router-protocol.md`) are the two "Never use EnterPlanMode" rules. P5 enforces them
   but deletes neither: `pending-prose-deletion`, `live_verified: false`. The live `claude -p` probe was not run in P5; P13 (LV-3 /
-  HV-4) must prove the deny fires, or these rows become `prose_retained`.
+  HV-4) must prove the deny fires, or these rows become `prose_retained`. (P13: HV-4 proved it and both rows are now `deleted`; see the P13 note at the end of this file.)
 
 Accepted gaps of the `plan_commit` guard (all fail open, today's behavior): `git update-index --index-info` (reads stdin),
 plumbing that writes the index or commits without `add`/`commit`/`update-index` (`git hash-object -w` + `commit-tree`,
@@ -794,11 +796,6 @@ lexer; a size-exhausted commit-only command is checked with the staged and workt
 function bodies, indirect command names (`g=git; $g commit`), arrays, more than 8 nested wrapper levels, numeric-delimiter `<<` forms,
 `git add .` of an untracked non-ignored plan, `bash -c "git commit"` once exhausted, and an `add && commit` over 16 KB or past the caps
 (false deny, split it). Recommended follow-up phase: extract the lexer into its own module and add a differential test against real bash.
-
-```
-| a01e2c640767 | native_plan_mode | craftflow_pretooluse_guard.py::_handle_enter_plan_mode | test_policy_guards.py::enterplanmode_denied_by_default | pending-prose-deletion | false | David Gracia (2026-10-20) | |
-| c403449266e4 | native_plan_mode | craftflow_pretooluse_guard.py::_handle_enter_plan_mode | test_policy_guards.py::enterplanmode_denied_by_default | pending-prose-deletion | false | David Gracia (2026-10-20) | |
-```
 
 P6 (`craftflow_gate_check.py`, ADR-0073 BC-6, DD-13). Two things need a human signature before CI's inventory diff can pass:
 
@@ -994,7 +991,7 @@ The signer reads these things:
 
 1. **Task 1 deleted nothing, on purpose.** Every `deleted` row with `live_verified: true` is already deleted (`plan_commit` in P5, `worktree_merge` in P8). The two EnterPlanMode rows
    (`a01e2c640767`, `c403449266e4`) stay `pending-prose-deletion`: `conditions.live_verified_enterplanmode` is `false` (LV-3 / HV-4 are P13), so the cut-plan rows
-   `p12-delete-enterplanmode-kernel` and `p12-delete-enterplanmode-protocol` stay conditional. No `prose_retained` row changes.
+   `p12-delete-enterplanmode-kernel` and `p12-delete-enterplanmode-protocol` stay conditional. No `prose_retained` row changes. (As of P13 these two rows are `deleted` and the cut-plan rows are `p12-`-named but phase P13; see the P13 note at the end of this file.)
 2. **The "Shared with Cursor" boilerplate is collapsed at nine sites, not eight.** The plan counted the eight capitalised sites; a ninth (`Required sections — shared with Cursor — canonical
    table lives in`, Memory Load, `a4d32960b23c`) has the same wording in lower case and gets the same treatment. Each site keeps the file, the quoted section name and every host-specific sentence; only the
    lead `Shared with Cursor — canonical text lives in` and the repo-relative prefix `tools/craftflow-plugin/plugins/craftflow/skills/` go, replaced by the tag `(shared)` and the plugin-relative path. The kept
@@ -1023,3 +1020,13 @@ The signer reads these things:
 
 After signing, regenerate `tests/fixtures/router-projection.json` (`reach_feasibility` counts the signed rows) and set the P12 `projection_revisions` entry in `router-budget.json` to
 `decided_by: "David"` with the new `to_projection_sha256`.
+
+P13 (EnterPlanMode prose deletion, plan P13 task 4; David decided on 2026-10-23 to delete it on the strength of HV-4). Needs a human signature before CI's inventory diff can pass.
+The two rows `a01e2c640767` (SKILL.md) and `c403449266e4` (`router-protocol.md`) moved from the P5 draft block into `## Policy-mapped deletions` as `deleted`, `live_verified: true`, with `Reviewed by`
+set to `pending-David` (not a signature: `rows_missing_review` is 2 and the inventory diff exits non-zero until David replaces it with `Name (YYYY-MM-DD)`). With them `unmapped_removed` is 0, `unreachable` is 0,
+`normative_in_rationale` is 0 and `row_errors` is empty. The proof is HV-4, an interactive `claude --plugin-dir` session on f0d00f73 (the `claude -p` lane could not prove it: LV-3 was
+LIMITATION:enterplanmode_not_offered). The two lines are gone from the kernel and the shared protocol; the cut-plan rows `p12-delete-enterplanmode-kernel` and `p12-delete-enterplanmode-protocol` keep their ids but
+carry phase P13 and `conditions.live_verified_enterplanmode` is `true`. The kernel's Policy table row `native_plan_mode` still names "§ 14 EnterPlanMode rule" as its prose location, as the
+`plan_commit` row still names "§ 14 plan-artifact rule": the cell is a label, not a pointer the guards read, and the table is printed from `craftflow_policy.py`, which this change does not touch.
+
+After signing, regenerate `tests/fixtures/router-projection.json` and set the P13 `projection_revisions` entry in `router-budget.json` to `decided_by: "David"` with the new `to_projection_sha256`.

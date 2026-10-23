@@ -267,7 +267,8 @@ def test_collect_head_matches_readset_tool() -> None:
     want = rs.compute("BUILD", PLUGIN_ROOT, budget_path=Path("/nonexistent"))["start_total"]
     got = [r for r in data["rows"] if r["workflow"] == "BUILD" and r["variant"] == "standard"][0]["head_start"]
     check("collect_head_equals_readset_tool_self_consistency", got == want, f"{got} != {want}")
-    check("collect_head_build_standard_literal_97407", got == 97407, f"BUILD standard start_total is {got}; the BUILD standard literal is 97,407")
+    # P13 task 4 (EnterPlanMode prose deleted, -680 B in every start set): 97,407 -> 96,727
+    check("collect_head_build_standard_literal_96727", got == 96727, f"BUILD standard start_total is {got}; the BUILD standard literal is 96,727")
 
 
 def test_collect_gated_measured_within_enforced() -> None:

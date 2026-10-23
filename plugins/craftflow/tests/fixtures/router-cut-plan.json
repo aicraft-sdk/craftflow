@@ -2727,7 +2727,7 @@
    "file": "skills/craftflow-router/SKILL.md",
    "id": "p12-delete-enterplanmode-kernel",
    "op": "delete",
-   "phase": "P12",
+   "phase": "P13",
    "source": "plan P12 task 1 / P13 task 4: EnterPlanMode rule deleted only after live proof (policy native_plan_mode, Policy table row)",
    "start_anchor": "- Never use EnterPlanMode. Claude Code's native plan mode is incompatible with Craftflow. Planning requests go through the Craftflow PLAN workflow (brainstorming → planner → bounded fresh review → memory finalization), which provides orchestration state, workflow artifacts, intent contracts, and verification. Native plan mode provides none of these."
   },
@@ -2736,7 +2736,7 @@
    "file": "skills/_shared/router-protocol.md",
    "id": "p12-delete-enterplanmode-protocol",
    "op": "delete",
-   "phase": "P12",
+   "phase": "P13",
    "source": "plan P12 task 1: router-protocol.md:206 EnterPlanMode rule deleted only after live proof",
    "start_anchor": "- NEVER use Claude Code's native plan mode (EnterPlanMode). Craftflow owns planning. All \"plan\", \"design\", \"architect\", \"brainstorm\" requests route to the Craftflow PLAN workflow — not to the built-in plan mode tool. EnterPlanMode bypasses Craftflow orchestration, memory, workflow artifacts, and verification entirely."
   },

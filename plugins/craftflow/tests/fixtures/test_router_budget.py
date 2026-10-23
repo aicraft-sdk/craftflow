@@ -710,16 +710,16 @@ def test_enforce_ratchet_vs_origin_main() -> None:
 
 
 def test_revision_phases_are_merged_phases() -> None:
-    """A relabelled last phase (P12 -> P13) leaves the P12 revision entry naming a phase that is not merged: the entry is the tell."""
+    """A relabelled last phase (P13 -> P14) leaves the P13 revision entry naming a phase that is not merged: the entry is the tell."""
     live = load_budget()
-    relabel = dict(live, merged_phases=live["merged_phases"][:-1] + ["P13"], last_phase="P13")
+    relabel = dict(live, merged_phases=live["merged_phases"][:-1] + ["P14"], last_phase="P14")
     ceiling_34203 = dict(relabel, ceilings=dict(live["ceilings"], kernel_bytes=34203), enforce=True)
     controls = {
-        "relabel_p13": len(revision_phase_problems(relabel)) == 1,
-        "relabel_p13_with_ceiling_34203": len(revision_phase_problems(ceiling_34203)) == 1,
+        "relabel_p14": len(revision_phase_problems(relabel)) == 1,
+        "relabel_p14_with_ceiling_34203": len(revision_phase_problems(ceiling_34203)) == 1,
         "all_revisions_merged": revision_phase_problems(dict(live, projection_revisions=[{"phase": "P5"}])) == [],
         "no_revisions": revision_phase_problems(dict(live, projection_revisions=[])) == [],
-        "revision_for_unmerged_phase": len(revision_phase_problems(dict(live, projection_revisions=[{"phase": "P13"}]))) == 1,
+        "revision_for_unmerged_phase": len(revision_phase_problems(dict(live, projection_revisions=[{"phase": "P14"}]))) == 1,
     }
     problems = revision_phase_problems(live)
     check("revision_phases_are_merged_phases", all(controls.values()) and not problems, f"controls={controls} live={problems}")

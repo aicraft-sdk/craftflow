@@ -708,8 +708,13 @@ def test_effective_block_uses_the_recorded_conditions() -> None:
     assumed = cli_json_args_project(["--assume-reach-amendment"])["effective"]["tier"]
     # K4: true in both legitimate states of the budget's `reach_amendment` (the decision record test owns the key itself). G2: every
     # difference_17 row is tagged, so without the recorded amendment the flag adds nothing to `effective`; with it `effective` is what the flag gives.
+    # P13: live_verified_enterplanmode is true, so the two EnterPlanMode delete rows (tagged by that flag, not by difference_17) are in `effective`
+    # and `effective` sits below `guaranteed` by exactly them; with that flag off the old premise still holds.
+    flag_off = cli_json_args_project(["--conditions", "difference_17=%s,live_verified_enterplanmode=false" % str(budget["conditions"]["difference_17"]).lower()])
+    enterplan_on = budget["conditions"]["live_verified_enterplanmode"]
     state_ok = (recorded["effective"]["tier"] == assumed) if budget["reach_amendment"] else \
-        (recorded["effective"]["tier"] == recorded["tiers"]["guaranteed"] and assumed != recorded["tiers"]["guaranteed"])
+        ((recorded["effective"]["tier"] == recorded["tiers"]["guaranteed"]) != enterplan_on
+         and flag_off["effective"]["tier"] == flag_off["tiers"]["guaranteed"] and assumed != recorded["tiers"]["guaranteed"])
     check("effective_block_uses_the_recorded_conditions",
           {k: recorded["effective_conditions"][k] for k in budget["conditions"]} == budget["conditions"]
           and recorded["effective_conditions"]["reach_amendment"] == budget["reach_amendment"] and recorded["effective_conditions_source"] == "router-budget.json"
@@ -1166,8 +1171,9 @@ def test_signing_burden_buckets_are_disjoint_on_every_tier() -> None:
     # P11 remediation 2 (re-derived on the final text and the 169 unsigned rows read by the diff): 530 / 529 (499 / 498) become 532 / 531 (501 / 500)
     # P11 remediation 3 (re-derived on the final text and the 156 unsigned rows read by the diff): 532 / 531 (501 / 500) become 533 / 532 (502 / 501)
     # P12 (re-derived on the final text and the 11 unsigned rows read by the diff): 533 / 532 (502 / 501) become 544 / 543 (513 / 512)
-    signed_overlap = {"conditional": 544, "conditional_if_reach_amended": 543, "effective": 544, "effective_without_infeasible_rows": 544,
-                      "guaranteed": 544, "with_contingencies": 513, "with_contingencies_if_reach_amended": 512}
+    # P13 (re-derived on the final text and the 2 unsigned P13 rows read by the diff, the two EnterPlanMode deletions): 544 / 543 (513 / 512) become 546 / 545 (515 / 514); the guaranteed tier stays 544 (the flag-tagged delete rows are not in it)
+    signed_overlap = {"conditional": 546, "conditional_if_reach_amended": 545, "effective": 546, "effective_without_infeasible_rows": 546,
+                      "guaranteed": 544, "with_contingencies": 515, "with_contingencies_if_reach_amended": 514}
     bad = {}
     for name, v in tiers.items():
         b = v["signing_burden"]["buckets"]
