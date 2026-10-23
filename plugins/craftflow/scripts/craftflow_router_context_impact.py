@@ -310,7 +310,7 @@ def render(data: dict, hv: Optional[dict] = None, lv: Optional[dict] = None, not
         reasons.append(f"inventory diff not clean (exit {data.get('inventory_exit')}, "
                        f"{'accounting unparsable or not collected' if data.get('inventory') is None else 'non-zero exit'})")
     a("- Status: DRAFT (" + "; ".join(reasons) + ")" if reasons
-      else "- Status: COMPLETE (all eight `/context` cells filled, every LV result passed, inventory diff exit 0)")
+      else "- Status: COMPLETE (all eight human-verification token cells filled, every LV result passed, inventory diff exit 0)")
     a("- Reproduce: `python3 scripts/craftflow_router_context_impact.py --baseline <BASELINE_SHA> --out <report.md>` "
       "(from `tools/craftflow-plugin/plugins/craftflow/`)")
     a("")
