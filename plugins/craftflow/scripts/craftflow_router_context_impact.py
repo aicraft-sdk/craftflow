@@ -30,8 +30,10 @@ import argparse
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -219,6 +221,11 @@ def load_hv(raw) -> dict:
     return out
 
 
+def _hv_note_is_pass(v) -> bool:
+    """An HV outcome note counts as a pass only when it starts with the word PASS ("PASS", "PASS: ...", "PASS ..."), not "PASSED-NOT"."""
+    return isinstance(v, str) and re.match(r"PASS(:|\s|$)", v) is not None
+
+
 def load_hv_notes(raw) -> dict:
     """Optional free-text notes for the human-verification section: how the cells were captured and the HV-3/4/5 outcomes.
     Exact shape `{"method": str, "outcomes": {"HV-3": str, ...}}`; single-line strings, bounded, no unknown keys or ids."""
@@ -229,8 +236,8 @@ def load_hv_notes(raw) -> dict:
         if not isinstance(v, str) or not v.strip() or len(v) > 900:
             raise ImpactError(f"HV notes {where}: need a single-line string of 1..900 characters")
         # Notes are pasted into Markdown: refuse table/HTML characters and every character str.splitlines() treats as a line break.
-        if any(ch in "<>|" or len(("x" + ch + "x").splitlines()) > 1 for ch in set(v)):
-            raise ImpactError(f"HV notes {where}: must not contain '<', '>', '|' or any line-break character")
+        if any(ch in "<>|" or len(("x" + ch + "x").splitlines()) > 1 or unicodedata.category(ch) in ("Cc", "Cf") for ch in set(v)):
+            raise ImpactError(f"HV notes {where}: must not contain '<', '>', '|', a line-break or a control or format character")
         return v.strip()
 
     out: dict = {}
@@ -304,7 +311,7 @@ def render(data: dict, hv: Optional[dict] = None, lv: Optional[dict] = None, not
     if pending:
         reasons.append("human `/context` A/B pending: " + str(len(pending)) + " of 8 cells")
     hv4 = ((notes or {}).get("outcomes") or {}).get("HV-4")
-    hv4_pass = isinstance(hv4, str) and hv4.startswith("PASS")
+    hv4_pass = _hv_note_is_pass(hv4)
     lv3_limited = lv is not None and lv["lv3"] == LV3_LIMITATION
     if lv is None:
         reasons.append("LV lane result not supplied")
@@ -413,7 +420,7 @@ def render(data: dict, hv: Optional[dict] = None, lv: Optional[dict] = None, not
         if lv["lv3"] == LV3_LIMITATION:
             a("LV-3 recorded the limitation `LIMITATION:enterplanmode_not_offered` (the session ran but the host never offered the tool); "
               + ("it is covered by HV-4, the interactive check, which is recorded as PASS below."
-                 if (((notes or {}).get("outcomes") or {}).get("HV-4") or "").startswith("PASS")
+                 if _hv_note_is_pass(((notes or {}).get("outcomes") or {}).get("HV-4"))
                  else "it is not covered: HV-4, the interactive check, is not recorded as PASS, so the report stays DRAFT."))
         problems = lv_problems(lv)
         if problems:

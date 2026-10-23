@@ -615,6 +615,14 @@ def test_render_is_pure() -> None:
     check("render_does_not_mutate_input", d == before, "render mutated its input")
 
 
+def test_hv_notes_reject_control_and_format_characters() -> None:
+    for name, ch in (("esc", "\x1b"), ("nul", "\x00"), ("tab", "\t"), ("bidi_override", "\u202e"), ("zero_width_space", "\u200b")):
+        expect_impact_error("hv_notes_rejects_" + name, lambda c=ch: imp.load_hv_notes({"method": "a" + c + "b"}))
+        expect_impact_error("hv_notes_outcome_rejects_" + name, lambda c=ch: imp.load_hv_notes({"outcomes": {"HV-4": "PASS" + c}}))
+    check("hv_notes_still_accept_backticks", imp.load_hv_notes({"method": "uses `claude --plugin-dir` (ok)"}) == {"method": "uses `claude --plugin-dir` (ok)"},
+          "ordinary punctuation and backticks stay allowed")
+
+
 def test_hv_notes_loader_and_render() -> None:
     good = {"method": "numbers taken from session transcripts.", "outcomes": {"HV-3": "PASS: router invoked", "HV-4": "PASS: denied"}}
     check("hv_notes_loader_accepts_good", imp.load_hv_notes(good) == good, "valid notes must round-trip")
@@ -640,7 +648,11 @@ def test_render_lv3_limitation_needs_hv4_pass() -> None:
         ("missing_notes", None, False),
         ("missing_hv4", {"outcomes": {"HV-3": "PASS: ok"}}, False),
         ("fail_hv4", {"outcomes": {"HV-4": "FAIL: not denied"}}, False),
+        ("passed_not_hv4", {"outcomes": {"HV-4": "PASSED-NOT"}}, False),
+        ("password_hv4", {"outcomes": {"HV-4": "PASSWORD leaked"}}, False),
+        ("lowercase_hv4", {"outcomes": {"HV-4": "pass: denied"}}, False),
         ("pass_hv4", {"outcomes": {"HV-4": "PASS: denied"}}, True),
+        ("bare_pass_hv4", {"outcomes": {"HV-4": "PASS"}}, True),
     )
     for name, notes, complete in cases:
         text = imp.render(synthetic(), hv=full_hv(), lv=lim, notes=notes)
