@@ -598,6 +598,22 @@ def test_render_is_pure() -> None:
     check("render_does_not_mutate_input", d == before, "render mutated its input")
 
 
+def test_hv_notes_loader_and_render() -> None:
+    good = {"method": "numbers taken from session transcripts.", "outcomes": {"HV-3": "PASS: router invoked", "HV-4": "PASS: denied"}}
+    check("hv_notes_loader_accepts_good", imp.load_hv_notes(good) == good, "valid notes must round-trip")
+    for name, bad in (("unknown_key", {"extra": "x"}), ("unknown_id", {"outcomes": {"HV-9": "x"}}), ("multiline", {"method": "a\nb"}),
+                      ("empty", {"method": "  "}), ("too_long", {"method": "x" * 901}), ("not_object", ["x"])):
+        expect_impact_error("hv_notes_loader_rejects_" + name, lambda b=bad: imp.load_hv_notes(b))
+    plain = imp.render(synthetic())
+    check("hv_default_text_unchanged_without_notes", "Captured by David with" in plain and "none is recorded here" in plain,
+          "without notes the original sentences must remain")
+    text = imp.render(synthetic(), notes=good)
+    check("hv_notes_replace_method_sentence", "Method: numbers taken from session transcripts." in text and "Captured by David with" not in text,
+          "method note must replace the hard-coded capture sentence")
+    check("hv_notes_list_outcomes", "- HV-3: PASS: router invoked" in text and "- HV-4: PASS: denied" in text and "none is recorded here" not in text,
+          "outcomes must replace the 'none is recorded' sentence")
+
+
 def main() -> int:
     for name in sorted(n for n in globals() if n.startswith("test_")):
         try:

@@ -217,6 +217,28 @@ def load_hv(raw) -> dict:
     return out
 
 
+def load_hv_notes(raw) -> dict:
+    """Optional free-text notes for the human-verification section: how the cells were captured and the HV-3/4/5 outcomes.
+    Exact shape `{"method": str, "outcomes": {"HV-3": str, ...}}`; single-line strings, bounded, no unknown keys or ids."""
+    if not isinstance(raw, dict) or not set(raw) <= {"method", "outcomes"}:
+        raise ImpactError("HV notes must be an object with only 'method' and 'outcomes'")
+
+    def text(v, where):
+        if not isinstance(v, str) or not v.strip() or "\n" in v or "\r" in v or len(v) > 900:
+            raise ImpactError(f"HV notes {where}: need a single-line string of 1..900 characters")
+        return v.strip()
+
+    out: dict = {}
+    if "method" in raw:
+        out["method"] = text(raw["method"], "method")
+    if "outcomes" in raw:
+        oc = raw["outcomes"]
+        if not isinstance(oc, dict) or not set(oc) <= {"HV-3", "HV-4", "HV-5"}:
+            raise ImpactError("HV notes outcomes: keys must be among HV-3, HV-4, HV-5")
+        out["outcomes"] = {k: text(v, f"outcomes.{k}") for k, v in oc.items()}
+    return out
+
+
 def load_lv(raw) -> dict:
     """Validate the live-lane summary. Exact key set; results PASS, FAIL:<reason>, or (lv3 only) the EnterPlanMode limitation."""
     if not isinstance(raw, dict):
@@ -259,7 +281,7 @@ def _hv_cell(hv: Optional[dict], hv_id: str, side: str, point: str) -> str:
     return "PENDING" if n is None else fmt(n)
 
 
-def render(data: dict, hv: Optional[dict] = None, lv: Optional[dict] = None) -> str:
+def render(data: dict, hv: Optional[dict] = None, lv: Optional[dict] = None, notes: Optional[dict] = None) -> str:
     """Pure: the Markdown report for a `collect` result. HV/LV cells without data stay PENDING."""
     L: List[str] = []
     a = L.append
@@ -385,9 +407,13 @@ def render(data: dict, hv: Optional[dict] = None, lv: Optional[dict] = None) -> 
     a("")
     a("## Human verification: `/context` A/B")
     a("")
-    a("Captured by David with `claude --plugin-dir <baseline plugin>` and `claude --plugin-dir <candidate plugin>`. Values are tokens as "
-      "`/context` prints them (not bytes). Capture point a is right after the routing announce; b is when memory-finalize completes. "
-      "A cell is PENDING until David pastes its number.")
+    if notes and "method" in notes:
+        a("Method: " + notes["method"] + " Values are tokens (not bytes). Capture point a is right after the routing announce; "
+          "b is when memory-finalize completes. A cell is PENDING until a number is recorded.")
+    else:
+        a("Captured by David with `claude --plugin-dir <baseline plugin>` and `claude --plugin-dir <candidate plugin>`. Values are tokens as "
+          "`/context` prints them (not bytes). Capture point a is right after the routing announce; b is when memory-finalize completes. "
+          "A cell is PENDING until David pastes its number.")
     a("")
     a("| Scenario | Baseline (a) | Baseline (b) | Candidate (a) | Candidate (b) |")
     a("|---|---:|---:|---:|---:|")
@@ -395,8 +421,15 @@ def render(data: dict, hv: Optional[dict] = None, lv: Optional[dict] = None) -> 
         cells = [_hv_cell(hv, hv_id, s, p) for s in ("baseline", "candidate") for p in ("a", "b")]
         a(f"| {hv_id} {HV_LABELS[hv_id]} | " + " | ".join(cells) + " |")
     a("")
-    a("HV-3 (activation on the candidate), HV-4 (EnterPlanMode interactive, only if LV-3 was a limitation) and HV-5 (Cursor, only if "
-      "available) are recorded by David as pass, fail or not run; none is recorded here.")
+    if notes and notes.get("outcomes"):
+        a("Other human checks:")
+        a("")
+        for k in ("HV-3", "HV-4", "HV-5"):
+            if k in notes["outcomes"]:
+                a(f"- {k}: {notes['outcomes'][k]}")
+    else:
+        a("HV-3 (activation on the candidate), HV-4 (EnterPlanMode interactive, only if LV-3 was a limitation) and HV-5 (Cursor, only if "
+          "available) are recorded by David as pass, fail or not run; none is recorded here.")
     a("")
     a("## Caveats")
     a("")
@@ -435,6 +468,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--date")
     ap.add_argument("--hv")
+    ap.add_argument("--hv-notes")
     ap.add_argument("--lv")
     ap.add_argument("--plugin-root")
     ap.add_argument("--no-inventory", action="store_true")
@@ -445,8 +479,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         baseline = args.baseline or cor.load_json(root / FIX / "router-baseline.lock.json")["baseline_sha"]
         hv = load_hv(_read_json(args.hv, "HV")) if args.hv else None
         lv = load_lv(_read_json(args.lv, "LV")) if args.lv else None
+        notes = load_hv_notes(_read_json(args.hv_notes, "HV notes")) if args.hv_notes else None
         data = collect(root, baseline, run_inventory=not args.no_inventory, date=args.date, allow_non_lock=args.allow_non_lock)
-        text = render(data, hv=hv, lv=lv)
+        text = render(data, hv=hv, lv=lv, notes=notes)
         Path(args.out).write_text(text, encoding="utf-8")
     except subprocess.TimeoutExpired as exc:
         print(f"error: a subprocess timed out after {exc.timeout}s ({' '.join(map(str, exc.cmd))[:120]}); nothing written", file=sys.stderr)
