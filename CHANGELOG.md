@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.34.0] - 2026-10-23
+
+### Features
+
+- let the impact report state how the human-verification cells were captured and the HV-3/4/5 outcomes
+- mark impact report DRAFT until the HV cells are filled
+- router context cut live lane LV-1..LV-5
+- router context impact report script
+
+### Fixes
+
+- HV-4 gate matches the word PASS, notes reject control and format characters; reword SC-010 and disclose post-signature prose edits
+- impact report needs an HV-4 PASS for the LV-3 limitation; LV-3 limitation needs a provably absent tool
+- impact report status line no longer claims the cells were typed from /context
+- live LV-3 treats a host-refused call to an unoffered EnterPlanMode as the not-offered limitation
+- live driver LV-3 requires a real session, Class A needs a passing load probe
+- impact report gates Status on the LV lane, rejects zero HV, fail-closed baseline and exit codes
+
+### Refactoring
+
+- delete the EnterPlanMode prose rules after the HV-4 live deny proof
+
+### Documentation
+
+- reword P13 acceptance to the disclosed evidence and put the signed P13 notes in past tense
+- sign P13 rows and projection revision
+
+### Tests
+
+- pin the effective-versus-guaranteed gap to the two EnterPlanMode delete rows
+
+### Chores
+
+- re-stamp router-budget measured_at_sha to the P13 commit
+
 ## [1.33.5] - 2026-10-21
 
 ### Fixes
