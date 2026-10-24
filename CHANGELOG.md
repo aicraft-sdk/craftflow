@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.34.1] - 2026-10-24
+
+### Fixes
+
+- retry the selfcheck policy validation once and report a double timeout as unconfirmed, not invalid
+
 ## [1.34.0] - 2026-10-23
 
 ### Features
