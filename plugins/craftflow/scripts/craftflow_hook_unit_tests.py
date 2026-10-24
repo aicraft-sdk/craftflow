@@ -11923,8 +11923,10 @@ def test_selfcheck_internal_budget_stays_under_registered_hook_timeout() -> None
     )
     # P4: the policy --validate subprocess (2 s) is charged INSIDE the sweep budget, so it adds nothing to the worst case.
     policy_timeout = getattr(module, "POLICY_TIMEOUT_SECONDS", None)
-    if policy_timeout != 2 or policy_timeout > module.SELFCHECK_TIME_BUDGET_SECONDS:
-        fail(name, f"POLICY_TIMEOUT_SECONDS must be 2 and fit inside SELFCHECK_TIME_BUDGET_SECONDS; got {policy_timeout!r}")
+    policy_attempts = getattr(module, "POLICY_ATTEMPTS", None)
+    if policy_timeout != 2 or policy_attempts != 2 or policy_timeout * policy_attempts > module.SELFCHECK_TIME_BUDGET_SECONDS:
+        fail(name, f"POLICY_TIMEOUT_SECONDS (2) x POLICY_ATTEMPTS (2) must fit inside SELFCHECK_TIME_BUDGET_SECONDS; "
+                   f"got {policy_timeout!r} x {policy_attempts!r}")
         return
     if worst_case > 12:
         fail(name, f"internal worst-case budget is {worst_case}s; the policy check must be charged inside the sweep budget (<= 12s)")
@@ -12029,6 +12031,45 @@ def test_selfcheck_policy_validator_non_utf8_output(tmp_dir: Path) -> None:
         return
     if result.returncode != 0 or "CRAFTFLOW policy.json invalid: " not in context or "�" in context:
         fail(name, f"unexpected warning: rc={result.returncode} context={context!r}")
+        return
+    ok(name)
+
+
+_SELFCHECK_SLOW_VALIDATOR = (
+    "import os, sys, time\n"
+    "marker = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'first-call-seen')\n"
+    "if %s or not os.path.exists(marker):\n"
+    "    open(marker, 'w').close()\n"
+    "    time.sleep(30)\n"
+    "print('{\"status\": \"ok\", \"errors\": []}')\n"
+)
+
+
+def test_selfcheck_policy_timeout_retries_once(tmp_dir: Path) -> None:
+    """A validator that overruns once (cold start under load) but answers on the retry stays silent."""
+    name = "hook-selfcheck/policy-timeout-retries-once"
+    checker = _selfcheck_policy_layout(tmp_dir / "retry", b"{}")
+    (checker.parent / "craftflow_policy.py").write_text(_SELFCHECK_SLOW_VALIDATOR % "False", encoding="utf-8")
+    result = _selfcheck_run_policy(checker, tmp_dir / "cfg")
+    if result.returncode != 0 or "CRAFTFLOW policy.json" in result.stdout:
+        fail(name, f"expected silence after a successful retry; got rc={result.returncode} stdout={result.stdout!r}")
+        return
+    ok(name)
+
+
+def test_selfcheck_policy_timeout_twice_is_unconfirmed_not_invalid(tmp_dir: Path) -> None:
+    """Two timeouts report the policy as unconfirmed; the line must not claim the policy is invalid or that gates fail closed."""
+    name = "hook-selfcheck/policy-timeout-twice-unconfirmed"
+    checker = _selfcheck_policy_layout(tmp_dir / "twice", b"{}")
+    (checker.parent / "craftflow_policy.py").write_text(_SELFCHECK_SLOW_VALIDATOR % "True", encoding="utf-8")
+    result = _selfcheck_run_policy(checker, tmp_dir / "cfg")
+    try:
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+    except (ValueError, KeyError):
+        fail(name, f"expected a warning line; got rc={result.returncode} stdout={result.stdout!r}")
+        return
+    if "timed out after 2 attempts of 2s" not in context or "invalid" in context or "fail closed" in context:
+        fail(name, f"unexpected warning: {context!r}")
         return
     ok(name)
 
@@ -28894,6 +28935,8 @@ def main() -> int:
         test_selfcheck_warns_when_shipped_policy_missing(tmp / "hp2b")
         test_selfcheck_policy_validator_non_utf8_output(tmp / "hp2c")
         test_selfcheck_policy_validator_exit_0_unparseable_output(tmp / "hp2d")
+        test_selfcheck_policy_timeout_retries_once(tmp / "hp2e")
+        test_selfcheck_policy_timeout_twice_is_unconfirmed_not_invalid(tmp / "hp2f")
         test_selfcheck_version_drift_line(tmp / "hp3")
         test_selfcheck_flushes_before_external_kill_when_sweep_runs_long(tmp / "hc5")
         test_selfcheck_discovery_itself_bounded_by_timeout(tmp / "hc6")

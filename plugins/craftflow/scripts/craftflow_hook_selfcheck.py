@@ -66,6 +66,7 @@ SELFCHECK_TIME_BUDGET_SECONDS = 5
 # P4: the `craftflow_policy.py --validate` subprocess. Its wall time is charged INSIDE SELFCHECK_TIME_BUDGET_SECONDS (main()
 # shortens the sweep deadline by what the policy and version checks spent), so the 12s worst case above does not grow.
 POLICY_TIMEOUT_SECONDS = 2
+POLICY_ATTEMPTS = 2  # one retry on timeout: 2 x 2s = 4s, still inside SELFCHECK_TIME_BUDGET_SECONDS (5s)
 MAX_NOTE_CHARS = 300
 
 
@@ -162,18 +163,25 @@ def check_policy(scripts_dir: Path) -> str | None:
     env = dict(os.environ)
     env["CLAUDE_PLUGIN_ROOT"] = str(scripts_dir.parent)  # validate THIS plugin's policy, whatever the hook env says
     try:
-        result = subprocess.run(
-            [INTERPRETER, str(script), "--validate"],
-            cwd=str(scripts_dir),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            errors="replace",  # a validator that prints non-UTF-8 bytes must not raise out of the decode
-            timeout=POLICY_TIMEOUT_SECONDS,
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
-        detail = f"validation timed out after {POLICY_TIMEOUT_SECONDS}s"
+        result = None
+        for _attempt in range(POLICY_ATTEMPTS):  # a cold start under host load can overrun one attempt; the retry runs warm
+            try:
+                result = subprocess.run(
+                    [INTERPRETER, str(script), "--validate"],
+                    cwd=str(scripts_dir),
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    errors="replace",  # a validator that prints non-UTF-8 bytes must not raise out of the decode
+                    timeout=POLICY_TIMEOUT_SECONDS,
+                    env=env,
+                )
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        if result is None:  # every attempt timed out: the policy is unconfirmed, not shown invalid
+            return (f"CRAFTFLOW policy.json check: validation timed out after {POLICY_ATTEMPTS} attempts of {POLICY_TIMEOUT_SECONDS}s "
+                    "(host under load?), so the policy could not be confirmed valid.")
     except (OSError, UnicodeDecodeError) as exc:
         detail = f"validator could not run: {exc}"
     else:
