@@ -26,3 +26,24 @@ implementations built on this plugin's own existing conventions
 `craftflow_hook_selfcheck.py`'s subprocess-only/never-import-the-checked-
 script isolation pattern). Deliberately NOT ported: grok's HTTP hook runner
 (`runner/http.rs`) — deferred, out of this phase's scope.
+
+---
+
+Routes, agents, scripts and loop-pane concepts in the following modules are adapted from cc10x:
+
+  https://github.com/romiluz13/cc10x
+  Copyright (c) Rom Iluz
+  MIT License
+  Pinned at commit 36c7b06a7c846d18cfbf33969ee0a7a2483985af
+
+Adapted artifacts (added over the cc10x routes harvest, SPEC-0035 / ADR-0075; this list is final in the last phase):
+
+- 5 agents: `architecture-scanner`, `triage-agent`, `qa-researcher`, `qa-harness-builder`, `qa-executor`.
+- `skills/qa-strategy`.
+- `templates/qa-*` (6 templates: test-plan, env-plan, feature-map, report, setup, topology).
+- The router and shared files of the harvest: `skills/_shared/route-*.md`, `skills/_shared/router-protocol.md`,
+  the router references for triage, codebase-health and qa, and `skills/cursor-router/references/routes.md`.
+- `scripts/craftflow_qa_topology*.py`, `scripts/craftflow_release_gate.py`, `scripts/craftflow_review_package.py`.
+- `hooks/{register.tsx,loop-state.ts,loop-routes.ts,loop-fixtures.ts}` and their tests.
+
+Wording adapted to craftflow conventions; no file copied verbatim except where marked.
