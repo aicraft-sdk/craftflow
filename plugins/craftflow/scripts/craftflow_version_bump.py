@@ -462,7 +462,10 @@ def main(argv=None) -> int:
 
     bump = max_bump(levels)
     groups = group_commits(commits)
-    computed_next_version = next_version(current_version, bump) if bump else current_version
+    # Contract: next_version is null when no bump is due. The publish workflow's
+    # `Compute bump` step maps null to '' and stops cleanly on ''; echoing
+    # current_version here made a docs-only range look like a release.
+    computed_next_version = next_version(current_version, bump) if bump else None
 
     if args.expect_version == "":
         print(
