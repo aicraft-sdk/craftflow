@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -37,7 +38,19 @@ MINT = PLUGIN_ROOT / "scripts" / "craftflow_workflow_id.py"
 DOC_PINS = (
     (ROUTE_FILE, "no `TaskCreate`"),
     (ROUTE_FILE, "re-routes from scratch"),
+    (ROUTE_FILE, "### ORIENT preparation"),
+    (ROUTE_FILE, "### ORIENT procedure"),
+    (ROUTE_FILE, "### ORIENT exit"),
+    (ROUTE_FILE, "### ORIENT vs REVIEW"),
     (ROUTE_FILE, "### ORIENT phases"),
+    (ROUTE_FILE, "inline and read-only"),
+    (ROUTE_FILE, "it never falls into BUILD"),
+    (ROUTE_FILE, "no agents"),
+    (ROUTE_FILE, "Stop at understanding"),
+    (ROUTE_FILE, "do not write any file"),
+    (ROUTE_FILE, "Do not propose or apply edits"),
+    (ROUTE_FILE, "fresh artifact"),
+    (ROUTE_FILE, "The only ORIENT phase token is `orient`"),
     (PROTOCOL, "never falls into BUILD"),
     (KERNEL, "### ORIENT pointer"),
     (KERNEL, "skills/_shared/route-orient.md"),
@@ -132,10 +145,25 @@ def check_pins() -> List[str]:
     return [f"{rel} lacks the pinned text {pin!r}" for rel, pin in DOC_PINS if pin not in read(rel)]
 
 
+NEGATION_RE = re.compile(r"\b(?:no|not|never|without|refuse[sd]?|refusing|cannot)\b", re.IGNORECASE)
+DISPATCH_SYNTAX = ("craftflow:", "subagent_type")  # never allowed, negated or not
+DISPATCH_WORDS = re.compile(
+    r"TaskCreate\(|\bTask\(|\bhand (?:the |this )?(?:request|work|task)\b|\bapply (?:the|a) (?:fix|change|patch)\b"
+    r"|\bdispatch(?:es|ed|ing)?\b", re.IGNORECASE)
+
+
+def dispatch_problems(text: str) -> List[str]:
+    """Dispatch syntax, or a plain-English hand-off with no whole-word negation earlier in its sentence."""
+    problems = [f"contains {bad!r}" for bad in DISPATCH_SYNTAX if bad in text]
+    for sentence in re.split(r"(?<=[.;!?])\s+|\n", text):
+        for match in DISPATCH_WORDS.finditer(sentence):
+            if not NEGATION_RE.search(sentence[:match.start()]):
+                problems.append(f"instructs a hand-off outside a negation: {match.group(0)!r} in {sentence.strip()!r}")
+    return problems
+
+
 def check_route_file_dispatches_nothing() -> List[str]:
-    text = read(ROUTE_FILE)
-    return [f"{ROUTE_FILE} contains {bad!r}" for bad in ("craftflow:", "subagent_type", "TaskCreate(", "Task(")
-            if bad in text]
+    return [f"{ROUTE_FILE} {p}" for p in dispatch_problems(read(ROUTE_FILE))]
 
 
 def check_cursor() -> List[str]:
@@ -180,10 +208,17 @@ def load_fixture(path: Path) -> Any:
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Replay check for the ORIENT route.")
-    ap.add_argument("--fixture", type=Path, default=FIXTURE)
+    ap.add_argument("--fixture", type=Path, default=None)
+    ap.add_argument("--plugin-root", type=Path, default=None,
+                    help="check this copy of the plugin tree instead of the one holding this script")
     args = ap.parse_args(argv)
+    global PLUGIN_ROOT, MINT
+    if args.plugin_root is not None:
+        PLUGIN_ROOT = args.plugin_root.resolve()
+        MINT = PLUGIN_ROOT / "scripts" / "craftflow_workflow_id.py"
+    fixture_path = args.fixture or PLUGIN_ROOT / "tests" / "fixtures" / "orient-inline.json"
     try:
-        fixture = load_fixture(args.fixture)
+        fixture = load_fixture(fixture_path)
     except ValueError as exc:
         print(f"FAIL: fixture shape: {exc}")
         return 1

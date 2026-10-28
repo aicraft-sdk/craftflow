@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -126,9 +127,51 @@ def replay_controls() -> None:
               p.returncode == 1 and "Traceback" not in p.stderr + p.stdout, f"rc={p.returncode}")
 
 
+HOLLOW_ROUTE = (
+    "### ORIENT phases\n\n"
+    "no `TaskCreate`, no Memory Update; re-routes from scratch. "
+    "Then hand the request to the builder and apply the fix.\n"
+)
+
+
+def run_replay_on_copy(route_text: str = "") -> subprocess.CompletedProcess:
+    """Run the replay checker against a copied plugin tree whose route-orient.md is optionally replaced."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "craftflow"
+        for sub in ("skills", "config", "scripts"):
+            shutil.copytree(PLUGIN_ROOT / sub, root / sub, ignore=shutil.ignore_patterns("__pycache__"))
+        (root / "tests" / "fixtures").mkdir(parents=True)
+        shutil.copy(replay.FIXTURE, root / "tests" / "fixtures" / "orient-inline.json")
+        if route_text:
+            (root / "skills" / "_shared" / "route-orient.md").write_text(route_text, encoding="utf-8")
+        return subprocess.run([sys.executable, str(PLUGIN_ROOT / "scripts" / "craftflow_route_replay_check.py"),
+                               "--plugin-root", str(root)], capture_output=True, text=True)
+
+
+def hollow_controls() -> None:
+    p = run_replay_on_copy()
+    check("an untouched plugin copy passes the replay", p.returncode == 0 and "0 failed" in p.stdout,
+          f"rc={p.returncode} {p.stdout[-300:]}{p.stderr[-200:]}")
+    p = run_replay_on_copy(HOLLOW_ROUTE)
+    check("a hollow route-orient.md fails the replay (doc pins)",
+          p.returncode == 1 and "FAIL: doc pins" in p.stdout and "### ORIENT preparation" in p.stdout,
+          f"rc={p.returncode} {p.stdout[-300:]}{p.stderr[-200:]}")
+    check("a hollow route-orient.md fails the dispatch scan (plain-English hand-off)",
+          "FAIL: route file dispatches nothing" in p.stdout, p.stdout[-300:])
+    for text in ("Then hand the request to the builder.", "Next apply the fix.", "Then dispatch the agent.",
+                 "Call TaskCreate(subject) now.", "Run Task(x) for it."):
+        check(f"bare instruction is flagged: {text}", replay.dispatch_problems(text) != [], text)
+    for text in ("It never falls into BUILD and does not dispatch anything.", "No `TaskCreate(` is ever issued.",
+                 "Do not hand the request to the builder.", "ORIENT cannot apply the fix."):
+        check(f"negated mention is allowed: {text}", replay.dispatch_problems(text) == [], str(replay.dispatch_problems(text)))
+    check("the real route file has no dispatch problems",
+          replay.dispatch_problems(replay.read(replay.ROUTE_FILE)) == [], "")
+
+
 def main() -> int:
     driver_controls()
     replay_controls()
+    hollow_controls()
     print(f"\n{_passes} passed, {len(_errors)} failed")
     for err in _errors:
         print(err)
