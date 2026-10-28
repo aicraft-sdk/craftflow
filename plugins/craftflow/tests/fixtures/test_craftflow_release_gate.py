@@ -105,7 +105,7 @@ check(
     "--list prints the step ids in the fixed order",
     buf.getvalue().split(),
     [
-        "version_consistency", "hook_unit_tests", "fixture_suite", "rule_inventory_diff", "workflow_replay_check",
+        "version_consistency", "hook_unit_tests", "fixture_suite_a", "fixture_suite_b", "rule_inventory_diff", "workflow_replay_check",
         "graph_check", "event_contract", "decisions", "docs_rot", "plugin_validate",
     ],
 )
@@ -122,8 +122,10 @@ check("ROOT holds the gate script at its documented path",
       gate.ROOT / "tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_release_gate.py", me)
 check("PLUGIN is the parent of scripts/", gate.PLUGIN, me.parents[1])
 steps = {s.id: s for s in gate.build_steps()}
-check("fixture_suite runs the suite from PLUGIN", (steps["fixture_suite"].argv, steps["fixture_suite"].cwd),
-      (["bash", "tests/fixtures/run_fixture_suite.sh"], gate.PLUGIN))
+for shard, shard_step in (("1/2", "fixture_suite_a"), ("2/2", "fixture_suite_b")):
+    check(f"{shard_step} runs shard {shard} of the suite from PLUGIN",
+          (steps[shard_step].argv, steps[shard_step].cwd, steps[shard_step].env_set.get("FIXTURE_SHARD")),
+          (["bash", "tests/fixtures/run_fixture_suite.sh"], gate.PLUGIN, shard))
 for node_step, script in (("graph_check", "gen-craftflow-graph.mjs"), ("event_contract", "verify-craftflow-event-contract.mjs"),
                           ("decisions", "verify-decision-format.mjs")):
     check(f"{node_step} runs node in ROOT", (steps[node_step].argv[:2], steps[node_step].cwd),
@@ -135,9 +137,11 @@ check("plugin_validate runs claude from tools/craftflow-plugin",
 inv = steps["rule_inventory_diff"].argv
 check("rule_inventory_diff is the --diff invocation", inv[1].endswith("craftflow_rule_inventory.py") and "--diff" in inv, True)
 check_true("rule_inventory_diff passes the lock and the policy map", "--lock" in inv and "--policy-map" in inv)
-env = gate.step_env(steps["fixture_suite"], {"CRAFTFLOW_PERF": "1", "PATH": "/bin", "CI": "false"})
-check("fixture_suite env: CI=true", env.get("CI"), "true")
-check("fixture_suite env: CRAFTFLOW_PERF removed even when the caller sets it", "CRAFTFLOW_PERF" in env, False)
+for shard_step in ("fixture_suite_a", "fixture_suite_b"):
+    env = gate.step_env(steps[shard_step], {"CRAFTFLOW_PERF": "1", "PATH": "/bin", "CI": "false", "FIXTURE_SHARD": "9/9"})
+    check(f"{shard_step} env: CI=true", env.get("CI"), "true")
+    check(f"{shard_step} env: CRAFTFLOW_PERF removed even when the caller sets it", "CRAFTFLOW_PERF" in env, False)
+    check(f"{shard_step} env: FIXTURE_SHARD comes from the step, not the caller", env.get("FIXTURE_SHARD"), steps[shard_step].env_set["FIXTURE_SHARD"])
 check("other steps keep the caller env", gate.step_env(steps["decisions"], {"CRAFTFLOW_PERF": "1"}).get("CRAFTFLOW_PERF"), "1")
 
 # --- budgets (real subprocesses) --------------------------------------------------

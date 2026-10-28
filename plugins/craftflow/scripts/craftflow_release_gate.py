@@ -58,9 +58,12 @@ def build_steps() -> List[Step]:
     return [
         Step("version_consistency", [py, str(PLUGIN / "scripts/craftflow_version_consistency_check.py")], ROOT),
         Step("hook_unit_tests", [py, str(PLUGIN / "scripts/craftflow_hook_unit_tests.py")], ROOT),
+        # The suite exceeded 450 s on one process, so it runs as two round-robin shards (FIXTURE_SHARD=i/2).
         # CRAFTFLOW_PERF is dropped so opt-in timing tests never run inside the gate.
-        Step("fixture_suite", ["bash", "tests/fixtures/run_fixture_suite.sh"], PLUGIN,
-             env_set={"CI": "true"}, env_drop=("CRAFTFLOW_PERF",)),
+        Step("fixture_suite_a", ["bash", "tests/fixtures/run_fixture_suite.sh"], PLUGIN,
+             env_set={"CI": "true", "FIXTURE_SHARD": "1/2"}, env_drop=("CRAFTFLOW_PERF",)),
+        Step("fixture_suite_b", ["bash", "tests/fixtures/run_fixture_suite.sh"], PLUGIN,
+             env_set={"CI": "true", "FIXTURE_SHARD": "2/2"}, env_drop=("CRAFTFLOW_PERF",)),
         Step("rule_inventory_diff", inventory, ROOT),
         Step("workflow_replay_check", [py, str(PLUGIN / "scripts/craftflow_workflow_replay_check.py")], ROOT),
         Step("graph_check", ["node", "scripts/gen-craftflow-graph.mjs", "--check"], ROOT),

@@ -69,7 +69,16 @@ if [ ! -e "$1" ]; then
   exit 1
 fi
 
+# FIXTURE_SHARD=i/n runs only the i-th of n round-robin slices of the sorted fixture list (the release gate splits the suite in two).
+shard="${FIXTURE_SHARD:-}"; idx=0
+if [ -n "$shard" ]; then
+  case "$shard" in *[!0-9/]* | */*/* | [!1-9]* | */[!1-9]* | *[!0-9]) shard=bad ;; [1-9]*/[1-9]*) [ "${shard%/*}" -gt "${shard#*/}" ] && shard=bad ;; *) shard=bad ;; esac
+  [ "$shard" = bad ] && { echo "::error::FIXTURE_SHARD must be i/n with 1 <= i <= n (got '${FIXTURE_SHARD}')"; exit 1; }
+fi
+
 for t in "$dir"/test_*.py; do
+  idx=$((idx + 1))
+  [ -n "$shard" ] && [ $(( (idx - 1) % ${shard#*/} + 1 )) -ne "${shard%/*}" ] && continue
   name="$(basename "$t")"
   want="$(expected_for "$name")"
   if python3 "$t" >"$out" 2>&1; then
