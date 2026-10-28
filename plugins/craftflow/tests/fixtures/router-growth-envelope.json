@@ -1,7 +1,7 @@
 {
   "adr": "ADR-0074",
   "decided_by": "David",
-  "decided_at_sha": "PENDING-SIGNATURE",
+  "decided_at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
   "base": {
     "kernel_bytes": 33797,
     "protocol_bytes": 13486,
@@ -28,5 +28,55 @@
     "CODEBASE-HEALTH": 112000,
     "QA": 130000
   },
-  "consumed": []
+  "consumed": [
+    {
+      "phase": "H2",
+      "key": "kernel_bytes",
+      "to": 35382,
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 33797
+    },
+    {
+      "phase": "H2",
+      "key": "protocol_bytes",
+      "to": 15863,
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 13486
+    },
+    {
+      "phase": "H2",
+      "key": "description_chars",
+      "to": 3847,
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 3793
+    },
+    {
+      "phase": "H2",
+      "key": "readset.BUILD",
+      "to": 100895,
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 96727
+    },
+    {
+      "phase": "H2",
+      "key": "readset.PLAN",
+      "to": 89101,
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 84933
+    },
+    {
+      "phase": "H2",
+      "key": "readset.DEBUG",
+      "to": 76887,
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 72719
+    },
+    {
+      "phase": "H2",
+      "key": "readset.REVIEW",
+      "to": 74907,
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 70739
+    }
+  ]
 }
