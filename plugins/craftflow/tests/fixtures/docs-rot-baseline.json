@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "ids": [
+    "rot:D3:missing:github-researcher",
+    "rot:D3:missing:plan-bakeoff-judge",
+    "rot:D3:missing:web-researcher",
+    "rot:D5:undocumented:craftflow_context_migration.py",
+    "rot:D5:undocumented:craftflow_hook_selfcheck.py",
+    "rot:D5:undocumented:craftflow_instructions_loaded_audit.py",
+    "rot:D5:undocumented:craftflow_memory_protect_restore.py",
+    "rot:D5:undocumented:craftflow_postcompact_context.py",
+    "rot:D5:undocumented:craftflow_posttooluse_artifact_guard.py",
+    "rot:D5:undocumented:craftflow_posttooluse_repeat_guard.py",
+    "rot:D5:undocumented:craftflow_precompact_state.py",
+    "rot:D5:undocumented:craftflow_sdd_cache_post.py",
+    "rot:D5:undocumented:craftflow_sdd_cache_pre.py",
+    "rot:D5:undocumented:craftflow_sessionstart_context.py",
+    "rot:D5:undocumented:craftflow_stop_failure_log.py",
+    "rot:D5:undocumented:craftflow_stop_persist.py",
+    "rot:D5:undocumented:craftflow_subagent_stop_audit.py",
+    "rot:D5:undocumented:craftflow_task_completed_guard.py"
+  ]
+}
