@@ -77,6 +77,41 @@
       "to": 74907,
       "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
       "from": 70739
+    },
+    {
+      "phase": "H3",
+      "key": "kernel_bytes",
+      "to": 35638,
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 35382
+    },
+    {
+      "phase": "H3",
+      "key": "readset.BUILD",
+      "to": 101249,
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 100895
+    },
+    {
+      "phase": "H3",
+      "key": "readset.PLAN",
+      "to": 89455,
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 89101
+    },
+    {
+      "phase": "H3",
+      "key": "readset.DEBUG",
+      "to": 77241,
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 76887
+    },
+    {
+      "phase": "H3",
+      "key": "readset.REVIEW",
+      "to": 75261,
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 74907
     }
   ]
 }

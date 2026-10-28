@@ -23,15 +23,15 @@
   },
   "reach_amendment": null,
   "ceilings": {
-    "kernel_bytes": 35382,
+    "kernel_bytes": 35638,
     "protocol_bytes": 15863,
     "reference_max_bytes": 19097,
     "description_chars": 3847,
     "readset": {
-      "BUILD": 100895,
-      "PLAN": 89101,
-      "DEBUG": 76887,
-      "REVIEW": 74907
+      "BUILD": 101249,
+      "PLAN": 89455,
+      "DEBUG": 77241,
+      "REVIEW": 75261
     }
   },
   "ceiling_raises": [
@@ -186,6 +186,46 @@
       "envelope": "ADR-0074",
       "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
       "from": 70739
+    },
+    {
+      "phase": "H3",
+      "key": "kernel_bytes",
+      "to": 35638,
+      "envelope": "ADR-0074",
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 35382
+    },
+    {
+      "phase": "H3",
+      "key": "readset.BUILD",
+      "to": 101249,
+      "envelope": "ADR-0074",
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 100895
+    },
+    {
+      "phase": "H3",
+      "key": "readset.PLAN",
+      "to": 89455,
+      "envelope": "ADR-0074",
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 89101
+    },
+    {
+      "phase": "H3",
+      "key": "readset.DEBUG",
+      "to": 77241,
+      "envelope": "ADR-0074",
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 76887
+    },
+    {
+      "phase": "H3",
+      "key": "readset.REVIEW",
+      "to": 75261,
+      "envelope": "ADR-0074",
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 74907
     }
   ],
   "targets": {
