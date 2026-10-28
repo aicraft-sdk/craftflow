@@ -278,7 +278,7 @@ P1 test-net limits (P1 REM-FIX 5; also recorded in ADR-0073, section "P1 test-ne
 5. Pre-existing vacuity (not P1). `test_craftflow_router_documents_state_read_compaction_self_heal` has markers that also occur at SKILL.md:88-94; the P0 rule-inventory gate covers it.
 6. The enumerator misses sibling-module constants, subprocess and rglob reads and class-attribute reads, and the drills are not cumulative (both already stated above).
 
-Rows: 147 (C=34, K=63, F=50).
+Rows: 150 (C=35, K=63, F=52).
 
 Paths are relative to the plugin root (`tools/craftflow-plugin/plugins/craftflow/`). Test paths use the short form `hook::` for `scripts/craftflow_hook_unit_tests.py`, `fx::` for `tests/fixtures/` and `scripts::<file>::<binding>` for a hand row about a router check inside a plugin script (the stale-row check accepts a name the script binds).
 
@@ -431,3 +431,6 @@ Paths are relative to the plugin root (`tools/craftflow-plugin/plugins/craftflow
 | fx::test_router_readset.py::test_build_variant_files_declared | K | the live read map: `build-graph-standard.md` is a BUILD start file with `variant: standard`, `build-graph-fast.md` one with `variant: fast_path` | P11 (added in P11 as the RED test) |
 | hook::test_router_phase_enum_registers_harvest_tokens | C | `## 3. Task Metadata Contract` section (the `phase:{...}`, `origin:{...}` and `scope:{...}` lines carry the QA, TRIAGE and CODEBASE-HEALTH tokens), read by heading with no file hint | none |
 | fx::test_craftflow_routing_law.py::test_a_protocol_table_parity | K | _shared/router-protocol.md#Intent Routing (the 8-row table equals `ROUTING_TABLE` of `craftflow_routing_law.py`) | never-move (the routing table stays in router-protocol.md) |
+| fx::test_craftflow_route_types.py::test_headings_and_type | C | the joined router corpus (`craftflow_router_corpus`): every heading text occurs once, checked through `router_relocation_drills.heading_problems` | none |
+| fx::test_craftflow_route_types.py::test_sizes | F | every `references/qa-*.md` and `_shared/route-*.md` is at most 18,500 B (per-file size) | none (the cap holds for every harvest route file) |
+| fx::test_craftflow_route_types.py::test_attribution | F | every file under the plugin root: the attribution-name grep stays inside the pinned allowlist (counts per file); a control copy with one extra hit fails | none |

@@ -37,7 +37,7 @@ _PHASE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,39}")
 _GATE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
 _PATH_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,199}")
 
-_TYPES = ("BUILD", "PLAN", "DEBUG", "REVIEW")
+_TYPES = ("BUILD", "PLAN", "DEBUG", "REVIEW", "ORIENT", "QA", "TRIAGE", "CODEBASE-HEALTH")
 _TERMINAL_MODES = frozenset(
     ("merged_and_removed", "removed_no_merge_needed", "removed_after_pr_merge", "merged"))
 _TERMINAL_EVENTS = frozenset(

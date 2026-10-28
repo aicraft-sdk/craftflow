@@ -409,6 +409,9 @@ def _hook_log_writer(project_dir: Path):
     return log_event
 
 
+WORKFLOW_TYPES = ("BUILD", "PLAN", "DEBUG", "REVIEW", "ORIENT", "QA", "TRIAGE", "CODEBASE-HEALTH")
+
+
 def init_artifact(project_dir: Path, info: dict, *, workflow_type: str, request: str,
                   phase: str, task_tools_available: str, task_id: str | None = None,
                   workspace_writable_paths: list | None = None,
@@ -418,6 +421,8 @@ def init_artifact(project_dir: Path, info: dict, *, workflow_type: str, request:
 
     Raises OSError (FileExistsError if the artifact/events log already exists); on any failure
     every file this call created is removed first."""
+    if workflow_type == "QA" and current_session_id() is None:
+        raise ValueError("QA workflow needs a session id")  # fail closed before any file exists
     wf = info["workflow_uuid"]
     ts = info["iso_timestamp"]
     if not (project_dir / ".craftflow").is_dir():
@@ -589,7 +594,7 @@ def main() -> int:
                         help="Print shell-safe KEY=value lines instead of the bare id")
     parser.add_argument("--init-artifact", dest="init_artifact", action="store_true",
                         help="Write the workflow artifact, events log and state dir")
-    parser.add_argument("--workflow-type", default=None, help="BUILD|DEBUG|REVIEW|PLAN")
+    parser.add_argument("--workflow-type", default=None, choices=WORKFLOW_TYPES)
     parser.add_argument("--task-tools-available", default=None, choices=_TASK_TOOLS_VALUES)
     parser.add_argument("--phase", default=None, help="build|debug|review|plan")
     parser.add_argument("--task-id", default=None, help="Parent task id for the event line")
@@ -637,6 +642,9 @@ def main() -> int:
                                   ("--phase", args.phase)) if not v]
         if missing:
             parser.error("--init-artifact requires " + ", ".join(missing))
+        if args.workflow_type == "ORIENT":
+            sys.stderr.write("Error: ORIENT creates no artifact\n")
+            return 2
         paths = _json_list_arg(parser, "--workspace-writable-paths-json", args.workspace_writable_paths_json)
         dropped = _json_list_arg(parser, "--writable-paths-dropped-json", args.writable_paths_dropped_json)
         try:
@@ -646,6 +654,9 @@ def main() -> int:
                 task_id=args.task_id, workspace_writable_paths=paths, dropped_paths=dropped,
                 fallback_reason=args.fallback_reason,
             )
+        except ValueError as exc:
+            sys.stderr.write(f"Error: {exc}\n")
+            return 2
         except OSError as exc:
             sys.stderr.write(f"Error: {describe_init_error(exc)}\n")
             return 1
