@@ -245,5 +245,20 @@ check("dirty tree: exit 1 and the stray file is listed", (rc_dirty, "stray-from-
 check("dirty tree: the refusal message is printed",
       "ERROR: the release gate changed the working tree; refusing to publish" in out_dirty, True)
 
+ci_job = CI.split("\n  release-gate:\n", 1)[1] if "\n  release-gate:\n" in CI else ""
+check("craftflow-ci has a release-gate job", bool(ci_job), True)
+check("release-gate job: ubuntu, python 3.12, node from .nvmrc, pinned claude CLI, full history",
+      all(s in ci_job for s in ("runs-on: ubuntu-latest", "python-version: '3.12'", "node-version-file: .nvmrc",
+                               "@anthropic-ai/claude-code@2.1.311", "fetch-depth: 0")), True)
+check("release-gate job: configures the CI git identity before the gate",
+      "git config --global user.name craftflow-ci" in ci_job
+      and ci_job.index("git config --global user.name craftflow-ci") < ci_job.index("craftflow_release_gate.py"), True)
+check("release-gate job: runs the full gate and accepts only the exact last line",
+      "craftflow_release_gate.py" in ci_job and 'test "$(tail -n1 /tmp/gate.log)" = "RELEASE GATE: OK"' in ci_job
+      and "--allow-no-claude" not in ci_job and "--total-seconds" not in ci_job, True)
+check("release-gate job: the clean-tree step follows the gate and there is no continue-on-error",
+      "git status --porcelain" in ci_job and ci_job.index("git status --porcelain") > ci_job.index("craftflow_release_gate.py")
+      and "continue-on-error" not in ci_job, True)
+
 print(f"\nResults: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
