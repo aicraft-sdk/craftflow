@@ -15,7 +15,9 @@ primary deliverable decides. Evaluation order:
      ERROR keyword sits in the lead clause;
   3. candidates are the nominations inside the lead clause (else all of them);
      the earliest position wins, equal positions go to the lower priority
-     number; no nomination -> BUILD.
+     number; no nomination -> BUILD;
+  4. R4: when QA wins and an ERROR keyword sits in the lead clause, DEBUG wins
+     (repairing is the deliverable, wherever the QA keyword sits).
 
 Keyword matching is case-insensitive and word-bounded exactly like
 `craftflow_jev_heuristic._find_matches`, with one extension: a keyword that
@@ -58,7 +60,7 @@ LEGACY_TABLE: List[Tuple[str, List[str], str]] = [
 
 _PRIORITY = {workflow: prio for prio, _signal, _kws, workflow in ROUTING_TABLE}
 _HOW_DOES_X_WORK = "how does X work"
-_LEAD_END = re.compile(r" and | then |,|;|\.(?=\s|$)", re.IGNORECASE)
+_LEAD_END = re.compile(r" and | then |,|;|\n|[.!?](?=\s|$)", re.IGNORECASE)
 _FIRST_WORD = re.compile(r"\s*([A-Za-z]+)")
 
 
@@ -74,8 +76,8 @@ def find_keyword(text: str, keyword: str) -> int:
 
 
 def lead_clause(text: str) -> str:
-    """The request up to its first ' and ', ' then ', comma, semicolon or
-    sentence end ('.' followed by whitespace or the end of the text)."""
+    """The request up to its first ' and ', ' then ', comma, semicolon, newline or
+    sentence end ('.', '!' or '?' followed by whitespace or the end of the text)."""
     found = _LEAD_END.search(text)
     return text[: found.start()] if found else text
 
@@ -117,6 +119,10 @@ def route(text: str, hint: Optional[str] = None) -> Dict[str, Any]:
     if not candidates:
         return {"workflow": "BUILD", "matched": []}
     _pos, _prio, workflow, matched = min(candidates, key=lambda n: (n[0], n[1]))
+    if workflow == "QA":  # R4: DEBUG beats QA when repairing is the deliverable (an ERROR keyword in the lead clause)
+        repairs = [n for n in in_lead if n[2] == "DEBUG"]
+        if repairs:
+            _pos, _prio, workflow, matched = min(repairs, key=lambda n: (n[0], n[1]))
     return {"workflow": workflow, "matched": matched}
 
 

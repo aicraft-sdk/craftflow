@@ -58,5 +58,14 @@
     {"id": "L14", "prompt": "Audit the craftflow plugin (tools/craftflow-plugin/) for security guardrails that prevent an agent from taking destructive actions autonomously", "expected": "REVIEW", "model": true, "legacy_route": "REVIEW", "why": "legacy REVIEW prompt from a recent artifact"},
     {"id": "L15", "prompt": "Port 3 net-new superpowers skills into craftflow: finishing-a-development-branch, systematic-debugging, requesting-code-review", "expected": "REVIEW", "model": true, "legacy_route": "REVIEW", "why": "legacy REVIEW prompt from a recent artifact; code-review is the only nomination"}
     ,{"id": "R56", "prompt": "plan how to fix the crash", "expected": "PLAN", "model": true, "legacy_flip": true, "legacy_route": "DEBUG", "why": "PLAN nominated at the start of the request: the deliverable is a plan, not the fix (part A Jev pin)"}
+    ,{"id": "R57", "prompt": "e2e test is broken", "expected": "DEBUG", "model": true, "legacy_route": "DEBUG", "why": "R4: an ERROR keyword with a QA keyword in the lead clause is DEBUG although e2e comes first"}
+    ,{"id": "R58", "prompt": "the regression in checkout is broken", "expected": "DEBUG", "model": true, "legacy_route": "DEBUG", "why": "R4: repairing is the deliverable; regression is the thing being repaired"}
+    ,{"id": "R59", "prompt": "QA found a bug in checkout", "expected": "DEBUG", "model": true, "legacy_route": "DEBUG", "why": "R4: QA keyword first, ERROR keyword in the lead clause"}
+    ,{"id": "R60", "prompt": "Implement the regression fix", "expected": "DEBUG", "model": true, "legacy_route": "DEBUG", "why": "R4: ERROR and QA keywords in the lead clause defeat the change-verb override and DEBUG beats QA"}
+    ,{"id": "R61", "prompt": "end-to-end flow is broken after the deploy", "expected": "DEBUG", "model": true, "legacy_route": "DEBUG", "why": "R4: end-to-end first, broken in the lead clause"}
+    ,{"id": "R62", "prompt": "Add a retry to the client. The upload is broken", "expected": "BUILD", "model": true, "legacy_flip": true, "legacy_route": "DEBUG", "why": "R1: a sentence end ends the lead clause before the ERROR word"}
+    ,{"id": "R63", "prompt": "Add a retry to the client! The upload is broken", "expected": "BUILD", "model": true, "legacy_flip": true, "legacy_route": "DEBUG", "why": "R1: '!' ends the lead clause"}
+    ,{"id": "R64", "prompt": "Add a retry to the client? The upload is broken", "expected": "BUILD", "model": true, "legacy_flip": true, "legacy_route": "DEBUG", "why": "R1: '?' ends the lead clause"}
+    ,{"id": "R65", "prompt": "Add a retry to the client\nThe upload is broken", "expected": "BUILD", "model": true, "legacy_flip": true, "legacy_route": "DEBUG", "why": "R1: a newline ends the lead clause"}
   ]
 }
