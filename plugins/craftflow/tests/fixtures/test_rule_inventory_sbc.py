@@ -325,6 +325,68 @@ def test_case19_sbc_row_cli_prints_a_pending_row() -> None:
           f"rc={sup.returncode} out={sup.stdout!r} err={sup.stderr!r}")
 
 
+def test_case20_partially_superseded_rewrites_row_is_not_skipped() -> None:
+    original = inv.sbc.superseded_targets
+    inv.sbc.superseded_targets = lambda rows, rewrite_rows, errors: {X}  # X alone is superseded; the row below names X and W
+    try:
+        res = run(B13, A13, policy_doc(rewrites=[rw_row(f"{X} {W}", Y, who="PENDING (David)")], sbc_rows=[sbc_row(X_TXT, Z_TXT, sup=SUP)]))
+    finally:
+        inv.sbc.superseded_targets = original
+    check("20: a Rewrites row naming one superseded and one live id is still processed (counted unsigned)",
+          res["rows_missing_review"] >= 1, repr(res))
+
+
+def test_case21_adr_status_is_strict() -> None:
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        def adr(n: str, status_line: str) -> str:
+            Path(d, f"{n}-x.md").write_text("---\nadr: \"" + n + "\"\n" + status_line + "\ndate: \"2026-10-28\"\n---\n\nBody.\n", encoding="utf-8")
+            return f"ADR-{n}"
+        want = {"proposed": "proposed", "accepted      # proposed | accepted | rejected": "accepted", "\"superseded\"": "superseded",
+                "deprecated": "deprecated", "rejected": "rejected"}
+        got = {k: sbc.adr_status(adr(f"{i:04d}", "status: " + k), d) for i, k in enumerate(want, 1)}
+        check("21: known statuses parse, inline # comments and quotes are stripped",
+              list(got.values()) == list(want.values()), repr(got))
+        for i, bad in enumerate(["status:", "status: Accepted", "status: draft", "status: accepted proposed"], 10):
+            n = adr(f"{i:04d}", bad)
+            try:
+                value = sbc.adr_status(n, d)
+                check(f"21: {bad!r} is an error", False, f"returned {value!r}")
+            except ValueError:
+                check(f"21: {bad!r} is an error", True)
+        Path(d, "0020-x.md").write_text("---\nadr: \"0020\"\n---\n\nBody.\n", encoding="utf-8")
+        try:
+            value = sbc.adr_status("ADR-0020", d)
+            check("21: a missing status line is an error", False, f"returned {value!r}")
+        except ValueError:
+            check("21: a missing status line is an error", True)
+    res = run(B1, A1, policy_doc(sbc_rows=[sbc_row(OLD_B, NEW_B)]), adr_status=lambda a: (_ for _ in ()).throw(ValueError("unknown status 'draft'")))
+    check("21: a row whose ADR status is unreadable is a row error, not a crash or a silent pass",
+          errs_with(res, "unknown status") and inv.exit_code(res) == 1, repr(res))
+
+
+def sbc_doc_with(section_body: str) -> str:
+    return policy_doc().replace("\n## Worktree finalize equivalence", "\n## Signed behavior changes\n\n" + section_body + "\n## Worktree finalize equivalence")
+
+
+def test_case22_malformed_section_fails_loudly() -> None:
+    good_row = sbc_row(OLD_B, NEW_B)
+    sep = "|" + "|".join(["---"] * 8) + "|"
+    typo = sbc.SBC_HEADER.replace("Supersedes", "Supercedes")
+    cases = {
+        "header typo": f"{typo}\n{sep}\n{good_row}\n",
+        "missing separator row": f"{sbc.SBC_HEADER}\n{good_row}\n",
+        "sub-heading inside the section": f"{sbc.SBC_HEADER}\n{sep}\n{good_row}\n\n### Notes\n\n{good_row}\n",
+        "sub-heading before the table": f"### Notes\n\n{sbc.SBC_HEADER}\n{sep}\n{good_row}\n",
+    }
+    for name, body in cases.items():
+        errors: list = []
+        rows = sbc.parse_sbc_rows(sbc_doc_with(body), errors)
+        res = run(B1, A1, sbc_doc_with(body))
+        check(f"22: {name} -> a parse error and exit 1, never an empty parse",
+              len(errors) == 1 and rows == [] and inv.exit_code(res) == 1 and res["row_errors"] != [], f"errors={errors!r} rows={rows!r} res={res!r}")
+
+
 def main() -> int:
     print("test_rule_inventory_sbc: running")
     test_case1_row_types_for_a_guarded_rewrite()
@@ -346,6 +408,9 @@ def main() -> int:
     test_case17_superseded_row_deleted()
     test_case18_supersede_of_a_heading_row()
     test_case19_sbc_row_cli_prints_a_pending_row()
+    test_case20_partially_superseded_rewrites_row_is_not_skipped()
+    test_case21_adr_status_is_strict()
+    test_case22_malformed_section_fails_loudly()
     print()
     print("=" * 40)
     if _errors:

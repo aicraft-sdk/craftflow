@@ -26,6 +26,7 @@ ADR_CELL = re.compile(r"^ADR-(\d{4})$")
 SUPERSEDES = re.compile(r"^Rewrites row ([0-9a-f]{12})$")
 UNSUPERSEDABLE = ("heading", "section-move", "group")
 DEAD_ADR = ("rejected", "superseded")
+ADR_STATUSES = ("proposed", "accepted", "superseded", "deprecated", "rejected")
 PENDING = "PENDING (David)"
 
 Accepted = Dict[str, Tuple[str, List[str]]]
@@ -68,7 +69,14 @@ def parse_sbc_rows(doc: str, errors: Optional[List[str]] = None) -> List[List[st
     idx = next((n for n, h in enumerate(heads) if cor.norm_text(h[2]).lstrip("§ ").strip() == SBC_TITLE), None)
     if unclosed or idx is None:  # an open fence is already reported by parse_tables
         return []
-    end = heads[idx + 1][0] if idx + 1 < len(heads) else len(lines)
+    level = heads[idx][1]
+    after = heads[idx + 1:]
+    stop = next((h for h in after if h[1] <= level), None)
+    end = stop[0] if stop else len(lines)
+    inner = [h for h in after if h[0] < end]
+    if inner:  # a sub-heading would end the table early and silently drop the rows after it
+        errors.append(f"policy map: section 'signed behavior changes' holds a sub-heading ({inner[0][2]!r}); rows after it would be ignored")
+        return []
     table = [lines[n] for n in range(heads[idx][0] + 1, end) if lines[n].strip().startswith("|") and not mask[n]]
     want = [_squash(c).lower() for c in split_cells(SBC_HEADER)]
     if not table or [_squash(c).lower() for c in split_cells(table[0])] != want:
@@ -118,8 +126,9 @@ def superseded_targets(rows: List[List[str]], rewrite_rows: List[List[str]], err
 
 
 def adr_status(adr: str, root=None) -> Optional[str]:
-    """Lower-case `status:` of docs/ai/decisions/<nnnn>-*.md in the repo that holds the running script (never
-    --plugin-root: a scratch root has no docs/); None when no such ADR exists."""
+    """`status:` of docs/ai/decisions/<nnnn>-*.md in the repo that holds the running script (never --plugin-root: a scratch
+    root has no docs/); None when no such ADR exists. Inline `#` comments are stripped; the value must be exactly one of
+    ADR_STATUSES (case-sensitive), else ValueError: a missing, empty or unknown status is an error, never 'not accepted'."""
     m = ADR_CELL.match(adr.strip())
     if not m:
         return None
@@ -127,8 +136,11 @@ def adr_status(adr: str, root=None) -> Optional[str]:
     for f in sorted(folder.glob(m.group(1) + "-*.md")):
         for line in f.read_text(encoding="utf-8").splitlines()[:30]:
             if line.startswith("status:"):
-                return line.split(":", 1)[1].strip().strip("\"'").lower()
-        return ""
+                value = line.split(":", 1)[1].split("#", 1)[0].strip().strip("\"'")
+                if value not in ADR_STATUSES:
+                    raise ValueError(f"{f.name}: status {value!r} is not one of {', '.join(ADR_STATUSES)}")
+                return value
+        raise ValueError(f"{f.name}: no status line in the front matter")
     return None
 
 
@@ -167,10 +179,16 @@ def check_sbc_rows(rows: List[List[str]], base: Dict[str, dict], after_by_id: Di
                 bad.append(f"more than one signed behavior change row for baseline id {old}")
         if not ADR_CELL.match(adr):
             bad.append(f"ADR cell must read ADR-NNNN (got '{adr}')")
-        elif adr_lookup(adr) is None:
-            bad.append(f"{adr} does not exist under docs/ai/decisions")
-        elif adr_lookup(adr) in DEAD_ADR:
-            bad.append(f"{adr} is {adr_lookup(adr)}")
+        else:
+            try:
+                status = adr_lookup(adr)
+            except ValueError as exc:
+                bad.append(f"{adr} has an unreadable status: {exc}")
+            else:
+                if status is None:
+                    bad.append(f"{adr} does not exist under docs/ai/decisions")
+                elif status in DEAD_ADR:
+                    bad.append(f"{adr} is {status}")
         errors.extend(f"signed behavior change row {c[0]}: {b}" for b in bad)
         if not bad:
             accepted[ids[0]] = ("behavior-change", [news[0]])

@@ -207,7 +207,8 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
     base_occ = [(e["id"], o) for e in baseline["entries"] for o in e["occurrences"]]
     after_occ = [(e["id"], o) for e in after["entries"] for o in e["occurrences"]]
     for c in rows["rewrites"]:
-        if superseded and set(HEX_ID.findall(c[0])) & superseded:  # replaced by a signed behavior change row (AD-10)
+        row_ids = set(HEX_ID.findall(c[0]))
+        if superseded and row_ids and row_ids <= superseded:  # replaced by a signed behavior change row (AD-10); only when ALL its ids are
             continue
         kind = c[2].strip().lower()
         if kind not in KINDS:
