@@ -64,7 +64,7 @@ Precedence: a per-dispatch `model` parameter > the frontmatter pin > `CLAUDE_COD
 | error, bug, fix, crash | DEBUG | bug-investigator → code-reviewer → integration-verifier (+ doubt-verifier fix-verify) |
 | plan, design, spec | PLAN | brainstorming → planner → plan-gap-reviewer (bounded fresh review loop) |
 | review, audit | REVIEW | code-reviewer (advisory, read-only) |
-| zoom out, explain, how does X work, walk me through | ORIENT | inline answer from read-only exploration, no agents, no artifact *(pending: available from a later release; until then routed by the pre-harvest order)* |
+| zoom out, explain, how does X work, walk me through | ORIENT | inline answer from read-only exploration, no agents, no artifact |
 | test plan, e2e, integration test, test coverage, regression, QA | QA | qa-researcher (fan-out) → qa-plan → plan-gap-reviewer → qa-preflight → qa-harness-builder → code-reviewer ‖ silent-failure-hunter → qa-executor *(pending: available from a later release; until then routed by the pre-harvest order)* |
 | triage, incoming issues, look at #N | TRIAGE | triage-agent → optional grill → agent-ready brief *(pending: available from a later release; until then routed by the pre-harvest order)* |
 | codebase health, improve architecture, deepening, shallow modules | CODEBASE-HEALTH | architecture-scanner → HTML report → user picks → grill → PLAN handoff *(pending: available from a later release; until then routed by the pre-harvest order)* |

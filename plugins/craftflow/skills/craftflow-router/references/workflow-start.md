@@ -97,3 +97,4 @@ TaskCreate({
 
 Only create child tasks after the v10 artifact and state directory exist (step 1 guarantees both). The `workflows/{workflow_uuid}/` directory is where the memory-finalize task writes workflow-scoped memory (activeContext.md, patterns.md, progress.md for this workflow only).
 
+New routes pass their own `--workflow-type`/`--phase`; see the route file's `### {ROUTE} phases`.

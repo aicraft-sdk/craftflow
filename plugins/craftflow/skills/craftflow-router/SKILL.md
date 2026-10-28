@@ -233,6 +233,10 @@ Router-owned interface fields:
 - Use the `### PLAN preparation` and `### PLAN task graph` blocks in that file as the canonical PLAN law.
 - If planner clarification, review-loop findings, or plan remediation rules trigger later in the workflow, also read `references/remediation-and-research.md` before continuing.
 
+### ORIENT pointer
+
+`Read()` `skills/_shared/route-orient.md` and answer inline; no workflow artifact, no tasks, no agents.
+
 ## 6. Workflow Task Graphs
 
 ### BUILD task graph
