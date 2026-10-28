@@ -279,23 +279,69 @@ def mutate(text, old, new):
 
 
 check("unmodified publish workflow: no gate-step defects", structure.release_gate_step_defects(PUBLISH), [])
+STEP_RUN = "        run: |\n"
+PY_LINE = '          python3 "$GATE" | tee /tmp/gate.log\n'
+
+
+def keyed(step, key_line):
+    return step.replace(STEP_RUN, key_line + STEP_RUN)
+
+
 mutants = {
-    "continue-on-error on Release gate": mutate(PUBLISH, GATE_STEP, GATE_STEP.replace("        run: |\n", "        continue-on-error: true\n        run: |\n")),
-    "continue-on-error on the clean-tree step": mutate(PUBLISH, CLEAN_STEP, CLEAN_STEP.replace("        run: |\n", "        continue-on-error: true\n        run: |\n")),
-    "if: always() on Release gate": mutate(PUBLISH, GATE_STEP, GATE_STEP.replace("        run: |\n", "        if: always()\n        run: |\n")),
+    "continue-on-error on Release gate": mutate(PUBLISH, GATE_STEP, keyed(GATE_STEP, "        continue-on-error: true\n")),
+    "continue-on-error on the clean-tree step": mutate(PUBLISH, CLEAN_STEP, keyed(CLEAN_STEP, "        continue-on-error: true\n")),
+    "if: always() on Release gate": mutate(PUBLISH, GATE_STEP, keyed(GATE_STEP, "        if: always()\n")),
+    "shell: true {0} on Release gate": mutate(PUBLISH, GATE_STEP, keyed(GATE_STEP, "        shell: true {0}\n")),
+    "working-directory on Release gate": mutate(PUBLISH, GATE_STEP, keyed(GATE_STEP, "        working-directory: /tmp\n")),
+    "env on Release gate": mutate(PUBLISH, GATE_STEP, keyed(GATE_STEP, "        env:\n          X: y\n")),
+    "timeout-minutes on Release gate": mutate(PUBLISH, GATE_STEP, keyed(GATE_STEP, "        timeout-minutes: 1\n")),
+    "shell: true {0} on the clean-tree step": mutate(PUBLISH, CLEAN_STEP, keyed(CLEAN_STEP, "        shell: true {0}\n")),
+    "uses: on the identity step": mutate(PUBLISH, "      - name: Configure a CI git identity for the release gate\n",
+                                         "      - name: Configure a CI git identity for the release gate\n        uses: ./noop\n"),
+    "defaults shell: true {0}": mutate(PUBLISH, "    shell: bash\n", "    shell: true {0}\n"),
+    "defaults working-directory": mutate(PUBLISH, "    shell: bash\n", "    shell: bash\n    working-directory: /tmp\n"),
     "early exit 0 before the verdict line": mutate(PUBLISH, TEST_LINE, "          exit 0\n" + TEST_LINE),
     "early exit 0 chained after then": mutate(PUBLISH, TEST_LINE, "          if true; then exit 0; fi\n" + TEST_LINE),
+    "bare exit": mutate(PUBLISH, PY_LINE, "          exit\n" + PY_LINE),
+    "exit;": mutate(PUBLISH, PY_LINE, "          exit;\n" + PY_LINE),
+    'exit "0"': mutate(PUBLISH, PY_LINE, '          exit "0"\n' + PY_LINE),
+    "[ -f x ] || exit": mutate(PUBLISH, PY_LINE, "          [ -f x ] || exit\n" + PY_LINE),
+    "exec true": mutate(PUBLISH, PY_LINE, "          exec true\n" + PY_LINE),
+    "set +e": mutate(PUBLISH, PY_LINE, "          set +e\n" + PY_LINE),
+    "|| true on the python line": mutate(PUBLISH, PY_LINE, '          python3 "$GATE" | tee /tmp/gate.log || true\n'),
+    "exit 0 after the verdict line": mutate(PUBLISH, TEST_LINE, TEST_LINE + "          exit 0\n"),
+    "|| true on the clean-tree check": mutate(PUBLISH, '          DIRTY="$(git status --porcelain)"\n', '          DIRTY="$(git status --porcelain)" || true\n'),
+    "set +e in the identity step": mutate(PUBLISH, "          git config --global user.name craftflow-ci\n", "          set +e\n          git config --global user.name craftflow-ci\n"),
 }
 for label, mutant in mutants.items():
     check_true("structure check rejects " + label, bool(structure.release_gate_step_defects(mutant)))
-check("an exit 0 after the verdict line is not an early exit",
-      structure.release_gate_step_defects(mutate(PUBLISH, TEST_LINE, TEST_LINE + "          exit 0\n")), [])
 
-ci_gate = "      - name: Release gate\n        run: |\n"
-check("craftflow-ci gate step: no defects", structure.release_gate_step_defects(ci_job, ("Release gate", "Release gate left the tree clean")), [])
+
+def with_if(step_name, expr):
+    """PUBLISH with the step's own `if:` joined to a status function."""
+    m = re.search(r"      - name: " + re.escape(step_name) + r"\n(?:        (?!if:|run:).*\n)*?        if: (.*)\n", PUBLISH)
+    assert m, step_name
+    return PUBLISH[:m.start(1)] + expr.format(m.group(1)) + PUBLISH[m.end(1):]
+
+
+check("unmodified publish workflow: no status-function defects", structure.status_function_defects(PUBLISH), [])
+status_mutants = {
+    "always() && on Push to craftflow-public": with_if("Push to craftflow-public", "always() && {}"),
+    "always() && on Commit and tag": with_if("Commit and tag", "always() && {}"),
+    "failure() || on Subtree split": with_if("Subtree split", "failure() || {}"),
+    "!cancelled() && on Create GitHub release": with_if("Create GitHub release on craftflow-public", "!cancelled() && {}"),
+    "success() || on Apply bump": with_if("Apply bump", "success() || {}"),
+}
+for label, mutant in status_mutants.items():
+    check_true("status-function check rejects " + label, bool(structure.status_function_defects(mutant)))
+
+ci_names = ("Release gate", "Release gate left the tree clean")
+check("craftflow-ci gate step: no defects", structure.release_gate_step_defects(ci_job, ci_names, structure.CI_GATE_BODIES), [])
 check_true("craftflow-ci gate step: early exit 0 rejected", bool(structure.release_gate_step_defects(
     mutate(ci_job, '          test "$(tail -n1 /tmp/gate.log)"', '          exit 0\n          test "$(tail -n1 /tmp/gate.log)"'),
-    ("Release gate", "Release gate left the tree clean"))))
+    ci_names, structure.CI_GATE_BODIES)))
+check_true("craftflow-ci gate step: shell: true {0} rejected", bool(structure.release_gate_step_defects(
+    mutate(ci_job, GATE_STEP, keyed(GATE_STEP, "        shell: true {0}\n")), ci_names, structure.CI_GATE_BODIES)))
 
 print(f"\nResults: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
