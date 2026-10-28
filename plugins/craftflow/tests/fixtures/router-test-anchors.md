@@ -256,6 +256,10 @@ Excluded tests. `tests/fixtures/router_test_enumerate.py` flags a test when its 
 - Not listed: fx::test_rule_inventory_sbc.py::test_case16_supersede_of_an_unnamed_row — drives the signed-behavior-change rows with synthetic corpora only (router-looking paths are dictionary keys); the live router is not read.
 - Not listed: fx::test_rule_inventory_sbc.py::test_case17_superseded_row_deleted — drives the signed-behavior-change rows with synthetic corpora only (router-looking paths are dictionary keys); the live router is not read.
 - Not listed: fx::test_rule_inventory_sbc.py::test_case18_supersede_of_a_heading_row — drives the signed-behavior-change rows with synthetic corpora only (router-looking paths are dictionary keys); the live router is not read.
+- Not listed: fx::test_rule_inventory_sbc.py::test_case20_partially_superseded_rewrites_row_is_not_skipped — drives the signed-behavior-change rows with synthetic corpora only (router-looking paths are dictionary keys); the live router is not read.
+- Not listed: fx::test_rule_inventory_sbc.py::test_case21_adr_status_is_strict — drives the signed-behavior-change rows with synthetic corpora only (router-looking paths are dictionary keys); the live router is not read.
+- Not listed: fx::test_rule_inventory_sbc.py::test_case22_malformed_section_fails_loudly — drives the signed-behavior-change rows with synthetic corpora only (router-looking paths are dictionary keys); the live router is not read.
+- Not listed: fx::test_rule_inventory_sbc.py::test_case23_adr_status_is_read_from_the_front_matter_only — drives the signed-behavior-change rows with synthetic corpora only (router-looking paths are dictionary keys); the live router is not read.
 - Not listed: fx::test_router_readset.py::test_harvest_workflows_follow_the_map — reads the read map and the measurer's CLI exit codes and variant lists; no router prose is asserted.
 
 

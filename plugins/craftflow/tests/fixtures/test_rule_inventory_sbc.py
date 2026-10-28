@@ -365,6 +365,31 @@ def test_case21_adr_status_is_strict() -> None:
           errs_with(res, "unknown status") and inv.exit_code(res) == 1, repr(res))
 
 
+def test_case23_adr_status_is_read_from_the_front_matter_only() -> None:
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "0030-x.md").write_text("---\nadr: \"0030\"\nstatus: proposed\n---\n\nstatus: accepted\n", encoding="utf-8")
+        check("23: a body status line does not override the front matter", sbc.adr_status("ADR-0030", d) == "proposed", repr(sbc.adr_status("ADR-0030", d)))
+        Path(d, "0031-x.md").write_text("---\nadr: \"0031\"\n---\n\nstatus: accepted\n", encoding="utf-8")
+        try:
+            value = sbc.adr_status("ADR-0031", d)
+            check("23: a body status line is not a front matter status", False, f"returned {value!r}")
+        except ValueError:
+            check("23: a body status line is not a front matter status", True)
+        Path(d, "0032-x.md").write_text("status: accepted\n\nno front matter at all\n", encoding="utf-8")
+        try:
+            value = sbc.adr_status("ADR-0032", d)
+            check("23: a file without a front matter fence has no status", False, f"returned {value!r}")
+        except ValueError:
+            check("23: a file without a front matter fence has no status", True)
+        Path(d, "0033-x.md").write_text("---\nadr: \"0033\"\nstatus: accepted\n", encoding="utf-8")
+        try:
+            value = sbc.adr_status("ADR-0033", d)
+            check("23: an unclosed front matter is an error", False, f"returned {value!r}")
+        except ValueError:
+            check("23: an unclosed front matter is an error", True)
+
+
 def sbc_doc_with(section_body: str) -> str:
     return policy_doc().replace("\n## Worktree finalize equivalence", "\n## Signed behavior changes\n\n" + section_body + "\n## Worktree finalize equivalence")
 
@@ -411,6 +436,7 @@ def main() -> int:
     test_case20_partially_superseded_rewrites_row_is_not_skipped()
     test_case21_adr_status_is_strict()
     test_case22_malformed_section_fails_loudly()
+    test_case23_adr_status_is_read_from_the_front_matter_only()
     print()
     print("=" * 40)
     if _errors:

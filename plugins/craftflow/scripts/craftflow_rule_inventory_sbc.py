@@ -134,7 +134,13 @@ def adr_status(adr: str, root=None) -> Optional[str]:
         return None
     folder = Path(root) if root else cor.PLUGIN_ROOT.parents[3] / "docs" / "ai" / "decisions"
     for f in sorted(folder.glob(m.group(1) + "-*.md")):
-        for line in f.read_text(encoding="utf-8").splitlines()[:30]:
+        lines = f.read_text(encoding="utf-8").splitlines()
+        if not lines or lines[0].strip() != "---":
+            raise ValueError(f"{f.name}: no front matter (the file must open with a --- fence)")
+        close = next((n for n, line in enumerate(lines[1:], 1) if line.strip() == "---"), None)
+        if close is None:
+            raise ValueError(f"{f.name}: the front matter has no closing --- fence")
+        for line in lines[1:close]:  # only the block between the fences; a body `status:` line never counts
             if line.startswith("status:"):
                 value = line.split(":", 1)[1].split("#", 1)[0].strip().strip("\"'")
                 if value not in ADR_STATUSES:
