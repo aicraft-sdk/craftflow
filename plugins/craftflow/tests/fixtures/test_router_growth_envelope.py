@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -50,10 +52,28 @@ def is_ancestor_of_head(sha: str) -> bool:
 
 def commit_touches(root: Path, sha: str, rel: str) -> bool:
     """True when the commit `sha` changes the file `rel` (the signing commit must touch the ADR)."""
-    if not isinstance(sha, str) or not renv.HEX_SHA.match(sha):
+    if not isinstance(sha, str) or not renv.HEX_SHA.fullmatch(sha):
         return False
-    res = subprocess.run(["git", "-C", str(root), "show", "--name-only", "--format=", sha], capture_output=True, text=True)
+    # A merge is judged against its first parent (plain `git show` prints a combined diff that hides it); a root commit against nothing.
+    has_parent = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "-q", f"{sha}^1"], capture_output=True).returncode == 0
+    cmd = ["diff", "--name-only", f"{sha}^1", sha] if has_parent else ["diff-tree", "--no-commit-id", "--name-only", "-r", "--root", sha]
+    res = subprocess.run(["git", "-C", str(root), *cmd], capture_output=True, text=True)
     return res.returncode == 0 and rel in res.stdout.split("\n")
+
+
+_REF = re.compile(r"[0-9a-f]{7,40}(\^1)?")
+
+
+def adr_blob(root: Path, ref: str) -> "bytes | None":
+    """The committed ADR at `ref` (a hex sha, or `<sha>^1` for its first parent); None when unreadable (e.g. a root commit's parent)."""
+    if not isinstance(ref, str) or not _REF.fullmatch(ref):
+        return None
+    res = subprocess.run(["git", "-C", str(root), "show", f"{ref}:{renv.REL_ADR}"], capture_output=True)
+    return res.stdout if res.returncode == 0 else None
+
+
+def _text_or_none(raw: "bytes | None") -> "str | None":
+    return None if raw is None else raw.decode("utf-8")
 
 
 def file_at(root: Path, sha: str, rel: str) -> "bytes | None":
@@ -68,6 +88,7 @@ def file_at(root: Path, sha: str, rel: str) -> "bytes | None":
 
 
 SIGNED_ADR = "---\nadr: \"0074\"\nstatus: accepted\ndate: \"2026-10-28\"\n---\n\n## Signature\n\nDavid Gracia (2026-10-29)\n"
+PROPOSED_ADR = SIGNED_ADR.replace("status: accepted", "status: proposed").replace("David Gracia (2026-10-29)", "Pending")
 SIGNED_FIELDS = ("base", "allowances", "new_route_ceilings")
 SIGN_SHA = "a" * 40
 
@@ -82,6 +103,7 @@ def signed_world() -> dict:
             "totals": {r: 1900 for r in renv.NEW_ROUTES}, "origin": None, "raises": []}
     w["adr_text"] = SIGNED_ADR
     w["touches_adr"] = lambda sha: sha == SIGN_SHA
+    w["blobs"] = {SIGN_SHA: SIGNED_ADR, SIGN_SHA + "^1": PROPOSED_ADR}
     w["at_sha"] = {k: copy.deepcopy(w["env"][k]) for k in SIGNED_FIELDS}
     return w
 
@@ -93,6 +115,7 @@ def problems_of(w: dict) -> list:
     sha = w["env"]["decided_at_sha"]
     return renv.problems(w["env"], w["origin"], w["ceilings"], w["measured"], w["caps"], w["totals"], w["raises"],
                          lambda s: s == SIGN_SHA, adr_text=w.get("adr_text"), touches_adr=w.get("touches_adr"),
+                         adr_at=(lambda ref: w["blobs"].get(ref)) if "blobs" in w else None,
                          envelope_at=(lambda s: w["at_sha"] if s == sha else None) if "at_sha" in w else None)
 
 
@@ -196,13 +219,62 @@ def test_signed_envelope_is_content_bound() -> None:
     check("pending_signature_keeps_the_old_single_problem", len(got) == 1 and "ancestor" in got[0], str(got))
 
 
+def test_signed_envelope_is_bound_to_the_blob_at_the_sha() -> None:
+    """H-A: the ADR must be accepted+signed AT decided_at_sha, and that commit must be the one that introduced the signature."""
+    def one(name: str, w: dict, needle: str) -> None:
+        got = problems_of(w)
+        check(f"blob_{name}_one_problem", len(got) == 1 and needle in got[0], str(got))
+
+    draft = signed_world()
+    draft["blobs"][SIGN_SHA] = PROPOSED_ADR  # the sha points at a commit whose ADR is still the draft
+    got = problems_of(draft)
+    check("blob_sha_with_draft_adr_fails", any("at decided_at_sha" in p for p in got) and len(got) >= 1, str(got))
+    later = signed_world()
+    later["blobs"][SIGN_SHA + "^1"] = SIGNED_ADR  # the signature was already there before this commit
+    one("sha_is_not_the_introducing_commit", later, "introduced")
+    root = signed_world()
+    del root["blobs"][SIGN_SHA + "^1"]  # a root commit has no parent: nothing was signed before it
+    check("blob_root_commit_signing_is_allowed", problems_of(root) == [], str(problems_of(root)))
+    unreadable = signed_world()
+    del unreadable["blobs"][SIGN_SHA]
+    got = problems_of(unreadable)
+    check("blob_unreadable_at_the_sha_fails", any("at decided_at_sha" in p for p in got), str(got))
+    check("hex_sha_rejects_a_trailing_newline", renv.HEX_SHA.match("a" * 40 + "\n") is None and renv.HEX_SHA.match("a" * 40) is not None, "the pattern itself must reject a trailing newline")
+    nl = signed_world()
+    nl["env"]["decided_at_sha"] = SIGN_SHA + "\n"
+    got = problems_of(nl)
+    check("signed_sha_with_trailing_newline_is_not_hex", any("hex" in p for p in got), str(got))
+
+
 def test_origin_envelope_unreadable_is_a_visible_skip() -> None:
-    env, note = renv.origin_envelope(False, lambda ref, rel: b"{}")
+    env, note = renv.origin_envelope(False, lambda ref, rel: ("ok", b"{}"))
     check("origin_unavailable_gives_a_skip_reason", env is None and note is not None and note.startswith("SKIP: ") and "origin/main" in note, repr((env, note)))
-    env, note = renv.origin_envelope(True, lambda ref, rel: None)
+    env, note = renv.origin_envelope(False, lambda ref, rel: ("ok", b"{}"), ci=True)
+    check("origin_unavailable_in_ci_is_a_failure", env is None and note is not None and note.startswith("FAIL: "), repr((env, note)))
+    env, note = renv.origin_envelope(True, lambda ref, rel: ("absent", None))
     check("origin_without_the_file_is_first_introduction_not_a_skip", env is None and note is None, repr((env, note)))
-    env, note = renv.origin_envelope(True, lambda ref, rel: b'{"consumed": []}')
+    env, note = renv.origin_envelope(True, lambda ref, rel: ("error", None))
+    check("origin_git_failure_is_a_skip_not_first_introduction", env is None and note is not None and note.startswith("SKIP: "), repr((env, note)))
+    env, note = renv.origin_envelope(True, lambda ref, rel: ("error", None), ci=True)
+    check("origin_git_failure_in_ci_is_a_failure", env is None and note is not None and note.startswith("FAIL: "), repr((env, note)))
+    env, note = renv.origin_envelope(True, lambda ref, rel: ("ok", b'{"consumed": []}'))
     check("origin_with_the_file_is_parsed", env == {"consumed": []} and note is None, repr((env, note)))
+
+
+def test_git_show_state_distinguishes_absent_from_failure() -> None:
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        def git(*a: str) -> None:
+            subprocess.run(["git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@t", *a], capture_output=True, text=True, check=True)
+        git("init", "-q")
+        (Path(d) / "f.txt").write_text("hi\n")
+        git("add", "f.txt")
+        git("commit", "-q", "-m", "f")
+        root = Path(d)
+        check("show_state_ok_for_a_present_path", trb.git_show_state("HEAD", "f.txt", root) == ("ok", b"hi\n"), repr(trb.git_show_state("HEAD", "f.txt", root)))
+        check("show_state_absent_for_a_missing_path", trb.git_show_state("HEAD", "nope.txt", root) == ("absent", None), repr(trb.git_show_state("HEAD", "nope.txt", root)))
+        check("show_state_error_for_a_missing_ref", trb.git_show_state("origin/nowhere", "f.txt", root) == ("error", None), repr(trb.git_show_state("origin/nowhere", "f.txt", root)))
+        check("show_state_error_when_git_cannot_run_there", trb.git_show_state("HEAD", "f.txt", root / "missing-dir") == ("error", None), "a non-repo directory is a git failure")
 
 
 def test_git_helpers_against_a_scratch_repo() -> None:
@@ -225,6 +297,33 @@ def test_git_helpers_against_a_scratch_repo() -> None:
         (Path(d) / "adr.md").write_text("two\n")
         git("add", "adr.md")
         git("commit", "-q", "-m", "adr2")
+        git("checkout", "-q", "-b", "side", adr_sha)
+        (Path(d) / "side.txt").write_text("s\n")
+        git("add", "side.txt")
+        git("commit", "-q", "-m", "side")
+        git("checkout", "-q", "-")
+        git("merge", "-q", "--no-ff", "-m", "merge", "side")
+        merge_sha = git("rev-parse", "HEAD")
+        (Path(d) / "adr.md").write_text("three\n")
+        git("add", "adr.md")
+        git("commit", "-q", "-m", "adr3")
+        git("checkout", "-q", "-b", "side2", "HEAD~1")
+        (Path(d) / "side2.txt").write_text("s\n")
+        git("add", "side2.txt")
+        git("commit", "-q", "-m", "side2")
+        git("checkout", "-q", "-")
+        git("merge", "-q", "--no-ff", "-m", "merge2", "side2")
+        merge2_sha = git("rev-parse", "HEAD")
+        git("checkout", "-q", "-b", "side3", "HEAD")
+        (Path(d) / "adr.md").write_text("four\n")
+        git("add", "adr.md")
+        git("commit", "-q", "-m", "adr4 on side")
+        git("checkout", "-q", "-")
+        git("merge", "-q", "--no-ff", "-m", "merge3", "side3")
+        merge3_sha = git("rev-parse", "HEAD")
+        check("commit_touches_true_for_a_merge_that_lands_a_change_to_the_file", commit_touches(Path(d), merge3_sha, "adr.md"), "a merge bringing in an adr.md change touches it against the first parent")
+        check("commit_touches_false_for_a_merge_that_brings_in_other_files", not commit_touches(Path(d), merge_sha, "adr.md"), "a merge of unrelated work must not count as touching adr.md")
+        check("commit_touches_is_first_parent_for_a_merge", not commit_touches(Path(d), merge2_sha, "adr.md") and commit_touches(Path(d), merge2_sha, "side2.txt"), "merge diff must be against the first parent")
         check("file_at_reads_the_committed_blob", file_at(Path(d), adr_sha, "adr.md") == b"one\n", repr(file_at(Path(d), adr_sha, "adr.md")))
         check("file_at_is_none_for_a_missing_path", file_at(Path(d), adr_sha, "nope.md") is None, "missing path should be None")
 
@@ -250,7 +349,8 @@ def test_signature_simulation_in_a_scratch_repo() -> None:
 
         def verdict(env: dict, adr_text: str) -> list:
             return renv.signed_problems(env, adr_text, lambda sha: commit_touches(root, sha, renv.REL_ADR),
-                                        lambda sha: _json_or_none(file_at(root, sha, renv.REL_ENVELOPE)))
+                                        lambda sha: _json_or_none(file_at(root, sha, renv.REL_ENVELOPE)),
+                                        adr_at=lambda ref: _text_or_none(adr_blob(root, ref)))
 
         git("init", "-q")
         put(renv.REL_ADR, real_adr)
@@ -275,12 +375,25 @@ def test_signature_simulation_in_a_scratch_repo() -> None:
         got = verdict(tampered, signed_adr)
         check("simulation_tampered_allowance_fails", len(got) == 1 and "allowances" in got[0], str(got))
         got = verdict(dict(signed_env, decided_at_sha=unrelated_sha), signed_adr)
-        check("simulation_sha_not_touching_the_adr_fails", len(got) == 1 and "does not touch" in got[0], str(got))
+        check("simulation_sha_not_touching_the_adr_fails", len(got) == 2 and any("does not touch" in p for p in got) and any("introduced" in p for p in got), str(got))
         got = verdict(signed_env, real_adr)
         check("simulation_adr_still_proposed_fails", len(got) == 2 and any("accepted" in p for p in got) and any("signature" in p for p in got), str(got))
         got = verdict(signed_env, signed_adr.replace("David Gracia (2026-10-29)", "(unsigned)"))
         check("simulation_missing_signature_line_fails", len(got) == 1 and "signature" in got[0], str(got))
         check("simulation_draft_commit_exists", bool(draft_sha) and draft_sha != sign_sha, "scratch history is wrong")
+        got = verdict(dict(signed_env, decided_at_sha=draft_sha), signed_adr)
+        check("simulation_sha_at_the_draft_commit_fails", any("at decided_at_sha" in p for p in got), str(got))
+        bumped = copy.deepcopy(real_env)
+        bumped["allowances"]["kernel_bytes"] += 100
+        put(renv.REL_ADR, signed_adr + "\nA later amendment.\n")
+        put(renv.REL_ENVELOPE, json.dumps(bumped, indent=2))
+        git("add", ".")
+        git("commit", "-q", "-m", "later amendment that touches the adr and bumps an allowance")
+        later_sha = git("rev-parse", "HEAD")
+        later_env = dict(bumped, decided_at_sha=later_sha)
+        got = verdict(later_env, signed_adr)
+        check("simulation_later_adr_commit_with_changed_allowance_fails", len(got) == 1 and "introduced" in got[0], str(got))
+        check("simulation_real_signing_commit_still_passes_after_history_grows", verdict(signed_env, signed_adr) == [], str(verdict(signed_env, signed_adr)))
 
 
 def test_check_raise_bounds_envelope_branch() -> None:
@@ -340,14 +453,17 @@ def test_live_envelope() -> None:
     totals = {r: rs.compute(r, PLUGIN_ROOT, readmap=rm, budget_path=Path("/nonexistent"))["start_total"] for r in renv.NEW_ROUTES}
     ceilings = {k: trb.ceiling(budget, k) for k in trb.KEYS}
     status, origin_budget = trb.origin_budget()
-    origin_env, note = renv.origin_envelope(trb.origin_available(), trb.git_show)
+    origin_env, note = renv.origin_envelope(trb.origin_available(), trb.git_show_state, ci=bool(os.environ.get("CI")))
     if note:
         print(f"  {note}")
+    if note and note.startswith("FAIL: "):
+        check("live_origin_readable_in_ci", False, note)
     added = budget["ceiling_raises"][len((origin_budget or {}).get("ceiling_raises", [])):]
     adr_file = REPO_TOP / renv.REL_ADR
     adr_text = adr_file.read_text(encoding="utf-8") if adr_file.is_file() else ""
     got = renv.problems(e, origin_env, ceilings, trb.MEASURED, cap_of, totals, added, is_ancestor_of_head, adr_text=adr_text,
                         touches_adr=lambda sha: commit_touches(REPO_TOP, sha, renv.REL_ADR),
+                        adr_at=lambda ref: _text_or_none(adr_blob(REPO_TOP, ref)),
                         envelope_at=lambda sha: _json_or_none(file_at(REPO_TOP, sha, renv.REL_ENVELOPE)))
     check("live_envelope_signed_and_within_bounds", not got, "; ".join(got) + " (expected red until the H2 signature commits C6/C7)")
 

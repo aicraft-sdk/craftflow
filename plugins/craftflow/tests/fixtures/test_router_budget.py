@@ -135,7 +135,21 @@ def git_show(ref: str, rel: str) -> Optional[bytes]:
     return res.stdout if res.returncode == 0 else None
 
 
-def origin_budget() -> "tuple[str, Optional[dict]]":
+def git_show_state(ref: str, rel: str, root: Optional[Path] = None) -> "tuple[str, Optional[bytes]]":
+    """('ok', bytes) | ('absent', None) when the ref resolves but the path is not in it | ('error', None) when git itself failed (M-A)."""
+    top = str(root if root is not None else REPO_ROOT)
+    try:
+        if subprocess.run(["git", "-C", top, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], capture_output=True).returncode != 0:
+            return "error", None
+        if subprocess.run(["git", "-C", top, "cat-file", "-e", f"{ref}:{rel}"], capture_output=True).returncode != 0:
+            return "absent", None
+        res = subprocess.run(["git", "-C", top, "show", f"{ref}:{rel}"], capture_output=True)
+    except OSError:
+        return "error", None
+    return ("ok", res.stdout) if res.returncode == 0 else ("error", None)
+
+
+def origin_budget() ->"tuple[str, Optional[dict]]":
     """('skip', None) without a remote, ('new', None) when origin/main has no budget file yet, else ('ok', parsed)."""
     if not origin_available():
         return "skip", None
