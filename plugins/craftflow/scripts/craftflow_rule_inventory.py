@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 import craftflow_router_corpus as cor
+import craftflow_rule_inventory_sbc as sbc
 from craftflow_rule_inventory_reach import (covers, heading_related, group_relations, narrowed_cover, near_rule_count, related,  # noqa: F401
                                             verify_lock, widening)
 from craftflow_rule_inventory_readmap import (CLASSES, RANK, check_readmap_files, coverage,  # noqa: F401
@@ -157,7 +158,8 @@ def _with_derived(ids: List[str], pool: Dict[str, dict]) -> List[str]:
 
 
 def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, policy_text: str,
-                   rationale_text: str = "", plugin_root=None, allowlist=frozenset(), *, baseline_readmap) -> dict:
+                   rationale_text: str = "", plugin_root=None, allowlist=frozenset(), *, baseline_readmap,
+                   sbc_rows_on: bool = True, adr_status=None) -> dict:
     """`baseline_readmap` is the read map frozen at the baseline (the CLI passes the lock-pinned file); it is required
     so a caller can never compare the live map with itself (H-L1)."""
     _check_baseline(baseline)
@@ -171,6 +173,8 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
     dests = {Path(f).name.lower(): _sections(t) for f, t in after_corpus.items()}  # file -> heading -> section text
     base = {e["id"]: e for e in baseline["entries"]}
     rows, errors = parse_tables(policy_text)
+    sbc_rows = sbc.parse_sbc_rows(policy_text, errors) if sbc_rows_on else []  # AD-7 signed behavior change rows
+    superseded = sbc.superseded_targets(sbc_rows, rows["rewrites"], errors)  # AD-10: the Rewrites rows they replace
     rat_ids = {u["id"] for u in extract_units(rationale_text, "rationale")}
     root = plugin_root or PLUGIN_ROOT
     missing_review = 0
@@ -203,6 +207,8 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
     base_occ = [(e["id"], o) for e in baseline["entries"] for o in e["occurrences"]]
     after_occ = [(e["id"], o) for e in after["entries"] for o in e["occurrences"]]
     for c in rows["rewrites"]:
+        if superseded and set(HEX_ID.findall(c[0])) & superseded:  # replaced by a signed behavior change row (AD-10)
+            continue
         kind = c[2].strip().lower()
         if kind not in KINDS:
             errors.append(f"rewrite row has unknown kind '{c[2]}'")
@@ -261,6 +267,13 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
             ctx_renames[new_ids[0]] = ids[0]
             if _text(base[ids[0]]).endswith(":"):
                 label_renames[_text(after_by_id[new_ids[0]])] = _text(base[ids[0]])
+
+    acc, unsigned, sbc_errors = sbc.check_sbc_rows(sbc_rows, base, after_by_id, _body, rows["rewrites"],
+                                                   {i for c in rows["policy"] for i in HEX_ID.findall(c[0])}, superseded,
+                                                   adr_status or sbc.adr_status)
+    errors.extend(sbc_errors)
+    missing_review += unsigned
+    sbc.merge_accepted(acc, rewrites, ctx_renames, label_renames, base, after_by_id, _text, errors)
 
     # an occurrence is identified by its unit id, last heading, file, full heading path, list label and the ids of its
     # enclosing list items and preceding paragraph (D4, A4, A10, R1)
@@ -410,7 +423,8 @@ def diff_inventory(baseline: dict, after_corpus: Dict[str, str], readmap: dict, 
             unmapped.add(gid)
     res.update({"unmapped_ids": sorted(unmapped), "normative_in_rationale": len(bad_rationale), "readmap_widened": widened,
                 "added_normative_near_rule": near_rule_count(baseline["entries"], after["entries"], {new: old for (_, new), old in renames.items()}),
-                "rows_missing_review": missing_review, "row_errors": sorted(set(errors))})
+                "rows_missing_review": missing_review, "row_errors": sorted(set(errors)),
+                "signed_behavior_changes": len(acc), "superseded_rewrites": sorted(superseded)})
     return res
 
 
@@ -465,7 +479,8 @@ def _fail(msg: str) -> int:
 # flags each mode accepts besides --ref/--plugin-root; anything else given explicitly is a usage error (H-M7)
 MODE_FLAGS = {"emit": {"readmap_baseline", "allowlist", "out", "force"},
               "diff": {"baseline", "policy_map", "rationale", "readmap", "readmap_baseline", "lock"},
-              "report_nonnormative": {"allowlist", "out", "files", "list", "format"}}
+              "report_nonnormative": {"allowlist", "out", "files", "list", "format"},
+              "sbc_row": {"baseline", "old_id", "new_id", "adr", "supersedes", "readmap", "readmap_baseline", "lock"}}
 
 
 def _allowlist(path: Optional[str]) -> Set[str]:
@@ -506,6 +521,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     mode.add_argument("--emit", action="store_true")
     mode.add_argument("--diff", action="store_true")
     mode.add_argument("--report-nonnormative", action="store_true")
+    mode.add_argument("--sbc-row", action="store_true", help="print one signed behavior change row (PENDING David)")
     ap.add_argument("--plugin-root", default=str(PLUGIN_ROOT))
     ap.add_argument("--ref", default=None)
     ap.add_argument("--readmap-baseline", default=None)
@@ -519,6 +535,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--files", nargs="+", default=[])
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--format", choices=("json", "md"), default=None)
+    ap.add_argument("--supersedes", action="store_true", help="--sbc-row: fill the Supersedes cell (AD-10)")
+    for flag in ("--old-id", "--new-id", "--adr"):
+        ap.add_argument(flag, default=None, help="--sbc-row: baseline unit id / live unit id / ADR-NNNN")
     ap.add_argument("--force", action="store_true", help="--emit: overwrite --out even when it holds another ref")
     a = ap.parse_args(argv)
     name = next(m for m in MODE_FLAGS if getattr(a, m))
@@ -553,6 +572,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             norm = sum(1 for e in inv["entries"] if e["normative"])
             print(json.dumps({"ref": sha, "units": units, "occurrences": occ, "normative_units": norm,
                               "non_normative_units": units - norm, "allowlist_unmatched": 0, "out": a.out}, sort_keys=True))
+            return 0
+        if a.sbc_row:
+            if not (a.baseline and a.old_id and a.new_id and a.adr):
+                return _fail("--sbc-row requires --baseline, --old-id, --new-id and --adr")
+            rm = load_readmap(a.readmap or root / "config" / "router-readmap.json")
+            live = build_inventory(cor.read_corpus(root, sha, rm), rm, _allowlist(None))["entries"]
+            base = verify_lock(a.baseline, a.readmap_baseline or DEFAULT_READMAP_BASELINE, a.lock or DEFAULT_LOCK)
+            print(sbc.generate_row(base["entries"], live, a.old_id, a.new_id, a.adr, a.supersedes, _body))
             return 0
         if a.diff:
             if not a.baseline or not a.policy_map:

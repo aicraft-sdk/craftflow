@@ -153,7 +153,7 @@ def reach_report(state: dict, ctx: dict) -> dict:
     inv = ctx["inv"]
     corpus, rm = runtime_corpus(state), state["readmap"]
     res = inv.diff_inventory(ctx["base"], corpus, rm, ctx["policy"], ctx["rationale"], ctx["root"], allowlist=ctx["allow"],
-                             baseline_readmap=ctx["readmap_baseline"])
+                             baseline_readmap=ctx["readmap_baseline"], sbc_rows_on=False)
     out = {k: (len(res[k]) if isinstance(res[k], (list, tuple, dict, set)) else res[k]) for k in COUNTERS}
     supply: Dict[str, list] = collections.defaultdict(list)
     for e in inv.build_inventory(corpus, rm, ctx["allow"])["entries"]:

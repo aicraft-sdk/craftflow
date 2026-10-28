@@ -584,6 +584,20 @@ then marks as read everywhere would look reachable.
 | skills/craftflow-router/references/build-fast-path-escalation.md | none | BUILD:fast_path@conditional_stage | P11: new conditional stage file for the Fast Path Escalation flow; it was read by BUILD in both variants at workflow start and is now read after a fast-path verifier FAIL (P11) | David Gracia (2026-10-20) | [p11-gen] |
 | skills/craftflow-router/references/plan-bakeoff.md | none | PLAN@conditional_stage | P11: new conditional stage file for the PLAN bake-off body (fan-out, judge dispatch, post-judge validation, chain loop step 5b); it was read by PLAN at workflow start and is now read only when the plan qualifies for a bake-off (P11) | David Gracia (2026-10-20) | [p11-gen] |
 
+## Signed behavior changes
+
+A row here accounts for one baseline unit whose rewrite changes a guarded word, number or token, which a Rewrites row
+refuses. Rules (AD-7, AD-10): one baseline unit and one new unit per row; the old and new text are verbatim, generated
+by `craftflow_rule_inventory.py --sbc-row` and never hand-typed; the ADR cell names an existing ADR whose status is not
+rejected or superseded; only David signs (`David Gracia (YYYY-MM-DD)`); the reach rule still applies, so each new unit
+must be read wherever the old one was, at least as early; a row is not a substitute for a Rewrites row when
+`related()` accepts one. A `Supersedes` cell reads `Rewrites row <baseline id>` and replaces the one signed Rewrites row
+of that same baseline id: that row stays byte-identical as signed history, INV skips it and lists it in
+`superseded_rewrites`, and deleting or unsigning it fails INV.
+
+| Baseline ID | New ID | Supersedes | Old text | New text | ADR | Signed by | Evidence |
+|---|---|---|---|---|---|---|---|
+
 ## Structural limit: what the mechanical checks cannot see
 
 The mechanical checks (retention >= 60%, two-way negation on an 11-word list, reach, read-map pinning, lock,
