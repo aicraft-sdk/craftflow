@@ -60,7 +60,7 @@ LEGACY_TABLE: List[Tuple[str, List[str], str]] = [
 
 _PRIORITY = {workflow: prio for prio, _signal, _kws, workflow in ROUTING_TABLE}
 _HOW_DOES_X_WORK = "how does X work"
-_LEAD_END = re.compile(r" and | then |,|;|\n|[.!?](?=\s|$)", re.IGNORECASE)
+_LEAD_END = re.compile(r" and | then |,|;|[.!?](?=\s|$)", re.IGNORECASE)
 _FIRST_WORD = re.compile(r"\s*([A-Za-z]+)")
 
 
@@ -76,7 +76,7 @@ def find_keyword(text: str, keyword: str) -> int:
 
 
 def lead_clause(text: str) -> str:
-    """The request up to its first ' and ', ' then ', comma, semicolon, newline or
+    """The request up to its first ' and ', ' then ', comma, semicolon or
     sentence end ('.', '!' or '?' followed by whitespace or the end of the text)."""
     found = _LEAD_END.search(text)
     return text[: found.start()] if found else text

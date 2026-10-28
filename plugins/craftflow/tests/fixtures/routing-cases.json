@@ -66,6 +66,6 @@
     ,{"id": "R62", "prompt": "Add a retry to the client. The upload is broken", "expected": "BUILD", "model": true, "legacy_flip": true, "legacy_route": "DEBUG", "why": "R1: a sentence end ends the lead clause before the ERROR word"}
     ,{"id": "R63", "prompt": "Add a retry to the client! The upload is broken", "expected": "BUILD", "model": true, "legacy_flip": true, "legacy_route": "DEBUG", "why": "R1: '!' ends the lead clause"}
     ,{"id": "R64", "prompt": "Add a retry to the client? The upload is broken", "expected": "BUILD", "model": true, "legacy_flip": true, "legacy_route": "DEBUG", "why": "R1: '?' ends the lead clause"}
-    ,{"id": "R65", "prompt": "Add a retry to the client\nThe upload is broken", "expected": "BUILD", "model": true, "legacy_flip": true, "legacy_route": "DEBUG", "why": "R1: a newline ends the lead clause"}
+    ,{"id": "R65", "prompt": "Refactor the parser\n\nNote: tests fail on main", "expected": "DEBUG", "model": true, "legacy_route": "DEBUG", "why": "R1: a newline is not a lead-clause end, so the ERROR word stays in the lead clause and defeats the change-verb override"}
   ]
 }

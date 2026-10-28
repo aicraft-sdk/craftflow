@@ -120,7 +120,7 @@ def adr_flip_prompts() -> set:
 
 
 def test_g_flips_match_adr() -> None:
-    flips = {re.sub(r"\s+", " ", c["prompt"]) for c in CASES if c.get("legacy_flip")}  # the ADR text is whitespace-normalized too
+    flips = {c["prompt"] for c in CASES if c.get("legacy_flip")}
     adr = adr_flip_prompts()
     check("(g) legacy_flip prompts equal the ADR-0075 Routing flips list", flips == adr,
           f"only_in_corpus={sorted(flips - adr)!r} only_in_adr={sorted(adr - flips)!r}")
@@ -137,7 +137,7 @@ def test_h_lead_clause() -> None:
         ("add test_cli.py", "add test_cli.py"),
         ("add x! fix y", "add x"),
         ("add x? fix y", "add x"),
-        ("add x\nfix y", "add x"),
+        ("add x\nfix y", "add x\nfix y"),
         ("add x!", "add x"),
         ("add a?b", "add a?b"),
     )
