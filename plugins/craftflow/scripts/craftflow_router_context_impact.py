@@ -84,6 +84,18 @@ def _get(d: dict, dotted: str):
     return d
 
 
+def effective_caps(budget: dict) -> dict:
+    """enforced_caps with enforced_caps_decision.amendments applied in order (as test_router_budget.effective_caps does)."""
+    caps = json.loads(json.dumps(budget["enforced_caps"]))
+    for a in (budget.get("enforced_caps_decision") or {}).get("amendments", []):
+        parts = a["key"].split(".")
+        node = caps
+        for part in parts[:-1]:
+            node = node[part]
+        node[parts[-1]] = a["to"]
+    return caps
+
+
 def _git_env() -> dict:
     """The environment for git calls: ambient GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE etc. must not redirect `-C <root>`."""
     return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
@@ -186,8 +198,9 @@ def collect(root, baseline: str, run_inventory: bool = True, date: Optional[str]
     for wf in WORKFLOWS:
         t = projection["tier"][wf]
         proj_vals[f"readset.{wf}"] = t["max"] if isinstance(t, dict) else t
+    caps = effective_caps(budget)
     gated = [{"key": k, "label": label, "baseline": base_vals[k], "goal": _get(budget["targets"], k),
-              "enforced": _get(budget["enforced_caps"], k), "measured": head_vals[k], "projection": proj_vals[k]}
+              "enforced": _get(caps, k), "measured": head_vals[k], "projection": proj_vals[k]}
              for k, label in GATED]
 
     files = sorted(set(base_sizes) | set(head_sizes))
@@ -197,7 +210,7 @@ def collect(root, baseline: str, run_inventory: bool = True, date: Optional[str]
             "date": date or datetime.date.today().isoformat(), "rows": rows, "build_definitions": defs, "gated": gated,
             "per_file": per_file,
             "descriptions": {"base": base_desc, "head": head_desc, "goal": budget["targets"]["description_chars"],
-                             "enforced": budget["enforced_caps"]["description_chars"], "projection": proj_vals["description_chars"]},
+                             "enforced": caps["description_chars"], "projection": proj_vals["description_chars"]},
             "inventory": inventory, "inventory_exit": inv_exit}
 
 

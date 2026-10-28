@@ -27,9 +27,12 @@ import craftflow_router_corpus as cor  # noqa: E402
 import craftflow_router_readset as rs  # noqa: E402
 import craftflow_router_readset_guard as grd  # noqa: E402
 import craftflow_router_readset_project as prj  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import router_envelope as renv  # noqa: E402  (ADR-0074 growth envelope logic)
 
 FIXTURES = PLUGIN_ROOT / "tests" / "fixtures"
 BUDGET = FIXTURES / "router-budget.json"
+ENVELOPE = FIXTURES / "router-growth-envelope.json"
 PROJECTION = FIXTURES / "router-projection.json"
 CUTPLAN = FIXTURES / "router-cut-plan.json"
 REL_BUDGET = "tools/craftflow-plugin/plugins/craftflow/tests/fixtures/router-budget.json"
@@ -147,10 +150,11 @@ def is_prefix(old: list, new: list) -> bool:
     return len(old) <= len(new) and new[:len(old)] == old
 
 
-def check_raise_bounds(budget: dict, origin: Optional[dict], projector: Callable[[List[str]], Dict[str, int]]) -> List[str]:
+def check_raise_bounds(budget: dict, origin: Optional[dict], projector: Callable[[List[str]], Dict[str, int]], envelope: Optional[Callable] = None) -> List[str]:
     """PP-8 / DD-6: a ceiling that rose against `origin` needs a ceiling_raises entry for this phase and key with
     projected_delta > 0, raise <= projected_delta + 500 and new ceiling <= project(merged_phases) + 1000.
-    `projector(phases)` returns {key: projected value} for a list of phase ids (effective tier, recorded conditions)."""
+    `projector(phases)` returns {key: projected value} for a list of phase ids (effective tier, recorded conditions).
+    ADR-0074: `envelope` (renv.checker) judges a key whose raises this change adds are all envelope-tagged H<n> entries instead."""
     if origin is None:
         return []  # first introduction of the ratchet: nothing to compare with
     problems = []
@@ -160,6 +164,10 @@ def check_raise_bounds(budget: dict, origin: Optional[dict], projector: Callable
     for k in KEYS:
         old, new = ceiling(origin, k), ceiling(budget, k)
         if new <= old:
+            continue
+        verdict = envelope(k, [e for e in budget["ceiling_raises"][len(origin.get("ceiling_raises", [])):] if e.get("key") == k], old, new) if envelope else None
+        if verdict is not None:
+            problems += verdict
             continue
         entries = [e for e in budget["ceiling_raises"] if e.get("phase") == phase and e.get("key") == k]
         if not entries:
@@ -494,7 +502,7 @@ def test_ceiling_changes_bounded_vs_origin_main() -> None:
         ok("ceiling_changes_bounded_vs_origin_main:first_introduction")
         return
     b = load_budget()
-    problems = check_raise_bounds(b, origin, effective_values(b))
+    problems = check_raise_bounds(b, origin, effective_values(b), renv.checker(renv.load(ENVELOPE), MEASURED))
     check("ceiling_changes_bounded_vs_origin_main", not problems, "; ".join(problems))
 
 
@@ -507,7 +515,7 @@ def append_only_problems(origin: dict, b: dict, identical: bool) -> List[str]:
     if not is_prefix(old, new):
         problems.append("enforced_caps_decision.amendments is not an append-only extension of origin/main's")
     added = len(b["merged_phases"]) - len(origin["merged_phases"])
-    want = 0 if identical else 1
+    want = 0 if identical or renv.envelope_only_change(origin, b) else 1  # ADR-0074: envelope-only changes add no phase
     if added != want:
         problems.append(f"merged_phases added {added}, expected {want} "
                         f"({'the file equals origin/main, so nothing' if identical else 'a phase PR adds exactly its own id'})")
@@ -632,6 +640,7 @@ def test_measured_within_phase_projection() -> None:
     b = load_budget()
     project = effective_values(b)
     projected = project(b["merged_phases"])
+    projected = {k: v + renv.slack(b, renv.load(ENVELOPE)).get(k, 0) for k, v in projected.items()}  # ADR-0074: accepted envelope raises
     problems = check_within_projection(MEASURED, projected)
     inflated = dict(MEASURED, **{"readset.BUILD": projected["readset.BUILD"] + 1001})
     control = check_within_projection(inflated, projected)

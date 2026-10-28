@@ -1,0 +1,32 @@
+{
+  "adr": "ADR-0074",
+  "decided_by": "David",
+  "decided_at_sha": "PENDING-SIGNATURE",
+  "base": {
+    "kernel_bytes": 33797,
+    "protocol_bytes": 13486,
+    "reference_max_bytes": 19097,
+    "description_chars": 3793,
+    "readset.BUILD": 96727,
+    "readset.PLAN": 84933,
+    "readset.DEBUG": 72719,
+    "readset.REVIEW": 70739
+  },
+  "allowances": {
+    "kernel_bytes": 4800,
+    "protocol_bytes": 6500,
+    "reference_max_bytes": 0,
+    "description_chars": 700,
+    "readset.BUILD": 13500,
+    "readset.PLAN": 13000,
+    "readset.DEBUG": 13500,
+    "readset.REVIEW": 13000
+  },
+  "new_route_ceilings": {
+    "ORIENT": 95000,
+    "TRIAGE": 112000,
+    "CODEBASE-HEALTH": 112000,
+    "QA": 130000
+  },
+  "consumed": []
+}

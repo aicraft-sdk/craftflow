@@ -268,13 +268,18 @@ def test_collect_head_matches_readset_tool() -> None:
     got = [r for r in data["rows"] if r["workflow"] == "BUILD" and r["variant"] == "standard"][0]["head_start"]
     check("collect_head_equals_readset_tool_self_consistency", got == want, f"{got} != {want}")
     # P13 task 4 (EnterPlanMode prose deleted, -680 B in every start set): 97,407 -> 96,727
-    check("collect_head_build_standard_literal_96727", got == 96727, f"BUILD standard start_total is {got}; the BUILD standard literal is 96,727")
+    # H2 (ADR-0074 envelope; routing law, stubs, readmap): 96,727 -> 100,895
+    check("collect_head_build_standard_literal_100895", got == 100895, f"BUILD standard start_total is {got}; the BUILD standard literal is 100,895")
 
 
 def test_collect_gated_measured_within_enforced() -> None:
     data = imp.collect(PLUGIN_ROOT, baseline_sha(), run_inventory=False)
     bad = [g["key"] for g in data["gated"] if g["measured"] > g["enforced"]]
     check("collect_measured_within_enforced_caps", not bad, f"over the enforced cap: {bad}")
+    # control: an amendment raising kernel_bytes makes the reported (effective) cap the amended one
+    b = json.loads(BUDGET.read_text(encoding="utf-8"))
+    b.setdefault("enforced_caps_decision", {}).setdefault("amendments", []).append({"key": "kernel_bytes", "to": 99999})
+    check("effective_caps_apply_amendments", imp.effective_caps(b)["kernel_bytes"] == 99999, str(imp.effective_caps(b)))
     keys = {g["key"] for g in data["gated"]}
     want = {"kernel_bytes", "protocol_bytes", "reference_max_bytes", "description_chars",
             "readset.BUILD", "readset.PLAN", "readset.DEBUG", "readset.REVIEW"}
@@ -286,7 +291,7 @@ def test_collect_goal_and_enforced_come_from_budget() -> None:
     data = imp.collect(PLUGIN_ROOT, baseline_sha(), run_inventory=False)
     g = [x for x in data["gated"] if x["key"] == "readset.BUILD"][0]
     check("collect_goal_from_targets", g["goal"] == b["targets"]["readset"]["BUILD"], str(g))
-    check("collect_enforced_from_caps", g["enforced"] == b["enforced_caps"]["readset"]["BUILD"], str(g))
+    check("collect_enforced_from_caps", g["enforced"] == imp.effective_caps(b)["readset"]["BUILD"], str(g))
 
 
 def test_collect_unknown_baseline_raises() -> None:
