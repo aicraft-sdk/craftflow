@@ -260,5 +260,42 @@ check("release-gate job: the clean-tree step follows the gate and there is no co
       "git status --porcelain" in ci_job and ci_job.index("git status --porcelain") > ci_job.index("craftflow_release_gate.py")
       and "continue-on-error" not in ci_job, True)
 
+# --- the gate step cannot be neutralised (mutation controls on the real YAML) -----------
+print("gate step guard")
+import importlib.util  # noqa: E402
+
+_spec = importlib.util.spec_from_file_location("publish_structure", REPO / ".github/test_publish_workflow_structure.py")
+structure = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(structure)
+
+GATE_STEP = "      - name: Release gate\n        run: |\n"
+CLEAN_STEP = "      - name: Release gate left the tree clean\n        run: |\n"
+TEST_LINE = '          test "$(tail -n1 /tmp/gate.log)" = "RELEASE GATE: OK"\n'
+
+
+def mutate(text, old, new):
+    assert text.count(old) == 1, old
+    return text.replace(old, new)
+
+
+check("unmodified publish workflow: no gate-step defects", structure.release_gate_step_defects(PUBLISH), [])
+mutants = {
+    "continue-on-error on Release gate": mutate(PUBLISH, GATE_STEP, GATE_STEP.replace("        run: |\n", "        continue-on-error: true\n        run: |\n")),
+    "continue-on-error on the clean-tree step": mutate(PUBLISH, CLEAN_STEP, CLEAN_STEP.replace("        run: |\n", "        continue-on-error: true\n        run: |\n")),
+    "if: always() on Release gate": mutate(PUBLISH, GATE_STEP, GATE_STEP.replace("        run: |\n", "        if: always()\n        run: |\n")),
+    "early exit 0 before the verdict line": mutate(PUBLISH, TEST_LINE, "          exit 0\n" + TEST_LINE),
+    "early exit 0 chained after then": mutate(PUBLISH, TEST_LINE, "          if true; then exit 0; fi\n" + TEST_LINE),
+}
+for label, mutant in mutants.items():
+    check_true("structure check rejects " + label, bool(structure.release_gate_step_defects(mutant)))
+check("an exit 0 after the verdict line is not an early exit",
+      structure.release_gate_step_defects(mutate(PUBLISH, TEST_LINE, TEST_LINE + "          exit 0\n")), [])
+
+ci_gate = "      - name: Release gate\n        run: |\n"
+check("craftflow-ci gate step: no defects", structure.release_gate_step_defects(ci_job, ("Release gate", "Release gate left the tree clean")), [])
+check_true("craftflow-ci gate step: early exit 0 rejected", bool(structure.release_gate_step_defects(
+    mutate(ci_job, '          test "$(tail -n1 /tmp/gate.log)"', '          exit 0\n          test "$(tail -n1 /tmp/gate.log)"'),
+    ("Release gate", "Release gate left the tree clean"))))
+
 print(f"\nResults: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
