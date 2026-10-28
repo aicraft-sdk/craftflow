@@ -42,23 +42,57 @@ def check(name: str, cond: bool, reason: str = "") -> None:
 def is_ancestor_of_head(sha: str) -> bool:
     if not isinstance(sha, str) or not sha:
         return False
+    if not renv.HEX_SHA.match(sha):  # never hand an option-shaped value to git
+        return False
     return subprocess.run(["git", "-C", str(REPO_ROOT), "merge-base", "--is-ancestor", sha, "HEAD"], capture_output=True).returncode == 0
+
+
+def commit_touches(root: Path, sha: str, rel: str) -> bool:
+    """True when the commit `sha` changes the file `rel` (the signing commit must touch the ADR)."""
+    if not isinstance(sha, str) or not renv.HEX_SHA.match(sha):
+        return False
+    res = subprocess.run(["git", "-C", str(root), "show", "--name-only", "--format=", sha], capture_output=True, text=True)
+    return res.returncode == 0 and rel in res.stdout.split("\n")
+
+
+def file_at(root: Path, sha: str, rel: str) -> "bytes | None":
+    """The committed bytes of `rel` at `sha`, None when the commit or path does not exist."""
+    if not isinstance(sha, str) or not renv.HEX_SHA.match(sha):
+        return None
+    res = subprocess.run(["git", "-C", str(root), "show", f"{sha}:{rel}"], capture_output=True)
+    return res.stdout if res.returncode == 0 else None
 
 
 # ---------------------------------------------------------------------------------------------- fixtures
 
 
-def world() -> dict:
+SIGNED_ADR = "---\nadr: \"0074\"\nstatus: accepted\ndate: \"2026-10-28\"\n---\n\n## Signature\n\nDavid Gracia (2026-10-29)\n"
+SIGNED_FIELDS = ("base", "allowances", "new_route_ceilings")
+SIGN_SHA = "a" * 40
+
+
+def signed_world() -> dict:
+    """A good world after the signature: a hex sha, a signed ADR, and the envelope fields as committed at that sha."""
     keys = trb.KEYS
-    return {"env": {"adr": "ADR-0074", "decided_by": "David", "decided_at_sha": "good",
+    w = {"env": {"adr": "ADR-0074", "decided_by": "David", "decided_at_sha": SIGN_SHA,
                     "base": {k: 1000 for k in keys}, "allowances": {k: 500 for k in keys},
                     "new_route_ceilings": {r: 2000 for r in renv.NEW_ROUTES}, "consumed": []},
             "ceilings": {k: 1200 for k in keys}, "measured": {k: 1100 for k in keys}, "caps": {k: 1600 for k in keys},
             "totals": {r: 1900 for r in renv.NEW_ROUTES}, "origin": None, "raises": []}
+    w["adr_text"] = SIGNED_ADR
+    w["touches_adr"] = lambda sha: sha == SIGN_SHA
+    w["at_sha"] = {k: copy.deepcopy(w["env"][k]) for k in SIGNED_FIELDS}
+    return w
+
+
+world = signed_world
 
 
 def problems_of(w: dict) -> list:
-    return renv.problems(w["env"], w["origin"], w["ceilings"], w["measured"], w["caps"], w["totals"], w["raises"], lambda s: s == "good")
+    sha = w["env"]["decided_at_sha"]
+    return renv.problems(w["env"], w["origin"], w["ceilings"], w["measured"], w["caps"], w["totals"], w["raises"],
+                         lambda s: s == SIGN_SHA, adr_text=w.get("adr_text"), touches_adr=w.get("touches_adr"),
+                         envelope_at=(lambda s: w["at_sha"] if s == sha else None) if "at_sha" in w else None)
 
 
 def test_shape_and_good_world() -> None:
@@ -101,6 +135,97 @@ def test_mutation_controls_each_give_exactly_one_problem() -> None:
     appended["origin"] = copy.deepcopy(appended["env"])
     appended["env"]["consumed"] = [{"phase": "H2", "key": "kernel_bytes", "from": 1000, "to": 1200, "at_sha": "x"}]
     check("consumed_append_is_allowed", problems_of(appended) == [], str(problems_of(appended)))
+
+
+def test_signed_envelope_is_content_bound() -> None:
+    good = signed_world()
+    check("signed_good_world_has_no_problems", problems_of(good) == [], str(problems_of(good)))
+
+    def one(name: str, w: dict, needle: str) -> None:
+        got = problems_of(w)
+        check(f"signed_mutation_{name}_one_problem", len(got) == 1 and needle in got[0], str(got))
+
+    tampered = signed_world()
+    tampered["env"]["allowances"]["kernel_bytes"] += 100  # still within the cap, so only the content binding can catch it
+    tampered["caps"]["kernel_bytes"] = 99999
+    one("allowance_tampered_after_signing", tampered, "allowances")
+    base = signed_world()
+    base["env"]["base"]["protocol_bytes"] -= 1
+    base["caps"]["protocol_bytes"] = 99999
+    one("base_tampered_after_signing", base, "base")
+    ceil = signed_world()
+    ceil["env"]["new_route_ceilings"]["QA"] += 1
+    one("route_ceiling_tampered_after_signing", ceil, "new_route_ceilings")
+    notouch = signed_world()
+    notouch["touches_adr"] = lambda sha: False
+    one("sha_does_not_touch_the_adr", notouch, "does not touch")
+    proposed = signed_world()
+    proposed["adr_text"] = SIGNED_ADR.replace("status: accepted", "status: proposed")
+    one("adr_still_proposed", proposed, "accepted")
+    nosig = signed_world()
+    nosig["adr_text"] = SIGNED_ADR.replace("David Gracia (2026-10-29)", "Pending: David signs in the H2 signing session.")
+    one("signature_line_missing", nosig, "signature")
+    other = signed_world()
+    other["adr_text"] = SIGNED_ADR.replace("David Gracia (2026-10-29)", "Some Agent (2026-10-29)")
+    one("signature_by_someone_else", other, "signature")
+    commented = signed_world()
+    commented["adr_text"] = SIGNED_ADR.replace("status: accepted", "status: accepted # not yet proposed")
+    check("status_inline_comment_is_stripped", problems_of(commented) == [], str(problems_of(commented)))
+    upper = signed_world()
+    upper["adr_text"] = SIGNED_ADR.replace("status: accepted", "status: Accepted")
+    one("status_is_case_sensitive", upper, "accepted")
+    absent = signed_world()
+    del absent["at_sha"]["base"]
+    one("envelope_file_unreadable_at_the_sha", absent, "base")
+    hexless = signed_world()
+    hexless["env"]["decided_at_sha"] = "--oops"
+    got = problems_of(hexless)
+    check("signed_sha_must_be_hex", any("hex" in p for p in got), str(got))
+    unverifiable = signed_world()
+    unverifiable["touches_adr"] = None
+    got = problems_of(unverifiable)
+    check("signed_without_a_verifier_is_a_problem", any("cannot be verified" in p for p in got), str(got))
+    consumed = signed_world()
+    consumed["env"]["consumed"] = [{"phase": "H3", "key": "kernel_bytes", "from": 1000, "to": 1100, "at_sha": "x"}]
+    check("consumed_growth_after_signing_is_not_content_drift", problems_of(consumed) == [], str(problems_of(consumed)))
+    pending = world()
+    pending["env"]["decided_at_sha"] = "PENDING-SIGNATURE"
+    pending["adr_text"] = SIGNED_ADR.replace("status: accepted", "status: proposed")
+    got = problems_of(pending)
+    check("pending_signature_keeps_the_old_single_problem", len(got) == 1 and "ancestor" in got[0], str(got))
+
+
+def test_origin_envelope_unreadable_is_a_visible_skip() -> None:
+    env, note = renv.origin_envelope(False, lambda ref, rel: b"{}")
+    check("origin_unavailable_gives_a_skip_reason", env is None and note is not None and note.startswith("SKIP: ") and "origin/main" in note, repr((env, note)))
+    env, note = renv.origin_envelope(True, lambda ref, rel: None)
+    check("origin_without_the_file_is_first_introduction_not_a_skip", env is None and note is None, repr((env, note)))
+    env, note = renv.origin_envelope(True, lambda ref, rel: b'{"consumed": []}')
+    check("origin_with_the_file_is_parsed", env == {"consumed": []} and note is None, repr((env, note)))
+
+
+def test_git_helpers_against_a_scratch_repo() -> None:
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        def git(*a: str) -> str:
+            return subprocess.run(["git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@t", *a], capture_output=True, text=True, check=True).stdout.strip()
+        git("init", "-q")
+        (Path(d) / "adr.md").write_text("one\n")
+        git("add", "adr.md")
+        git("commit", "-q", "-m", "adr")
+        adr_sha = git("rev-parse", "HEAD")
+        (Path(d) / "other.txt").write_text("x\n")
+        git("add", "other.txt")
+        git("commit", "-q", "-m", "other")
+        other_sha = git("rev-parse", "HEAD")
+        check("commit_touches_true_for_the_signing_commit", commit_touches(Path(d), adr_sha, "adr.md"), "adr commit should touch adr.md")
+        check("commit_touches_false_for_another_commit", not commit_touches(Path(d), other_sha, "adr.md"), "other commit should not touch adr.md")
+        check("commit_touches_false_for_an_option_shaped_sha", not commit_touches(Path(d), "--oops", "adr.md"), "an option-shaped sha must not run")
+        (Path(d) / "adr.md").write_text("two\n")
+        git("add", "adr.md")
+        git("commit", "-q", "-m", "adr2")
+        check("file_at_reads_the_committed_blob", file_at(Path(d), adr_sha, "adr.md") == b"one\n", repr(file_at(Path(d), adr_sha, "adr.md")))
+        check("file_at_is_none_for_a_missing_path", file_at(Path(d), adr_sha, "nope.md") is None, "missing path should be None")
 
 
 def test_check_raise_bounds_envelope_branch() -> None:
@@ -147,6 +272,10 @@ def test_slack_and_append_only() -> None:
 # ---------------------------------------------------------------------------------------------- live check
 
 
+def _json_or_none(raw: "bytes | None") -> "dict | None":
+    return None if raw is None else json.loads(raw.decode("utf-8"))
+
+
 def test_live_envelope() -> None:
     e = json.loads(ENVELOPE.read_text(encoding="utf-8"))
     budget = trb.load_budget()
@@ -156,10 +285,15 @@ def test_live_envelope() -> None:
     totals = {r: rs.compute(r, PLUGIN_ROOT, readmap=rm, budget_path=Path("/nonexistent"))["start_total"] for r in renv.NEW_ROUTES}
     ceilings = {k: trb.ceiling(budget, k) for k in trb.KEYS}
     status, origin_budget = trb.origin_budget()
-    raw = trb.git_show("origin/main", REL_ENVELOPE) if trb.origin_available() else None
-    origin_env = json.loads(raw.decode("utf-8")) if raw else None
+    origin_env, note = renv.origin_envelope(trb.origin_available(), trb.git_show)
+    if note:
+        print(f"  {note}")
     added = budget["ceiling_raises"][len((origin_budget or {}).get("ceiling_raises", [])):]
-    got = renv.problems(e, origin_env, ceilings, trb.MEASURED, cap_of, totals, added, is_ancestor_of_head)
+    adr_file = REPO_ROOT / renv.REL_ADR
+    adr_text = adr_file.read_text(encoding="utf-8") if adr_file.is_file() else ""
+    got = renv.problems(e, origin_env, ceilings, trb.MEASURED, cap_of, totals, added, is_ancestor_of_head, adr_text=adr_text,
+                        touches_adr=lambda sha: commit_touches(REPO_ROOT, sha, renv.REL_ADR),
+                        envelope_at=lambda sha: _json_or_none(file_at(REPO_ROOT, sha, renv.REL_ENVELOPE)))
     check("live_envelope_signed_and_within_bounds", not got, "; ".join(got) + " (expected red until the H2 signature commits C6/C7)")
 
 

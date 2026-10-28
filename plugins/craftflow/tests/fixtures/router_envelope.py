@@ -14,6 +14,12 @@ from typing import Callable, Dict, List, Optional
 ADR = "ADR-0074"
 FIELDS = {"adr", "decided_by", "decided_at_sha", "base", "allowances", "new_route_ceilings", "consumed"}
 ENTRY = {"phase", "key", "from", "to", "at_sha"}
+PENDING = "PENDING-SIGNATURE"
+SIGNED_FIELDS = ("base", "allowances", "new_route_ceilings")
+HEX_SHA = re.compile(r"^[0-9a-f]{7,40}$")
+SIGNATURE_LINE = re.compile(r"^David Gracia \(\d{4}-\d{2}-\d{2}\)\s*$", re.M)
+REL_ENVELOPE = "tools/craftflow-plugin/plugins/craftflow/tests/fixtures/router-growth-envelope.json"
+REL_ADR = "docs/ai/decisions/0074-craftflow-router-growth-envelope.md"
 NEW_ROUTES = ("ORIENT", "TRIAGE", "CODEBASE-HEALTH", "QA")
 _H_PHASE = re.compile(r"^H\d+$")
 
@@ -78,6 +84,62 @@ def route_problems(e: dict, totals: Dict[str, int]) -> List[str]:
             if totals[r] > e["new_route_ceilings"][r]]
 
 
+def _adr_front_status(text: str) -> Optional[str]:
+    """`status:` of the ADR's leading front matter with any inline `#` comment stripped; None when absent."""
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return None
+        if line.startswith("status:"):
+            return line.split(":", 1)[1].split("#", 1)[0].strip().strip("\"'")
+    return None
+
+
+def _adr_signed(text: str) -> bool:
+    """A `David Gracia (YYYY-MM-DD)` line inside the ADR's `## Signature` section."""
+    m = re.search(r"^## Signature\s*$(.*?)(?=^## |\Z)", text, re.M | re.S)
+    return bool(m and SIGNATURE_LINE.search(m.group(1)))
+
+
+def signed_problems(e: dict, adr_text: Optional[str], touches_adr: Optional[Callable[[str], bool]],
+                    envelope_at: Optional[Callable[[str], Optional[dict]]]) -> List[str]:
+    """Once decided_at_sha is no longer PENDING-SIGNATURE the signature must be real and content-bound (H-1): the ADR is
+    `status: accepted` with a David Gracia signature line, the sha is a commit that touches the ADR, and base / allowances /
+    new_route_ceilings equal the envelope file as committed at that sha (consumed[] and ceiling raises are judged elsewhere)."""
+    sha = e["decided_at_sha"]
+    if sha == PENDING:
+        return []
+    if adr_text is None or touches_adr is None or envelope_at is None:
+        return [f"signed envelope cannot be verified: the {ADR} text, the commit lookup and the envelope-at-sha lookup are all required"]
+    if not HEX_SHA.match(sha):
+        return [f"decided_at_sha {sha!r} is not a hex commit id"]
+    out = []
+    if _adr_front_status(adr_text) != "accepted":
+        out.append(f"{ADR} front matter must read status: accepted (got {_adr_front_status(adr_text)!r})")
+    if not _adr_signed(adr_text):
+        out.append(f"{ADR} has no 'David Gracia (YYYY-MM-DD)' signature line under ## Signature")
+    if not touches_adr(sha):
+        out.append(f"decided_at_sha {sha} does not touch {ADR} (it must be the signing commit)")
+    signed = envelope_at(sha)
+    for field in SIGNED_FIELDS:
+        if not isinstance(signed, dict) or field not in signed:
+            out.append(f"{field}: the envelope file is unreadable at decided_at_sha {sha}")
+        elif signed[field] != e[field]:
+            out.append(f"{field} differs from the envelope signed at {sha} (the signed values are frozen)")
+    return out
+
+
+def origin_envelope(available: bool, show: Callable[[str, str], Optional[bytes]]) -> "tuple[Optional[dict], Optional[str]]":
+    """(origin's envelope, note). An unreadable origin gives (None, 'SKIP: <reason>') so the consumed[] append-only check is
+    visibly skipped rather than silently passing; a file absent at origin is a first introduction (None, None) (M-1)."""
+    if not available:
+        return None, "SKIP: origin/main is unreadable, so consumed[] append-only was not checked against it"
+    raw = show("origin/main", REL_ENVELOPE)
+    return (None, None) if raw is None else (json.loads(raw.decode("utf-8")), None)
+
+
 def consumed_problems(e: dict, origin: Optional[dict]) -> List[str]:
     old = (origin or {}).get("consumed", [])
     return [] if e["consumed"][:len(old)] == old else ["consumed[] is not an append-only extension of origin/main's"]
@@ -90,11 +152,14 @@ def tag_problems(added: List[dict]) -> List[str]:
 
 
 def problems(e: dict, origin: Optional[dict], ceilings: Dict[str, int], measured: Dict[str, int], caps: Dict[str, int],
-             totals: Dict[str, int], added_raises: List[dict], is_ancestor: Callable[[str], bool]) -> List[str]:
+             totals: Dict[str, int], added_raises: List[dict], is_ancestor: Callable[[str], bool],
+             adr_text: Optional[str] = None, touches_adr: Optional[Callable[[str], bool]] = None,
+             envelope_at: Optional[Callable[[str], Optional[dict]]] = None) -> List[str]:
     bad = shape_problems(e)
     if bad:
         return bad
-    return (identity_problems(e, is_ancestor) + bound_problems(e, ceilings, measured, caps) + route_problems(e, totals)
+    return (identity_problems(e, is_ancestor) + signed_problems(e, adr_text, touches_adr, envelope_at)
+            + bound_problems(e, ceilings, measured, caps) + route_problems(e, totals)
             + consumed_problems(e, origin) + tag_problems(added_raises))
 
 
