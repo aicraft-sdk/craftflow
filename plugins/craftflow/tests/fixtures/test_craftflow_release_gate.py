@@ -194,5 +194,56 @@ check("wall time line precedes the verdict",
 rc, out = run([step("a")], [], fake({}))
 check("wall time is printed on a passing run too", out[-2].startswith("gate wall time: "), True)
 
+# --- workflow step bodies (extracted from the YAML and executed) -------------------
+print("workflow steps")
+import re  # noqa: E402
+import subprocess  # noqa: E402
+
+REPO = gate.ROOT
+PUBLISH = (REPO / ".github/workflows/publish-craftflow-plugin.yml").read_text()
+CI = (REPO / ".github/workflows/craftflow-ci.yml").read_text()
+
+
+def step_run_body(text, name):
+    """The dedented `run: |` body of the step called `name`, or None when absent."""
+    m = re.search(r"^      - name: " + re.escape(name) + r"\s*\n((?:(?!      - ).*\n?)*)", text, re.MULTILINE)
+    if not m:
+        return None
+    rm = re.search(r"^( +)run: \|\n((?:[ \t]*\n|\1[ \t]+.*\n?)*)", m.group(1), re.MULTILINE)
+    if not rm:
+        return None
+    lines = rm.group(2).splitlines()
+    indent = min(len(ln) - len(ln.lstrip()) for ln in lines if ln.strip())
+    return "\n".join(ln[indent:] for ln in lines) + "\n"
+
+
+def run_body(body, cwd, env=None):
+    r = subprocess.run(["bash", "-c", body], cwd=str(cwd), capture_output=True, text=True, env=env)
+    return r.returncode, r.stdout + r.stderr
+
+
+gate_body = step_run_body(PUBLISH, "Release gate")
+check("publish workflow has a Release gate step body", gate_body is not None, True)
+with tempfile.TemporaryDirectory() as empty:
+    rc, out = run_body(gate_body or "false", empty)
+check("resume path: script absent at the tag prints the pre-gate line and exits 1",
+      (rc, out.strip().splitlines()[-1:]),
+      (1, ["RELEASE GATE: FAIL (resume tag predates the release gate; publish a new version instead)"]))
+
+clean_body = step_run_body(PUBLISH, "Release gate left the tree clean")
+check("publish workflow has a clean-tree step body", clean_body is not None, True)
+git_env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t",
+               GIT_COMMITTER_EMAIL="t@example.invalid")
+with tempfile.TemporaryDirectory() as repo:
+    for args in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "base"]):
+        subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True, env=git_env)
+    rc_clean, _ = run_body(clean_body or "false", repo, git_env)
+    (Path(repo) / "stray-from-gate.txt").write_text("x")
+    rc_dirty, out_dirty = run_body(clean_body or "false", repo, git_env)
+check("clean tree: exit 0", rc_clean, 0)
+check("dirty tree: exit 1 and the stray file is listed", (rc_dirty, "stray-from-gate.txt" in out_dirty), (1, True))
+check("dirty tree: the refusal message is printed",
+      "ERROR: the release gate changed the working tree; refusing to publish" in out_dirty, True)
+
 print(f"\nResults: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
