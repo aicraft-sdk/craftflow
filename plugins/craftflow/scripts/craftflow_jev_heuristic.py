@@ -4,9 +4,11 @@ optional Jev (TypeSafe AI) agreement telemetry (DD-10).
 
 `INTENT_TABLE` and `RISK_KEYWORDS` are literal copies of the two markdown
 source-of-truth tables:
-  - `skills/_shared/router-protocol.md` -- Intent Routing table (priority
-    ERROR > PLAN > REVIEW > BUILD-default; the DEFAULT/BUILD row is not a
-    keyword row and is intentionally excluded).
+  - `skills/_shared/router-protocol.md` -- Intent Routing table (the seven
+    keyword rows ERROR, PLAN, REVIEW, ORIENT, QA, TRIAGE, CODEBASE-HEALTH;
+    the DEFAULT/BUILD row is not a keyword row and is intentionally
+    excluded). `classify()` decides with `craftflow_routing_law.route()`,
+    the primary-deliverable law, not with first-match-wins priority.
   - `skills/craftflow-router/references/fast-path.md` -- the
     `risk_keyword_scan` keyword table.
 
@@ -26,13 +28,23 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Tuple
 
-# Literal copy of skills/_shared/router-protocol.md's Intent Routing table,
-# priority order ERROR > PLAN > REVIEW (the DEFAULT/BUILD row carries no
-# keywords and is not represented here -- classify() falls back to BUILD).
+from craftflow_routing_law import route
+
+# Literal copy of skills/_shared/router-protocol.md's Intent Routing table
+# (keyword rows only, in priority order; the DEFAULT/BUILD row carries no
+# keywords and is not represented here). Must equal craftflow_routing_law's
+# ROUTING_TABLE keyword rows; test_craftflow_jev_heuristic.py asserts both.
 INTENT_TABLE: List[Tuple[str, List[str], str]] = [
     ("ERROR", ["error", "bug", "fix", "broken", "crash", "fail", "debug", "troubleshoot", "issue"], "DEBUG"),
     ("PLAN", ["plan", "design", "architect", "roadmap", "strategy", "spec", "brainstorm"], "PLAN"),
     ("REVIEW", ["review", "audit", "analyze", "assess", "is this good"], "REVIEW"),
+    ("ORIENT", ["zoom out", "explain", "understand", "how does X work", "walk me through",
+                "where is", "what does this do", "map this"], "ORIENT"),
+    ("QA", ["test plan", "e2e", "end-to-end", "integration test", "test coverage", "regression",
+            "smoke test", "verify my feature", "prove it works", "QA"], "QA"),
+    ("TRIAGE", ["triage", "incoming issues", "look at #", "triage #"], "TRIAGE"),
+    ("CODEBASE-HEALTH", ["codebase health", "improve architecture", "deepening", "ball of mud",
+                         "shallow modules", "architecture audit"], "CODEBASE-HEALTH"),
 ]
 
 # Literal copy of skills/craftflow-router/references/fast-path.md's
@@ -145,14 +157,9 @@ def _find_matches(text: str, keywords: List[str]) -> List[str]:
 def classify(text: str) -> Dict[str, Any]:
     """Deterministic keyword-table classification -- the heuristic half of
     the jev agreement telemetry. Never raises; pure function of `text`."""
-    workflow = "BUILD"
-    matched: List[str] = []
-    for _signal, keywords, table_workflow in INTENT_TABLE:
-        hit = _find_matches(text, keywords)
-        if hit:
-            workflow = table_workflow
-            matched = hit
-            break
+    routed = route(text)
+    workflow = routed["workflow"]
+    matched = routed["matched"]
 
     risk_signals: List[str] = []
     for group_keywords in RISK_KEYWORDS.values():

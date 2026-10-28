@@ -131,6 +131,10 @@ WORKFLOWS: Dict[str, str] = {
     "DEBUG": "Fix an error, bug, crash, failing test, or broken behavior; troubleshoot an issue",
     "PLAN": "Plan, design, architect, roadmap, strategy, spec, or brainstorm",
     "REVIEW": "Review, audit, analyze, or assess existing code; advisory only",
+    "ORIENT": "Explain or map existing code; no changes",
+    "QA": "Design, build and run a test system for existing code",
+    "TRIAGE": "Triage incoming issues/PRs into briefs",
+    "CODEBASE-HEALTH": "Architecture health scan and deepening candidates",
     "BUILD": "Everything else: implement, add, create, write, change, refactor",
 }
 
