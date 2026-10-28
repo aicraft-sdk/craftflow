@@ -109,17 +109,21 @@ def _accepted_and_signed(text: Optional[str]) -> bool:
 
 def signed_problems(e: dict, adr_text: Optional[str], touches_adr: Optional[Callable[[str], bool]],
                     envelope_at: Optional[Callable[[str], Optional[dict]]],
-                    adr_at: Optional[Callable[[str], Optional[str]]] = None) -> List[str]:
+                    adr_at: Optional[Callable[[str], Optional[str]]] = None,
+                    prior_adr_commits: Optional[Callable[[str], Optional[List[str]]]] = None) -> List[str]:
     """Once decided_at_sha is no longer PENDING-SIGNATURE the signature must be real and content-bound (H-1, H-A): the ADR blob AT
     decided_at_sha is `status: accepted` with a David Gracia signature line, that commit introduced the signature (the ADR at its first
     parent, `<sha>^1`, is not accepted+signed), the working-tree ADR is still accepted+signed, and base / allowances /
     new_route_ceilings equal the envelope file as committed at that sha (consumed[] and ceiling raises are judged elsewhere).
-    `adr_at(ref)` returns the committed ADR text at `ref` (a sha or `<sha>^1`), None when unreadable."""
+    `adr_at(ref)` returns the committed ADR text at `ref` (a sha or `<sha>^1`), None when unreadable.
+    Origin-independent re-signature guard: `prior_adr_commits(sha)` lists every commit that touched the ADR among the ancestors of
+    `<sha>^1` (None when git cannot answer); none of them may hold an accepted+signed ADR, so a sign -> unsign -> re-sign sequence
+    cannot re-point decided_at_sha at a fresh signature even while origin/main is stale or unreadable."""
     sha = e["decided_at_sha"]
     if sha == PENDING:
         return []
-    if adr_text is None or touches_adr is None or envelope_at is None or adr_at is None:
-        return [f"signed envelope cannot be verified: the {ADR} text, the commit lookups and the envelope-at-sha lookup are all required"]
+    if adr_text is None or touches_adr is None or envelope_at is None or adr_at is None or prior_adr_commits is None:
+        return [f"signed envelope cannot be verified: the {ADR} text, the commit lookups, the ADR history lookup and the envelope-at-sha lookup are all required"]
     if not HEX_SHA.match(sha):
         return [f"decided_at_sha {sha!r} is not a hex commit id"]
     out = []
@@ -133,6 +137,13 @@ def signed_problems(e: dict, adr_text: Optional[str], touches_adr: Optional[Call
         out.append(f"{ADR} at decided_at_sha {sha} is not status: accepted with a David Gracia signature line (or is unreadable there)")
     elif _accepted_and_signed(adr_at(f"{sha}^1")):
         out.append(f"decided_at_sha {sha} is not the commit that introduced the {ADR} signature (its parent already holds it)")
+    earlier = prior_adr_commits(sha)
+    if earlier is None:
+        out.append(f"the {ADR} history before decided_at_sha {sha} cannot be read, so a re-signature cannot be ruled out")
+    else:
+        already = next((c for c in earlier if _accepted_and_signed(adr_at(c))), None)  # an unreadable blob (a deletion) is not a signature
+        if already is not None:
+            out.append(f"{ADR} was already signed at {already}; a re-signature cannot re-point decided_at_sha")
     signed = envelope_at(sha)
     for field in SIGNED_FIELDS:
         if not isinstance(signed, dict) or field not in signed:
@@ -182,11 +193,12 @@ def problems(e: dict, origin: Optional[dict], ceilings: Dict[str, int], measured
              totals: Dict[str, int], added_raises: List[dict], is_ancestor: Callable[[str], bool],
              adr_text: Optional[str] = None, touches_adr: Optional[Callable[[str], bool]] = None,
              envelope_at: Optional[Callable[[str], Optional[dict]]] = None,
-             adr_at: Optional[Callable[[str], Optional[str]]] = None) -> List[str]:
+             adr_at: Optional[Callable[[str], Optional[str]]] = None,
+             prior_adr_commits: Optional[Callable[[str], Optional[List[str]]]] = None) -> List[str]:
     bad = shape_problems(e)
     if bad:
         return bad
-    return (identity_problems(e, is_ancestor) + signed_problems(e, adr_text, touches_adr, envelope_at, adr_at)
+    return (identity_problems(e, is_ancestor) + signed_problems(e, adr_text, touches_adr, envelope_at, adr_at, prior_adr_commits)
             + bound_problems(e, ceilings, measured, caps) + route_problems(e, totals)
             + consumed_problems(e, origin) + frozen_problems(e, origin) + tag_problems(added_raises))
 

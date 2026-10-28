@@ -61,6 +61,18 @@ def commit_touches(root: Path, sha: str, rel: str) -> bool:
     return res.returncode == 0 and rel in res.stdout.split("\n")
 
 
+def prior_adr_commits(root: Path, sha: str) -> "list | None":
+    """Every commit that is an ancestor of `sha`'s first parent and touched the ADR (`git rev-list --full-history <sha>^1 -- <adr>`);
+    [] for a root commit; None when git cannot answer (the caller fails closed)."""
+    if not isinstance(sha, str) or not renv.HEX_SHA.fullmatch(sha):
+        return None
+    if subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "-q", f"{sha}^1"], capture_output=True).returncode != 0:
+        exists = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "-q", f"{sha}^{{commit}}"], capture_output=True).returncode == 0
+        return [] if exists else None  # a root commit has no earlier history; an unknown commit is a git failure
+    res = subprocess.run(["git", "-C", str(root), "rev-list", "--full-history", f"{sha}^1", "--", renv.REL_ADR], capture_output=True, text=True)
+    return res.stdout.split() if res.returncode == 0 else None
+
+
 _REF = re.compile(r"[0-9a-f]{7,40}(\^1)?")
 
 
@@ -103,6 +115,7 @@ def signed_world() -> dict:
             "totals": {r: 1900 for r in renv.NEW_ROUTES}, "origin": None, "raises": []}
     w["adr_text"] = SIGNED_ADR
     w["touches_adr"] = lambda sha: sha == SIGN_SHA
+    w["prior"] = lambda sha: []  # no earlier commit touched the ADR: this is the first signature
     w["blobs"] = {SIGN_SHA: SIGNED_ADR, SIGN_SHA + "^1": PROPOSED_ADR}
     w["at_sha"] = {k: copy.deepcopy(w["env"][k]) for k in SIGNED_FIELDS}
     return w
@@ -116,6 +129,7 @@ def problems_of(w: dict) -> list:
     return renv.problems(w["env"], w["origin"], w["ceilings"], w["measured"], w["caps"], w["totals"], w["raises"],
                          lambda s: s == SIGN_SHA, adr_text=w.get("adr_text"), touches_adr=w.get("touches_adr"),
                          adr_at=(lambda ref: w["blobs"].get(ref)) if "blobs" in w else None,
+                         prior_adr_commits=w.get("prior"),
                          envelope_at=(lambda s: w["at_sha"] if s == sha else None) if "at_sha" in w else None)
 
 
@@ -209,6 +223,10 @@ def test_signed_envelope_is_content_bound() -> None:
     unverifiable["touches_adr"] = None
     got = problems_of(unverifiable)
     check("signed_without_a_verifier_is_a_problem", any("cannot be verified" in p for p in got), str(got))
+    nohistory = signed_world()
+    nohistory["prior"] = None
+    got = problems_of(nohistory)
+    check("signed_without_a_history_lookup_is_a_problem", any("cannot be verified" in p for p in got), str(got))
     consumed = signed_world()
     consumed["env"]["consumed"] = [{"phase": "H3", "key": "kernel_bytes", "from": 1000, "to": 1100, "at_sha": "x"}]
     check("consumed_growth_after_signing_is_not_content_drift", problems_of(consumed) == [], str(problems_of(consumed)))
@@ -239,6 +257,21 @@ def test_signed_envelope_is_bound_to_the_blob_at_the_sha() -> None:
     del unreadable["blobs"][SIGN_SHA]
     got = problems_of(unreadable)
     check("blob_unreadable_at_the_sha_fails", any("at decided_at_sha" in p for p in got), str(got))
+    older = "c" * 40
+    resigned = signed_world()
+    resigned["prior"] = lambda sha: [older]
+    resigned["blobs"][older] = SIGNED_ADR  # an earlier commit already held the signature: this one is a re-signature
+    one("resignature_after_an_earlier_signature", resigned, "already signed")
+    drafts = signed_world()
+    drafts["prior"] = lambda sha: [older]
+    drafts["blobs"][older] = PROPOSED_ADR  # earlier commits only held drafts: the legitimate first signature
+    check("earlier_draft_commits_do_not_block_the_first_signature", problems_of(drafts) == [], str(problems_of(drafts)))
+    gone = signed_world()
+    gone["prior"] = lambda sha: [older]  # the earlier commit has no readable ADR (a deletion): not a signature
+    check("earlier_commit_without_an_adr_blob_is_not_a_signature", problems_of(gone) == [], str(problems_of(gone)))
+    blind = signed_world()
+    blind["prior"] = lambda sha: None  # git could not list the history: fail closed
+    one("history_lookup_failure_fails_closed", blind, "history")
     check("hex_sha_rejects_a_trailing_newline", renv.HEX_SHA.match("a" * 40 + "\n") is None and renv.HEX_SHA.match("a" * 40) is not None, "the pattern itself must reject a trailing newline")
     nl = signed_world()
     nl["env"]["decided_at_sha"] = SIGN_SHA + "\n"
@@ -256,7 +289,7 @@ def test_signed_origin_envelope_cannot_be_relaunched() -> None:
         sha = head["decided_at_sha"]
         return renv.problems(head, origin, w["ceilings"], w["measured"], w["caps"], w["totals"], [], lambda s: s in ok_shas,
                              adr_text=SIGNED_ADR, touches_adr=lambda s: s == sha,
-                             adr_at=lambda ref: {sha: SIGNED_ADR, sha + "^1": PROPOSED_ADR}.get(ref),
+                             adr_at=lambda ref: {sha: SIGNED_ADR, sha + "^1": PROPOSED_ADR}.get(ref), prior_adr_commits=lambda s: [],
                              envelope_at=lambda s: {k: copy.deepcopy(head[k]) for k in SIGNED_FIELDS} if s == sha else None)
 
     origin = signed_world()["env"]
@@ -419,7 +452,8 @@ def test_signature_simulation_in_a_scratch_repo() -> None:
         def verdict(env: dict, adr_text: str) -> list:
             return renv.signed_problems(env, adr_text, lambda sha: commit_touches(root, sha, renv.REL_ADR),
                                         lambda sha: _json_or_none(file_at(root, sha, renv.REL_ENVELOPE)),
-                                        adr_at=lambda ref: _text_or_none(adr_blob(root, ref)))
+                                        adr_at=lambda ref: _text_or_none(adr_blob(root, ref)),
+                                        prior_adr_commits=lambda sha: prior_adr_commits(root, sha))
 
         git("init", "-q")
         put(renv.REL_ADR, real_adr)
@@ -444,7 +478,8 @@ def test_signature_simulation_in_a_scratch_repo() -> None:
         got = verdict(tampered, signed_adr)
         check("simulation_tampered_allowance_fails", len(got) == 1 and "allowances" in got[0], str(got))
         got = verdict(dict(signed_env, decided_at_sha=unrelated_sha), signed_adr)
-        check("simulation_sha_not_touching_the_adr_fails", len(got) == 2 and any("does not touch" in p for p in got) and any("introduced" in p for p in got), str(got))
+        check("simulation_sha_not_touching_the_adr_fails", len(got) == 3 and any("does not touch" in p for p in got) and any("introduced" in p for p in got)
+              and any("already signed" in p for p in got), str(got))
         got = verdict(signed_env, real_adr)
         check("simulation_adr_still_proposed_fails", len(got) == 2 and any("accepted" in p for p in got) and any("signature" in p for p in got), str(got))
         got = verdict(signed_env, signed_adr.replace("David Gracia (2026-10-29)", "(unsigned)"))
@@ -461,8 +496,25 @@ def test_signature_simulation_in_a_scratch_repo() -> None:
         later_sha = git("rev-parse", "HEAD")
         later_env = dict(bumped, decided_at_sha=later_sha)
         got = verdict(later_env, signed_adr)
-        check("simulation_later_adr_commit_with_changed_allowance_fails", len(got) == 1 and "introduced" in got[0], str(got))
+        check("simulation_later_adr_commit_with_changed_allowance_fails", len(got) == 2 and any("introduced" in p for p in got) and any("already signed" in p for p in got), str(got))
         check("simulation_real_signing_commit_still_passes_after_history_grows", verdict(signed_env, signed_adr) == [], str(verdict(signed_env, signed_adr)))
+        # re-signature laundering, independent of origin/main: sign -> unsign -> re-sign with a raised signed ceiling, sha re-pointed at the re-sign
+        put(renv.REL_ADR, real_adr)
+        git("add", ".")
+        git("commit", "-q", "-m", "unsign (re-propose)")
+        raised = copy.deepcopy(real_env)
+        raised["new_route_ceilings"]["QA"] += 70000
+        put(renv.REL_ADR, signed_adr)
+        put(renv.REL_ENVELOPE, json.dumps(raised, indent=2))
+        git("add", ".")
+        git("commit", "-q", "-m", "re-sign with the QA ceiling raised")
+        resign_sha = git("rev-parse", "HEAD")
+        got = verdict(dict(raised, decided_at_sha=resign_sha), signed_adr)
+        check("simulation_resignature_with_raised_ceiling_fails_without_origin", len(got) == 1 and "already signed" in got[0] and (later_sha in got[0] or sign_sha in got[0]), str(got))
+        check("simulation_first_signature_still_passes_after_a_resignature_exists", verdict(signed_env, signed_adr) == [], str(verdict(signed_env, signed_adr)))
+        check("simulation_prior_commits_are_listed", prior_adr_commits(root, sign_sha) == [draft_sha] and prior_adr_commits(root, draft_sha) == [],
+              repr(prior_adr_commits(root, sign_sha)))
+        check("simulation_prior_commits_of_an_unknown_commit_is_a_git_failure", prior_adr_commits(root, "f" * 40) is None, "unknown sha must not read as no history")
 
 
 def test_check_raise_bounds_envelope_branch() -> None:
@@ -540,6 +592,7 @@ def test_live_envelope() -> None:
     got = renv.problems(e, origin_env, ceilings, trb.MEASURED, cap_of, totals, added, is_ancestor_of_head, adr_text=adr_text,
                         touches_adr=lambda sha: commit_touches(REPO_TOP, sha, renv.REL_ADR),
                         adr_at=lambda ref: _text_or_none(adr_blob(REPO_TOP, ref)),
+                        prior_adr_commits=lambda sha: prior_adr_commits(REPO_TOP, sha),
                         envelope_at=lambda sha: _json_or_none(file_at(REPO_TOP, sha, renv.REL_ENVELOPE)))
     check("live_envelope_signed_and_within_bounds", not got, "; ".join(got) + " (expected red until the H2 signature commits C6/C7)")
 
