@@ -149,12 +149,17 @@ def git_show_state(ref: str, rel: str, root: Optional[Path] = None) -> "tuple[st
     return ("ok", res.stdout) if res.returncode == 0 else ("error", None)
 
 
-def origin_budget() ->"tuple[str, Optional[dict]]":
-    """('skip', None) without a remote, ('new', None) when origin/main has no budget file yet, else ('ok', parsed)."""
-    if not origin_available():
+def origin_budget(available: Optional[bool] = None, show: Optional[Callable] = None) -> "tuple[str, Optional[dict]]":
+    """('skip', None) without a remote or when git fails to read origin/main, ('new', None) only when a readable origin/main has no budget
+    file yet, else ('ok', parsed). `available` and `show` (the git_show_state shape) are injectable for tests."""
+    if not (origin_available() if available is None else available):
         return "skip", None
-    raw = git_show("origin/main", REL_BUDGET)
-    return ("new", None) if raw is None else ("ok", json.loads(raw.decode("utf-8")))
+    state, raw = (show or git_show_state)("origin/main", REL_BUDGET)
+    if state == "absent":
+        return "new", None
+    if state != "ok" or raw is None:
+        return "skip", None
+    return "ok", json.loads(raw.decode("utf-8"))
 
 
 # ---------------------------------------------------------------------------------------------- pure bound checks

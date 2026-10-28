@@ -261,6 +261,14 @@ def test_origin_envelope_unreadable_is_a_visible_skip() -> None:
     check("origin_with_the_file_is_parsed", env == {"consumed": []} and note is None, repr((env, note)))
 
 
+def test_origin_budget_git_failure_is_a_skip_not_new() -> None:
+    check("origin_budget_unavailable_is_skip", trb.origin_budget(False, lambda ref, rel: ("ok", b"{}")) == ("skip", None), "no origin ref")
+    check("origin_budget_git_failure_is_skip_not_new", trb.origin_budget(True, lambda ref, rel: ("error", None)) == ("skip", None),
+          "a git failure must not read as a first introduction")
+    check("origin_budget_absent_file_is_new", trb.origin_budget(True, lambda ref, rel: ("absent", None)) == ("new", None), "first introduction")
+    check("origin_budget_present_file_is_parsed", trb.origin_budget(True, lambda ref, rel: ("ok", b'{"a": 1}')) == ("ok", {"a": 1}), "parsed")
+
+
 def test_git_show_state_distinguishes_absent_from_failure() -> None:
     import tempfile
     with tempfile.TemporaryDirectory() as d:
