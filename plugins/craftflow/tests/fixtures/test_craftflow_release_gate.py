@@ -393,6 +393,8 @@ check_true("craftflow-ci gate step: shell: true {0} rejected", bool(structure.ci
     mutate(CI, GATE_STEP, keyed(GATE_STEP, "        shell: true {0}\n"))))))
 check_true("craftflow-ci release-gate job: continue-on-error rejected", bool(structure.ci_guard_defects(yaml.safe_load(
     mutate(CI, "    name: release gate\n", "    name: release gate\n    continue-on-error: true\n")))))
+check_true("craftflow-ci release-gate job: missing pyyaml install rejected", any("'release-gate'" in d for d in structure.ci_guard_defects(yaml.safe_load(
+    mutate(CI, "claude-code@2.1.311\n\n      - name: Install pyyaml\n        run: python -m pip install --quiet pyyaml\n", "claude-code@2.1.311\n")))))
 
 print(f"\nResults: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
