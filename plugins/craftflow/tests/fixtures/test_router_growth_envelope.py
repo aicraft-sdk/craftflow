@@ -328,15 +328,37 @@ def test_git_helpers_against_a_scratch_repo() -> None:
         check("file_at_is_none_for_a_missing_path", file_at(Path(d), adr_sha, "nope.md") is None, "missing path should be None")
 
 
+PENDING_NOTE = "Pending: David signs in the H2 signing session. This ADR stays `status: proposed` until then."
+
+
+def pending_draft_of(adr_text: str) -> str:
+    """The unsigned draft of the ADR: the text itself while it still holds the pending note, else the signed ADR with its status put back
+    to proposed and its `## Signature` line put back to the pending note (so the simulation does not depend on the live signing state)."""
+    if PENDING_NOTE in adr_text:
+        return adr_text
+    draft = adr_text.replace("status: accepted", "status: proposed", 1)
+    section = re.search(r"^## Signature\s*$(.*?)(?=^## |\Z)", draft, re.M | re.S)
+    if section:
+        line = renv.SIGNATURE_LINE.search(section.group(1))
+        if line:
+            start = section.start(1) + line.start()
+            draft = draft[:start] + PENDING_NOTE + draft[start + len(line.group(0).rstrip()):]
+    return draft
+
+
 def test_signature_simulation_in_a_scratch_repo() -> None:
     """The real ADR and envelope files, signed through real commits in a scratch repo: properly signed passes, each tamper fails."""
     import tempfile
-    real_adr = (REPO_TOP / renv.REL_ADR).read_text(encoding="utf-8")
+    live_adr = (REPO_TOP / renv.REL_ADR).read_text(encoding="utf-8")
+    real_adr = pending_draft_of(live_adr)  # independent of whether the live ADR is already signed
     real_env = json.loads(ENVELOPE.read_text(encoding="utf-8"))
-    pending_note = "Pending: David signs in the H2 signing session. This ADR stays `status: proposed` until then."
-    signed_adr = real_adr.replace("status: proposed", "status: accepted", 1).replace(pending_note, "David Gracia (2026-10-29)", 1)
-    check("simulation_inputs_are_the_pending_originals", signed_adr != real_adr and "David Gracia (2026-10-29)" in signed_adr and pending_note in real_adr,
-          "the live ADR no longer has the pending signature text this simulation replaces")
+    signed_adr = real_adr.replace("status: proposed", "status: accepted", 1).replace(PENDING_NOTE, "David Gracia (2026-10-29)", 1)
+    check("simulation_inputs_are_the_pending_originals", signed_adr != real_adr and "David Gracia (2026-10-29)" in signed_adr and PENDING_NOTE in real_adr
+          and renv._adr_front_status(real_adr) == "proposed" and not renv._adr_signed(real_adr),
+          "the pending draft could not be derived from the live ADR")
+    check("pending_draft_of_a_signed_adr_reverses_the_signature",
+          pending_draft_of(live_adr.replace("status: proposed", "status: accepted", 1).replace(PENDING_NOTE, "David Gracia (2026-11-02)", 1)) == real_adr,
+          "reversing a signed ADR must give back the pending draft")
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
 
