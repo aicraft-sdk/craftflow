@@ -163,6 +163,15 @@ def consumed_problems(e: dict, origin: Optional[dict]) -> List[str]:
     return [] if e["consumed"][:len(old)] == old else ["consumed[] is not an append-only extension of origin/main's"]
 
 
+def frozen_problems(e: dict, origin: Optional[dict]) -> List[str]:
+    """Once origin/main holds a signed (non-PENDING) envelope its signature fields are frozen: re-proposing and re-accepting the ADR at a
+    fresh commit must not be a way to change decided_at_sha, base, allowances or new_route_ceilings (consumed[] is judged elsewhere)."""
+    if not isinstance(origin, dict) or origin.get("decided_at_sha", PENDING) == PENDING:
+        return []
+    return [f"{field} differs from origin/main's signed envelope (the signed values and decided_at_sha are frozen once origin/main is signed)"
+            for field in ("decided_at_sha",) + SIGNED_FIELDS if e[field] != origin.get(field)]
+
+
 def tag_problems(added: List[dict]) -> List[str]:
     """An envelope tag needs an H<n> phase and an H<n> phase needs the tag (a raise outside the cut plan must say which rule judges it)."""
     return [f"ceiling_raises {x.get('key')}: phase {x.get('phase')!r} and envelope {x.get('envelope')!r} do not form an {ADR} entry"
@@ -179,11 +188,14 @@ def problems(e: dict, origin: Optional[dict], ceilings: Dict[str, int], measured
         return bad
     return (identity_problems(e, is_ancestor) + signed_problems(e, adr_text, touches_adr, envelope_at, adr_at)
             + bound_problems(e, ceilings, measured, caps) + route_problems(e, totals)
-            + consumed_problems(e, origin) + tag_problems(added_raises))
+            + consumed_problems(e, origin) + frozen_problems(e, origin) + tag_problems(added_raises))
 
 
-def checker(e: dict, measured: Dict[str, int]) -> Callable[[str, List[dict], int, int], Optional[List[str]]]:
-    """For check_raise_bounds: None = not an envelope raise (the projection rule applies); a list = the envelope verdict for that key."""
+def checker(e: dict, measured: Dict[str, int],
+            is_ancestor: Optional[Callable[[str], bool]] = None) -> Callable[[str, List[dict], int, int], Optional[List[str]]]:
+    """For check_raise_bounds: None = not an envelope raise (the projection rule applies); a list = the envelope verdict for that key.
+    ADR-0074 Rule 3: each added entry's at_sha must be a commit that is an ancestor of HEAD (`is_ancestor`, which must reject a non-hex
+    value) and its matching consumed[] row must exist."""
     def run(key: str, added: List[dict], old: int, new: int) -> Optional[List[str]]:
         if not any(x.get("envelope") == ADR or _h_phase(x) for x in added):
             return None
@@ -201,6 +213,11 @@ def checker(e: dict, measured: Dict[str, int]) -> Callable[[str, List[dict], int
             out.append(f"{key}: ceiling {new} < measured {measured[key]}")
         if not all(isinstance(x.get("at_sha"), str) and x["at_sha"] for x in added):
             out.append(f"{key}: envelope entry without at_sha")
+        elif is_ancestor is not None and not all(is_ancestor(x["at_sha"]) for x in added):
+            out.append(f"{key}: an envelope entry's at_sha is not a commit that is an ancestor of HEAD")
+        rows = [{f: c.get(f) for f in ENTRY} for c in e["consumed"] if isinstance(c, dict)]
+        if not all({f: x.get(f) for f in ENTRY} in rows for x in added):
+            out.append(f"{key}: an envelope entry has no matching consumed[] row (phase, key, from, to, at_sha)")
         return out
     return run
 

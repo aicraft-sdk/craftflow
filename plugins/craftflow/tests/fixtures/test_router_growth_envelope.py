@@ -246,6 +246,45 @@ def test_signed_envelope_is_bound_to_the_blob_at_the_sha() -> None:
     check("signed_sha_with_trailing_newline_is_not_hex", any("hex" in p for p in got), str(got))
 
 
+def test_signed_origin_envelope_cannot_be_relaunched() -> None:
+    """Once origin/main holds a signed envelope, a re-propose / re-accept / re-point sequence must not change the signed fields or the sha."""
+    new_sha = "b" * 40
+    ok_shas = {SIGN_SHA, new_sha}
+
+    def judge(head: dict, origin: "dict | None") -> list:
+        w = signed_world()
+        sha = head["decided_at_sha"]
+        return renv.problems(head, origin, w["ceilings"], w["measured"], w["caps"], w["totals"], [], lambda s: s in ok_shas,
+                             adr_text=SIGNED_ADR, touches_adr=lambda s: s == sha,
+                             adr_at=lambda ref: {sha: SIGNED_ADR, sha + "^1": PROPOSED_ADR}.get(ref),
+                             envelope_at=lambda s: {k: copy.deepcopy(head[k]) for k in SIGNED_FIELDS} if s == sha else None)
+
+    origin = signed_world()["env"]
+    check("relaunch_unchanged_signed_envelope_passes", judge(copy.deepcopy(origin), origin) == [], str(judge(copy.deepcopy(origin), origin)))
+    appended = copy.deepcopy(origin)
+    appended["consumed"] = [{"phase": "H3", "key": "kernel_bytes", "from": 1000, "to": 1100, "at_sha": SIGN_SHA}]
+    check("relaunch_consumed_append_passes", judge(appended, origin) == [], str(judge(appended, origin)))
+    first = copy.deepcopy(origin)
+    first_origin = copy.deepcopy(origin)
+    first_origin["decided_at_sha"] = renv.PENDING
+    check("relaunch_first_signature_over_a_pending_origin_passes", judge(first, first_origin) == [], str(judge(first, first_origin)))
+    laundered = copy.deepcopy(origin)  # the dv2 sequence: raise a signed ceiling and re-point the sha at a fresh re-accept commit
+    laundered["new_route_ceilings"]["QA"] += 70000
+    laundered["decided_at_sha"] = new_sha
+    got = judge(laundered, origin)
+    check("relaunch_raised_ceiling_with_a_fresh_sha_fails", any("origin/main" in p and "new_route_ceilings" in p for p in got) and any("decided_at_sha" in p for p in got), str(got))
+    for field in ("base", "allowances", "new_route_ceilings"):
+        moved = copy.deepcopy(origin)
+        moved[field][next(iter(moved[field]))] += 1
+        moved["decided_at_sha"] = new_sha
+        got = judge(moved, origin)
+        check(f"relaunch_{field}_change_over_a_signed_origin_fails", any("origin/main" in p and field in p for p in got), str(got))
+    repoint = copy.deepcopy(origin)
+    repoint["decided_at_sha"] = new_sha
+    got = judge(repoint, origin)
+    check("relaunch_sha_repoint_alone_fails", len(got) == 1 and "decided_at_sha" in got[0] and "origin/main" in got[0], str(got))
+
+
 def test_origin_envelope_unreadable_is_a_visible_skip() -> None:
     env, note = renv.origin_envelope(False, lambda ref, rel: ("ok", b"{}"))
     check("origin_unavailable_gives_a_skip_reason", env is None and note is not None and note.startswith("SKIP: ") and "origin/main" in note, repr((env, note)))
@@ -427,16 +466,23 @@ def test_signature_simulation_in_a_scratch_repo() -> None:
 
 
 def test_check_raise_bounds_envelope_branch() -> None:
-    def run(entries, to=1300, extra_keys=()):
+    def run(entries, to=1300, consumed="match", ancestor=lambda s: s == "abc"):
         budget, origin, table = trb.raise_world()
         w = world()
         budget["ceilings"]["readset"]["BUILD"] = to
         budget["ceiling_raises"] = entries
-        envelope = renv.checker(w["env"], {k: 1100 for k in trb.KEYS})
+        w["env"]["consumed"] = ([{f: x[f] for f in renv.ENTRY} for x in entries if renv.is_envelope_entry(x)] if consumed == "match" else consumed)
+        envelope = renv.checker(w["env"], {k: 1100 for k in trb.KEYS}, ancestor)
         return trb.check_raise_bounds(budget, origin, trb.fixture_projector(table), envelope=envelope)
 
     good = {"phase": "H2", "key": "readset.BUILD", "from": 1000, "to": 1300, "envelope": "ADR-0074", "at_sha": "abc"}
     check("envelope_raise_within_allowance_passes", run([good]) == [], str(run([good])))
+    check("envelope_raise_at_sha_not_an_ancestor_one_problem", len(run([dict(good, at_sha="def")])) == 1 and "ancestor" in run([dict(good, at_sha="def")])[0],
+          str(run([dict(good, at_sha="def")])))
+    check("envelope_raise_without_a_consumed_row_one_problem", len(run([good], consumed=[])) == 1 and "consumed" in run([good], consumed=[])[0],
+          str(run([good], consumed=[])))
+    check("envelope_raise_with_a_different_consumed_row_one_problem",
+          len(run([good], consumed=[dict({f: good[f] for f in renv.ENTRY}, to=1301)])) == 1, str(run([good], consumed=[dict({f: good[f] for f in renv.ENTRY}, to=1301)])))
     check("envelope_raise_above_allowance_one_problem", len(run([dict(good, to=1501)], to=1501)) == 1, str(run([dict(good, to=1501)], to=1501)))
     check("envelope_raise_with_p13_phase_one_problem", len(run([dict(good, phase="P13")])) == 1, str(run([dict(good, phase="P13")])))
     check("envelope_raise_from_not_origin_one_problem", len(run([dict(good, **{"from": 900})])) == 1, str(run([dict(good, **{"from": 900})])))

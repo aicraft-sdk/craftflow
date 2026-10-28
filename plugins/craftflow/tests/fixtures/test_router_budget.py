@@ -130,6 +130,13 @@ def origin_available() -> bool:
     return subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "-q", "origin/main"], capture_output=True).returncode == 0
 
 
+def is_ancestor_of_head(sha: str) -> bool:
+    """True when `sha` is a hex commit id that is an ancestor of HEAD (a non-hex or option-shaped value never reaches git)."""
+    if not isinstance(sha, str) or not renv.HEX_SHA.match(sha):
+        return False
+    return subprocess.run(["git", "-C", str(REPO_ROOT), "merge-base", "--is-ancestor", sha, "HEAD"], capture_output=True).returncode == 0
+
+
 def git_show(ref: str, rel: str) -> Optional[bytes]:
     res = subprocess.run(["git", "-C", str(REPO_ROOT), "show", f"{ref}:{rel}"], capture_output=True)
     return res.stdout if res.returncode == 0 else None
@@ -521,7 +528,7 @@ def test_ceiling_changes_bounded_vs_origin_main() -> None:
         ok("ceiling_changes_bounded_vs_origin_main:first_introduction")
         return
     b = load_budget()
-    problems = check_raise_bounds(b, origin, effective_values(b), renv.checker(renv.load(ENVELOPE), MEASURED))
+    problems = check_raise_bounds(b, origin, effective_values(b), renv.checker(renv.load(ENVELOPE), MEASURED, is_ancestor_of_head))
     check("ceiling_changes_bounded_vs_origin_main", not problems, "; ".join(problems))
 
 
