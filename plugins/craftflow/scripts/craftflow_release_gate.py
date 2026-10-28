@@ -8,7 +8,8 @@ exactly `RELEASE GATE: OK` only when every step ran and passed. Any other outcom
     RELEASE GATE: PARTIAL (<...>)     a step was skipped (--allow-no-claude) or --only left steps out
     RELEASE GATE: NOTHING RAN         every selected step was skipped
 
-The gate writes nothing inside the repository; the publish job checks that with a clean-tree step.
+The gate leaves no tracked or non-ignored file in the repository (hook logs under the ignored .craftflow/ may
+appear); the publish job checks that with a clean-tree step.
 Python 3.9, standard library only.
 """
 from __future__ import annotations

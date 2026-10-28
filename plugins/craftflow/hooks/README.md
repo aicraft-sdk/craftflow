@@ -140,8 +140,9 @@ Steps run in this fixed order, each in its own process group: `version_consisten
   flag, nor `--total-seconds`, is passed by CI.
 - **Last-line contract.** The last line is exactly one of `RELEASE GATE: OK`, `RELEASE GATE: FAIL (<steps>)`,
   `RELEASE GATE: PARTIAL (<skipped or not run>)` or `RELEASE GATE: NOTHING RAN (...)`. Only OK exits 0, and CI accepts
-  only the exact OK line. The gate writes nothing inside the checkout; the publish job and the CI job both check
-  `git status --porcelain` is empty afterwards.
+  only the exact OK line. The gate leaves no tracked or non-ignored file in the checkout (hook logs under the ignored
+  `.craftflow/` directory may appear); the publish job and the CI job both check `git status --porcelain` is empty
+  afterwards.
 - **Docs-rot ratchet.** `docs_rot` runs `scripts/craftflow_docs_rot.py` (checks D1 to D10 over the READMEs, the agent and
   skill lists, the hook scripts, the versions and the routing table). Violations must match
   `tests/fixtures/docs-rot-baseline.json` exactly: an unlisted one prints `NEW <id>` and a fixed one prints
@@ -150,6 +151,13 @@ Steps run in this fixed order, each in its own process group: `version_consisten
 - **Resuming a version tagged before the gate existed is unsupported.** The resume step runs the gate of the tag, and a
   tag without `craftflow_release_gate.py` fails with `RELEASE GATE: FAIL (resume tag predates the release gate; publish
   a new version instead)`. There is no skip input.
+- **The guarantee covers only refs that contain the gate.** A `workflow_dispatch` runs the workflow file of the ref it
+  is dispatched from. Dispatched from `main`, or from another ref that already contains the gate step, the gate and its
+  resume guard apply on every path. Dispatched from a tag or branch older than the gate (for example
+  `--ref craftflow-v1.34.1 -f resume_publish=true`), that ref's own workflow file runs and it has no gate at all. Never
+  dispatch the publish workflow from an older tag or branch. The hard fix is a repository setting, not code: restrict
+  `CRAFTFLOW_PUBLIC_TOKEN` to a GitHub Environment with a `main`-only deployment-branch rule. That is the owner's
+  decision, and it would also stop branch dry runs from reaching the token.
 
 ## Skill Candidate Ledger (router-invoked, not a registered hook)
 

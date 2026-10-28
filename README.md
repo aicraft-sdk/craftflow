@@ -226,7 +226,7 @@ plugins/craftflow/
 
 ## Releases
 
-Releases are automatic. Merging to `main` with changes under `tools/craftflow-plugin/**` runs the release gate (`plugins/craftflow/scripts/craftflow_release_gate.py`, see the Release gate section of `plugins/craftflow/hooks/README.md`) and refuses to continue unless its last line is `RELEASE GATE: OK`; then it bumps the version, writes a `CHANGELOG.md` entry, runs a fail-closed consistency gate across all version-bearing files, tags the release and publishes it here. Resuming a publish for a version tagged before the gate existed is unsupported: publish a new version instead.
+Releases are automatic. Merging to `main` with changes under `tools/craftflow-plugin/**` runs the release gate (`plugins/craftflow/scripts/craftflow_release_gate.py`, see the Release gate section of `plugins/craftflow/hooks/README.md`) and refuses to continue unless its last line is `RELEASE GATE: OK`; then it bumps the version, writes a `CHANGELOG.md` entry, runs a fail-closed consistency gate across all version-bearing files, tags the release and publishes it here. Resuming a publish for a version tagged before the gate existed is unsupported: publish a new version instead. The gate, and its resume guard, only apply when the publish workflow is dispatched from `main` or another ref that contains the gate: a `workflow_dispatch` runs the workflow file of the ref it is dispatched from, so never dispatch it from an older tag or branch (an old ref runs its own gate-less workflow). Closing that hole for good means restricting `CRAFTFLOW_PUBLIC_TOKEN` to a GitHub Environment with a `main`-only deployment-branch rule, which is a repository setting for the owner to decide and would also affect branch dry runs.
 
 | Commit type | Bump |
 |---|---|
