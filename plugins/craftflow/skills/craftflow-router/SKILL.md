@@ -235,7 +235,7 @@ Router-owned interface fields:
 
 ### ORIENT pointer
 
-`Read()` `skills/_shared/route-orient.md` and answer inline; no workflow artifact, no tasks, no agents.
+An explain or "how does X work" request is routed here, not answered ad hoc: first print `-> ORIENT workflow (signals: ...)`, then `Read()` `skills/_shared/route-orient.md` and answer inline; no workflow artifact, no tasks, no agents.
 
 ## 6. Workflow Task Graphs
 

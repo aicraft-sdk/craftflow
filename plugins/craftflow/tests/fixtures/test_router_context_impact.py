@@ -269,7 +269,8 @@ def test_collect_head_matches_readset_tool() -> None:
     check("collect_head_equals_readset_tool_self_consistency", got == want, f"{got} != {want}")
     # P13 task 4 (EnterPlanMode prose deleted, -680 B in every start set): 97,407 -> 96,727
     # H2 (ADR-0074 envelope; routing law, stubs, readmap): 96,727 -> 100,895
-    check("collect_head_build_standard_literal_100895", got == 100895, f"BUILD standard start_total is {got}; the BUILD standard literal is 100,895")
+    # H3 (ADR-0074 envelope; ORIENT pointer, workflow-start line): 100,895 -> 101,249
+    check("collect_head_build_standard_literal_101249", got == 101249, f"BUILD standard start_total is {got}; the BUILD standard literal is 101,249")
 
 
 def test_collect_gated_measured_within_enforced() -> None:

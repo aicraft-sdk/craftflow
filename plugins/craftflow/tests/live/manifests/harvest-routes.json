@@ -1,0 +1,42 @@
+{
+  "name": "harvest-routes",
+  "workdir": ".",
+  "required_env": [],
+  "environment": {
+    "CI": "true"
+  },
+  "healthcheck": [
+    {
+      "name": "claude CLI present",
+      "command": "claude --version",
+      "expected": "exit 0, claude version printed"
+    },
+    {
+      "name": "policy.json validates",
+      "command": "python3 plugins/craftflow/scripts/craftflow_policy.py --validate | grep -q '\"status\": \"ok\"'",
+      "expected": "exit 0; craftflow_policy.py --validate prints status ok"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "load_probe: --plugin-dir overrides the installed craftflow",
+      "mode": "proof",
+      "given": "a fresh copy of the seeded cf-harvest-live-* scratch repo, CLAUDE_PLUGIN_ROOT / CLAUDE_CODE_SESSION_ID unset and CLAUDE_PROJECT_DIR pointing at the copy",
+      "when": "claude -p --plugin-dir plugins/craftflow --model sonnet --debug-file <file> runs a one-word prompt",
+      "then": "the debug log contains 'from --plugin-dir overrides installed version' at least once, proving the candidate plugin (not the installed one) is what the other scenarios exercise",
+      "command": "python3 plugins/craftflow/tests/live/harvest_routes_roundtrip.py --plugin-dir plugins/craftflow --only load_probe",
+      "expected": "exit 0; {\"load_probe\":\"PASS\",\"class\":\"A\"}",
+      "timeout_seconds": 300
+    },
+    {
+      "name": "LV-ORIENT: an explain request gets an inline read-only ORIENT answer",
+      "mode": "proof",
+      "given": "a fresh copy of the seeded scratch repo (calc/core.py, calc/facade.py, AUTO_PROCEED: true) and the candidate plugin loaded via --plugin-dir",
+      "when": "claude -p 'how does the calc facade work?' runs with stream-json output",
+      "then": "the transcript announces '-> ORIENT workflow', no new .craftflow/state/workflows/*.json exists, and the model made no Task, Agent, Edit, Write, MultiEdit or NotebookEdit call",
+      "command": "python3 plugins/craftflow/tests/live/harvest_routes_roundtrip.py --plugin-dir plugins/craftflow --only load_probe,LV-ORIENT",
+      "expected": "exit 0; {\"load_probe\":\"PASS\",\"LV-ORIENT\":\"PASS\",\"class\":\"A\"}",
+      "timeout_seconds": 600
+    }
+  ]
+}
