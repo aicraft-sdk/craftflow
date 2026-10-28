@@ -19,10 +19,14 @@ dir is then set to the scenario copy); the stop-gate and context-nudge user over
 CRAFTFLOW_QA_HOME=<scratch>/qa-home. Model `sonnet` unless `--model`. Prompts go on stdin.
 
 Evidence class "A" only when load_probe PASSed in the same run, otherwise "B-SIMULATED". Evidence JSON (one entry per scenario plus
-the transcript path) is written to <scratch>/evidence.json; keep the scratch with --keep.
+the transcript path) is written to <scratch>/evidence.json; keep the scratch with --keep (it is kept anyway on any non-PASS result).
 
-Exit 0 only when every scenario run is PASS. Prints one summary JSON line on stdout, e.g.
-{"load_probe":"PASS","LV-ORIENT":"PASS","class":"A"}.
+Exit codes: 0 every scenario PASS and class "A"; 1 a scenario failed (or NOT_REGISTERED / no claude CLI / unexpected error);
+2 bad arguments; 3 every scenario PASSed but the class is not "A" (no passing load_probe in this run: not evidence).
+Prints one summary JSON line on stdout, e.g. {"load_probe":"PASS","LV-ORIENT":"PASS","class":"A"}.
+LV-ORIENT also fails on a Bash command that mentions craftflow_workflow_id or .craftflow/state/workflows (a mint attempt), on any
+new entry under workflows/ (*.json, *.events.jsonl, directories) and on any `git status --porcelain` change of the scratch repo.
+evidence.json is written even when a scenario raises; the scratch dir is kept (and printed) on any non-PASS result.
 
 Run:     python3 tests/live/harvest_routes_roundtrip.py --plugin-dir <plugin dir> [--only load_probe,LV-ORIENT] [--keep] [--model M]
 Setup:   ... --plugin-dir <plugin dir> --setup-only --keep      (prints the seeded scratch dir)
@@ -35,6 +39,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -48,7 +53,9 @@ LOAD_MARKER = "from --plugin-dir overrides installed version"
 STRIPPED_ENV = ("CLAUDE_PLUGIN_ROOT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PROJECT_DIR", "TYPESAFE_API_KEY")  # last: no Jev consent block in the probe
 REGISTERED = ("load_probe", "LV-ORIENT")
 NOT_REGISTERED = ("LV-CH", "LV-TRIAGE", "LV-QA", "LV-GUARD", "LV-ROUTE")
-FORBIDDEN_TOOLS = ("Task", "Agent", "Edit", "Write", "MultiEdit", "NotebookEdit")
+FORBIDDEN_TOOLS = ("Task", "Agent", "Edit", "Write", "MultiEdit", "NotebookEdit", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList")
+MINT_MARKERS = ("craftflow_workflow_id", ".craftflow/state/workflows")  # a Bash command naming either is a mint attempt
+EXIT_NOT_CLASS_A = 3
 ORIENT_ANNOUNCE = "-> ORIENT workflow"
 ORIENT_PROMPT = "how does the calc facade work?"
 
@@ -82,13 +89,27 @@ def log(msg):
     print(msg, file=sys.stderr)
 
 
+def decode_partial(raw):
+    """Partial output of a timed-out child: bytes are decoded, None becomes ''."""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return raw or ""
+
+
 def run(cmd, env, cwd, data=None):
-    """(returncode, stdout, stderr); never shell=True; timeout -> returncode 124."""
+    """(returncode, stdout, stderr); never shell=True; own process group; timeout -> kill the group, returncode 124."""
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=str(cwd),
+                         text=True, start_new_session=True)
     try:
-        p = subprocess.run(cmd, input=data, env=env, cwd=str(cwd), capture_output=True, text=True, timeout=CALL_TIMEOUT_S)
-        return p.returncode, p.stdout, p.stderr
+        out, err = p.communicate(input=data, timeout=CALL_TIMEOUT_S)
+        return p.returncode, out, err
     except subprocess.TimeoutExpired as exc:
-        return 124, (exc.stdout or "") if isinstance(exc.stdout, str) else "", "timeout"
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass  # group already gone (macOS answers EPERM for a group of unreaped zombies)
+        out, err = p.communicate()
+        return 124, decode_partial(exc.stdout) or decode_partial(out), "timeout" + (": " + decode_partial(err)[-200:] if err else "")
 
 
 def git(project, *args):
@@ -174,31 +195,55 @@ def session_ran(rc, stream_json):
     return rc == 0 and any(ev.get("type") == "result" for ev in stream_events(stream_json))
 
 
+def bash_commands(stream_json):
+    """The command string of every Bash tool_use."""
+    return [str((b.get("input") or {}).get("command", "")) for ev in stream_events(stream_json)
+            for b in content_blocks(ev) if b.get("type") == "tool_use" and b.get("name") == "Bash"]
+
+
 def workflow_files(project):
+    """Every entry under .craftflow/state/workflows/ (*.json, *.events.jsonl, directories as 'name/')."""
     d = Path(project) / ".craftflow" / "state" / "workflows"
-    return sorted(p.name for p in d.glob("*.json")) if d.is_dir() else []
+    return sorted(p.name + ("/" if p.is_dir() else "") for p in d.iterdir()) if d.is_dir() else []
 
 
-def judge_orient(rc, stream_json, before, after):
-    """('PASS' | 'FAIL:<reason>', detail dict). Pure: every verdict input is a parameter."""
+def git_porcelain(project):
+    return git(project, "status", "--porcelain")
+
+
+def judge_orient(rc, stream_json, before, after, git_before, git_after):
+    """('PASS' | 'FAIL:<reason>', detail dict). Pure: every verdict input is a parameter (all required: no default reads as success)."""
     forbidden = sorted({t for t in tool_uses(stream_json) if t in FORBIDDEN_TOOLS})
     new_files = sorted(set(after) - set(before))
+    mints = [c for c in bash_commands(stream_json) if any(m in c for m in MINT_MARKERS)]
     announced = ORIENT_ANNOUNCE in assistant_text(stream_json)
-    detail = {"announced": announced, "new_workflow_files": new_files, "forbidden_tools": forbidden, "rc": rc}
+    detail = {"announced": announced, "new_workflow_files": new_files, "forbidden_tools": forbidden, "mint_commands": mints,
+              "git_changed": git_before != git_after, "rc": rc}
     if not session_ran(rc, stream_json):
         return "FAIL:claude_session_failed(rc=%s)" % rc, detail
     if not announced:
         return "FAIL:no_orient_announce", detail
+    if mints:
+        return "FAIL:mint_attempt(%s)" % " | ".join(c[:120] for c in mints), detail
     if new_files:
         return "FAIL:artifact_minted(%s)" % ",".join(new_files), detail
     if forbidden:
         return "FAIL:forbidden_tool_use(%s)" % ",".join(forbidden), detail
+    if git_before != git_after:
+        return "FAIL:scratch_repo_changed(before=%r,after=%r)" % (git_before[:120], git_after[:120]), detail
     return "PASS", detail
 
 
 def evidence_class(summary):
     """Class A only with a passing load probe in this run."""
     return "A" if summary.get("load_probe") == "PASS" else "B-SIMULATED"
+
+
+def exit_for(summary, ids):
+    """0 only when every scenario PASSed AND the class is A; 1 on any non-PASS; 3 for all-PASS under class B."""
+    if not all(summary.get(s) == "PASS" for s in ids):
+        return 1
+    return 0 if summary.get("class") == "A" else EXIT_NOT_CLASS_A
 
 
 # --- scenarios -----------------------------------------------------------------------------------------
@@ -218,13 +263,14 @@ def step_load_probe(ctx):
 def step_orient(ctx):
     project = fresh_copy(ctx["scr"], ctx["seed"], "LV-ORIENT")
     before = workflow_files(project)
+    git_before = git_porcelain(project)
     rc, out, err = claude(ctx["plugin"], project, ctx["scr"], ctx["model"], ORIENT_PROMPT,
                           ("--output-format", "stream-json", "--verbose"))
     tdir = ctx["scr"] / "transcripts"
     tdir.mkdir(exist_ok=True)
     transcript = tdir / "LV-ORIENT.jsonl"
     transcript.write_text(out, encoding="utf-8")
-    verdict, detail = judge_orient(rc, out, before, workflow_files(project))
+    verdict, detail = judge_orient(rc, out, before, workflow_files(project), git_before, git_porcelain(project))
     detail["transcript"] = str(transcript)
     detail["stderr_tail"] = err[-300:]
     log("LV-ORIENT: %s %s" % (verdict, json.dumps(detail)))
@@ -279,6 +325,7 @@ def main(argv=None):
     scr = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX))
     summary = {s: "NOT_RUN" for s in ids}
     entries = {}
+    code = 1  # anything that skips the explicit return below is a failure
     try:
         seed = make_seed(scr)
         if args.setup_only:
@@ -292,18 +339,22 @@ def main(argv=None):
         summary["class"] = evidence_class(summary)
         if summary["class"] != "A":
             log("class B-SIMULATED: no passing load probe in this run, so nothing here proves the candidate plugin was loaded.")
-        (scr / "evidence.json").write_text(json.dumps({"summary": summary, "scenarios": entries, "model": args.model}, indent=2),
-                                           encoding="utf-8")
-        log("evidence: %s" % (scr / "evidence.json"))
         print(json.dumps(summary, separators=(",", ":")))
-        return 0 if all(summary[s] == "PASS" for s in ids) else 1
+        code = exit_for(summary, ids)
+        return code
     except Exception as exc:  # noqa: BLE001 - driver reports a clean FAIL row, never a traceback
         log("FAIL: unexpected error: %s: %s" % (type(exc).__name__, exc))
         print(json.dumps(summary))
-        return 1
+        code = 1
+        return code
     finally:
-        if args.keep or args.setup_only:
-            log("kept scratch dir: %s" % scr)
+        if not args.setup_only:
+            summary.setdefault("class", evidence_class(summary))
+            (scr / "evidence.json").write_text(json.dumps({"summary": summary, "scenarios": entries, "model": args.model}, indent=2),
+                                               encoding="utf-8")
+        keep = args.keep or args.setup_only or code != 0
+        if keep:
+            log("kept scratch dir: %s (evidence: %s)" % (scr, scr / "evidence.json"))
         else:
             shutil.rmtree(str(scr), ignore_errors=True)
 

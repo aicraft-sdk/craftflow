@@ -25,7 +25,7 @@ ADVISORY_FILES = (
     "skills/craftflow-router/references/codebase-health-workflow.md",
 )
 ADVISORY_GLOBS = ("skills/craftflow-router/references/qa-*.md",)
-NEGATION = ("never", "no ", "not ", "without", "refus")
+NEGATION_RE = re.compile(r"\b(?:no|not|never|without|refuse[sd]?|refusing|cannot)\b", re.IGNORECASE)
 TOKEN_RE = re.compile(r"`([a-z][a-z0-9]*(?:-[a-z0-9]+)*|kind:[a-z]+|origin:[a-z-]+)`")
 
 _passes = 0
@@ -67,9 +67,10 @@ def advisory_write_problems(table: Dict[str, str], name: str, text: str) -> List
     """Tokens an advisory file schedules (outside negations) that the dispatcher maps to a write agent."""
     problems = []
     for line in text.splitlines():
-        if any(word in line.lower() for word in NEGATION):
-            continue
-        for token in TOKEN_RE.findall(line):
+        for match in TOKEN_RE.finditer(line):
+            token = match.group(1)
+            if NEGATION_RE.search(line[:match.start()]):  # a whole-word negation earlier in the line exempts the mention
+                continue
             agent = table.get(token, "")
             if any(w in agent for w in WRITE_AGENTS):
                 problems.append(f"{name}: `{token}` maps to {agent}")
@@ -114,6 +115,12 @@ def main() -> int:
           advisory_write_problems(table, "x", "Then dispatch `build-implement` for the fix.") != [], "")
     check("control: a negated mention is allowed",
           advisory_write_problems(table, "x", "Never dispatch `build-implement` here.") == [], "")
+    check("control: 'piano' is not a negation, so a scheduled build-implement is caught",
+          advisory_write_problems(table, "x", "Use the piano then dispatch `build-implement`.") != [], "")
+    check("control: 'cannot dispatch' is a negation",
+          advisory_write_problems(table, "x", "The route cannot dispatch `build-implement`.") == [], "")
+    check("control: a negation after the token does not exempt it",
+          advisory_write_problems(table, "x", "Dispatch `build-implement` now, not later.") != [], "")
     check("control: harness-builder to component-builder is caught",
           harness_builder_problems({"`origin:qa-harness-builder`": "craftflow:component-builder"}) != [], "")
 

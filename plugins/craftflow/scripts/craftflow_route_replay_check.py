@@ -6,10 +6,12 @@ request to ORIENT, the protocol row derives an inline answer with no agents and 
 registers `route-orient.md`, the doc pins hold (no `TaskCreate`, never falls into BUILD, re-routes from
 scratch), the Cursor binding is read-only, and `craftflow_workflow_id.py` refuses to mint an ORIENT artifact.
 
-Exit 0 when every check passes, 1 otherwise. Run: python3 scripts/craftflow_route_replay_check.py
+Exit 0 when every check passes, 1 otherwise (including a missing, unparsable or mis-shaped fixture).
+Run: python3 scripts/craftflow_route_replay_check.py [--fixture PATH]
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -47,8 +49,8 @@ def read(rel: str) -> str:
     return (PLUGIN_ROOT / rel).read_text(encoding="utf-8")
 
 
-def derive_outcome(protocol_text: str) -> Dict[str, Any]:
-    """What the protocol's ORIENT row says happens, as the fixture's `expected` fields."""
+def derive_outcome(protocol_text: str, route_text: str = "") -> Dict[str, Any]:
+    """What the protocol's ORIENT row (and the route file's "no Memory Update") says happens, as the fixture's `expected` fields."""
     row = next((r for r in law.parse_routing_table(protocol_text) if r[3] == "ORIENT"), None)
     chain = ""
     for line in protocol_text.splitlines():
@@ -61,6 +63,7 @@ def derive_outcome(protocol_text: str) -> Dict[str, Any]:
         "task_creates": 0 if "no agents" in chain else None,
         "artifact_created": False if "no artifact" in chain else None,
         "agents_dispatched": 0 if "no agents" in chain else None,
+        "memory_update": False if "no Memory Update" in route_text else None,
     }
 
 
@@ -79,13 +82,22 @@ def section_after(text: str, heading: str) -> Optional[str]:
     return None
 
 
-def check_fixture(fixture: Dict[str, Any]) -> List[str]:
-    problems: List[str] = []
-    exp = fixture.get("expected", {})
+EXPECTED_KEYS = ("next_action", "task_creates", "artifact_created", "agents_dispatched", "memory_update")
+
+
+def check_fixture(fixture: Any) -> List[str]:
+    """Shape problems: every key the other checks read must be present with the right value and type."""
+    if not isinstance(fixture, dict):
+        return ["fixture is not a JSON object"]
+    exp = fixture.get("expected")
+    if not isinstance(exp, dict):
+        return ["fixture lacks an `expected` object"]
+    problems: List[str] = [f"fixture lacks expected.{k}" for k in EXPECTED_KEYS if k not in exp]
     if fixture.get("workflow_type") != "ORIENT" or exp.get("workflow") != "ORIENT":
         problems.append("fixture does not describe an ORIENT replay")
-    for key, want in (("next_action", "answer_inline"), ("task_creates", 0), ("artifact_created", False)):
-        if exp.get(key) != want or type(exp.get(key)) is not type(want):
+    for key, want in (("next_action", "answer_inline"), ("task_creates", 0), ("artifact_created", False),
+                      ("agents_dispatched", 0), ("memory_update", False)):
+        if key in exp and (exp.get(key) != want or type(exp.get(key)) is not type(want)):
             problems.append(f"fixture expected.{key} must be {want!r}, got {exp.get(key)!r}")
     return problems
 
@@ -97,11 +109,10 @@ def check_routing(fixture: Dict[str, Any]) -> List[str]:
 
 
 def check_outcome(fixture: Dict[str, Any]) -> List[str]:
-    got = derive_outcome(read(PROTOCOL))
-    exp = fixture["expected"]
-    return [f"protocol ORIENT row derives {k}={got[k]!r}, fixture expects {exp[k]!r}"
-            for k in ("workflow", "next_action", "task_creates", "artifact_created", "agents_dispatched")
-            if got[k] != exp[k]]
+    got = derive_outcome(read(PROTOCOL), read(ROUTE_FILE))
+    exp = fixture.get("expected") or {}
+    return [f"protocol ORIENT row derives {k}={got[k]!r}, fixture expects {exp.get(k)!r}"
+            for k in ("workflow", *EXPECTED_KEYS) if got[k] != exp.get(k) or type(got[k]) is not type(exp.get(k))]
 
 
 def check_registry() -> List[str]:
@@ -159,10 +170,32 @@ def check_mint_refused() -> List[str]:
     return problems
 
 
-def main() -> int:
-    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+def load_fixture(path: Path) -> Any:
+    """The parsed fixture; raises ValueError with a tidy message when it cannot be read or parsed."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot load fixture {path}: {type(exc).__name__}: {exc}") from exc
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(description="Replay check for the ORIENT route.")
+    ap.add_argument("--fixture", type=Path, default=FIXTURE)
+    args = ap.parse_args(argv)
+    try:
+        fixture = load_fixture(args.fixture)
+    except ValueError as exc:
+        print(f"FAIL: fixture shape: {exc}")
+        return 1
+    shape = check_fixture(fixture)
+    if shape:
+        print("FAIL: fixture shape")
+        for problem in shape:
+            print("  - " + problem)
+        print("route replay: stopped, fixture shape is invalid")
+        return 1
     results = [
-        ("fixture shape", check_fixture(fixture)),
+        ("fixture shape", shape),
         ("routing law sends the requests to ORIENT", check_routing(fixture)),
         ("protocol row derives the inline outcome", check_outcome(fixture)),
         ("read map registers the route file", check_registry()),
