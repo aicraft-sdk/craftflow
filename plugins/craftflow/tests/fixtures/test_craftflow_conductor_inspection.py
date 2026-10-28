@@ -362,7 +362,7 @@ def test_allowlist_parser() -> None:
 def router_block() -> str:
     text = CURSOR_ROUTER.read_text(encoding="utf-8")
     i = text.find("### Router-exempt inspection skills")
-    j = text.find("Route using the first matching signal:", i)
+    j = text.find("Route by the shared doc's `## Intent Routing`", i)
     return text[i:j] if i >= 0 and j > i else ""
 
 

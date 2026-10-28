@@ -319,6 +319,11 @@ _CHAINS: dict[str, list[str]] = {
     "DEBUG":  ["investigator", "reviewer", "verifier", "memory_finalize"],
     "REVIEW": ["reviewer", "memory_finalize"],
     "PLAN":   ["planner", "planning_reviewer", "memory_finalize"],
+    "QA":     ["qa_researcher", "planner", "planning_reviewer", "qa_harness_builder", "reviewer", "hunter", "qa_executor",
+               "memory_finalize"],
+    "TRIAGE": ["triage_agent", "memory_finalize"],
+    "CODEBASE-HEALTH": ["architecture_scanner", "memory_finalize"],
+    # ORIENT mints no artifact, so it has no chain (docs-rot D7 exempts it by name)
 }
 
 # Map event-log agent names → chain role keys
@@ -331,6 +336,11 @@ _AGENT_NAME_TO_ROLE: dict[str, str] = {
     "doc-syncer":              "doc_syncer",
     "planner":                "planner",
     "plan-gap-reviewer":       "planning_reviewer",
+    "qa-researcher":           "qa_researcher",
+    "qa-harness-builder":      "qa_harness_builder",
+    "qa-executor":             "qa_executor",
+    "triage-agent":            "triage_agent",
+    "architecture-scanner":    "architecture_scanner",
     "router":                 "memory_finalize",  # memory_finalized event comes from router
 }
 

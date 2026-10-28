@@ -1358,6 +1358,7 @@ def test_stage_files_have_triggers() -> None:
 
 
 P11_SHARED = {"router-protocol-multirepo.md", "skill-distill-approval.md", "verifier-handoff.md"}
+HARVEST_SHARED = {"route-orient.md", "route-advisory.md", "route-triage.md", "route-codebase-health.md", "route-qa.md"}
 
 
 def test_cursor_pointers_cover_shared_files() -> None:
@@ -1383,8 +1384,8 @@ def test_cursor_pointers_cover_shared_files() -> None:
     with_read = "`Read()` `skills/_shared/verifier-handoff.md` before dispatching the verifier.\n"
     controls = not ordered(bare, "verifier-handoff.md") and ordered(with_read, "verifier-handoff.md")
     check("cursor_pointers_cover_shared_files",
-          shared == P11_SHARED and not unnamed and not no_read_cursor and not no_read_protocol and controls,
-          f"shared={sorted(shared)} expected={sorted(P11_SHARED)} unnamed_in_cursor_router={unnamed} "
+          shared == P11_SHARED | HARVEST_SHARED and not unnamed and not no_read_cursor and not no_read_protocol and controls,
+          f"shared={sorted(shared)} expected={sorted(P11_SHARED | HARVEST_SHARED)} unnamed_in_cursor_router={unnamed} "
           f"no_read_instruction_in_cursor_router={no_read_cursor} in_protocol={no_read_protocol} controls={controls}")
 
 
@@ -1400,6 +1401,27 @@ def test_build_variant_files_declared() -> None:
     exists = all((PLUGIN_ROOT / REF / n).is_file() for n in want)
     declared = all(got[n] == (v, "start", ["BUILD"]) for n, v in want.items())
     check("build_variant_files_declared", exists and declared, f"got={got} exists={exists}")
+
+
+def test_harvest_workflows_follow_the_map() -> None:
+    """H2: the workflow set is a function of the loaded map; the legacy four are a mandatory floor."""
+    legacy, wanted = ("BUILD", "PLAN", "DEBUG", "REVIEW"), ("ORIENT", "QA", "TRIAGE", "CODEBASE-HEALTH")
+    no_build, qa, dup = syn_map(), syn_map(), syn_map()
+    del no_build["variants"]["BUILD"]
+    qa["variants"]["QA"] = ["standard", "probe"]
+    qa["files"].append({"file": REF + "qa-workflow.md", "class": "start", "workflows": ["QA"], "trigger": "QA preparation", "happy_path": True})
+    qa["files"].append({"file": REF + "qa-plan.md", "class": "stage", "workflows": ["QA"], "variant": "standard", "trigger": "x", "happy_path": True})
+    sizes = {e["file"]: 10 for e in qa["files"]}
+    dup["files"].append({"file": HSC, "class": "stage", "workflows": ["PLAN"], "trigger": "y", "happy_path": True})
+    all_, one = cli_json("--workflow", "ALL"), cli_json("--workflow", "QA")
+    check("harvest_workflows_follow_the_map",
+          core.workflows_of(rs.load_map(LIVE_MAP)) == legacy + wanted and core.workflows_of(syn_map()) == legacy
+          and raises(lambda: core.workflows_of(no_build), rs.ReadsetError) and raises(lambda: core.compute_from_sizes(syn_map(), sizes, "QA"), rs.ReadsetError)
+          and sorted(core.compute_from_sizes(qa, sizes, "QA")["variants"]) == ["probe", "standard"]
+          and raises(lambda: __import__("craftflow_rule_inventory_readmap").coverage(dup), ValueError)
+          and sorted(all_["workflows"]) == sorted(legacy + wanted) and one["workflow"] == "QA"
+          and sorted(one["variants"]) == ["probe", "standard"] and run_cli("--workflow", "NOPE").returncode == 2,
+          f"all={sorted(all_['workflows'])} qa={one['workflow']}")
 
 
 def main() -> int:

@@ -5,7 +5,11 @@
     "BUILD": ["fast_path", "standard"],
     "PLAN": ["standard"],
     "DEBUG": ["standard"],
-    "REVIEW": ["standard"]
+    "REVIEW": ["standard"],
+    "ORIENT": ["standard"],
+    "QA": ["standard", "probe"],
+    "TRIAGE": ["standard"],
+    "CODEBASE-HEALTH": ["standard"]
   },
   "files": [
     {"file": "skills/craftflow-router/SKILL.md", "class": "kernel", "workflows": ["ALL"], "trigger": "skill load", "happy_path": true},
@@ -35,6 +39,21 @@
     {"file": "skills/craftflow-router/references/build-graph-fast.md", "class": "start", "workflows": ["BUILD"], "trigger": "build_mode fast_path", "happy_path": true, "variant": "fast_path"},
     {"file": "skills/craftflow-router/references/build-fast-path-escalation.md", "class": "stage", "workflows": ["BUILD"], "trigger": "fast-path verifier FAIL", "happy_path": false, "variant": "fast_path"},
     {"file": "skills/craftflow-router/references/plan-bakeoff.md", "class": "stage", "workflows": ["PLAN"], "trigger": "bake-off qualifies (decision_rfc or critical_path)", "happy_path": false},
+    {"file": "skills/_shared/route-orient.md", "class": "start", "workflows": ["ORIENT"], "trigger": "ORIENT routed", "happy_path": true},
+    {"file": "skills/_shared/route-triage.md", "class": "start", "workflows": ["TRIAGE"], "trigger": "TRIAGE preparation", "happy_path": true},
+    {"file": "skills/_shared/route-codebase-health.md", "class": "start", "workflows": ["CODEBASE-HEALTH"], "trigger": "CODEBASE-HEALTH preparation", "happy_path": true},
+    {"file": "skills/_shared/route-qa.md", "class": "start", "workflows": ["QA"], "trigger": "QA preparation", "happy_path": true},
+    {"file": "skills/_shared/route-advisory.md", "class": "stage", "workflows": ["TRIAGE", "CODEBASE-HEALTH", "QA"], "trigger": "first TRIAGE, CODEBASE-HEALTH or QA pause or terminal state (handoff law)", "happy_path": true},
+    {"file": "skills/craftflow-router/references/triage-workflow.md", "class": "start", "workflows": ["TRIAGE"], "trigger": "TRIAGE preparation", "happy_path": true},
+    {"file": "skills/craftflow-router/references/codebase-health-workflow.md", "class": "start", "workflows": ["CODEBASE-HEALTH"], "trigger": "CODEBASE-HEALTH preparation", "happy_path": true},
+    {"file": "skills/craftflow-router/references/qa-workflow.md", "class": "start", "workflows": ["QA"], "trigger": "QA preparation", "happy_path": true},
+    {"file": "skills/craftflow-router/references/qa-research.md", "class": "stage", "workflows": ["QA"], "trigger": "QA research fan-out", "happy_path": true},
+    {"file": "skills/craftflow-router/references/qa-plan.md", "class": "stage", "workflows": ["QA"], "trigger": "qa-plan dispatch", "happy_path": true, "variant": "standard"},
+    {"file": "skills/craftflow-router/references/qa-plan-review.md", "class": "stage", "workflows": ["QA"], "trigger": "qa-plan returns", "happy_path": true, "variant": "standard"},
+    {"file": "skills/craftflow-router/references/qa-preflight-and-grants.md", "class": "stage", "workflows": ["QA"], "trigger": "test-plan approval cleared, or any QA grant gate", "happy_path": true},
+    {"file": "skills/craftflow-router/references/qa-build-and-review.md", "class": "stage", "workflows": ["QA"], "trigger": "qa-build dispatch", "happy_path": true},
+    {"file": "skills/craftflow-router/references/qa-execute.md", "class": "stage", "workflows": ["QA"], "trigger": "qa-execute dispatch", "happy_path": true},
+    {"file": "skills/craftflow-router/references/qa-bug-handoff.md", "class": "stage", "workflows": ["QA", "DEBUG"], "trigger": "QA bug candidates persisted; a DEBUG workflow carrying `## QA Bug Context` (dispatch, and after its memory finalization for the automatic QA re-run)", "happy_path": false},
     {"file": "tools/craftflow-plugin/docs/router-protocol-history.md", "class": "maintainer", "workflows": [], "trigger": "maintainers only"}
   ]
 }

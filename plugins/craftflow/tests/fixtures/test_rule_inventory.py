@@ -297,6 +297,19 @@ def test_applicability_from_baseline_readmap() -> None:
           and bld == [["BUILD", "fast_path", "start"], ["BUILD", "standard", "start"]], f"{kern} {bld}")
 
 
+def test_row_tokens_cover_harvest_workflows() -> None:
+    """H2: policy-map rows may name the harvest workflows (ROW_VARIANTS) while the default coverage() variants stay the legacy four."""
+    import craftflow_rule_inventory_rows as rows
+    errs: list = []
+    got = rows.tokens_of("QA@conditional_stage; CODEBASE-HEALTH; ORIENT:standard; TRIAGE; QA:probe", errs)
+    bad: list = []
+    rows.tokens_of("QA:nope; BOGUS", bad)
+    check("row_tokens_cover_harvest_workflows",
+          not errs and got.get(("QA", "standard")) == "conditional_stage" and got.get(("QA", "probe")) is None
+          and ("CODEBASE-HEALTH", "standard") in got and ("ORIENT", "standard") in got and ("TRIAGE", "standard") in got
+          and len(bad) == 2 and sorted(rows.VARIANTS) == ["BUILD", "DEBUG", "PLAN", "REVIEW"], f"errs={errs} got={got} bad={bad}")
+
+
 def test_extract_is_deterministic() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

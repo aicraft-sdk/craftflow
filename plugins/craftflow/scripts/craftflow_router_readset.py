@@ -39,7 +39,6 @@ from craftflow_router_readset_core import ReadsetError
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 FIX = "tests/fixtures/"
 POLICY = "config/policy.json"
-WF_CHOICES = ("BUILD", "PLAN", "DEBUG", "REVIEW", "ALL")
 
 
 def load_map(path) -> dict:
@@ -83,7 +82,7 @@ def policy_bytes(plugin_root, ref: Optional[str]) -> Dict[str, int]:
 
 def _budget(plugin_root, workflow: str, path) -> Optional[int]:
     p = Path(path) if path else Path(plugin_root) / FIX / "router-budget.json"
-    if not p.is_file():
+    if workflow not in core.WORKFLOWS or not p.is_file():  # new routes are bounded by the growth envelope, not router-budget.json
         return None
     try:
         v = cor.load_json(p)["ceilings"]["readset"][workflow]
@@ -104,7 +103,7 @@ def compute(workflow: str, plugin_root=None, ref: Optional[str] = None, readmap=
     rm = readmap if isinstance(readmap, dict) else load_map(readmap or root / "config" / "router-readmap.json")
     sizes = measure(root, ref, rm)
     extra = policy_bytes(root, ref)
-    names = list(core.variants_of(rm)) if workflow == "ALL" else [workflow]
+    names = list(core.workflows_of(rm)) if workflow == "ALL" else [workflow]
     out = {w: core.compute_from_sizes(rm, sizes, w, variant if workflow != "ALL" else None, extra,
                                       None if ref else _budget(root, w, budget_path)) for w in names}
     return out[workflow] if workflow != "ALL" else {"workflow": "ALL", "workflows": out}
@@ -182,7 +181,7 @@ def run_projection(root: Path, args) -> dict:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Router read-set measurer and cut-plan projection")
     mode = ap.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--workflow", choices=WF_CHOICES)
+    mode.add_argument("--workflow")  # validated against the loaded map (legacy four + any declared workflow, or ALL)
     mode.add_argument("--descriptions", action="store_true")
     mode.add_argument("--print-table", action="store_true")
     mode.add_argument("--project", metavar="CUTPLAN")

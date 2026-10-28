@@ -180,6 +180,8 @@ def test_d3_attack8_self_referential_baseline_e2e() -> None:
         live = json.loads((root / "config" / "router-readmap.json").read_text(encoding="utf-8"))
         named = {e["file"] for e in frozen["files"]}
         frozen["files"] += [e for e in live["files"] if e["file"] not in named]
+        # H2: the copied entries name the harvest workflows; the attack forges the emit, not the map.
+        frozen["variants"] = dict(frozen.get("variants", {}), **live.get("variants", {}))
         (fx / "router-readmap.baseline.json").write_text(json.dumps(frozen), encoding="utf-8")
         edit(root, K, "- Never spawn Memory Update as a sub-agent.\n", "")
         edit(root, K, "- Never use an unscoped task lookup in critical paths.\n", "")

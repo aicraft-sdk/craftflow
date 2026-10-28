@@ -98,21 +98,31 @@ See `docs/ai/decisions/0038-craftflow-jev-auto-detect-consent.md` for the full d
 
 ## Intent Routing
 
-Route using the first matching signal:
+Route by the primary deliverable; keywords only nominate rows:
 
 | Priority | Signal | Keywords | Workflow | Chain |
 |----------|--------|----------|----------|-------|
 | 1 | ERROR | error, bug, fix, broken, crash, fail, debug, troubleshoot, issue | DEBUG | bug-investigator -> code-reviewer -> integration-verifier |
 | 2 | PLAN | plan, design, architect, roadmap, strategy, spec, brainstorm | PLAN | brainstorming -> planner -> bounded fresh review loop |
 | 3 | REVIEW | review, audit, analyze, assess, "is this good" | REVIEW | code-reviewer |
-| 4 | DEFAULT | Everything else | BUILD | fast path: builder -> verifier -> memory (default); full chain: builder -> [code-reviewer \|\| silent-failure-hunter] -> verifier -> memory (when risk keywords match) |
+| 4 | ORIENT | zoom out, explain, understand, how does X work, walk me through, where is, what does this do, map this | ORIENT | inline answer, no agents, no artifact |
+| 5 | QA | test plan, e2e, end-to-end, integration test, test coverage, regression, smoke test, verify my feature, prove it works, QA | QA | qa-researcher (fan-out) -> qa-plan -> plan-gap-reviewer -> qa-preflight -> qa-harness-builder -> [code-reviewer \|\| silent-failure-hunter] -> qa-executor |
+| 6 | TRIAGE | triage, incoming issues, look at #, triage # | TRIAGE | triage-agent -> optional grill -> agent-ready brief |
+| 7 | CODEBASE-HEALTH | codebase health, improve architecture, deepening, ball of mud, shallow modules, architecture audit | CODEBASE-HEALTH | architecture-scanner -> HTML report -> user picks -> grill (craftflow:brainstorming) -> PLAN handoff |
+| 8 | DEFAULT | Everything else | BUILD | fast path: builder -> verifier -> memory (default); full chain: builder -> [code-reviewer \|\| silent-failure-hunter] -> verifier -> memory (when risk keywords match) |
 
 Rules:
-- ERROR always wins over BUILD.
+- ERROR wins unconditionally only when the deliverable is a fix ('triage incoming issues' routes TRIAGE; 'add X and fix Y' is BUILD).
+- A keyword only nominates a row; the request's primary deliverable decides. A genuine tie goes to the lower Priority number. The lead clause is the request up to its first ' and ', ' then ', comma, semicolon or sentence end; a request whose first word is a change verb (add, implement, create, build, refactor, rewrite, change, update, remove, rename, migrate, make) routes BUILD unless an ERROR, PLAN or QA keyword sits in its lead clause.
+- ORIENT is read-only, dispatches no agent, creates no artifact and never falls into BUILD; `Read()` `skills/_shared/route-orient.md`.
+- DEBUG beats QA when repairing is the deliverable; QA beats BUILD when a test system over existing code is the deliverable; tests written as part of building code stay BUILD; `Read()` `skills/_shared/route-qa.md` when QA is routed.
+- TRIAGE applies only when triage is the deliverable; `Read()` `skills/_shared/route-triage.md`.
+- CODEBASE-HEALTH applies only when discovery or advice is the deliverable; a refactor request is BUILD; `Read()` `skills/_shared/route-codebase-health.md`.
+- Advisory routes (REVIEW, ORIENT, TRIAGE, CODEBASE-HEALTH) and QA never create product-code tasks; a transition into PLAN, BUILD or DEBUG happens only through the handoff law; `Read()` `skills/_shared/route-advisory.md` at a TRIAGE, CODEBASE-HEALTH or QA pause or terminal state.
 - REVIEW is advisory only. Never let REVIEW create code-changing tasks.
 - BUILD uses fast path (builder → verifier → memory) by default when no risk keywords are detected in the request. Full chain (builder → reviewer → hunter → verifier → memory) is used when risk keywords match. See each binding doc's own fast-path detection reference for keyword rules.
 - Before execution, output one line: `-> {WORKFLOW} workflow (signals: {matched keywords})`
-- Optional routing hint: when the turn context contains a `<craftflow_routing_hint source="jev">` block, priority-1 ERROR keywords still win unconditionally. Otherwise, a `workflow:` line in that block is consulted BEFORE the keyword table (the hook only emits lines already at/above the configured confidence threshold). A `risk_full_chain` value ≥ 0.5 counts as one additional risk signal for the fast-path decision and never removes a keyword-matched signal. No block, or no `workflow:` line → the keyword table applies unchanged. Announce as `-> {WORKFLOW} workflow (signals: {matched keywords}; jev: {workflow} {confidence})` when the hint was consulted.
+- Optional routing hint: when the turn context contains a `<craftflow_routing_hint source="jev">` block, a `workflow:` line in that block is one more nomination at the start of the request (the hook only emits lines already at/above the configured confidence threshold); the deliverable law above decides, and an ERROR keyword in the request's lead clause still wins over the hint. A `risk_full_chain` value ≥ 0.5 counts as one additional risk signal for the fast-path decision and never removes a keyword-matched signal. No block, or no `workflow:` line → the routing table and rules apply unchanged. Announce as `-> {WORKFLOW} workflow (signals: {matched keywords}; jev: {workflow} {confidence})` when the hint was consulted.
 
 (Host-specific additions: Cursor's router applies 3 additional risk keywords — `concurrent`, `race`, `rollback` — beyond the shared fast-path keyword table, and runs an additional Cursor-only "Pending-answer precedence check" before this routing table, per its own binding doc. Claude Code's router may additionally receive the optional routing-hint block above from the opt-in `UserPromptSubmit` hook (`config/jev.json`, off by default; Claude Code only, no Cursor equivalent) — see `craftflow-router/SKILL.md` § 1. None of these additions belongs here — see `cursor-router/SKILL.md` § 1 and `craftflow-router/SKILL.md` § 1.)
 

@@ -389,7 +389,7 @@ def test_router_description_keeps_the_stop_sentence_and_sheds_the_keyword_list()
     print("\n[router_description_keeps_the_stop_sentence_and_sheds_the_keyword_list]")
     head = current(SKILL).split("\n---\n", 1)[0]
     check("description_keeps_do_not_stop_and_route_immediately", "Do not stop at describing capabilities." in head and "CRITICAL: Route and execute immediately." in head
-          and "Activate this skill for build, debug, review, and plan requests." in head and "Use when the user asks to implement, fix, review, plan, test, refactor, or continue code work." in head, head)
+          and "Activate this skill for build, debug, review, plan, QA/testing, triage, codebase-health and explain-the-code requests." in head and "Use when the user asks to implement, fix, review, plan, test, refactor, or continue code work." in head, head)
     check("description_no_longer_carries_the_keyword_list", "Trigger keywords:" not in head, head)
 
 

@@ -56,7 +56,7 @@ Precedence: a per-dispatch `model` parameter > the frontmatter pin > `CLAUDE_COD
 ## Workflow types
 
 <p align="center">
-  <img src="../../docs/images/workflow-lanes.svg" alt="The four craftflow workflows: PLAN, BUILD, DEBUG and REVIEW, each with its agent chain" width="100%">
+  <img src="../../docs/images/workflow-lanes.svg" alt="the craftflow workflows" width="100%">
 </p>
 
 | Signal | Workflow | Agent chain |
@@ -64,9 +64,13 @@ Precedence: a per-dispatch `model` parameter > the frontmatter pin > `CLAUDE_COD
 | error, bug, fix, crash | DEBUG | bug-investigator → code-reviewer → integration-verifier (+ doubt-verifier fix-verify) |
 | plan, design, spec | PLAN | brainstorming → planner → plan-gap-reviewer (bounded fresh review loop) |
 | review, audit | REVIEW | code-reviewer (advisory, read-only) |
+| zoom out, explain, how does X work, walk me through | ORIENT | inline answer from read-only exploration, no agents, no artifact *(pending: available from a later release; until then routed by the pre-harvest order)* |
+| test plan, e2e, integration test, test coverage, regression, QA | QA | qa-researcher (fan-out) → qa-plan → plan-gap-reviewer → qa-preflight → qa-harness-builder → code-reviewer ‖ silent-failure-hunter → qa-executor *(pending: available from a later release; until then routed by the pre-harvest order)* |
+| triage, incoming issues, look at #N | TRIAGE | triage-agent → optional grill → agent-ready brief *(pending: available from a later release; until then routed by the pre-harvest order)* |
+| codebase health, improve architecture, deepening, shallow modules | CODEBASE-HEALTH | architecture-scanner → HTML report → user picks → grill → PLAN handoff *(pending: available from a later release; until then routed by the pre-harvest order)* |
 | everything else (build, implement, create) | BUILD | **fast path** (no risk keywords): component-builder → integration-verifier. **Full chain** (risk keywords such as auth, schema, payment, secret): component-builder → code-reviewer ‖ silent-failure-hunter → integration-verifier → doc-syncer |
 
-Signals are matched in priority order (error, plan, review, then BUILD), so a request with an error word is always DEBUG. Every chain ends with inline memory finalization.
+A keyword only nominates a workflow; the request's primary deliverable decides, and a genuine tie goes to the lower priority number (error, plan, review, orient, QA, triage, codebase-health, then BUILD). Every chain ends with inline memory finalization.
 
 ---
 

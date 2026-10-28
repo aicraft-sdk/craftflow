@@ -57,5 +57,6 @@
     {"id": "L13", "prompt": "Comprehensive audit of @ai-craft monorepo packages, tools, and plugins vs the npm org — what to keep, what to remove.", "expected": "REVIEW", "model": true, "legacy_route": "REVIEW", "why": "legacy REVIEW prompt from a recent artifact"},
     {"id": "L14", "prompt": "Audit the craftflow plugin (tools/craftflow-plugin/) for security guardrails that prevent an agent from taking destructive actions autonomously", "expected": "REVIEW", "model": true, "legacy_route": "REVIEW", "why": "legacy REVIEW prompt from a recent artifact"},
     {"id": "L15", "prompt": "Port 3 net-new superpowers skills into craftflow: finishing-a-development-branch, systematic-debugging, requesting-code-review", "expected": "REVIEW", "model": true, "legacy_route": "REVIEW", "why": "legacy REVIEW prompt from a recent artifact; code-review is the only nomination"}
+    ,{"id": "R56", "prompt": "plan how to fix the crash", "expected": "PLAN", "model": true, "legacy_flip": true, "legacy_route": "DEBUG", "why": "PLAN nominated at the start of the request: the deliverable is a plan, not the fix (part A Jev pin)"}
   ]
 }

@@ -1162,12 +1162,13 @@ def test_router_docs_carry_jev_precedence_rules() -> None:
 
     shared_rule = (
         '- Optional routing hint: when the turn context contains a '
-        '`<craftflow_routing_hint source="jev">` block, priority-1 ERROR keywords still win '
-        "unconditionally. Otherwise, a `workflow:` line in that block is consulted BEFORE the "
-        "keyword table (the hook only emits lines already at/above the configured confidence "
-        "threshold). A `risk_full_chain` value ≥ 0.5 counts as one additional risk signal "
+        '`<craftflow_routing_hint source="jev">` block, a `workflow:` line in that block is one '
+        "more nomination at the start of the request (the hook only emits lines already at/above "
+        "the configured confidence threshold); the deliverable law above decides, and an ERROR "
+        "keyword in the request's lead clause still wins over the hint. A `risk_full_chain` "
+        "value ≥ 0.5 counts as one additional risk signal "
         "for the fast-path decision and never removes a keyword-matched signal. No block, or no "
-        "`workflow:` line → the keyword table applies unchanged. Announce as "
+        "`workflow:` line → the routing table and rules apply unchanged. Announce as "
         "`-> {WORKFLOW} workflow (signals: {matched keywords}; jev: {workflow} {confidence})` "
         "when the hint was consulted."
     )
@@ -1195,7 +1196,8 @@ def test_router_docs_carry_jev_precedence_rules() -> None:
     section1_sentence = (
         "An optional Jev hint block (Claude Code only; produced by the opt-in "
         "`UserPromptSubmit` hook gated by `config/jev.json`, off by default), when present, is "
-        "consulted per the shared doc's hint-precedence rule (ERROR keywords always win)."
+        "consulted per the shared doc's hint-precedence rule (the shared doc's deliverable law "
+        "decides; ERROR wins when the deliverable is a fix)."
     )
     # SKILL.md § 1 uses manual paragraph line-wrapping (real newlines mid-sentence); collapse
     # whitespace runs on both sides before the substring check.

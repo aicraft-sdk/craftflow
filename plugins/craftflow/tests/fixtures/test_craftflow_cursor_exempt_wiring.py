@@ -187,7 +187,7 @@ def test_exempt_block() -> None:
     t = CURSOR_ROUTER.read_text(encoding="utf-8")
     i = t.find("### Router-exempt inspection skills")
     a = t.find("Only when both `pending_skill_approval` and `pending_gate` are null")
-    b = t.find("Route using the first matching signal:")
+    b = t.find("Route by the shared doc's `## Intent Routing`")
     check("exempt_order", a != -1 and a < i < b, f"a={a} i={i} b={b}")
     if i == -1 or b == -1:
         return

@@ -1,7 +1,7 @@
 ---
 name: craftflow-router
 description: |
-  THE ONLY ENTRY POINT FOR CRAFTFLOW. Activate this skill for build, debug, review, and plan requests.
+  THE ONLY ENTRY POINT FOR CRAFTFLOW. Activate this skill for build, debug, review, plan, QA/testing, triage, codebase-health and explain-the-code requests.
 
   Use when the user asks to implement, fix, review, plan, test, refactor, or continue code work.
 
@@ -55,6 +55,21 @@ Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset
 | start | build_mode fast_path | `references/build-graph-fast.md` | BUILD | fast_path | yes |
 | stage | fast-path verifier FAIL | `references/build-fast-path-escalation.md` | BUILD | fast_path | no |
 | stage | bake-off qualifies (decision_rfc or critical_path) | `references/plan-bakeoff.md` | PLAN | - | no |
+| start | ORIENT routed | `_shared/route-orient.md` | ORIENT | - | yes |
+| start | TRIAGE preparation | `_shared/route-triage.md` | TRIAGE | - | yes |
+| start | CODEBASE-HEALTH preparation | `_shared/route-codebase-health.md` | CODEBASE-HEALTH | - | yes |
+| start | QA preparation | `_shared/route-qa.md` | QA | - | yes |
+| stage | first TRIAGE, CODEBASE-HEALTH or QA pause or terminal state (handoff law) | `_shared/route-advisory.md` | TRIAGE, CODEBASE-HEALTH, QA | - | yes |
+| start | TRIAGE preparation | `references/triage-workflow.md` | TRIAGE | - | yes |
+| start | CODEBASE-HEALTH preparation | `references/codebase-health-workflow.md` | CODEBASE-HEALTH | - | yes |
+| start | QA preparation | `references/qa-workflow.md` | QA | - | yes |
+| stage | QA research fan-out | `references/qa-research.md` | QA | - | yes |
+| stage | qa-plan dispatch | `references/qa-plan.md` | QA | standard | yes |
+| stage | qa-plan returns | `references/qa-plan-review.md` | QA | standard | yes |
+| stage | test-plan approval cleared, or any QA grant gate | `references/qa-preflight-and-grants.md` | QA | - | yes |
+| stage | qa-build dispatch | `references/qa-build-and-review.md` | QA | - | yes |
+| stage | qa-execute dispatch | `references/qa-execute.md` | QA | - | yes |
+| stage | QA bug candidates persisted; a DEBUG workflow carrying `## QA Bug Context` (dispatch, and after its memory finalization for the automatic QA re-run) | `references/qa-bug-handoff.md` | QA, DEBUG | - | no |
 <!-- readmap:end -->
 
 ## 1. Intent Routing
@@ -64,7 +79,7 @@ Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset
 for the risk-keyword detection table used to choose between BUILD's fast path and full
 chain. An optional Jev hint block (Claude Code only; produced by the opt-in
 `UserPromptSubmit` hook gated by `config/jev.json`, off by default), when present, is
-consulted per the shared doc's hint-precedence rule (ERROR keywords always win).
+consulted per the shared doc's hint-precedence rule (the shared doc's deliverable law decides; ERROR wins when the deliverable is a fix).
 
 **Jev auto-detect consent contract:** When a consent-request block appears in `additionalContext` during the optional auto-detect SessionStart hook, execute the embedded `AskUserQuestion` contract before your first substantive reply and run the matching `--record-consent` command. See `router-protocol.md` "## Jev Auto-Detect Consent Request Contract" for the full contract and tag format.
 

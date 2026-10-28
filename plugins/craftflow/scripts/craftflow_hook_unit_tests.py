@@ -18095,6 +18095,31 @@ def test_router_phase_enum_registers_skill_distill_learn_distill_doubt_verify() 
     ok(name)
 
 
+def test_router_phase_enum_registers_harvest_tokens() -> None:
+    name = "router/metadata-fence-registers-harvest-phase-origin-scope-tokens"
+    content = _router_section_or_none("## 3. Task Metadata Contract") or ""
+    lines = {k: re.search(rf"^{k}:\{{[^\n]*\}}$", content, re.MULTILINE) for k in ("phase", "origin", "scope")}
+    if not all(lines.values()):
+        fail(name, "Task Metadata Contract fence is missing a phase:/origin:/scope: enum line")
+        return
+    phase_tokens = set(lines["phase"].group(0)[len("phase:{"):-1].split("|"))
+    wanted = ("triage", "codebase-health", "qa", "qa-research", "qa-plan", "qa-re-plan", "qa-plan-review", "qa-plan-review-2",
+              "qa-preflight", "qa-build", "re-qa-build", "qa-review", "qa-hunt", "qa-execute", "re-qa-execute")
+    legacy = ("build", "plan-create", "plan-review-gap-2", "doubt-verify", "re-plan", "plan-bakeoff-judge")
+    missing = [t for t in wanted + legacy if t not in phase_tokens]
+    if missing:
+        fail(name, f"phase:{{...}} enum line missing {missing!r}")
+        return
+    if "qa-harness-builder" not in lines["origin"].group(0)[len("origin:{"):-1].split("|"):
+        fail(name, f"origin:{{...}} enum line missing qa-harness-builder: {lines['origin'].group(0)}")
+        return
+    scope = lines["scope"].group(0)
+    if "{source}" not in scope or "code:{repo}" not in scope:
+        fail(name, f"scope:{{...}} enum line missing {{source}} or code:{{repo}}: {scope}")
+        return
+    ok(name)
+
+
 def test_router_dispatcher_table_includes_skill_distill() -> None:
     # Phase 3d of the hooks-as-bridge redesign (backlog item 8) extracted "### Explicit
     # dispatcher"'s phase-to-agent table out of craftflow-router/SKILL.md into
@@ -29299,6 +29324,7 @@ def main() -> int:
     print()
     print("[ structural: skill-distill router wiring (Phase 3) ]")
     test_router_phase_enum_registers_skill_distill_learn_distill_doubt_verify()
+    test_router_phase_enum_registers_harvest_tokens()
     test_router_dispatcher_table_includes_skill_distill()
     test_router_effort_dispatch_includes_skill_distill_low()
     test_router_contract_overrides_includes_skill_author()

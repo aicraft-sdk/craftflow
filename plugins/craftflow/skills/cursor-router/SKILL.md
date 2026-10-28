@@ -140,17 +140,17 @@ to re-run `install-cursor.sh` from a local checkout and stop. A message that mat
 a row's "NOT exempt" column, or matches no row clearly, is a normal development request — it is
 NOT exempt and falls through to the routing table below.
 
-Route using the first matching signal:
+Route by the shared doc's `## Intent Routing` table and rules (already read above); Cursor-only additions follow.
 
-| Priority | Signal | Keywords | Workflow | Chain |
-|----------|--------|----------|----------|-------|
-| 1 | ERROR | error, bug, fix, broken, crash, fail, debug, troubleshoot, issue | DEBUG | bug-investigator → code-reviewer → integration-verifier |
-| 2 | PLAN | plan, design, architect, roadmap, strategy, spec, brainstorm | PLAN | brainstorming (inline) → planner (dispatched) → plan-gap-reviewer (dispatched, 1-2 passes) |
-| 3 | REVIEW | review, audit, analyze, assess, "is this good" | REVIEW | code-reviewer |
-| 4 | DEFAULT | Everything else | BUILD | component-builder → code-reviewer → silent-failure-hunter → integration-verifier |
+- `Read()` `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` § "Intent Routing" if not already read this session.
+- `Read()` `tools/craftflow-plugin/plugins/craftflow/skills/_shared/route-orient.md` when ORIENT is routed.
+- `Read()` `tools/craftflow-plugin/plugins/craftflow/skills/_shared/route-qa.md` when QA is routed.
+- `Read()` `tools/craftflow-plugin/plugins/craftflow/skills/_shared/route-triage.md` when TRIAGE is routed.
+- `Read()` `tools/craftflow-plugin/plugins/craftflow/skills/_shared/route-codebase-health.md` when CODEBASE-HEALTH is routed.
+- `Read()` `tools/craftflow-plugin/plugins/craftflow/skills/_shared/route-advisory.md` at a TRIAGE, CODEBASE-HEALTH or QA pause or terminal state.
+- `Read()` `tools/craftflow-plugin/plugins/craftflow/skills/cursor-router/references/routes.md` when ORIENT, QA, TRIAGE or CODEBASE-HEALTH is routed (the Cursor binding).
 
 Rules:
-- ERROR always wins over BUILD.
 - REVIEW is advisory only. Never let REVIEW create implementation tasks.
 - BUILD uses a risk scan: if no risk keywords match, fast path (builder → verifier only).
   Risk keywords (case-insensitive, matches request text):
