@@ -116,6 +116,41 @@ It validates the publication-critical contract:
 - key router headings still exist for invariant coverage
 - router-consumed task metadata and agent contract fields are still present
 
+### Release gate
+
+`scripts/craftflow_release_gate.py` is the fail-closed gate in front of auto-release. The publish workflow runs it on
+every path (dry run, real run and resume) after `Checkout resume tag`, and the `release-gate` job in `craftflow-ci.yml`
+runs the same gate on pull requests. Run it locally from anywhere in the checkout (Node 22 and the `claude` CLI on `PATH`):
+
+```bash
+python3 tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_release_gate.py
+```
+
+Steps run in this fixed order, each in its own process group: `version_consistency`, `hook_unit_tests`,
+`fixture_suite_a` and `fixture_suite_b` (the fixture suite as two `FIXTURE_SHARD=i/2` slices, with `CI=true` and without
+`CRAFTFLOW_PERF`), `rule_inventory_diff`, `workflow_replay_check`, `graph_check`, `event_contract`, `decisions`,
+`docs_rot`, `plugin_validate`.
+
+- **Caps.** Every step is killed (whole process group) after `min(600 s, remaining total budget)` and printed as
+  `FAIL <step>: timed out after <n> s`; the gate then continues. `--total-seconds` (default 1200) bounds the whole run:
+  once it is spent, every step not yet started prints `FAIL <step>: total budget exhausted` and does not run.
+  `gate wall time: <s> s` is printed before the verdict.
+- **Flags.** `--list` prints the step ids. `--only STEP` (repeatable) runs a subset, which can never print OK.
+  `--allow-no-claude` turns a missing `claude` CLI into a skipped `plugin_validate` (verdict PARTIAL, exit 1). Neither
+  flag, nor `--total-seconds`, is passed by CI.
+- **Last-line contract.** The last line is exactly one of `RELEASE GATE: OK`, `RELEASE GATE: FAIL (<steps>)`,
+  `RELEASE GATE: PARTIAL (<skipped or not run>)` or `RELEASE GATE: NOTHING RAN (...)`. Only OK exits 0, and CI accepts
+  only the exact OK line. The gate writes nothing inside the checkout; the publish job and the CI job both check
+  `git status --porcelain` is empty afterwards.
+- **Docs-rot ratchet.** `docs_rot` runs `scripts/craftflow_docs_rot.py` (checks D1 to D10 over the READMEs, the agent and
+  skill lists, the hook scripts, the versions and the routing table). Violations must match
+  `tests/fixtures/docs-rot-baseline.json` exactly: an unlisted one prints `NEW <id>` and a fixed one prints
+  `STALE <id>`, both exit 1. The baseline may only shrink relative to `git merge-base HEAD origin/main`. Fix the
+  drift, then delete its id from the baseline; never add one.
+- **Resuming a version tagged before the gate existed is unsupported.** The resume step runs the gate of the tag, and a
+  tag without `craftflow_release_gate.py` fails with `RELEASE GATE: FAIL (resume tag predates the release gate; publish
+  a new version instead)`. There is no skip input.
+
 ## Skill Candidate Ledger (router-invoked, not a registered hook)
 
 Phase 1 of `docs/plans/2026-07-29-craftflow-skill-distillation-plan.md` ships
