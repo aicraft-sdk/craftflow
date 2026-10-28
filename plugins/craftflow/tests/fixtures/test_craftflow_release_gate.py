@@ -260,9 +260,12 @@ check("release-gate job: the clean-tree step follows the gate and there is no co
       "git status --porcelain" in ci_job and ci_job.index("git status --porcelain") > ci_job.index("craftflow_release_gate.py")
       and "continue-on-error" not in ci_job, True)
 
-# --- the gate step cannot be neutralised (mutation controls on the real YAML) -----------
+# --- the gate step cannot be neutralised (mutation controls on the PARSED workflow) -----
 print("gate step guard")
+import copy  # noqa: E402
 import importlib.util  # noqa: E402
+
+import yaml  # noqa: E402  (hard import: without PyYAML this group fails instead of skipping)
 
 _spec = importlib.util.spec_from_file_location("publish_structure", REPO / ".github/test_publish_workflow_structure.py")
 structure = importlib.util.module_from_spec(_spec)
@@ -271,6 +274,9 @@ _spec.loader.exec_module(structure)
 GATE_STEP = "      - name: Release gate\n        run: |\n"
 CLEAN_STEP = "      - name: Release gate left the tree clean\n        run: |\n"
 TEST_LINE = '          test "$(tail -n1 /tmp/gate.log)" = "RELEASE GATE: OK"\n'
+STEP_RUN = "        run: |\n"
+PY_LINE = '          python3 "$GATE" | tee /tmp/gate.log\n'
+GATE_NAMES = ("Configure a CI git identity for the release gate", "Release gate", "Release gate left the tree clean")
 
 
 def mutate(text, old, new):
@@ -278,15 +284,59 @@ def mutate(text, old, new):
     return text.replace(old, new)
 
 
-check("unmodified publish workflow: no gate-step defects", structure.release_gate_step_defects(PUBLISH), [])
-STEP_RUN = "        run: |\n"
-PY_LINE = '          python3 "$GATE" | tee /tmp/gate.log\n'
-
-
 def keyed(step, key_line):
     return step.replace(STEP_RUN, key_line + STEP_RUN)
 
 
+def publish_defects(text_or_wf):
+    wf = yaml.safe_load(text_or_wf) if isinstance(text_or_wf, str) else text_or_wf
+    return structure.publish_guard_defects(wf)
+
+
+def with_if(step_name, expr):
+    """PUBLISH with the step's own `if:` replaced by expr.format(old if)."""
+    m = re.search(r"      - name: " + re.escape(step_name) + r"\n(?:        (?!if:|run:).*\n)*?        if: (.*)\n", PUBLISH)
+    assert m, step_name
+    return PUBLISH[:m.start(1)] + expr.format(m.group(1)) + PUBLISH[m.end(1):]
+
+
+def after_run(step_name, key_line):
+    """PUBLISH with key_line appended to the step's mapping, AFTER its run: block."""
+    start = PUBLISH.index("      - name: " + step_name + "\n")
+    nxt = PUBLISH.index("\n      - ", start + 1)
+    return PUBLISH[:nxt] + "\n" + key_line.rstrip("\n") + PUBLISH[nxt:]
+
+
+def parsed(edit):
+    wf = yaml.safe_load(PUBLISH)
+    edit(wf)
+    return wf
+
+
+def step_named(wf, name):
+    return next(s for s in wf["jobs"]["publish"]["steps"] if s.get("name") == name)
+
+
+def move_gate_to_other_job(wf):
+    steps = wf["jobs"]["publish"]["steps"]
+    moved = [s for s in steps if s.get("name") in GATE_NAMES]
+    wf["jobs"]["publish"]["steps"] = [s for s in steps if s.get("name") not in GATE_NAMES]
+    wf["jobs"]["gates"] = {"runs-on": "ubuntu-latest", "steps": moved}
+
+
+MIRROR = """
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mirror to craftflow-public
+        env:
+          TOKEN: ${{ secrets.CRAFTFLOW_PUBLIC_TOKEN }}
+        run: |
+          set -euo pipefail
+          git push "https://x-access-token:${TOKEN}@github.com/aicraft-sdk/craftflow.git" HEAD:refs/heads/main
+"""
+
+check("unmodified publish workflow: no guard defects", publish_defects(PUBLISH), [])
 mutants = {
     "continue-on-error on Release gate": mutate(PUBLISH, GATE_STEP, keyed(GATE_STEP, "        continue-on-error: true\n")),
     "continue-on-error on the clean-tree step": mutate(PUBLISH, CLEAN_STEP, keyed(CLEAN_STEP, "        continue-on-error: true\n")),
@@ -312,36 +362,37 @@ mutants = {
     "exit 0 after the verdict line": mutate(PUBLISH, TEST_LINE, TEST_LINE + "          exit 0\n"),
     "|| true on the clean-tree check": mutate(PUBLISH, '          DIRTY="$(git status --porcelain)"\n', '          DIRTY="$(git status --porcelain)" || true\n'),
     "set +e in the identity step": mutate(PUBLISH, "          git config --global user.name craftflow-ci\n", "          set +e\n          git config --global user.name craftflow-ci\n"),
-}
-for label, mutant in mutants.items():
-    check_true("structure check rejects " + label, bool(structure.release_gate_step_defects(mutant)))
-
-
-def with_if(step_name, expr):
-    """PUBLISH with the step's own `if:` joined to a status function."""
-    m = re.search(r"      - name: " + re.escape(step_name) + r"\n(?:        (?!if:|run:).*\n)*?        if: (.*)\n", PUBLISH)
-    assert m, step_name
-    return PUBLISH[:m.start(1)] + expr.format(m.group(1)) + PUBLISH[m.end(1):]
-
-
-check("unmodified publish workflow: no status-function defects", structure.status_function_defects(PUBLISH), [])
-status_mutants = {
     "always() && on Push to craftflow-public": with_if("Push to craftflow-public", "always() && {}"),
     "always() && on Commit and tag": with_if("Commit and tag", "always() && {}"),
     "failure() || on Subtree split": with_if("Subtree split", "failure() || {}"),
-    "!cancelled() && on Create GitHub release": with_if("Create GitHub release on craftflow-public", "!cancelled() && {}"),
+    "!cancelled() && on Create GitHub release": with_if("Create GitHub release on craftflow-public", '"!cancelled() && ({})"'),
     "success() || on Apply bump": with_if("Apply bump", "success() || {}"),
+    "YAML-escaped always() on Subtree split": with_if("Subtree split", '"\\x61lways() && ({})"'),
+    "if: true on Subtree split": with_if("Subtree split", "true"),
+    "if: ${{ true }} on Push to craftflow-public": with_if("Push to craftflow-public", "${{{{ true }}}}"),
+    "if: always() written after run: on Determinism cross-check": after_run("Determinism cross-check", "        if: always()"),
+    "extra mirror job with no needs": PUBLISH.rstrip("\n") + "\n" + MIRROR,
+    "gate steps moved into a separate job": parsed(move_gate_to_other_job),
+    "duplicate step name": parsed(lambda wf: wf["jobs"]["publish"]["steps"].append(copy.deepcopy(step_named(wf, "Apply bump")))),
+    "job-level if: always()": parsed(lambda wf: wf["jobs"]["publish"].update({"if": "always()"})),
+    "job-level continue-on-error: true": parsed(lambda wf: wf["jobs"]["publish"].update({"continue-on-error": True})),
+    "job-level defaults shell: sh": parsed(lambda wf: wf["jobs"]["publish"].update({"defaults": {"run": {"shell": "sh"}}})),
 }
-for label, mutant in status_mutants.items():
-    check_true("status-function check rejects " + label, bool(structure.status_function_defects(mutant)))
+for label, mutant in mutants.items():
+    check_true("structure check rejects " + label, bool(publish_defects(mutant)))
 
-ci_names = ("Release gate", "Release gate left the tree clean")
-check("craftflow-ci gate step: no defects", structure.release_gate_step_defects(ci_job, ci_names, structure.CI_GATE_BODIES), [])
-check_true("craftflow-ci gate step: early exit 0 rejected", bool(structure.release_gate_step_defects(
-    mutate(ci_job, '          test "$(tail -n1 /tmp/gate.log)"', '          exit 0\n          test "$(tail -n1 /tmp/gate.log)"'),
-    ci_names, structure.CI_GATE_BODIES)))
-check_true("craftflow-ci gate step: shell: true {0} rejected", bool(structure.release_gate_step_defects(
-    mutate(ci_job, GATE_STEP, keyed(GATE_STEP, "        shell: true {0}\n")), ci_names, structure.CI_GATE_BODIES)))
+diff_defects = publish_defects(mutate(PUBLISH, PY_LINE, "          exit\n" + PY_LINE))
+check_true("canonical-body mismatch prints a unified diff and the update hint",
+           any("+exit" in d and "PUBLISH_GATE_BODIES" in d for d in diff_defects), diff_defects)
+
+CI_WF = yaml.safe_load(CI)
+check("craftflow-ci gate steps: no defects", structure.ci_guard_defects(CI_WF), [])
+check_true("craftflow-ci gate step: early exit 0 rejected", bool(structure.ci_guard_defects(yaml.safe_load(
+    mutate(CI, '          test "$(tail -n1 /tmp/gate.log)"', '          exit 0\n          test "$(tail -n1 /tmp/gate.log)"')))))
+check_true("craftflow-ci gate step: shell: true {0} rejected", bool(structure.ci_guard_defects(yaml.safe_load(
+    mutate(CI, GATE_STEP, keyed(GATE_STEP, "        shell: true {0}\n"))))))
+check_true("craftflow-ci release-gate job: continue-on-error rejected", bool(structure.ci_guard_defects(yaml.safe_load(
+    mutate(CI, "    name: release gate\n", "    name: release gate\n    continue-on-error: true\n")))))
 
 print(f"\nResults: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
