@@ -1,0 +1,18 @@
+{
+  "id": "orient-inline",
+  "workflow_type": "ORIENT",
+  "request": "Explain how the router picks a workflow",
+  "requests": [
+    "Explain how the router picks a workflow",
+    "walk me through the hook guard",
+    "where is the readmap loaded"
+  ],
+  "expected": {
+    "workflow": "ORIENT",
+    "next_action": "answer_inline",
+    "task_creates": 0,
+    "artifact_created": false,
+    "agents_dispatched": 0,
+    "memory_update": false
+  }
+}

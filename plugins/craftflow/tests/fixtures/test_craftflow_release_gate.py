@@ -134,6 +134,12 @@ check("graph_check passes --check", steps["graph_check"].argv[-1], "--check")
 check("plugin_validate runs claude from tools/craftflow-plugin",
       (steps["plugin_validate"].argv, steps["plugin_validate"].cwd, steps["plugin_validate"].needs_claude),
       (["claude", "plugin", "validate", "plugins/craftflow"], gate.ROOT / "tools/craftflow-plugin", True))
+replay_argv = steps["workflow_replay_check"].argv
+check_true("workflow_replay_check lists both replay checkers",
+           any(x.endswith("craftflow_workflow_replay_check.py") for x in replay_argv)
+           and any(x.endswith("craftflow_route_replay_check.py") for x in replay_argv))
+check("workflow_replay_check runs the second checker only after the first passes",
+      replay_argv[:2] + [replay_argv[2].count("&&")], ["bash", "-c", 1])
 inv = steps["rule_inventory_diff"].argv
 check("rule_inventory_diff is the --diff invocation", inv[1].endswith("craftflow_rule_inventory.py") and "--diff" in inv, True)
 check_true("rule_inventory_diff passes the lock and the policy map", "--lock" in inv and "--policy-map" in inv)

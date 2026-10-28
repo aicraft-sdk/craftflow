@@ -66,7 +66,11 @@ def build_steps() -> List[Step]:
         Step("fixture_suite_b", ["bash", "tests/fixtures/run_fixture_suite.sh"], PLUGIN,
              env_set={"CI": "true", "FIXTURE_SHARD": "2/2"}, env_drop=("CRAFTFLOW_PERF",)),
         Step("rule_inventory_diff", inventory, ROOT),
-        Step("workflow_replay_check", [py, str(PLUGIN / "scripts/craftflow_workflow_replay_check.py")], ROOT),
+        # Two checkers, one step: the route replay runs only after the workflow replay passed.
+        Step("workflow_replay_check",
+             ["bash", "-c", '"$0" "$1" && "$0" "$2"', py,
+              str(PLUGIN / "scripts/craftflow_workflow_replay_check.py"),
+              str(PLUGIN / "scripts/craftflow_route_replay_check.py")], ROOT),
         Step("graph_check", ["node", "scripts/gen-craftflow-graph.mjs", "--check"], ROOT),
         Step("event_contract", ["node", "scripts/verify-craftflow-event-contract.mjs"], ROOT),
         Step("decisions", ["node", "scripts/verify-decision-format.mjs"], ROOT),
