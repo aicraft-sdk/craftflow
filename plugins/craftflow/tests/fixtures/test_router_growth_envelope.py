@@ -16,6 +16,7 @@ from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 REPO_ROOT = PLUGIN_ROOT.parents[2]
+REPO_TOP = PLUGIN_ROOT.parents[3]  # the git top level (REPO_ROOT is tools/, kept for the existing git -C calls)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 
@@ -228,6 +229,60 @@ def test_git_helpers_against_a_scratch_repo() -> None:
         check("file_at_is_none_for_a_missing_path", file_at(Path(d), adr_sha, "nope.md") is None, "missing path should be None")
 
 
+def test_signature_simulation_in_a_scratch_repo() -> None:
+    """The real ADR and envelope files, signed through real commits in a scratch repo: properly signed passes, each tamper fails."""
+    import tempfile
+    real_adr = (REPO_TOP / renv.REL_ADR).read_text(encoding="utf-8")
+    real_env = json.loads(ENVELOPE.read_text(encoding="utf-8"))
+    pending_note = "Pending: David signs in the H2 signing session. This ADR stays `status: proposed` until then."
+    signed_adr = real_adr.replace("status: proposed", "status: accepted", 1).replace(pending_note, "David Gracia (2026-10-29)", 1)
+    check("simulation_inputs_are_the_pending_originals", signed_adr != real_adr and "David Gracia (2026-10-29)" in signed_adr and pending_note in real_adr,
+          "the live ADR no longer has the pending signature text this simulation replaces")
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+
+        def git(*a: str) -> str:
+            return subprocess.run(["git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@t", *a], capture_output=True, text=True, check=True).stdout.strip()
+
+        def put(rel: str, text: str) -> None:
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(text, encoding="utf-8")
+
+        def verdict(env: dict, adr_text: str) -> list:
+            return renv.signed_problems(env, adr_text, lambda sha: commit_touches(root, sha, renv.REL_ADR),
+                                        lambda sha: _json_or_none(file_at(root, sha, renv.REL_ENVELOPE)))
+
+        git("init", "-q")
+        put(renv.REL_ADR, real_adr)
+        put(renv.REL_ENVELOPE, json.dumps(real_env, indent=2))
+        git("add", ".")
+        git("commit", "-q", "-m", "draft")
+        draft_sha = git("rev-parse", "HEAD")
+        put(renv.REL_ADR, signed_adr)
+        git("add", ".")
+        git("commit", "-q", "-m", "sign")
+        sign_sha = git("rev-parse", "HEAD")
+        put("unrelated.txt", "x\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "unrelated")
+        unrelated_sha = git("rev-parse", "HEAD")
+        signed_env = dict(real_env, decided_at_sha=sign_sha)
+        check("simulation_properly_signed_passes", verdict(signed_env, signed_adr) == [], str(verdict(signed_env, signed_adr)))
+        grown = dict(signed_env, consumed=[{"phase": "H3", "key": "kernel_bytes", "from": 1, "to": 2, "at_sha": sign_sha}])
+        check("simulation_consumed_growth_after_signing_passes", verdict(grown, signed_adr) == [], str(verdict(grown, signed_adr)))
+        tampered = copy.deepcopy(signed_env)
+        tampered["allowances"]["kernel_bytes"] += 1
+        got = verdict(tampered, signed_adr)
+        check("simulation_tampered_allowance_fails", len(got) == 1 and "allowances" in got[0], str(got))
+        got = verdict(dict(signed_env, decided_at_sha=unrelated_sha), signed_adr)
+        check("simulation_sha_not_touching_the_adr_fails", len(got) == 1 and "does not touch" in got[0], str(got))
+        got = verdict(signed_env, real_adr)
+        check("simulation_adr_still_proposed_fails", len(got) == 2 and any("accepted" in p for p in got) and any("signature" in p for p in got), str(got))
+        got = verdict(signed_env, signed_adr.replace("David Gracia (2026-10-29)", "(unsigned)"))
+        check("simulation_missing_signature_line_fails", len(got) == 1 and "signature" in got[0], str(got))
+        check("simulation_draft_commit_exists", bool(draft_sha) and draft_sha != sign_sha, "scratch history is wrong")
+
+
 def test_check_raise_bounds_envelope_branch() -> None:
     def run(entries, to=1300, extra_keys=()):
         budget, origin, table = trb.raise_world()
@@ -289,11 +344,11 @@ def test_live_envelope() -> None:
     if note:
         print(f"  {note}")
     added = budget["ceiling_raises"][len((origin_budget or {}).get("ceiling_raises", [])):]
-    adr_file = REPO_ROOT / renv.REL_ADR
+    adr_file = REPO_TOP / renv.REL_ADR
     adr_text = adr_file.read_text(encoding="utf-8") if adr_file.is_file() else ""
     got = renv.problems(e, origin_env, ceilings, trb.MEASURED, cap_of, totals, added, is_ancestor_of_head, adr_text=adr_text,
-                        touches_adr=lambda sha: commit_touches(REPO_ROOT, sha, renv.REL_ADR),
-                        envelope_at=lambda sha: _json_or_none(file_at(REPO_ROOT, sha, renv.REL_ENVELOPE)))
+                        touches_adr=lambda sha: commit_touches(REPO_TOP, sha, renv.REL_ADR),
+                        envelope_at=lambda sha: _json_or_none(file_at(REPO_TOP, sha, renv.REL_ENVELOPE)))
     check("live_envelope_signed_and_within_bounds", not got, "; ".join(got) + " (expected red until the H2 signature commits C6/C7)")
 
 
