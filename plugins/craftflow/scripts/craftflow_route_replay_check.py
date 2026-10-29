@@ -146,9 +146,9 @@ def check_pins() -> List[str]:
 
 
 NEGATION_RE = re.compile(r"\b(?:no|not|never|without|refuse[sd]?|refusing|cannot)\b", re.IGNORECASE)
-DISPATCH_SYNTAX = ("craftflow:", "subagent_type")  # never allowed, negated or not
+DISPATCH_SYNTAX = ("craftflow:", "subagent_type", "TaskCreate(", "Task(")  # never allowed, negated or not
 DISPATCH_WORDS = re.compile(
-    r"TaskCreate\(|\bTask\(|\bhand (?:the |this )?(?:request|work|task)\b|\bapply (?:the|a) (?:fix|change|patch)\b"
+    r"\bhand (?:the |this )?(?:request|work|task)\b|\bapply (?:the|a) (?:fix|change|patch)\b"
     r"|\bdispatch(?:es|ed|ing)?\b", re.IGNORECASE)
 
 

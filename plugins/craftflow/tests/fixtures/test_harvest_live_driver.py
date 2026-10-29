@@ -159,9 +159,10 @@ def hollow_controls() -> None:
     check("a hollow route-orient.md fails the dispatch scan (plain-English hand-off)",
           "FAIL: route file dispatches nothing" in p.stdout, p.stdout[-300:])
     for text in ("Then hand the request to the builder.", "Next apply the fix.", "Then dispatch the agent.",
-                 "Call TaskCreate(subject) now.", "Run Task(x) for it."):
+                 "Call TaskCreate(subject) now.", "Run Task(x) for it.",
+                 "Do not hesitate, call TaskCreate(x).", "If not obvious, use Task(x) to delegate."):
         check(f"bare instruction is flagged: {text}", replay.dispatch_problems(text) != [], text)
-    for text in ("It never falls into BUILD and does not dispatch anything.", "No `TaskCreate(` is ever issued.",
+    for text in ("It never falls into BUILD and does not dispatch anything.", "No `TaskCreate` is ever issued.",
                  "Do not hand the request to the builder.", "ORIENT cannot apply the fix."):
         check(f"negated mention is allowed: {text}", replay.dispatch_problems(text) == [], str(replay.dispatch_problems(text)))
     check("the real route file has no dispatch problems",
