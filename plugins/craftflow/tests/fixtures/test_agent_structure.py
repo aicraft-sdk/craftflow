@@ -606,17 +606,23 @@ def _agent(name: str) -> str:
         return fh.read()
 
 
+_SUBST = "substitute the sha from `## Review Base` for `<BASE>`"
 for _n in ("code-reviewer", "silent-failure-hunter", "doc-syncer"):
     _t = _agent(_n)
     check_contains(f"{_n} handles ## Review Base", _t, "## Review Base")
     check_contains(f"{_n} pins the no-BASE fallback", _t, _FALLBACK)
-    check(f"{_n} no longer diffs against HEAD~N", [h for h in ("HEAD~1", "HEAD~5") if h in _t], [])
+    check_contains(f"{_n} says an empty fallback diff is UNVERIFIED", _t, "UNVERIFIED")
+    check(f"{_n} no longer diffs against HEAD~N", [h for h in ("HEAD~5",) if h in _t], [])
 _tamper = [ln for ln in _agent("integration-verifier").splitlines() if "Test tampering" in ln]
-check("integration-verifier tamper check names BASE", len(_tamper) == 1 and "$BASE" in _tamper[0], True)
+check("integration-verifier tamper check names <BASE>", len(_tamper) == 1 and "<BASE>" in _tamper[0], True)
 _bi = _agent("bug-investigator")
 check_count("bug-investigator keeps HEAD~5 only in history exploration", _bi, "HEAD~5", 1)
-check("bug-investigator names BASE for the fix so far",
-      [ln for ln in _bi.splitlines() if "the fix so far" in ln and "$BASE" in ln] != [], True)
+check("bug-investigator names <BASE> for the fix so far",
+      [ln for ln in _bi.splitlines() if "the fix so far" in ln and "<BASE>" in ln] != [], True)
+for _n in ("code-reviewer", "silent-failure-hunter", "doc-syncer", "integration-verifier", "bug-investigator"):
+    _t = _agent(_n)  # $BASE is not a shell variable: a pasted command would diff against nothing
+    check(f"{_n} has no literal $BASE", "$BASE" in _t, False)
+    check(f"{_n} tells the agent to substitute <BASE>", "<BASE>" in _t and _SUBST in _t, True)
 
 # ---------------------------------------------------------------------------
 # Summary

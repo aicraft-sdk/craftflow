@@ -270,8 +270,8 @@ def test_collect_head_matches_readset_tool() -> None:
     # P13 task 4 (EnterPlanMode prose deleted, -680 B in every start set): 97,407 -> 96,727
     # H2 (ADR-0074 envelope; routing law, stubs, readmap): 96,727 -> 100,895
     # H3 (ADR-0074 envelope; ORIENT pointer, workflow-start line): 100,895 -> 101,249
-    # H4 (ADR-0074 envelope; Record BASE law, Review Base protocol bullet, artifact field and event): 101,249 -> 102,167
-    check("collect_head_build_standard_literal_102167", got == 102167, f"BUILD standard start_total is {got}; the BUILD standard literal is 102,167")
+    # H4 (ADR-0074 envelope; Record BASE law, Review Base protocol bullet, artifact field and event): 101,249 -> 102,166 (the fix drops one blank line)
+    check("collect_head_build_standard_literal_102166", got == 102166, f"BUILD standard start_total is {got}; the BUILD standard literal is 102,166")
 
 
 def test_collect_gated_measured_within_enforced() -> None:

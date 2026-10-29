@@ -46,7 +46,6 @@
 
 **Record BASE:** before each phase's `build-implement` task becomes runnable, run `git -C {tree} rev-parse HEAD` and store it as `results.git_base_sha` (`unavailable` on failure), then append `phase_base_recorded`. After the builder returns, run `python3 {plugin_root}/scripts/craftflow_review_package.py {BASE} --repo {tree} --out-dir {PROJECT_ROOT}/.craftflow/review` and pass `## Review Base` to the reviewer, hunter, verifier and doc-syncer.
 
-
 ### Fast Path Detection
 
 Before BUILD child task creation, read `references/fast-path.md` (contains canonical keyword table and escalation cap).

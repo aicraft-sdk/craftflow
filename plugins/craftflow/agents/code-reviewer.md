@@ -47,7 +47,7 @@ Do not self-activate internal CRAFTFLOW skills, including `craftflow:frontend-pa
 - progress.md: `## Verification`
 
 ## Git Context (Before Review)
-With a `## Review Base` in the prompt, Read the review package it names, or run `git log --oneline $BASE..HEAD`, `git diff --stat $BASE`, `git diff $BASE` and `git ls-files --others --exclude-standard`, so every commit, uncommitted edit and new file of the phase is reviewed. If no BASE is recorded or it is `unavailable`, fall back to `git diff HEAD` and say so ("no recorded BASE") in the review.
+With a `## Review Base` in the prompt, Read the review package it names, or run `git log --oneline <BASE>..HEAD`, `git diff --stat <BASE>`, `git diff <BASE>` and `git ls-files --others --exclude-standard` (substitute the sha from `## Review Base` for `<BASE>`), so every commit, uncommitted edit and new file of the phase is reviewed. If no BASE is recorded or it is `unavailable`, fall back to `git diff HEAD` and say so ("no recorded BASE") in the review. An empty diff under this fallback means UNVERIFIED (no recorded BASE), never "no changes"; for a committed build also inspect `git diff HEAD~1` and say that BASE was missing.
 ```
 git status                                    # What's changed
 git diff HEAD                                 # ALL changes (staged + unstaged)

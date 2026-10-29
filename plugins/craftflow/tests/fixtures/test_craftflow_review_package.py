@@ -96,28 +96,92 @@ def test_default_out_dir(tmp: str) -> None:
     check("default: written under {repo}/.craftflow/review/", len(found) == 1, str(found))
 
 
+def refused(name: str, res, text: str) -> None:
+    check(f"{name}: exit 2 + message", res.returncode == 2 and text in res.stderr, f"rc={res.returncode} {res.stderr!r}")
+
+
 def test_refusals(tmp: str) -> None:
     repo = new_repo(tmp, "refuse")
     commit_file(repo, "a.txt", "x\n", "feat: a")
     out_dir = repo / ".craftflow" / "review"
     res = run("unavailable", "--repo", str(repo), "--out-dir", str(out_dir))
-    check("unavailable: exit 2", res.returncode == 2, f"rc={res.returncode}")
-    check("unavailable: message", "Error: no recorded BASE" in res.stderr, res.stderr)
+    refused("unavailable", res, "Error: no recorded BASE")
     check("unavailable: nothing written", not out_dir.exists() or not list(out_dir.iterdir()), "wrote a file")
     # a sibling branch commit is not an ancestor of HEAD
     git(repo, "checkout", "-q", "-b", "side", "HEAD~1")
     commit_file(repo, "s.txt", "s\n", "feat: side")
     side = git(repo, "rev-parse", "HEAD")
     git(repo, "checkout", "-q", "main")
-    res = run(side, "--repo", str(repo), "--out-dir", str(out_dir))
-    check("non-ancestor: exit 2", res.returncode == 2, f"rc={res.returncode}")
-    check("non-ancestor: message names the problem", "not an ancestor" in res.stderr, res.stderr)
-    res = run("no-such-ref", "--repo", str(repo), "--out-dir", str(out_dir))
-    check("unresolvable: exit 2", res.returncode == 2, f"rc={res.returncode}")
+    refused("non-ancestor", run(side, "--repo", str(repo), "--out-dir", str(out_dir)), "is not an ancestor of HEAD")
+    refused("bad BASE", run("no-such-ref", "--repo", str(repo), "--out-dir", str(out_dir)), "BASE no-such-ref does not resolve to a commit")
     res = run("--repo", str(repo))
-    check("missing argument: exit 2 usage", res.returncode == 2 and "usage" in res.stderr.lower(), f"rc={res.returncode} {res.stderr}")
-    res = run("HEAD", "--repo", str(Path(tmp) / "not-a-repo"))
-    check("not a repo: exit 2", res.returncode == 2, f"rc={res.returncode}")
+    check("usage: exit 2 + usage text", res.returncode == 2 and "usage" in res.stderr.lower(), f"rc={res.returncode} {res.stderr}")
+    gone = Path(tmp) / "not-a-repo"
+    refused("not a repo", run("HEAD", "--repo", str(gone)), f"Error: not a git repository: {gone}")
+    empty = Path(tmp) / "empty"
+    empty.mkdir()
+    git(empty, "init", "-q", "-b", "main")
+    refused("empty repo", run("deadbeef", "--repo", str(empty)), "Error: HEAD does not resolve to a commit (empty repository?)")
+
+
+def test_ancestor_exit_codes(tmp: str) -> None:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("craftflow_review_package", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    repo = new_repo(tmp, "anc")
+    base = git(repo, "rev-parse", "HEAD")
+    real = mod.git
+
+    def fake(rc: int):
+        def inner(r, *args, check=True):
+            if args[:1] == ("merge-base",):
+                return subprocess.CompletedProcess(args, rc, "", "boom\n")
+            return real(r, *args, check=check)
+        return inner
+
+    for rc, want in ((1, "is not an ancestor of HEAD"), (128, "Error: git failed: boom")):
+        mod.git = fake(rc)
+        try:
+            mod.build_package(str(repo), base, str(repo / "pkg"))
+            got = ""
+        except mod.PackageError as exc:
+            got = str(exc)
+        finally:
+            mod.git = real
+        check(f"is-ancestor exit {rc}", want in got, got)
+
+
+def test_subdir_repo(tmp: str) -> None:
+    repo = new_repo(tmp, "subdir")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "sub").mkdir()
+    (repo / "e.txt").write_text("echo-top\n")
+    (repo / "sub" / "f.txt").write_text("foxtrot-sub\n")
+    out_dir = repo / "pkg"
+    res = run(base, "--repo", str(repo / "sub"), "--out-dir", str(out_dir))
+    body = next(out_dir.glob("review-*.diff")).read_text() if res.returncode == 0 else ""
+    check("subdir: exits 0", res.returncode == 0, res.stderr)
+    check("subdir: top-level and sub files listed with content", "echo-top" in body and "foxtrot-sub" in body and "unreadable" not in body, body[-300:])
+
+
+def test_symlink_and_size_cap(tmp: str) -> None:
+    repo = new_repo(tmp, "link")
+    base = git(repo, "rev-parse", "HEAD")
+    secret = Path(tmp) / "outside-secret.txt"
+    secret.write_text("TOP-SECRET-OUTSIDE\n")
+    (repo / "link.txt").symlink_to(secret)
+    (repo / "huge.txt").write_text("x" * (1024 * 1024 + 5000) + "\n")
+    out_dir = repo / "pkg"
+    res = run(base, "--repo", str(repo), "--out-dir", str(out_dir))
+    body = next(out_dir.glob("review-*.diff")).read_text()
+    check("symlink: exits 0", res.returncode == 0, res.stderr)
+    check("symlink: target content never inlined", "TOP-SECRET-OUTSIDE" not in body, "followed symlink")
+    check("symlink: target path noted", f"(symlink -> {secret})" in body, body[-300:])
+    check("size cap: 1 MiB marker", "(truncated at 1 MiB)" in body, body[-200:])
+    check("size cap: package stays near the cap", len(body) < 1024 * 1024 + 2000, str(len(body)))
+    check("header: gitignored files omitted", "gitignored files are omitted" in body, body[:300])
+    check("atomic: no temp file left", not [p for p in out_dir.iterdir() if p.suffix != ".diff"], str(list(out_dir.iterdir())))
 
 
 def test_untracked_cap(tmp: str) -> None:
@@ -151,7 +215,8 @@ def test_base_equals_head(tmp: str) -> None:
 
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
-        for fn in (test_full_package, test_default_out_dir, test_refusals, test_untracked_cap, test_base_equals_head):
+        for fn in (test_full_package, test_default_out_dir, test_refusals, test_ancestor_exit_codes, test_subdir_repo,
+                   test_symlink_and_size_cap, test_untracked_cap, test_base_equals_head):
             print(fn.__name__)
             fn(tmp)
     print(f"passes={_passes} failures={len(_errors)}")

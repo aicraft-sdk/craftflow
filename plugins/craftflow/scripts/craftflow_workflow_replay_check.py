@@ -777,7 +777,8 @@ def check_build_multi_commit_base(fixture: dict[str, Any]) -> None:
     require(fixture["agent_outputs"]["review_package"]["commits"] == 3, "build-multi-commit-base: expected a 3-commit phase")
     law = (PLUGIN_ROOT / "skills/craftflow-router/references/build-workflow.md").read_text(encoding="utf-8")
     para = next((p for p in law.split("\n\n") if p.startswith("**Record BASE:**")), "")
-    for tok in ("results.git_base_sha", "phase_base_recorded", "craftflow_review_package.py", "## Review Base"):
+    for tok in ("results.git_base_sha", "phase_base_recorded", "craftflow_review_package.py", "## Review Base",
+                "before each phase's", "build-implement", "unavailable", "--out-dir"):
         require(tok in para, f"build-multi-commit-base: Record BASE paragraph lost {tok}")
 
 
