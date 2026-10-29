@@ -602,19 +602,19 @@ _FALLBACK = "If no BASE is recorded or it is `unavailable`, fall back to `git di
 
 _agent = lambda name: open(os.path.join(AGENTS_DIR, name + ".md"), encoding="utf-8").read()  # noqa: E731
 _SUBST = "substitute the sha from `## Review Base` for `<BASE>`"
-for _n in ("code-reviewer", "silent-failure-hunter", "doc-syncer"):
-    _need = ["## Review Base", _FALLBACK, "UNVERIFIED"]
-    check(f"{_n} review base, no-BASE fallback, UNVERIFIED", [x for x in _need if x not in _agent(_n)], [])
-    check(f"{_n} no longer diffs against HEAD~N", [h for h in ("HEAD~1", "HEAD~5") if h in _agent(_n)], [])
-_tamper = [ln for ln in _agent("integration-verifier").splitlines() if "Test tampering" in ln]
-check("integration-verifier tamper check names <BASE>", len(_tamper) == 1 and "<BASE>" in _tamper[0], True)
-_bi = _agent("bug-investigator")
-check_count("bug-investigator keeps HEAD~5 only in history exploration", _bi, "HEAD~5", 1)
-check("bug-investigator names <BASE> for the fix so far",
-      [ln for ln in _bi.splitlines() if "the fix so far" in ln and "<BASE>" in ln] != [], True)
-for _n in ("code-reviewer", "silent-failure-hunter", "doc-syncer", "integration-verifier", "bug-investigator"):
+# command forms, not the bare placeholder (_SUBST itself contains <BASE>); the iv/bi tail entries are their fallbacks
+_R = ("## Review Base", _FALLBACK, "UNVERIFIED")
+_CMDS = {"code-reviewer": ("git log --oneline <BASE>..HEAD", "git diff --stat <BASE>", "`git diff <BASE>`") + _R,
+         "silent-failure-hunter": ("git diff --name-only <BASE>",) + _R, "doc-syncer": ("git diff <BASE> --stat && git diff <BASE>",) + _R,
+         "integration-verifier": ("git diff <BASE> -- '*.test.*' '*.spec.*'", "if none is recorded or it is `unavailable`, use `git diff HEAD` and say so"),
+         "bug-investigator": ("`git diff <BASE>` for the fix so far", "if no BASE is recorded or it is `unavailable`, fall back to `git diff HEAD` and say so.")}
+for _n, _cmds in _CMDS.items():
     _t = _agent(_n)  # $BASE is not a shell variable: a pasted command would diff against nothing
-    check(f"{_n} substitutes <BASE>, no literal $BASE", "$BASE" not in _t and "<BASE>" in _t and _SUBST in _t, True)
+    check(f"{_n} pins its <BASE> command forms, fallback", [x for x in _cmds if x not in _t], [])
+    check(f"{_n} uses <BASE> outside the substitution sentence, no literal $BASE", "$BASE" not in _t and _SUBST in _t and _t.replace(_SUBST, "").count("<BASE>") >= 1, True)
+    check(f"{_n} has no HEAD~N diff", [h for h in ("HEAD~1", "HEAD~5") if h in _t and _n != "bug-investigator"], [])
+check("integration-verifier has one tamper row", len([ln for ln in _agent("integration-verifier").splitlines() if "Test tampering" in ln and "git diff <BASE>" in ln]), 1)
+check_count("bug-investigator keeps HEAD~5 only in history exploration", _agent("bug-investigator"), "HEAD~5", 1)
 
 # ---------------------------------------------------------------------------
 # Summary

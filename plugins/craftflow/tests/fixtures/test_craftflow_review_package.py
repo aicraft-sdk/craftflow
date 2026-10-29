@@ -241,10 +241,29 @@ def test_base_equals_head(tmp: str) -> None:
     check("BASE==HEAD dirty: edit and untracked shown", "+wip-edit" in body and "wip-untracked" in body, "missing")
 
 
+def test_ignores_user_color_and_external_diff(tmp: str) -> None:
+    repo = new_repo(tmp, "hostile-config")
+    base = git(repo, "rev-parse", "HEAD")
+    ext = Path(tmp) / "ext-diff.sh"
+    ext.write_text("#!/bin/sh\necho EXTERNAL\n")
+    ext.chmod(0o755)
+    git(repo, "config", "color.ui", "always")
+    git(repo, "config", "diff.external", str(ext))
+    commit_file(repo, "a.txt", "alpha-hunk\n", "feat: add a")
+    (repo / "base.txt").write_text("base line\nwip-edit\n")
+    out_dir = repo / "pkg"
+    res = run(base, "--repo", str(repo), "--out-dir", str(out_dir))
+    body = next(out_dir.glob("review-*.diff")).read_text()
+    check("hostile config: exits 0", res.returncode == 0, f"rc={res.returncode} {res.stderr}")
+    check("hostile config: no ESC byte", "\x1b" not in body, repr(body[:200]))
+    check("hostile config: no external diff output", "EXTERNAL" not in body and "+alpha-hunk" in body and "+wip-edit" in body, body[:300])
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         for fn in (test_full_package, test_default_out_dir, test_refusals, test_ancestor_exit_codes, test_subdir_repo,
-                   test_symlink_and_size_cap, test_untracked_cap, test_clipped_count_and_failed_cleanup, test_base_equals_head):
+                   test_symlink_and_size_cap, test_untracked_cap, test_clipped_count_and_failed_cleanup, test_base_equals_head,
+                   test_ignores_user_color_and_external_diff):
             print(fn.__name__)
             fn(tmp)
     print(f"passes={_passes} failures={len(_errors)}")

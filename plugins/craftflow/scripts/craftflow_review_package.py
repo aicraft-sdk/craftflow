@@ -113,10 +113,10 @@ def build_package(repo: Optional[str], base: str, out_dir: Optional[str]) -> str
         "# Review package\n"
         f"\nRange: {base_sha[:7]}..{head_sha[:7]} (BASE..HEAD), plus uncommitted and untracked changes\n"
         "(gitignored files are omitted: untracked files are listed with --exclude-standard)\n"
-        f"\n## Commits\n{text(git(repo, 'log', '--oneline', rng))}"
-        f"\n## Files changed\n{text(git(repo, 'diff', '--stat', rng))}"
-        f"\n## Diff\n{text(git(repo, 'diff', CONTEXT, rng))}"
-        f"\n## Uncommitted changes\n{text(git(repo, 'diff', CONTEXT, 'HEAD'))}"
+        f"\n## Commits\n{text(git(repo, 'log', '--no-color', '--oneline', rng))}"
+        f"\n## Files changed\n{text(git(repo, 'diff', '--no-color', '--no-ext-diff', '--stat', rng))}"
+        f"\n## Diff\n{text(git(repo, 'diff', '--no-color', '--no-ext-diff', CONTEXT, rng))}"
+        f"\n## Uncommitted changes\n{text(git(repo, 'diff', '--no-color', '--no-ext-diff', CONTEXT, 'HEAD'))}"
         f"\n## Untracked\n{untracked_section(repo, top, target)}"
     )
     tmp_name = None
