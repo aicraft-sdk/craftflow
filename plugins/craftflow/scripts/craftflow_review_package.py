@@ -6,7 +6,8 @@ router's context.
 
 Usage: craftflow_review_package.py BASE [--repo DIR] [--out-dir DIR]
   BASE       the sha recorded in results.git_base_sha BEFORE the phase's build-implement task ran
-  --repo     the git tree to diff (default: the current directory)
+  --repo     the git tree to diff (default: the current directory); a subdirectory still
+             packages the whole repository
   --out-dir  where to write the package (default: <repo toplevel>/.craftflow/review)
 
 Writes review-<base7>..<head7>.diff and prints 'wrote <path>: <n> commit(s), <bytes> bytes'.
@@ -20,6 +21,7 @@ a clean tree yields an honest empty package rather than an error.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import subprocess
 import sys
@@ -79,7 +81,8 @@ def untracked_section(repo: Optional[str], top: Path, out_dir: Path) -> str:
         lines = raw.decode("utf-8", errors="replace").splitlines()
         shown = "\n".join(lines[:UNTRACKED_LINE_CAP])
         more = len(lines) - UNTRACKED_LINE_CAP
-        marker = f"\n... [truncated: {more} more line(s) not shown]" if more > 0 else ""
+        atleast = "at least " if clipped else ""  # counted from the capped read, so a lower bound
+        marker = f"\n... [truncated: {atleast}{more} more line(s) not shown]" if more > 0 else ""
         marker += "\n(truncated at 1 MiB)" if clipped else ""
         parts.append(f"### {name}\n{shown}{marker}\n")
     return "".join(parts) or "(none)\n"
@@ -124,8 +127,9 @@ def build_package(repo: Optional[str], base: str, out_dir: Optional[str]) -> str
         tmp_name.write_text(body, encoding="utf-8")
         os.replace(tmp_name, out)  # atomic: a reader never sees a half-written package
     except OSError as exc:
-        if tmp_name is not None and tmp_name.exists():
-            tmp_name.unlink()
+        if tmp_name is not None:
+            with contextlib.suppress(OSError):  # a failing cleanup must not mask the clean exit-2 message
+                tmp_name.unlink()
         raise PackageError(f"Error: cannot write review package under {target}: {exc}")
     return f"wrote {out}: {commits} commit(s), {len(body.encode('utf-8'))} bytes"
 

@@ -600,19 +600,12 @@ for _f in _agent_files:
 print("\n[test_review_agents_diff_against_recorded_base] (H4)")
 _FALLBACK = "If no BASE is recorded or it is `unavailable`, fall back to `git diff HEAD` and say so"
 
-
-def _agent(name: str) -> str:
-    with open(os.path.join(AGENTS_DIR, name + ".md"), encoding="utf-8") as fh:
-        return fh.read()
-
-
+_agent = lambda name: open(os.path.join(AGENTS_DIR, name + ".md"), encoding="utf-8").read()  # noqa: E731
 _SUBST = "substitute the sha from `## Review Base` for `<BASE>`"
 for _n in ("code-reviewer", "silent-failure-hunter", "doc-syncer"):
-    _t = _agent(_n)
-    check_contains(f"{_n} handles ## Review Base", _t, "## Review Base")
-    check_contains(f"{_n} pins the no-BASE fallback", _t, _FALLBACK)
-    check_contains(f"{_n} says an empty fallback diff is UNVERIFIED", _t, "UNVERIFIED")
-    check(f"{_n} no longer diffs against HEAD~N", [h for h in ("HEAD~5",) if h in _t], [])
+    _need = ["## Review Base", _FALLBACK, "UNVERIFIED"]
+    check(f"{_n} review base, no-BASE fallback, UNVERIFIED", [x for x in _need if x not in _agent(_n)], [])
+    check(f"{_n} no longer diffs against HEAD~N", [h for h in ("HEAD~1", "HEAD~5") if h in _agent(_n)], [])
 _tamper = [ln for ln in _agent("integration-verifier").splitlines() if "Test tampering" in ln]
 check("integration-verifier tamper check names <BASE>", len(_tamper) == 1 and "<BASE>" in _tamper[0], True)
 _bi = _agent("bug-investigator")
@@ -621,8 +614,7 @@ check("bug-investigator names <BASE> for the fix so far",
       [ln for ln in _bi.splitlines() if "the fix so far" in ln and "<BASE>" in ln] != [], True)
 for _n in ("code-reviewer", "silent-failure-hunter", "doc-syncer", "integration-verifier", "bug-investigator"):
     _t = _agent(_n)  # $BASE is not a shell variable: a pasted command would diff against nothing
-    check(f"{_n} has no literal $BASE", "$BASE" in _t, False)
-    check(f"{_n} tells the agent to substitute <BASE>", "<BASE>" in _t and _SUBST in _t, True)
+    check(f"{_n} substitutes <BASE>, no literal $BASE", "$BASE" not in _t and "<BASE>" in _t and _SUBST in _t, True)
 
 # ---------------------------------------------------------------------------
 # Summary

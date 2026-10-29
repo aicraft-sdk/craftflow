@@ -199,6 +199,34 @@ def test_untracked_cap(tmp: str) -> None:
     check("cap: binary file noted, not dumped", "bin.dat" in body and "binary" in body.lower() and "\x00" not in body, "binary handling")
 
 
+def test_clipped_count_and_failed_cleanup(tmp: str) -> None:
+    repo = new_repo(tmp, "clip")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "two.txt").write_text("row\n" * (512 * 1024))  # 2 MiB, 524288 lines
+    out_dir = repo / "pkg"
+    res = run(base, "--repo", str(repo), "--out-dir", str(out_dir))
+    body = next(out_dir.glob("review-*.diff")).read_text()
+    check("clip: exits 0", res.returncode == 0, res.stderr)
+    check("clip: count is a lower bound once the byte cap hit", "[truncated: at least " in body and "(truncated at 1 MiB)" in body, body[-200:])
+    import importlib.util, os
+    spec = importlib.util.spec_from_file_location("craftflow_review_package", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    real_replace, real_unlink = os.replace, Path.unlink
+
+    def boom(*_a, **_k):
+        raise OSError("boom")
+    mod.os.replace, Path.unlink = boom, boom
+    try:
+        mod.build_package(str(repo), base, str(repo / "pkg2"))
+        got = ""
+    except mod.PackageError as exc:
+        got = str(exc)
+    finally:
+        mod.os.replace, Path.unlink = real_replace, real_unlink
+    check("cleanup: failing unlink still gives the clean message", "Error: cannot write review package" in got, got)
+
+
 def test_base_equals_head(tmp: str) -> None:
     repo = new_repo(tmp, "same")
     base = git(repo, "rev-parse", "HEAD")
@@ -216,7 +244,7 @@ def test_base_equals_head(tmp: str) -> None:
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         for fn in (test_full_package, test_default_out_dir, test_refusals, test_ancestor_exit_codes, test_subdir_repo,
-                   test_symlink_and_size_cap, test_untracked_cap, test_base_equals_head):
+                   test_symlink_and_size_cap, test_untracked_cap, test_clipped_count_and_failed_cleanup, test_base_equals_head):
             print(fn.__name__)
             fn(tmp)
     print(f"passes={_passes} failures={len(_errors)}")
