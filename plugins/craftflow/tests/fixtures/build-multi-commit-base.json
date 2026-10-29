@@ -1,0 +1,73 @@
+{
+  "id": "build-multi-commit-base",
+  "workflow_type": "BUILD",
+  "starting_artifact": {
+    "workflow_uuid": "wf-20261029T120000Z-build-base",
+    "workflow_id": "wf-20261029T120000Z-build-base",
+    "workflow_type": "BUILD",
+    "state_root": ".craftflow/state",
+    "plan_mode": "execution_plan",
+    "verification_rigor": "standard",
+    "proof_status": "gaps_found",
+    "traceability": {"requirements": [], "phases": [], "verification": [], "remediation": []},
+    "phase_cursor": "phase-1",
+    "task_ids": {},
+    "results": {"git_base_sha": "9f1c2ab7d3e44c0b8a6f5e21d7c9b0a4e3f2d1c8"},
+    "intent": {"goal": "Build the export endpoint across three commits"},
+    "evidence": {},
+    "quality": {"convergence_state": "pending"},
+    "status_history": [],
+    "remediation_history": []
+  },
+  "relevant_tasks": {},
+  "events": [
+    {"event": "workflow_started", "phase": "build-start"},
+    {"event": "phase_base_recorded", "phase": "phase-1", "git_base_sha": "9f1c2ab7d3e44c0b8a6f5e21d7c9b0a4e3f2d1c8"},
+    {"event": "agent_started", "phase": "build-implement"},
+    {"event": "agent_completed", "phase": "build-implement"},
+    {"event": "agent_started", "phase": "build-review"}
+  ],
+  "agent_outputs": {
+    "builder_contract": {
+      "STATUS": "PASS",
+      "PHASE_ID": "phase-1",
+      "PHASE_STATUS": "completed",
+      "PHASE_EXIT_READY": true,
+      "CHECKPOINT_TYPE": "none",
+      "PROOF_STATUS": "passed",
+      "INPUTS": ["export schema"],
+      "EXPECTED_ARTIFACTS": ["export route", "export tests"],
+      "TDD_RED_EXIT": 1,
+      "TDD_GREEN_EXIT": 0,
+      "BLOCKED_ITEMS": [],
+      "SKIPPED_ITEMS": [],
+      "SCOPE_INCREASES": [],
+      "SCENARIOS": [
+        {
+          "name": "Export returns rows",
+          "given": "a populated table",
+          "when": "GET /export",
+          "then": "every row is streamed",
+          "command": "npm test -- export",
+          "expected": "all rows streamed",
+          "actual": "all rows streamed",
+          "exit_code": 0,
+          "status": "PASS"
+        }
+      ]
+    },
+    "review_package": {
+      "command": "python3 {plugin_root}/scripts/craftflow_review_package.py 9f1c2ab7d3e44c0b8a6f5e21d7c9b0a4e3f2d1c8 --repo {tree} --out-dir {PROJECT_ROOT}/.craftflow/review",
+      "stdout": "wrote .craftflow/review/review-9f1c2ab..4d5e6f7.diff: 3 commit(s), 4096 bytes",
+      "commits": 3,
+      "dispatch_sections": ["## Review Base"]
+    }
+  },
+  "expected": {
+    "next_action": "review",
+    "artifact_delta": {
+      "phase_cursor": "phase-1",
+      "quality": {"convergence_state": "pending"}
+    }
+  }
+}

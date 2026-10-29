@@ -23,6 +23,7 @@ REQUIRED_FIXTURES = (
     "plan-fresh-review-exhausted.json",
     "plan-design-handoff.json",
     "build-happy-path.json",
+    "build-multi-commit-base.json",
     "build-checkpoint-decision.json",
     "build-phase-blocked.json",
     "build-scope-gate.json",
@@ -767,6 +768,19 @@ def check_build_happy_path(fixture: dict[str, Any]) -> None:
     )
 
 
+def check_build_multi_commit_base(fixture: dict[str, Any]) -> None:
+    ev = [(e["event"], e["phase"]) for e in fixture["events"]]
+    base = fixture["starting_artifact"]["results"].get("git_base_sha", "")
+    require(("phase_base_recorded", "phase-1") in ev and len(base) == 40, "build-multi-commit-base: no recorded BASE")
+    require(ev.index(("phase_base_recorded", "phase-1")) < ev.index(("agent_started", "build-implement")),
+            "build-multi-commit-base: BASE must be recorded before build-implement")
+    require(fixture["agent_outputs"]["review_package"]["commits"] == 3, "build-multi-commit-base: expected a 3-commit phase")
+    law = (PLUGIN_ROOT / "skills/craftflow-router/references/build-workflow.md").read_text(encoding="utf-8")
+    para = next((p for p in law.split("\n\n") if p.startswith("**Record BASE:**")), "")
+    for tok in ("results.git_base_sha", "phase_base_recorded", "craftflow_review_package.py", "## Review Base"):
+        require(tok in para, f"build-multi-commit-base: Record BASE paragraph lost {tok}")
+
+
 def check_build_checkpoint_decision(fixture: dict[str, Any]) -> None:
     builder = fixture["agent_outputs"]["builder_contract"]
     require(
@@ -1118,6 +1132,7 @@ CHECKS = {
     "plan-fresh-review-exhausted.json": check_plan_fresh_review_exhausted,
     "plan-design-handoff.json": check_plan_design_handoff,
     "build-happy-path.json": check_build_happy_path,
+    "build-multi-commit-base.json": check_build_multi_commit_base,
     "build-checkpoint-decision.json": check_build_checkpoint_decision,
     "build-phase-blocked.json": check_build_phase_blocked,
     "build-scope-gate.json": check_build_scope_gate,

@@ -44,6 +44,8 @@
 
 **BUILD task graph, doc-syncer state, fast path and escalation:** read the graph file the Read Map names for `build_mode` (`build-graph-standard.md` or `build-graph-fast.md`); after a fast-path verifier FAIL read `build-fast-path-escalation.md`.
 
+**Record BASE:** before each phase's `build-implement` task becomes runnable, run `git -C {tree} rev-parse HEAD` and store it as `results.git_base_sha` (`unavailable` on failure), then append `phase_base_recorded`. After the builder returns, run `python3 {plugin_root}/scripts/craftflow_review_package.py {BASE} --repo {tree} --out-dir {PROJECT_ROOT}/.craftflow/review` and pass `## Review Base` to the reviewer, hunter, verifier and doc-syncer.
+
 
 ### Fast Path Detection
 

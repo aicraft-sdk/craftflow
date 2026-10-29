@@ -597,6 +597,27 @@ for _f in _agent_files:
     _models = read_frontmatter_model(os.path.join(AGENTS_DIR, _f))
     check(f"agents/{_f} has exactly one frontmatter model line", len(_models), 1)
 
+print("\n[test_review_agents_diff_against_recorded_base] (H4)")
+_FALLBACK = "If no BASE is recorded or it is `unavailable`, fall back to `git diff HEAD` and say so"
+
+
+def _agent(name: str) -> str:
+    with open(os.path.join(AGENTS_DIR, name + ".md"), encoding="utf-8") as fh:
+        return fh.read()
+
+
+for _n in ("code-reviewer", "silent-failure-hunter", "doc-syncer"):
+    _t = _agent(_n)
+    check_contains(f"{_n} handles ## Review Base", _t, "## Review Base")
+    check_contains(f"{_n} pins the no-BASE fallback", _t, _FALLBACK)
+    check(f"{_n} no longer diffs against HEAD~N", [h for h in ("HEAD~1", "HEAD~5") if h in _t], [])
+_tamper = [ln for ln in _agent("integration-verifier").splitlines() if "Test tampering" in ln]
+check("integration-verifier tamper check names BASE", len(_tamper) == 1 and "$BASE" in _tamper[0], True)
+_bi = _agent("bug-investigator")
+check_count("bug-investigator keeps HEAD~5 only in history exploration", _bi, "HEAD~5", 1)
+check("bug-investigator names BASE for the fix so far",
+      [ln for ln in _bi.splitlines() if "the fix so far" in ln and "$BASE" in ln] != [], True)
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

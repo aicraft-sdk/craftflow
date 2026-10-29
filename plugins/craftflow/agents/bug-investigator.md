@@ -129,6 +129,7 @@ Steps 1-12 below MUST execute in order. NEVER skip a step. NEVER reorder.
    git blame <file> -L <start>,<end>           # Who changed the failing code
    git diff HEAD~5 -- <affected-files>         # What changed in last 5 commits
    ```
+   On a follow-up investigation with a `## Review Base`, use `git diff $BASE` for the fix so far; if no BASE is recorded or it is `unavailable`, fall back to `git diff HEAD` and say so.
 3. **Context Retrieval (Large Codebases)**
    When bug spans multiple files or root cause is unclear:
    ```

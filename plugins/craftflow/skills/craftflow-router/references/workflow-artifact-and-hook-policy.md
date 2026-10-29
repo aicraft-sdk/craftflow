@@ -181,6 +181,7 @@ Rules:
     user how to proceed before creating another REM-FIX task.
 - Worktree merge gates (`worktree_merge_*`, `worktree_dirty_main_tree`, `worktree_copy_fallback_failed`, `worktree_cleanup_failed`) are summarized in `references/worktree.md`.
 - `policy_invalid` — `config/policy.json` failed validation; the finalize call touched nothing. Fix the file, then resume.
+- `results.git_base_sha` — BUILD/DEBUG; the `git rev-parse HEAD` of the work tree recorded before a phase's `build-implement` task (or the first DEBUG investigator) becomes runnable, or `unavailable` when git fails; review-side dispatches diff against it (`## Review Base`), and a follow-up keeps it.
 - `status_history` and `remediation_history` are append-only summaries of major router decisions.
 
 v10 router gates:
@@ -235,6 +236,7 @@ Workflow event log:
   - `skill_distill_failed`
   - `policy_loaded`
   - `gate_check`
+  - `phase_base_recorded`
   - `worktree_finalize`
 
 Hook policy:
