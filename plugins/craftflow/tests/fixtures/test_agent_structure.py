@@ -613,7 +613,8 @@ for _n, _cmds in _CMDS.items():
     check(f"{_n} pins its <BASE> command forms, fallback", [x for x in _cmds if x not in _t], [])
     check(f"{_n} uses <BASE> outside the substitution sentence, no literal $BASE", "$BASE" not in _t and _SUBST in _t and _t.replace(_SUBST, "").count("<BASE>") >= 1, True)
     check(f"{_n} has no HEAD~N diff", [h for h in ("HEAD~1", "HEAD~5") if h in _t and _n != "bug-investigator"], [])
-check("integration-verifier has one tamper row", len([ln for ln in _agent("integration-verifier").splitlines() if "Test tampering" in ln and "git diff <BASE>" in ln]), 1)
+_rows = [ln for ln in _agent("integration-verifier").splitlines() if "Test tampering" in ln]
+check("integration-verifier has one tamper row", len(_rows) == 1 and "git diff <BASE>" in _rows[0], True)
 check_count("bug-investigator keeps HEAD~5 only in history exploration", _agent("bug-investigator"), "HEAD~5", 1)
 
 # ---------------------------------------------------------------------------
