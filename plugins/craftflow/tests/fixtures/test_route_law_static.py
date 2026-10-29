@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PP-3 (static): advisory routes never write product code, and ORIENT dispatches nothing.
+"""PP-3 (static): advisory routes never write product code, and ORIENT dispatches nothing. H5: the handoff matrix.
 
 Run: python3 tests/fixtures/test_route_law_static.py   (non-zero exit on any FAIL)
 Reads the dispatcher table of `_shared/router-protocol.md` and the advisory route files. The checks are
@@ -82,6 +82,46 @@ def harness_builder_problems(table: Dict[str, str]) -> List[str]:
             if "qa-harness-builder" in k and "component-builder" in v]
 
 
+ADVISORY = PLUGIN_ROOT / "skills" / "_shared" / "route-advisory.md"
+KERNEL = PLUGIN_ROOT / "skills" / "craftflow-router" / "SKILL.md"
+DETAIL_VALUES = ("tool_unavailable", "tool_error", "no_answer")
+
+
+def matrix_rows(text: str) -> Dict[str, List[str]]:
+    """{source cell: [target, mode, JUST_GO]} from the `### Handoff targets and modes` table."""
+    start = text.find("### Handoff targets and modes")
+    end = text.find("\n### ", start + 1)
+    rows: Dict[str, List[str]] = {}
+    for line in text[start:end if end != -1 else len(text)].splitlines() if start != -1 else []:
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if line.startswith("|") and len(cells) == 4 and cells[0] != "Source" and not cells[0].startswith("-"):
+            rows[cells[0]] = cells[1:]
+    return rows
+
+
+def matrix_problems(text: str) -> List[str]:
+    """PLAN and the QA re-run are automatic (also under JUST_GO); BUILD/DEBUG are asked once and asked under JUST_GO."""
+    rows, problems = matrix_rows(text), []
+    want = (("CODEBASE-HEALTH", "PLAN", "auto", "auto"), ("TRIAGE", "BUILD / DEBUG", "ask", "asked"),
+            ("QA bug candidate", "DEBUG", "ask", "asked"), ("QA-seeded DEBUG", "QA re-run", "auto", "auto"))
+    for source, target, mode, jg in want:
+        row = next((v for k, v in rows.items() if k.startswith(source)), None)
+        if row is None or target not in row[0]:
+            problems.append(f"no matrix row {source} -> {target}")
+        elif not row[1].startswith(mode) or not row[2].startswith(jg):
+            problems.append(f"{source} -> {target}: mode {row[1]!r} / JUST_GO {row[2]!r}, want {mode}/{jg}")
+    return problems
+
+
+def detection_problems(text: str) -> List[str]:
+    """Non-interactive detection: three triggers (a)-(c) and the three `detail` values, recorded with --record-decline."""
+    start = text.find("### Asking about a write handoff")
+    body = text[start:text.find("\n### ", start + 1) if text.find("\n### ", start + 1) != -1 else len(text)] if start != -1 else ""
+    problems = [f"detection lacks {n!r}" for n in ("(a)", "(b)", "(c)", "tool_unavailable|tool_error|no_answer",
+                                                    "--record-decline --reason non_interactive --detail") if n not in body]
+    return problems + [f"detection lacks the detail {d!r}" for d in DETAIL_VALUES if d not in body]
+
+
 def advisory_files() -> List[Path]:
     paths = [PLUGIN_ROOT / rel for rel in ADVISORY_FILES]
     for pattern in ADVISORY_GLOBS:
@@ -123,6 +163,23 @@ def main() -> int:
           advisory_write_problems(table, "x", "Dispatch `build-implement` now, not later.") != [], "")
     check("control: harness-builder to component-builder is caught",
           harness_builder_problems({"`origin:qa-harness-builder`": "craftflow:component-builder"}) != [], "")
+
+    # H5: the handoff matrix and the non-interactive detection, read from the live files.
+    advisory = ADVISORY.read_text(encoding="utf-8")
+    check("route-advisory.md matrix: PLAN and the QA re-run automatic, BUILD/DEBUG ask-first", matrix_problems(advisory) == [],
+          str(matrix_problems(advisory)))
+    check("route-advisory.md defines non-interactive detection with the three detail values", detection_problems(advisory) == [],
+          str(detection_problems(advisory)))
+    check("route-advisory.md has ### Adopting the handoff child", "\n### Adopting the handoff child\n" in "\n" + advisory, "")
+    kernel = KERNEL.read_text(encoding="utf-8")
+    carve = next((l for l in kernel.splitlines() if "handoff question" in l and "JUST_GO" in l), "")
+    check("kernel JUST_GO carve-out names BUILD and DEBUG", "BUILD or DEBUG handoff question" in carve and "never auto-accepted" in carve, carve)
+    check("control: BUILD marked automatic is caught",
+          matrix_problems(advisory.replace("| ask once | asked; non-interactive = declined |", "| auto | auto |", 1)) != [], "")
+    check("control: PLAN marked ask-first is caught",
+          matrix_problems(advisory.replace("| PLAN | auto, announce", "| PLAN | ask once, announce", 1)) != [], "")
+    check("control: an empty file has no matrix", matrix_problems("") != [], "")
+    check("control: a detection missing no_answer is caught", detection_problems(advisory.replace("no_answer", "x")) != [], "")
 
     print(f"\n{_passes} passed, {len(_errors)} failed")
     for err in _errors:

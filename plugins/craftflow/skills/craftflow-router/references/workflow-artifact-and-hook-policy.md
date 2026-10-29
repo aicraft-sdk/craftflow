@@ -51,6 +51,8 @@ Artifact schema must include:
 - `remediation_history`
 - `policy` — `{sha256, status}` of `config/policy.json`, stamped at workflow creation by `craftflow_workflow_id.py --init-artifact`; informational only.
 - `created_at`
+- `parent_workflow_uuid` — handoff child only: the workflow it was minted from by `craftflow_workflow_handoff.py`.
+- `handoff` — handoff child only: `{source_route, source_workflow_uuid, input_path, input_kind, mode}`; `mode` is `auto` or `asked`.
 - `updated_at`
 
 Rules:
@@ -237,6 +239,7 @@ Workflow event log:
   - `policy_loaded`
   - `gate_check`
   - `phase_base_recorded`
+  - `handoff_started` (both logs), `handoff_accepted` (`event_id`, `target`, `answer`), `handoff_declined` (`reason`, `detail`), `handoff_failed`, `workflow_adopted`
   - `worktree_finalize`
 
 Hook policy:

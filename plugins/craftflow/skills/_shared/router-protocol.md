@@ -174,6 +174,7 @@ Optional sections:
 - `## Original User Request` only for `plan-gap-reviewer`.
 - `## Approved Context Files` only for `plan-gap-reviewer`.
 - `## Review Base` (BASE sha and package path) for reviewer, hunter, verifier, doc-syncer and investigator dispatches in BUILD, DEBUG and QA.
+- `## Handoff Context` (source route, input path, `handoff.mode`) for a handoff child's first dispatch.
 - `## Previous Agent Findings` only for integration-verifier and only after review/hunt phases.
 
 (Host-specific additions: Cursor's dispatch prompt additionally injects a `## Worktree` block and a "you are an isolated subagent, read your own brief" preamble, both necessary only because `Task`'s `generalPurpose` subagent doesn't natively load an agent's system prompt the way Claude Code's registered subagent types do. Claude Code needs neither — see each binding doc's own dispatch section. Cursor's template also omits `## Domain Context`, `## SKILL_HINTS` and `Effort Directive`, so it stays fully inline in `cursor-router/SKILL.md` § 5.)

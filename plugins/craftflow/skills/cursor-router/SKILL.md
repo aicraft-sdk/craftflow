@@ -101,13 +101,18 @@ message** (mirrors § 2 Memory Load's "Run this before routing" note): read
   retry/skip/stop answer — the same kind of pending-question state, used analogously),
   treat the incoming message as the answer to that question instead and process it per
   § 6's own options ((a) retry, (b) skip, (c) stop), re-asking verbatim on a
-  non-matching reply. Skip Intent Routing entirely for this turn.
+  non-matching reply. Skip Intent Routing entirely for this turn. A `pending_gate` value that does not start with `phase_` is
+  a route gate set by `references/routes.md`; answer it per that file's `### Cursor route gate answers` row, not § 6's options.
+- If `pending_handoff` is non-null (set by `references/routes.md` while a BUILD/DEBUG handoff question
+  waits), treat the incoming message as the answer to that question and process it per
+  `references/routes.md` `### Cursor handoff answers`, re-asking verbatim on a non-matching reply.
+  Skip Intent Routing entirely for this turn.
 - This precedence rule applies uniformly whether the pending state was set moments ago
   in this same live session or is being read back after a session restart — there is no
   separate "same session" vs "resumed session" code path. A router turn that receives a
-  reply while `pending_skill_approval` (or `pending_gate`) is still non-null must never
+  reply while `pending_skill_approval` (or `pending_gate`, or `pending_handoff`) is still non-null must never
   fall through to Intent Routing below and start a new workflow from that reply's text.
-- Only when both `pending_skill_approval` and `pending_gate` are null does Intent
+- Only when `pending_skill_approval`, `pending_gate` and `pending_handoff` are all null does Intent
   Routing below apply to the incoming message.
 
 ### Router-exempt inspection skills
@@ -122,7 +127,7 @@ router exemption it has in Claude Code.
 | failure-digest | *show* recurring failures across Craftflow workflows ("failure digest", "craftflow failure report", "what keeps failing", "recurring failures", "top blockers") | `~/.cursor/skills/failure-digest/SKILL.md` | a request to fix a recurring failure, add a guard, or otherwise act on a finding |
 
 Precedence: this block runs only AFTER the pending-answer check above. While
-`pending_skill_approval` or `pending_gate` is non-null, a request for any skill in the table is
+`pending_skill_approval`, `pending_gate` or `pending_handoff` is non-null, a request for any skill in the table is
 handled by that check like any other reply (the pending question is re-asked); tell the user to
 answer it first, then ask again. For status, the `cfstatus` terminal alias (status skill, Terminal
 Usage) works at any time. The exemption never clears or consumes pending state.
@@ -975,6 +980,9 @@ label, letter, or unambiguous restatement — e.g. "retry", "(a)", "try it again
 retry; "skip it" matches skip; "abort"/"halt" match stop), re-ask the same Step 3
 question verbatim. Never guess, never silently fall through to a default — the same rule
 § 5a Step 4.4 uses for `pending_skill_approval` replies.
+These three options answer only `phase_{phase}_failed` gates; any other `pending_gate` value is answered per
+`references/routes.md` `### Cursor route gate answers`. Route chains (CODEBASE-HEALTH, TRIAGE, QA) never use this section:
+a failed route phase sets `{agent}_failed`, and skip is never an answer for a route phase.
 
 ### Resolution (Step 5 — mirrors § 5a Step 4.5's `pending_skill_approval` resolution)
 

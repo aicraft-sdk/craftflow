@@ -141,7 +141,8 @@ def run_replay_on_copy(route_text: str = "") -> subprocess.CompletedProcess:
         for sub in ("skills", "config", "scripts"):
             shutil.copytree(PLUGIN_ROOT / sub, root / sub, ignore=shutil.ignore_patterns("__pycache__"))
         (root / "tests" / "fixtures").mkdir(parents=True)
-        shutil.copy(replay.FIXTURE, root / "tests" / "fixtures" / "orient-inline.json")
+        for name in replay.registry():  # every registered fixture: a bare run replays them all
+            shutil.copy(replay.FIXTURE.parent / name, root / "tests" / "fixtures" / name)
         if route_text:
             (root / "skills" / "_shared" / "route-orient.md").write_text(route_text, encoding="utf-8")
         return subprocess.run([sys.executable, str(PLUGIN_ROOT / "scripts" / "craftflow_route_replay_check.py"),

@@ -650,6 +650,9 @@ def _report_one(wf_id: str, payload: dict[str, Any], verbose: bool) -> list[str]
     lines.append(f"  {_render_phases_compact(payload)}   proof: {payload.get('proof_status') or '—'}")
     lines.append(f"  last: {_last_event_line(wf_id)}")
     lines.append(f"  worktree: {payload.get('worktree_branch') or payload.get('worktree_path') or '—'}")
+    if payload.get("parent_workflow_uuid"):  # a handoff child (H5)
+        link = payload.get("handoff") or {}
+        lines.append(f"  parent: {payload['parent_workflow_uuid']} (handoff {link.get('mode') or '?'} from {link.get('source_route') or '?'})")
 
     if not verbose:
         return lines

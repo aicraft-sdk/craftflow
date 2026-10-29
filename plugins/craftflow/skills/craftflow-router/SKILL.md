@@ -157,6 +157,7 @@ JUST_GO:
 - Read `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Session Settings`.
 - If `AUTO_PROCEED: true`, set `JUST_GO=true`.
 - While `JUST_GO=true`, auto-default all non-REVERT AskUserQuestion gates to the recommended option and log the choice in `## Decisions`.
+- Exception: a BUILD or DEBUG handoff question (`_shared/route-advisory.md`) is asked even under `JUST_GO`, never auto-accepted; a non-interactive host records `handoff_declined`.
 - Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (`_shared/skill-distill-approval.md`, was § 8) is carved out as a de
   facto REVERT-class gate under JUST_GO — see its own "JUST_GO carve-out" for the fail-closed
   default (`Defer`, never `Approve`).
@@ -456,6 +457,7 @@ After any agent returns, read `references/post-agent-validation.md` (once per co
 - `DIFF_DRIVEN_DOCS: skip` in Session Settings disables doc-syncer for projects that manage documentation separately; when present, skip `build-doc-sync` task creation and block Memory Update on `verifier_task_id` directly.
 - `SKILL_DISTILL: skip` in Session Settings disables the `skill-distill` phase entirely; when present, never run the ledger gate check, never create the `skill-distill` task, and block Memory Update on whatever task it would otherwise have depended on (`learn-distill` if gated in, otherwise `doc_sync_task_id`/`verifier_task_id` per the normal chain). This toggle does NOT disable the unconditional `--observe` step in `references/memory-finalize.md → ## 13. Memory Finalization` — that call still runs every workflow regardless of this setting (cheap, deterministic, preserves future calibration value).
 - Agents must never reference or read internal skill files from other agents or skills (e.g., component-builder must never read code-review-patterns/SKILL.md). Cross-agent knowledge flows exclusively through router-mediated scaffolds and workflow artifacts.
+- Advisory and QA routes hand off only through `_shared/route-advisory.md` and `scripts/craftflow_workflow_handoff.py`; BUILD/DEBUG targets need a recorded `handoff_accepted`, never JUST_GO.
 
 ### Policy table
 

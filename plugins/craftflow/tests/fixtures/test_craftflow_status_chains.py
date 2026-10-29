@@ -80,6 +80,21 @@ def main() -> int:
     check("existing chains are unchanged",
           sr._CHAINS["BUILD"] == ["builder", "reviewer", "hunter", "verifier", "doc_syncer", "memory_finalize"]
           and sr._CHAINS["REVIEW"] == ["reviewer", "memory_finalize"], f"chains={sr._CHAINS}")
+    with tempfile.TemporaryDirectory() as tmp:  # H5: a handoff child shows its parent and how it was started
+        (Path(tmp) / ".craftflow" / "state" / "workflows").mkdir(parents=True)
+        old = os.environ.get("CLAUDE_PROJECT_DIR")
+        os.environ["CLAUDE_PROJECT_DIR"] = tmp
+        try:
+            child = sr._report_one("wf-child", {"workflow_type": "PLAN", "parent_workflow_uuid": "wf-parent",
+                                                "handoff": {"mode": "asked", "source_route": "TRIAGE"}}, False)
+            plain = sr._report_one("wf-plain", {"workflow_type": "PLAN"}, False)
+        finally:
+            if old is None:
+                os.environ.pop("CLAUDE_PROJECT_DIR", None)
+            else:
+                os.environ["CLAUDE_PROJECT_DIR"] = old
+    check("a handoff child reports its parent and mode", "  parent: wf-parent (handoff asked from TRIAGE)" in child, f"lines={child}")
+    check("a workflow with no parent has no parent line", not any(l.startswith("  parent:") for l in plain), f"lines={plain}")
     print()
     for e in _errors:
         print(e)

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Replay check for the harvest routes (H3: ORIENT).
+"""Replay check for the harvest routes (H3: ORIENT; H5: advisory pauses and handoffs).
 
-Replays `tests/fixtures/orient-inline.json` against the live registry and docs: the routing law routes each
+A fixture-to-check registry (`registry()`); with no `--fixture` every registered fixture runs. The H5 checks live in
+`craftflow_route_replay_handoff.py`. `tests/fixtures/orient-inline.json` replays against the live registry and docs: the routing law routes each
 request to ORIENT, the protocol row derives an inline answer with no agents and no artifact, the read map
 registers `route-orient.md`, the doc pins hold (no `TaskCreate`, never falls into BUILD, re-routes from
 scratch), the Cursor binding is read-only, and `craftflow_workflow_id.py` refuses to mint an ORIENT artifact.
 
 Exit 0 when every check passes, 1 otherwise (including a missing, unparsable or mis-shaped fixture).
-Run: python3 scripts/craftflow_route_replay_check.py [--fixture PATH]
+Run: python3 scripts/craftflow_route_replay_check.py [--fixture PATH] [--plugin-root DIR]
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from typing import Any, Dict, List, Optional
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 
+import craftflow_route_replay_handoff as handoff  # noqa: E402
 import craftflow_routing_law as law  # noqa: E402
 
 FIXTURE = PLUGIN_ROOT / "tests" / "fixtures" / "orient-inline.json"
@@ -206,31 +208,9 @@ def load_fixture(path: Path) -> Any:
         raise ValueError(f"cannot load fixture {path}: {type(exc).__name__}: {exc}") from exc
 
 
-def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Replay check for the ORIENT route.")
-    ap.add_argument("--fixture", type=Path, default=None)
-    ap.add_argument("--plugin-root", type=Path, default=None,
-                    help="check this copy of the plugin tree instead of the one holding this script")
-    args = ap.parse_args(argv)
-    global PLUGIN_ROOT, MINT
-    if args.plugin_root is not None:
-        PLUGIN_ROOT = args.plugin_root.resolve()
-        MINT = PLUGIN_ROOT / "scripts" / "craftflow_workflow_id.py"
-    fixture_path = args.fixture or PLUGIN_ROOT / "tests" / "fixtures" / "orient-inline.json"
-    try:
-        fixture = load_fixture(fixture_path)
-    except ValueError as exc:
-        print(f"FAIL: fixture shape: {exc}")
-        return 1
-    shape = check_fixture(fixture)
-    if shape:
-        print("FAIL: fixture shape")
-        for problem in shape:
-            print("  - " + problem)
-        print("route replay: stopped, fixture shape is invalid")
-        return 1
-    results = [
-        ("fixture shape", shape),
+def orient_results(fixture: Any) -> List[Any]:
+    return [
+        ("fixture shape", check_fixture(fixture)),
         ("routing law sends the requests to ORIENT", check_routing(fixture)),
         ("protocol row derives the inline outcome", check_outcome(fixture)),
         ("read map registers the route file", check_registry()),
@@ -239,13 +219,50 @@ def main(argv: Optional[List[str]] = None) -> int:
         ("Cursor binding is read-only", check_cursor()),
         ("ORIENT mint is refused", check_mint_refused()),
     ]
-    failed = 0
-    for name, problems in results:
-        print(("PASS: " if not problems else "FAIL: ") + name)
-        for problem in problems:
-            print("  - " + problem)
-        failed += bool(problems)
-    print(f"route replay: {len(results) - failed} passed, {failed} failed")
+
+
+def registry() -> Dict[str, Any]:
+    """fixture file name -> function(fixture) returning [(check name, problems)]; the H5 entries bind the plugin root."""
+    reg: Dict[str, Any] = {"orient-inline.json": orient_results}
+    for name, fn in handoff.CHECKS.items():
+        reg[name] = (lambda fx, fn=fn: fn(fx, PLUGIN_ROOT))
+    return reg
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(description="Replay check for the harvest routes.")
+    ap.add_argument("--fixture", type=Path, default=None, help="one fixture (default: every registered fixture)")
+    ap.add_argument("--plugin-root", type=Path, default=None,
+                    help="check this copy of the plugin tree instead of the one holding this script")
+    args = ap.parse_args(argv)
+    global PLUGIN_ROOT, MINT
+    if args.plugin_root is not None:
+        PLUGIN_ROOT = args.plugin_root.resolve()
+        MINT = PLUGIN_ROOT / "scripts" / "craftflow_workflow_id.py"
+    reg = registry()
+    paths = [args.fixture] if args.fixture else [PLUGIN_ROOT / "tests" / "fixtures" / name for name in reg]
+    passed = failed = 0
+    for path in paths:
+        print(f"== {path.name}")
+        try:
+            fixture = load_fixture(path)
+        except ValueError as exc:
+            print(f"FAIL: fixture shape: {exc}")
+            return 1
+        results = reg.get(path.name, orient_results)(fixture)
+        if results[0][1]:
+            print("FAIL: fixture shape")
+            for problem in results[0][1]:
+                print("  - " + problem)
+            print("route replay: stopped, fixture shape is invalid")
+            return 1
+        for name, problems in results:
+            print(("PASS: " if not problems else "FAIL: ") + name)
+            for problem in problems:
+                print("  - " + problem)
+            failed += bool(problems)
+            passed += not problems
+    print(f"route replay: {passed} passed, {failed} failed")
     return 1 if failed else 0
 
 

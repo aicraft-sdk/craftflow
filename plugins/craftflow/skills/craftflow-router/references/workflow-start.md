@@ -98,3 +98,5 @@ TaskCreate({
 Only create child tasks after the v10 artifact and state directory exist (step 1 guarantees both). The `workflows/{workflow_uuid}/` directory is where the memory-finalize task writes workflow-scoped memory (activeContext.md, patterns.md, progress.md for this workflow only).
 
 New routes pass their own `--workflow-type`/`--phase`; see the route file's `### {ROUTE} phases`.
+
+A child minted by `craftflow_workflow_handoff.py` in this turn is adopted, not minted again: skip step 1 only and run every other start step for its type; see `_shared/route-advisory.md` `### Adopting the handoff child`.
