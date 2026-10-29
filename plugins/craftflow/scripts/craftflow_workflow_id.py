@@ -416,12 +416,13 @@ def init_artifact(project_dir: Path, info: dict, *, workflow_type: str, request:
                   phase: str, task_tools_available: str, task_id: str | None = None,
                   workspace_writable_paths: list | None = None,
                   dropped_paths: list | None = None,
-                  fallback_reason: str | None = None) -> Path:
+                  fallback_reason: str | None = None,
+                  host: str = "claude-code", allow_no_session: bool = False) -> Path:
     """Write the artifact + events.jsonl + workflows/{wf}/ dir.
 
     Raises OSError (FileExistsError if the artifact/events log already exists); on any failure
-    every file this call created is removed first."""
-    if workflow_type == "QA" and current_session_id() is None:
+    every file this call created is removed first. `host` and `allow_no_session` serve the handoff CLI (Cursor)."""
+    if workflow_type == "QA" and not allow_no_session and current_session_id() is None:
         raise ValueError("QA workflow needs a session id")  # fail closed before any file exists
     wf = info["workflow_uuid"]
     ts = info["iso_timestamp"]
@@ -433,7 +434,7 @@ def init_artifact(project_dir: Path, info: dict, *, workflow_type: str, request:
     events_path = wf_dir / f"{wf}.events.jsonl"
     artifact = build_artifact(info, workflow_type, request, phase, task_tools_available,
                               workspace_writable_paths)
-    events = [{"ts": ts, "wf": wf, "event": "workflow_started", "host": "claude-code",
+    events = [{"ts": ts, "wf": wf, "event": "workflow_started", "host": host,
                "phase": phase, "task_id": task_id, "agent": "router", "decision": "start",
                "reason": "User request"}]
     stamp = _policy_stamp()
