@@ -94,6 +94,54 @@ def driver_controls() -> None:
     check("decode_partial keeps bytes output", out == "partial" and driver.decode_partial(None) == "", out)
 
 
+def ch_state(**kw: Any) -> Dict[str, Any]:
+    base = {"parents": ["wf-a"], "parent": "wf-a", "events": ["workflow_started", "memory_finalized", "handoff_started"],
+            "report_exists": True, "children": ["wf-b"]}
+    return {**base, **kw}
+
+
+def ch_controls() -> None:
+    """LV-CH (H6): each failure mode of the judge has a control; the run loop stops on `done` and on timeout."""
+    text = "-> CODEBASE-HEALTH workflow (signals: codebase health)"
+    verdict = lambda s=stream(text=text), st=None, calc="": driver.judge_ch(s, st or ch_state(), calc)[0]  # noqa: E731
+    check("LV-CH registered, not pending", "LV-CH" in driver.REGISTERED and "LV-CH" not in driver.NOT_REGISTERED, str(driver.REGISTERED))
+    check("LV-CH clean run passes", verdict() == "PASS", verdict())
+    check("LV-CH without the announce fails", verdict(stream(text="hello")).startswith("FAIL:no_ch_announce"), verdict(stream(text="hello")))
+    check("LV-CH with an empty stream fails", verdict("").startswith("FAIL:claude_session_failed"), verdict(""))
+    check("LV-CH without a CODEBASE-HEALTH artifact fails", verdict(st=ch_state(parents=[], parent=None)).startswith("FAIL:no_ch_artifact"), "")
+    check("LV-CH with two CODEBASE-HEALTH artifacts fails", verdict(st=ch_state(parents=["wf-a", "wf-c"])).startswith("FAIL:no_ch_artifact"), "")
+    for missing in ("memory_finalized", "handoff_started"):
+        st = ch_state(events=[e for e in ch_state()["events"] if e != missing])
+        check(f"LV-CH without {missing} fails", verdict(st=st).startswith("FAIL:events_missing") and missing in verdict(st=st), verdict(st=st))
+    check("LV-CH without the report file fails", verdict(st=ch_state(report_exists=False)).startswith("FAIL:no_report"), "")
+    check("LV-CH without a PLAN child fails", verdict(st=ch_state(children=[])).startswith("FAIL:no_plan_child"), "")
+    check("LV-CH with changed product code fails", verdict(calc=" M calc/core.py\n").startswith("FAIL:product_code_changed"), "")
+    with tempfile.TemporaryDirectory() as tmp:
+        wf = Path(tmp) / ".craftflow" / "state" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / "wf-a.json").write_text(json.dumps({"workflow_type": "CODEBASE-HEALTH"}))
+        (wf / "wf-a.events.jsonl").write_text(json.dumps({"event": "memory_finalized"}) + "\n" + json.dumps({"event": "handoff_started"}) + "\n")
+        (wf / "wf-b.json").write_text(json.dumps({"workflow_type": "PLAN", "parent_workflow_uuid": "wf-a"}))
+        (wf / "wf-z.json").write_text(json.dumps({"workflow_type": "PLAN", "parent_workflow_uuid": "wf-other"}))
+        (Path(tmp) / ".craftflow" / "codebase-health" / "wf-a").mkdir(parents=True)
+        (Path(tmp) / ".craftflow" / "codebase-health" / "wf-a" / "report.html").write_text("<svg></svg>")
+        st = driver.ch_state(tmp)
+        check("ch_state reads the parent, its events, the report and only its own PLAN child",
+              st["parent"] == "wf-a" and st["events"] == ["memory_finalized", "handoff_started"] and st["report_exists"] and st["children"] == ["wf-b"], str(st))
+        (Path(tmp) / ".craftflow" / "codebase-health" / "wf-a" / "report.html").write_text("")
+        check("ch_state treats an empty report as missing", driver.ch_state(tmp)["report_exists"] is False, "")
+        shim = driver.open_shim(Path(tmp))
+        rc = subprocess.run([str(shim / "open"), "/r/report.html"]).returncode
+        check("the open shim records its argument and exits 0 (no browser in the proof)",
+              rc == 0 and (Path(tmp) / "open-calls.log").read_text().strip() == "/r/report.html", str(rc))
+        rc, out, err, why = driver.run_until([sys.executable, "-c", "import time; print('x', flush=True); time.sleep(30)"], dict(), tmp, "", lambda: True, 20)
+        check("run_until stops a running child once done() is true", why == "done" and "x" in out and rc != 0, f"{rc} {why} {out!r}")
+        rc, out, err, why = driver.run_until([sys.executable, "-c", "import time; time.sleep(30)"], dict(), tmp, "", lambda: False, 1)
+        check("run_until stops a child at the timeout", why == "timeout", why)
+        rc, out, err, why = driver.run_until([sys.executable, "-c", "import sys; print(sys.stdin.read())"], dict(), tmp, "hi", lambda: False, 20)
+        check("run_until passes stdin and reports a normal exit", (rc, why, out.strip()) == (0, "exited", "hi"), f"{rc} {why} {out!r}")
+
+
 def replay_controls() -> None:
     good = json.loads(replay.FIXTURE.read_text(encoding="utf-8"))
     check("real fixture shape is clean", replay.check_fixture(good) == [], str(replay.check_fixture(good)))
@@ -172,6 +220,7 @@ def hollow_controls() -> None:
 
 def main() -> int:
     driver_controls()
+    ch_controls()
     replay_controls()
     hollow_controls()
     print(f"\n{_passes} passed, {len(_errors)} failed")

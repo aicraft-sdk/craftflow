@@ -37,6 +37,16 @@
       "command": "python3 plugins/craftflow/tests/live/harvest_routes_roundtrip.py --plugin-dir plugins/craftflow --only load_probe,LV-ORIENT",
       "expected": "exit 0; {\"load_probe\":\"PASS\",\"LV-ORIENT\":\"PASS\",\"class\":\"A\"}",
       "timeout_seconds": 600
+    },
+    {
+      "name": "LV-CH: a codebase-health request yields an HTML report, a picked candidate and an automatic PLAN handoff",
+      "mode": "proof",
+      "given": "a fresh copy of the seeded scratch repo (calc/core.py, calc/facade.py, AUTO_PROCEED: true) and the candidate plugin loaded via --plugin-dir",
+      "when": "claude -p 'run a codebase health check on calc' runs with stream-json output; the driver stops it once the PLAN child exists",
+      "then": "the transcript announces '-> CODEBASE-HEALTH workflow'; exactly one artifact has workflow_type CODEBASE-HEALTH and its events hold memory_finalized and handoff_started; .craftflow/codebase-health/{wf}/report.html exists and is non-empty; a PLAN artifact has parent_workflow_uuid equal to that wf; calc/ and tests/ are untouched",
+      "command": "python3 plugins/craftflow/tests/live/harvest_routes_roundtrip.py --plugin-dir plugins/craftflow --only load_probe,LV-CH",
+      "expected": "exit 0; {\"load_probe\":\"PASS\",\"LV-CH\":\"PASS\",\"class\":\"A\"}",
+      "timeout_seconds": 1800
     }
   ]
 }

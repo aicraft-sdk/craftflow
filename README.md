@@ -100,6 +100,7 @@ Each agent pins its model in its `model:` frontmatter.
 | `plan-bakeoff-judge` | opus | Compares competing plans and synthesizes one |
 | `bug-investigator` | opus | Root-cause proof before any fix |
 | `doubt-verifier` | opus | Adversarial verification of claims and fixes |
+| `architecture-scanner` | opus | Deepening-candidate scan and HTML report (CODEBASE-HEALTH) |
 | `component-builder` | sonnet | TDD execution of an approved phase |
 | `code-reviewer` | sonnet | Diff review |
 | `silent-failure-hunter` | sonnet | Error-handling and swallowed-failure review |
@@ -214,7 +215,7 @@ State lives in `.craftflow/state/` at the project root:
 
 ```
 plugins/craftflow/
-├── agents/       # 14 agent definitions
+├── agents/       # 15 agent definitions
 ├── skills/       # 34 skills, each with SKILL.md and on-demand references/
 ├── scripts/      # 80 Python and shell scripts: hooks, validators, benchmarks
 ├── hooks/        # hook bindings for Claude Code

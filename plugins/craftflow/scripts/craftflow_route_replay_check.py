@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Replay check for the harvest routes (H3: ORIENT; H5: advisory pauses and handoffs).
+"""Replay check for the harvest routes (H3: ORIENT; H5: advisory pauses and handoffs; H6: CODEBASE-HEALTH).
 
 A fixture-to-check registry (`registry()`); with no `--fixture` every registered fixture runs. The H5 checks live in
-`craftflow_route_replay_handoff.py`. `tests/fixtures/orient-inline.json` replays against the live registry and docs: the routing law routes each
+`craftflow_route_replay_handoff.py`, the H6 checks in `craftflow_route_replay_ch.py`. `tests/fixtures/orient-inline.json` replays against the live registry and docs: the routing law routes each
 request to ORIENT, the protocol row derives an inline answer with no agents and no artifact, the read map
 registers `route-orient.md`, the doc pins hold (no `TaskCreate`, never falls into BUILD, re-routes from
 scratch), the Cursor binding is read-only, and `craftflow_workflow_id.py` refuses to mint an ORIENT artifact.
@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 
+import craftflow_route_replay_ch as ch  # noqa: E402
 import craftflow_route_replay_handoff as handoff  # noqa: E402
 import craftflow_routing_law as law  # noqa: E402
 
@@ -224,7 +225,7 @@ def registry() -> Dict[str, Any]:
     """fixture file name -> (shape(fixture) -> problems, run(fixture) -> [(check name, problems)]); the H5 entries bind the
     plugin root. `main` runs the shape phase first and stops on a mis-shaped fixture."""
     reg: Dict[str, Any] = {"orient-inline.json": (check_fixture, orient_results)}
-    for name, (shape_fn, run_fn) in handoff.CHECKS.items():
+    for name, (shape_fn, run_fn) in {**handoff.CHECKS, **ch.CHECKS}.items():
         reg[name] = (shape_fn, (lambda fx, fn=run_fn: fn(fx, PLUGIN_ROOT)))
     return reg
 

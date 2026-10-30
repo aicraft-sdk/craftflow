@@ -5,12 +5,19 @@
   LV-ORIENT   (H3) in the scratch repo `claude -p "how does the calc facade work?"`: the transcript announces
               `-> ORIENT workflow`, no `.craftflow/state/workflows/*.json` is created, and the model never uses
               Task, Agent, Edit, Write, MultiEdit or NotebookEdit.
+  LV-CH       (H6) `claude -p "run a codebase health check on calc"` (AUTO_PROCEED seed = JUST_GO): the transcript announces
+              `-> CODEBASE-HEALTH workflow`; exactly one CODEBASE-HEALTH artifact whose events hold `memory_finalized` and
+              `handoff_started`; `.craftflow/codebase-health/{wf}/report.html` exists and is non-empty; a PLAN artifact has
+              `parent_workflow_uuid == wf` (the automatic handoff); `calc/` and `tests/` are untouched. The mint IS expected here
+              (the opposite of LV-ORIENT). The run is polled and stopped as soon as the child exists (the PLAN itself is not run),
+              within CH_TIMEOUT_S; the scanner is pinned opus, so one run costs real money. A shim `open` first on PATH records the
+              router's `open {REPORT_PATH}` in <scratch>/open-calls.log instead of launching a browser (kept in the evidence).
 
-Not yet registered (added by their phases, listed so `--only` names them honestly): LV-CH (H6), LV-TRIAGE (H7), LV-QA (H11),
+Not yet registered (added by their phases, listed so `--only` names them honestly): LV-TRIAGE (H7), LV-QA (H11),
 LV-GUARD (H10), LV-ROUTE (H13). `--only` with one of them exits 1 with `NOT_REGISTERED`.
 
 Scratch repo (`tempfile.mkdtemp(prefix="cf-harvest-live-")`): calc/core.py, calc/facade.py, calc/__main__.py (`python -m calc add 1 2`),
-tests/test_core.py (unittest), ISSUE-12.md, ISSUE-13.md, `.craftflow/state/project/activeContext.md` with `AUTO_PROCEED: true`, and a
+tests/test_core.py (unittest), ISSUE-12.md, ISSUE-13.md, `.craftflow/state/project/activeContext.md` with `AUTO_PROCEED: true` plus section-only patterns.md and progress.md, and a
 repo-local git identity. Each scenario runs in a fresh copy of that seed.
 
 Env isolation: nested `claude -p` gets os.environ minus CLAUDE_PLUGIN_ROOT, CLAUDE_CODE_SESSION_ID, CLAUDE_PROJECT_DIR and
@@ -43,6 +50,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -51,13 +59,19 @@ DEFAULT_MODEL = "sonnet"
 SCRATCH_PREFIX = "cf-harvest-live-"
 LOAD_MARKER = "from --plugin-dir overrides installed version"
 STRIPPED_ENV = ("CLAUDE_PLUGIN_ROOT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PROJECT_DIR", "TYPESAFE_API_KEY")  # last: no Jev consent block in the probe
-REGISTERED = ("load_probe", "LV-ORIENT")
-NOT_REGISTERED = ("LV-CH", "LV-TRIAGE", "LV-QA", "LV-GUARD", "LV-ROUTE")
+REGISTERED = ("load_probe", "LV-ORIENT", "LV-CH")
+NOT_REGISTERED = ("LV-TRIAGE", "LV-QA", "LV-GUARD", "LV-ROUTE")
 FORBIDDEN_TOOLS = ("Task", "Agent", "Edit", "Write", "MultiEdit", "NotebookEdit", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList")
 MINT_MARKERS = ("craftflow_workflow_id", ".craftflow/state/workflows")  # a Bash command naming either is a mint attempt
 EXIT_NOT_CLASS_A = 3
 ORIENT_ANNOUNCE = "-> ORIENT workflow"
 ORIENT_PROMPT = "how does the calc facade work?"
+CH_ANNOUNCE = "-> CODEBASE-HEALTH workflow"
+CH_PROMPT = "run a codebase health check on calc"
+CH_TIMEOUT_S = 1500
+CH_POLL_S = 5
+CH_GRACE_S = 5
+CH_TOOLS = "--allowedTools=Bash,Write,Edit,Read,Glob,Grep,Skill,Task,Agent,TaskCreate,TaskUpdate,TaskGet,TaskList,LSP"
 
 SEED = {
     "calc/__init__.py": "",
@@ -83,6 +97,11 @@ SEED = {
     ".gitignore": ".craftflow/\n",
 }
 ACTIVE_CONTEXT = "# Active Context\n\n## Session Settings\n\nAUTO_PROCEED: true\n"
+# A craftflow-managed project already holds its project-tier memory files (the workflow tier is created per workflow).
+MEMORY_SEED = {
+    "patterns.md": "# Patterns\n\n## Common Gotchas\n\n## User Standards\n\n## Architecture Patterns\n",
+    "progress.md": "# Progress\n\n## Current Workflow\n\n## Verification\n\n## Last Updated\n",
+}
 
 
 def log(msg):
@@ -112,6 +131,37 @@ def run(cmd, env, cwd, data=None):
         return 124, decode_partial(exc.stdout) or decode_partial(out), "timeout" + (": " + decode_partial(err)[-200:] if err else "")
 
 
+def run_until(cmd, env, cwd, data, done, timeout):
+    """(returncode, stdout, stderr, reason). Output goes to temp files so it survives a kill. Polls done() every CH_POLL_S and stops
+    the child's process group CH_GRACE_S after done() turns true ('done') or at the timeout ('timeout'); 'exited' otherwise."""
+    with tempfile.TemporaryFile("w+", encoding="utf-8") as out_f, tempfile.TemporaryFile("w+", encoding="utf-8") as err_f:
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=out_f, stderr=err_f, env=env, cwd=str(cwd), text=True, start_new_session=True)
+        try:
+            p.stdin.write(data)
+            p.stdin.close()
+        except BrokenPipeError:
+            pass  # the child already exited; its exit code speaks
+        deadline, reason = time.monotonic() + timeout, "exited"
+        while p.poll() is None:
+            if done():
+                time.sleep(CH_GRACE_S)
+                reason = "done"
+                break
+            if time.monotonic() > deadline:
+                reason = "timeout"
+                break
+            time.sleep(min(CH_POLL_S, max(0.2, deadline - time.monotonic())))
+        if p.poll() is None:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass  # group already gone
+            p.wait()
+        out_f.seek(0)
+        err_f.seek(0)
+        return p.returncode, out_f.read(), err_f.read(), reason
+
+
 def git(project, *args):
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}  # ambient GIT_DIR etc. must not redirect -C
     rc, out, err = run(["git", "-C", str(project), *args], env, project)
@@ -129,6 +179,8 @@ def make_seed(scr):
     state = seed / ".craftflow" / "state" / "project"
     state.mkdir(parents=True)
     (state / "activeContext.md").write_text(ACTIVE_CONTEXT, encoding="utf-8")
+    for name, body in MEMORY_SEED.items():
+        (state / name).write_text(body, encoding="utf-8")
     git(seed, "init", "-q")
     git(seed, "config", "init.defaultBranch", "main")
     git(seed, "config", "user.name", "live")
@@ -153,9 +205,12 @@ def nested_env(project, scr):
     return env
 
 
+def claude_cmd(plugin, model, extra=()):
+    return ["claude", "-p", "--plugin-dir", str(plugin), "--model", model, "--session-id", str(uuid.uuid4()), *extra]
+
+
 def claude(plugin, project, scr, model, prompt, extra=()):
-    cmd = ["claude", "-p", "--plugin-dir", str(plugin), "--model", model, "--session-id", str(uuid.uuid4()), *extra]
-    return run(cmd, nested_env(project, scr), project, data=prompt)
+    return run(claude_cmd(plugin, model, extra), nested_env(project, scr), project, data=prompt)
 
 
 def stream_events(stream_json):
@@ -234,6 +289,58 @@ def judge_orient(rc, stream_json, before, after, git_before, git_after):
     return "PASS", detail
 
 
+def ch_state(project):
+    """What a CODEBASE-HEALTH run left behind: its artifact(s), the parent's event names, the report, and the PLAN children."""
+    root = Path(project) / ".craftflow"
+    wdir = root / "state" / "workflows"
+    arts = {}
+    for f in sorted(wdir.glob("wf-*.json")) if wdir.is_dir() else []:
+        try:
+            arts[f.stem] = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+    parents = [w for w, a in arts.items() if isinstance(a, dict) and a.get("workflow_type") == "CODEBASE-HEALTH"]
+    parent = parents[0] if len(parents) == 1 else None
+    events = []
+    if parent:
+        try:
+            lines = (wdir / (parent + ".events.jsonl")).read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+        for line in lines:
+            try:
+                events.append(json.loads(line).get("event"))
+            except (ValueError, AttributeError):
+                continue
+    report = root / "codebase-health" / str(parent) / "report.html"
+    return {"parents": parents, "parent": parent, "events": events,
+            "report_exists": bool(parent) and report.is_file() and report.stat().st_size > 0,
+            "children": [w for w, a in arts.items() if parent and isinstance(a, dict) and a.get("workflow_type") == "PLAN"
+                         and a.get("parent_workflow_uuid") == parent]}
+
+
+def judge_ch(stream_json, state, calc_porcelain):
+    """('PASS' | 'FAIL:<reason>', detail dict). Pure. A run stopped early (child exists) is fine: no exit-code check, only a non-empty stream."""
+    announced = CH_ANNOUNCE in assistant_text(stream_json)
+    detail = {"announced": announced, "state": state, "product_changes": calc_porcelain}
+    if not stream_events(stream_json):
+        return "FAIL:claude_session_failed(empty stream)", detail
+    if not announced:
+        return "FAIL:no_ch_announce", detail
+    if state["parent"] is None or len(state["parents"]) != 1:
+        return "FAIL:no_ch_artifact(parents=%s)" % state["parents"], detail
+    missing = [e for e in ("memory_finalized", "handoff_started") if e not in state["events"]]
+    if missing:
+        return "FAIL:events_missing(%s)" % ",".join(missing), detail
+    if not state["report_exists"]:
+        return "FAIL:no_report(.craftflow/codebase-health/%s/report.html)" % state["parent"], detail
+    if not state["children"]:
+        return "FAIL:no_plan_child(parent=%s)" % state["parent"], detail
+    if calc_porcelain.strip():
+        return "FAIL:product_code_changed(%r)" % calc_porcelain[:120], detail
+    return "PASS", detail
+
+
 def evidence_class(summary):
     """Class A only with a passing load probe in this run."""
     return "A" if summary.get("load_probe") == "PASS" else "B-SIMULATED"
@@ -277,7 +384,37 @@ def step_orient(ctx):
     return verdict, detail
 
 
-RUNNERS = {"load_probe": step_load_probe, "LV-ORIENT": step_orient}
+def open_shim(scr):
+    """A PATH dir whose `open` appends its arguments to <scr>/open-calls.log and exits 0 (no browser in a live proof)."""
+    shim = scr / "shim-bin"
+    shim.mkdir(exist_ok=True)
+    (shim / "open").write_text('#!/bin/sh\necho "$@" >> "%s"\n' % (scr / "open-calls.log"), encoding="utf-8")
+    (shim / "open").chmod(0o755)
+    return shim
+
+
+def step_ch(ctx):
+    project = fresh_copy(ctx["scr"], ctx["seed"], "LV-CH")
+    env = nested_env(project, ctx["scr"])
+    env["PATH"] = str(open_shim(ctx["scr"])) + os.pathsep + env.get("PATH", "")
+    extra = ("--output-format", "stream-json", "--verbose", "--max-turns", "80", CH_TOOLS)
+    rc, out, err, why = run_until(claude_cmd(ctx["plugin"], ctx["model"], extra), env, project, CH_PROMPT,
+                                  lambda: (lambda s: bool(s["children"]) and "handoff_started" in s["events"])(ch_state(project)),
+                                  CH_TIMEOUT_S)
+    tdir = ctx["scr"] / "transcripts"
+    tdir.mkdir(exist_ok=True)
+    transcript = tdir / "LV-CH.jsonl"
+    transcript.write_text(out, encoding="utf-8")
+    verdict, detail = judge_ch(out, ch_state(project), git(project, "status", "--porcelain", "--", "calc", "tests"))
+    detail.update({"transcript": str(transcript), "stop_reason": why, "rc": rc, "stderr_tail": err[-300:], "project": str(project),
+                   "tools_used": sorted(set(t for t in tool_uses(out) if t)),
+                   "open_calls": (ctx["scr"] / "open-calls.log").read_text(encoding="utf-8").splitlines()
+                   if (ctx["scr"] / "open-calls.log").is_file() else []})
+    log("LV-CH: %s stop=%s %s" % (verdict, why, json.dumps(detail)[:600]))
+    return verdict, detail
+
+
+RUNNERS = {"load_probe": step_load_probe, "LV-ORIENT": step_orient, "LV-CH": step_ch}
 
 
 def clean_scratch(path):

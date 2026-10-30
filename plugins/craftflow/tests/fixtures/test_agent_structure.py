@@ -541,6 +541,7 @@ AGENTS_DIR = os.path.join(_FIXTURES_DIR, "../../agents")
 
 EXPECTED_AGENT_MODELS = {
     "planner": "opus",
+    "architecture-scanner": "opus",
     "plan-gap-reviewer": "opus",
     "plan-bakeoff-judge": "opus",
     "bug-investigator": "opus",

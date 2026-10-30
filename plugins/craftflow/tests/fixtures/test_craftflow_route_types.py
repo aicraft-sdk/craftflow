@@ -171,11 +171,36 @@ def test_attribution(tmp: str) -> None:
     check("control: one extra string fails", attribution_violations(attribution_hits(ctrl)) == ["adapted.md"], "")
 
 
+def guard_decision(project: Path, target: str) -> str:
+    """'allow' or 'deny' from the real PreToolUse write guard for a subagent Write of `target` (payload shape per hooks.json)."""
+    payload = {"tool_name": "Write", "cwd": str(project), "session_id": SESSION, "agent_id": "agent-scanner-1",
+               "agent_type": "craftflow:architecture-scanner", "tool_input": {"file_path": target, "content": "<html></html>"}}
+    env = dict(os.environ, CLAUDE_PLUGIN_ROOT=str(PLUGIN_ROOT), CLAUDE_PROJECT_DIR=str(project))
+    res = subprocess.run([sys.executable, str(PLUGIN_ROOT / "scripts" / "craftflow_pretooluse_guard.py")], input=json.dumps(payload),
+                         capture_output=True, text=True, env=env, cwd=str(project), timeout=60)
+    if res.returncode != 0:
+        return f"error rc={res.returncode} {res.stderr[-200:]}"
+    return "deny" if '"permissionDecision": "deny"' in res.stdout or '"permissionDecision":"deny"' in res.stdout else "allow"
+
+
+def test_report_write_guard(tmp: str) -> None:
+    """H6: the scanner's only Write (its report under .craftflow/codebase-health/) passes the write guard; a /tmp Write does not."""
+    project = new_project(tmp, "guard")
+    report = project / ".craftflow" / "codebase-health" / "x" / "report.html"
+    check("a subagent Write to .craftflow/codebase-health/x/report.html is allowed", guard_decision(project, str(report)) == "allow",
+          guard_decision(project, str(report)))
+    check("a subagent Write to /tmp/x is denied", guard_decision(project, "/tmp/x") == "deny", guard_decision(project, "/tmp/x"))
+    outside = Path(tmp) / "elsewhere" / "report.html"
+    check("a subagent Write to a report path outside the project is denied", guard_decision(project, str(outside)) == "deny",
+          guard_decision(project, str(outside)))
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         test_mints(tmp)
         test_qa_needs_session(tmp)
         test_attribution(tmp)
+        test_report_write_guard(tmp)
     test_headings_and_type()
     test_sizes()
     print(f"\n{_passes} passed, {len(_errors)} failed")

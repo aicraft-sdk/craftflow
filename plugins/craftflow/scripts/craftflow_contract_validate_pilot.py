@@ -3,7 +3,7 @@
 craftflow_contract_validate_pilot.py
 
 Schema-validates the nested `verdict:`/`rationale:` Router Contract YAML body
-emitted by the two pilot write-agents (component-builder, planner) against a
+emitted by the pilot write-agents (component-builder, planner, architecture-scanner) against a
 per-agent JSON schema table under scripts/schemas/.
 
 Distinct from, and NOT a replacement for, craftflow_contract_validate.py --
@@ -295,7 +295,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         description="Schema-validate a pilot write-agent's nested verdict/rationale "
                      "Router Contract YAML body."
     )
-    parser.add_argument("--agent", required=True, choices=["component-builder", "planner"])
+    parser.add_argument("--agent", required=True, choices=["component-builder", "planner", "architecture-scanner"])
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--stdin", action="store_true")
     group.add_argument("--file")

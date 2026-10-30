@@ -93,6 +93,7 @@ wiring): `doubt-verifier`, `github-researcher`, `learn-distiller`, `plan-gap-rev
 
 ```mermaid
 flowchart LR
+  agent_architecture_scanner["architecture-scanner"]
   agent_bug_investigator["bug-investigator"]
   agent_code_reviewer["code-reviewer"]
   agent_component_builder["component-builder"]
@@ -102,6 +103,8 @@ flowchart LR
   agent_planner["planner"]
   agent_silent_failure_hunter["silent-failure-hunter"]
   agent_skill_author["skill-author"]
+  skill_craftflow_codebase_deepening(["craftflow:codebase-deepening"])
+  skill_craftflow_diagram_design(["craftflow:diagram-design"])
   skill_craftflow_debugging_patterns(["craftflow:debugging-patterns"])
   skill_craftflow_test_driven_development(["craftflow:test-driven-development"])
   skill_craftflow_verification_before_completion(["craftflow:verification-before-completion"])
@@ -110,6 +113,8 @@ flowchart LR
   skill_craftflow_diff_driven_docs(["craftflow:diff-driven-docs"])
   skill_craftflow_planning_patterns(["craftflow:planning-patterns"])
   skill_craftflow_skill_distillation(["craftflow:skill-distillation"])
+  agent_architecture_scanner --> skill_craftflow_codebase_deepening
+  agent_architecture_scanner --> skill_craftflow_diagram_design
   agent_bug_investigator --> skill_craftflow_debugging_patterns
   agent_bug_investigator --> skill_craftflow_test_driven_development
   agent_bug_investigator --> skill_craftflow_verification_before_completion
@@ -132,6 +137,7 @@ flowchart LR
 
 | Agent | Declared tools |
 |-------|----------------|
+| `architecture-scanner` | `Read`, `Bash`, `Grep`, `Glob`, `Skill`, `LSP`, `Write` |
 | `bug-investigator` | `Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `Skill`, `LSP`, `WebFetch`, `TaskUpdate` |
 | `code-reviewer` | `Read`, `Bash`, `Grep`, `Glob`, `Skill`, `LSP`, `WebFetch` |
 | `component-builder` | `Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `Skill`, `LSP`, `WebFetch`, `TaskUpdate`, `mcp__ai-craft-registry__registry_search`, `mcp__ai-craft-registry__registry_get`, `mcp__ai-craft-registry__registry_list` |
@@ -149,6 +155,6 @@ flowchart LR
 
 ## Inventory
 
-- 14 agents (`agents/*.md`)
+- 15 agents (`agents/*.md`)
 - 34 skills (`skills/*/SKILL.md`)
 - 24 hook scripts wired in `hooks/hooks.json`

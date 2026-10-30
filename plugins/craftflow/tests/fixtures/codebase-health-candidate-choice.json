@@ -1,0 +1,186 @@
+{
+  "id": "codebase-health-candidate-choice",
+  "workflow_type": "CODEBASE-HEALTH",
+  "scenarios": [
+    {
+      "name": "candidates-found-choice-grill-terminal-plan-handoff",
+      "request": "run a codebase health check on calc",
+      "just_go": false,
+      "expected": {"path": "handoff", "candidate_picked": 1, "child_minted": true},
+      "steps": [
+        {"op": "announce", "text": "-> CODEBASE-HEALTH workflow (signals: codebase health)"},
+        {"op": "mint", "workflow_type": "CODEBASE-HEALTH", "phase": "codebase-health"},
+        {"op": "scanner", "status": "CANDIDATES_FOUND", "candidate_count": 2, "strengths": ["Strong", "Worth exploring"], "top": 1, "report_exists": true, "outcome": "ok"},
+        {"op": "report_shown", "how": "open", "platform": "darwin"},
+        {"op": "gate", "pending_gate": "candidate_choice"},
+        {"op": "question", "options": ["1", "2", "None"]},
+        {"op": "answer", "text": "1", "outcome": "picked"},
+        {"op": "grill", "candidate": 1, "pending_gate": "candidate_choice"},
+        {"op": "design_saved", "path": "docs/plans/2026-10-30-calc-facade-design.md", "captured_in": "results.codebase_health.design_file"},
+        {"op": "status", "value": "completed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"},
+        {"op": "handoff", "target": "PLAN", "input_kind": "design", "announce": "-> handing off to PLAN (design: docs/plans/2026-10-30-calc-facade-design.md)"}
+      ]
+    },
+    {
+      "name": "no-candidates-completes-without-a-gate-or-handoff",
+      "request": "improve architecture of the billing module",
+      "just_go": false,
+      "expected": {"path": "completed_no_handoff", "child_minted": false},
+      "steps": [
+        {"op": "announce", "text": "-> CODEBASE-HEALTH workflow (signals: improve architecture)"},
+        {"op": "mint", "workflow_type": "CODEBASE-HEALTH", "phase": "codebase-health"},
+        {"op": "scanner", "status": "NO_CANDIDATES", "candidate_count": 0, "strengths": [], "top": null, "report_exists": true, "outcome": "ok"},
+        {"op": "report_shown", "how": "print", "platform": "linux"},
+        {"op": "status", "value": "completed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"}
+      ]
+    },
+    {
+      "name": "none-declines-the-choice-and-ends-without-a-handoff",
+      "request": "find the ball of mud in the repo",
+      "just_go": false,
+      "expected": {"path": "completed_no_handoff", "child_minted": false},
+      "steps": [
+        {"op": "announce", "text": "-> CODEBASE-HEALTH workflow (signals: ball of mud)"},
+        {"op": "mint", "workflow_type": "CODEBASE-HEALTH", "phase": "codebase-health"},
+        {"op": "scanner", "status": "CANDIDATES_FOUND", "candidate_count": 3, "strengths": ["Speculative", "Strong", "Worth exploring"], "top": 2, "report_exists": true, "outcome": "ok"},
+        {"op": "report_shown", "how": "open", "platform": "darwin"},
+        {"op": "gate", "pending_gate": "candidate_choice"},
+        {"op": "question", "options": ["1", "2", "3", "None"]},
+        {"op": "answer", "text": "None", "outcome": "declined"},
+        {"op": "status", "value": "completed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"}
+      ]
+    },
+    {
+      "name": "an-unrelated-request-while-the-choice-is-pending-counts-as-a-decline",
+      "request": "codebase health check",
+      "just_go": false,
+      "expected": {"path": "completed_no_handoff", "child_minted": false},
+      "steps": [
+        {"op": "announce", "text": "-> CODEBASE-HEALTH workflow (signals: codebase health)"},
+        {"op": "mint", "workflow_type": "CODEBASE-HEALTH", "phase": "codebase-health"},
+        {"op": "scanner", "status": "CANDIDATES_FOUND", "candidate_count": 2, "strengths": ["Strong", "Strong"], "top": 1, "report_exists": true, "outcome": "ok"},
+        {"op": "report_shown", "how": "print", "platform": "linux"},
+        {"op": "gate", "pending_gate": "candidate_choice"},
+        {"op": "question", "options": ["1", "2", "None"]},
+        {"op": "answer", "text": "fix the failing login test", "outcome": "declined"},
+        {"op": "status", "value": "completed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"}
+      ]
+    },
+    {
+      "name": "just-go-auto-picks-the-top-recommendation",
+      "request": "run a codebase health check on calc",
+      "just_go": true,
+      "expected": {"path": "handoff", "candidate_picked": 2, "child_minted": true},
+      "steps": [
+        {"op": "announce", "text": "-> CODEBASE-HEALTH workflow (signals: codebase health)"},
+        {"op": "mint", "workflow_type": "CODEBASE-HEALTH", "phase": "codebase-health"},
+        {"op": "scanner", "status": "CANDIDATES_FOUND", "candidate_count": 3, "strengths": ["Strong", "Worth exploring", "Speculative"], "top": 2, "report_exists": true, "outcome": "ok"},
+        {"op": "report_shown", "how": "open", "platform": "darwin"},
+        {"op": "auto_pick", "candidate": 2},
+        {"op": "grill", "candidate": 2, "pending_gate": "candidate_choice"},
+        {"op": "design_saved", "path": "docs/plans/2026-10-30-calc-core-design.md", "captured_in": "results.codebase_health.design_file"},
+        {"op": "status", "value": "completed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"},
+        {"op": "handoff", "target": "PLAN", "input_kind": "design", "announce": "-> handing off to PLAN (design: docs/plans/2026-10-30-calc-core-design.md)"}
+      ]
+    },
+    {
+      "name": "just-go-without-a-top-recommendation-picks-the-first-strong",
+      "request": "run a codebase health check on calc",
+      "just_go": true,
+      "expected": {"path": "handoff", "candidate_picked": 2, "child_minted": true},
+      "steps": [
+        {"op": "announce", "text": "-> CODEBASE-HEALTH workflow (signals: codebase health)"},
+        {"op": "mint", "workflow_type": "CODEBASE-HEALTH", "phase": "codebase-health"},
+        {"op": "scanner", "status": "CANDIDATES_FOUND", "candidate_count": 3, "strengths": ["Worth exploring", "Strong", "Strong"], "top": null, "report_exists": true, "outcome": "ok"},
+        {"op": "report_shown", "how": "print", "platform": "linux"},
+        {"op": "auto_pick", "candidate": 2},
+        {"op": "grill", "candidate": 2, "pending_gate": "candidate_choice"},
+        {"op": "design_saved", "path": "docs/plans/2026-10-30-calc-core-design.md", "captured_in": "results.codebase_health.design_file"},
+        {"op": "status", "value": "completed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"},
+        {"op": "handoff", "target": "PLAN", "input_kind": "design", "announce": "-> handing off to PLAN (design: docs/plans/2026-10-30-calc-core-design.md)"}
+      ]
+    },
+    {
+      "name": "just-go-with-neither-top-nor-strong-picks-the-first",
+      "request": "run a codebase health check on calc",
+      "just_go": true,
+      "expected": {"path": "handoff", "candidate_picked": 1, "child_minted": true},
+      "steps": [
+        {"op": "announce", "text": "-> CODEBASE-HEALTH workflow (signals: codebase health)"},
+        {"op": "mint", "workflow_type": "CODEBASE-HEALTH", "phase": "codebase-health"},
+        {"op": "scanner", "status": "CANDIDATES_FOUND", "candidate_count": 2, "strengths": ["Worth exploring", "Speculative"], "top": null, "report_exists": true, "outcome": "ok"},
+        {"op": "report_shown", "how": "print", "platform": "linux"},
+        {"op": "auto_pick", "candidate": 1},
+        {"op": "grill", "candidate": 1, "pending_gate": "candidate_choice"},
+        {"op": "design_saved", "path": "docs/plans/2026-10-30-calc-facade-design.md", "captured_in": "results.codebase_health.design_file"},
+        {"op": "status", "value": "completed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"},
+        {"op": "handoff", "target": "PLAN", "input_kind": "design", "announce": "-> handing off to PLAN (design: docs/plans/2026-10-30-calc-facade-design.md)"}
+      ]
+    },
+    {
+      "name": "scanner-failure-stops-skip-is-reasked-and-end-is-terminal",
+      "request": "run a codebase health check on calc",
+      "just_go": false,
+      "expected": {"path": "failed", "child_minted": false},
+      "steps": [
+        {"op": "announce", "text": "-> CODEBASE-HEALTH workflow (signals: codebase health)"},
+        {"op": "mint", "workflow_type": "CODEBASE-HEALTH", "phase": "codebase-health"},
+        {"op": "scanner_failed"},
+        {"op": "gate", "pending_gate": "architecture_scanner_failed"},
+        {"op": "answer", "text": "skip", "outcome": "re_ask"},
+        {"op": "answer", "text": "(b)", "outcome": "re_ask"},
+        {"op": "answer", "text": "end", "outcome": "ended"},
+        {"op": "status", "value": "failed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"}
+      ]
+    },
+    {
+      "name": "a-report-missing-on-disk-is-a-scanner-failure",
+      "request": "run a codebase health check on calc",
+      "just_go": false,
+      "expected": {"path": "failed", "child_minted": false},
+      "steps": [
+        {"op": "announce", "text": "-> CODEBASE-HEALTH workflow (signals: codebase health)"},
+        {"op": "mint", "workflow_type": "CODEBASE-HEALTH", "phase": "codebase-health"},
+        {"op": "scanner", "status": "CANDIDATES_FOUND", "candidate_count": 2, "strengths": ["Strong", "Strong"], "top": 1, "report_exists": false, "outcome": "architecture_scanner_failed"},
+        {"op": "gate", "pending_gate": "architecture_scanner_failed"},
+        {"op": "answer", "text": "end", "outcome": "ended"},
+        {"op": "status", "value": "failed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"}
+      ]
+    },
+    {
+      "name": "a-count-that-disagrees-with-the-candidates-is-a-scanner-failure-and-retry-recovers",
+      "request": "run a codebase health check on calc",
+      "just_go": false,
+      "expected": {"path": "completed_no_handoff", "child_minted": false},
+      "steps": [
+        {"op": "announce", "text": "-> CODEBASE-HEALTH workflow (signals: codebase health)"},
+        {"op": "mint", "workflow_type": "CODEBASE-HEALTH", "phase": "codebase-health"},
+        {"op": "scanner", "status": "CANDIDATES_FOUND", "candidate_count": 3, "strengths": ["Strong", "Strong"], "top": 1, "report_exists": true, "outcome": "architecture_scanner_failed"},
+        {"op": "gate", "pending_gate": "architecture_scanner_failed"},
+        {"op": "answer", "text": "retry", "outcome": "retried"},
+        {"op": "scanner", "status": "NO_CANDIDATES", "candidate_count": 0, "strengths": [], "top": null, "report_exists": true, "outcome": "ok"},
+        {"op": "status", "value": "completed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"}
+      ]
+    }
+  ]
+}

@@ -20,7 +20,7 @@ ROUTE_FILES = ("route-orient.md", "route-advisory.md", "route-triage.md", "route
 # Route gates answered by `### Cursor route gate answers`; each later route phase appends its own (H6, H7, H11).
 ROUTE_GATES = ("architecture_scanner_failed", "triage_agent_failed", "qa_researcher_failed", "qa_harness_builder_failed",
                "qa_executor_failed", "planner_failed", "plan_gap_reviewer_failed", "code_reviewer_failed",
-               "silent_failure_hunter_failed")
+               "silent_failure_hunter_failed", "candidate_choice")
 POINTER = "Route by the shared doc's `## Intent Routing` table and rules (already read above); Cursor-only additions follow."
 
 _passes = 0
