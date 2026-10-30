@@ -273,10 +273,148 @@ def test_messages(tmp: str) -> None:
     check("a failing handoff_failed append is reported", res.returncode == 5 and "could not append handoff_failed" in res.stderr, f"rc={res.returncode} {res.stderr}")
 
 
+BARRIER = ("import sys, os, time\nsys.path.insert(0, %r)\nimport craftflow_workflow_handoff as h\n"
+           "while not os.path.exists(sys.argv[1]):\n    time.sleep(0.01)\nsys.exit(h.main(sys.argv[2:]))\n")
+
+
+def barrier(p: Proj, n: int, *args: str) -> list:
+    """`n` processes that have all finished importing and then start at once, when a sentinel file appears."""
+    go = p.root / "GO"
+    env = dict(os.environ, CLAUDE_CODE_SESSION_ID=SESSION)
+    cmd = [sys.executable, "-c", BARRIER % str(SCRIPT.parent), str(go), "--project", str(p.root), "--parent", p.parent, *args]
+    procs = [subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=str(p.root)) for _ in range(n)]
+    time.sleep(0.8)
+    go.write_text("1", encoding="utf-8")
+    return [(q.wait(), q.stdout.read(), q.stderr.read()) for q in procs]
+
+
+def test_takeover_race(tmp: str) -> None:
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    bad = []
+    for rnd in range(10):
+        p = Proj(tmp, f"takeover{rnd}")
+        (p.wf_dir / f"{p.parent}.handoff.lock").write_text(json.dumps({"pid": dead.pid}), encoding="utf-8")
+        res = barrier(p, 8, *plan_args())
+        minted = [line_value(r[1], "child_workflow_uuid") for r in res if line_value(r[1], "child_workflow_uuid")]
+        already = {line_value(r[1], "already_handed_off") for r in res if line_value(r[1], "already_handed_off")}
+        started = [e for e in p.events() if e["event"] == "handoff_started"]
+        if not (all(r[0] == 0 for r in res) and len(minted) == 1 and already == set(minted) and len(p.children()) == 1
+                and len(started) == 1 and len([r for r in res if line_value(r[1], "already_handed_off")]) == 7):
+            bad.append((rnd, minted, len(p.children()), len(started)))
+    check("8 barrier-released processes on a dead-pid claim: one child and one handoff_started per round, 10 rounds", not bad, str(bad))
+    left = [k.name for k in p.wf_dir.iterdir() if ".stale-" in k.name or ".tmp" in k.name or k.name.endswith(".takeover")]
+    check("no takeover guard, stale or tmp file is left behind", not left, str(left))
+
+
+def test_interrupt(tmp: str) -> None:
+    p = Proj(tmp, "interrupt")
+    snap, real, raised = p.listing(), hand.write_atomic, False
+
+    def boom(*a, **kw):
+        raise KeyboardInterrupt()
+
+    hand.write_atomic = boom
+    try:
+        run_inproc(p, *plan_args())
+    except KeyboardInterrupt:
+        raised = True
+    finally:
+        hand.write_atomic = real
+    check("a KeyboardInterrupt in the mint still propagates", raised, "")
+    check("the interrupted mint left no child and no claim", p.listing() == snap, str(p.listing()))
+    check("the interrupted mint logs handoff_failed", len([e for e in p.events() if e["event"] == "handoff_failed"]) == 1, str(p.events()))
+
+
+def test_sigterm(tmp: str) -> None:
+    p = Proj(tmp, "sigterm")
+    snap = p.listing()
+    code = ("import sys, os, time, signal\nsys.path.insert(0, %r)\nimport craftflow_workflow_handoff as h\n"
+            "def term(*a, **k):\n    os.kill(os.getpid(), signal.SIGTERM)\n    time.sleep(5)\n"
+            "h.write_atomic = term\nsys.exit(h.main(sys.argv[1:]))\n") % str(SCRIPT.parent)
+    env = dict(os.environ, CLAUDE_CODE_SESSION_ID=SESSION)
+    res = subprocess.run([sys.executable, "-c", code, "--project", str(p.root), "--parent", p.parent, *plan_args()],
+                         capture_output=True, text=True, env=env, cwd=str(p.root), timeout=60)
+    check("a SIGTERM during the mint exits 143 and rolls back", res.returncode == 143 and p.listing() == snap
+          and len([e for e in p.events() if e["event"] == "handoff_failed"]) == 1, f"rc={res.returncode} {res.stderr} {p.listing()}")
+
+
+def test_incomplete_child(tmp: str) -> None:
+    p = Proj(tmp, "incomplete")
+    bare, blocked = "wf-orphan-20260101-000000-deadbeef", "wf-orphan-20260101-000001-cafebabe"
+    (p.wf_dir / f"{bare}.json").write_text(json.dumps({"workflow_uuid": bare, "parent_workflow_uuid": p.parent}), encoding="utf-8")
+    (p.wf_dir / f"{blocked}.json").write_text(json.dumps({"workflow_uuid": blocked, "parent_workflow_uuid": p.parent,
+                                                         "handoff": {"mode": "auto"}}), encoding="utf-8")
+    res = p.run(*plan_args())
+    kid = p.child()
+    fresh = line_value(res.stdout, "child_workflow_uuid")
+    check("planted incomplete children are removed with a warning", res.returncode == 0 and f"Warning: removed incomplete child {bare}" in res.stderr
+          and f"Warning: removed incomplete child {blocked}" in res.stderr, f"rc={res.returncode} {res.stderr}")
+    check("a fresh complete child is minted in their place", fresh.startswith("wf-") and fresh not in (bare, blocked) and kid.get("workflow_uuid") == fresh
+          and kid.get("handoff", {}).get("mode") == "auto" and "already_handed_off" not in res.stdout, f"{res.stdout} {p.listing()}")
+    check("the removed orphans left no files", not [n for n in p.listing() if "orphan" in n], str(p.listing()))
+
+
+def test_claim_robustness(tmp: str) -> None:
+    p = Proj(tmp, "garbage")
+    (p.wf_dir / f"{p.parent}.handoff.lock").write_text("not json {", encoding="utf-8")
+    start = time.time()
+    res = p.run(*plan_args())
+    took = time.time() - start
+    check("an unreadable claim is stale after 5 s and the mint proceeds (< 10 s)", res.returncode == 0 and line_value(res.stdout, "child_workflow_uuid") and took < 10,
+          f"rc={res.returncode} {took:.1f}s {res.stderr}")
+    q = Proj(tmp, "nopid")
+    lock = q.wf_dir / f"{q.parent}.handoff.lock"
+    lock.write_text(json.dumps({"ts": "2026-10-30T00:00:00Z"}), encoding="utf-8")
+    old = time.time() - 30
+    os.utime(str(lock), (old, old))
+    check("a claim with no pid and an old mtime is replaced", q.run(*plan_args()).returncode == 0 and len(q.children()) == 1, str(q.listing()))
+    r = Proj(tmp, "dirclaim")
+    lock = r.wf_dir / f"{r.parent}.handoff.lock"
+    lock.mkdir()
+    start = time.time()
+    try:
+        res = r.run(*plan_args(), timeout=30)
+    except subprocess.TimeoutExpired:
+        res = subprocess.CompletedProcess([], 124, "", "timed out waiting on the directory claim")
+    check("a directory at the claim path: exit 5 at once with the path in the message", res.returncode == 5 and time.time() - start < 5
+          and f"Error: handoff claim path is not a regular file: {lock.resolve()}" in res.stderr, f"rc={res.returncode} {res.stderr}")
+    check("a directory claim writes no handoff_failed and no child", not [e for e in r.events() if e["event"] == "handoff_failed"] and not r.children(), str(r.events()))
+    s = Proj(tmp, "ghostchild")
+    lock = s.wf_dir / f"{s.parent}.handoff.lock"
+    lock.write_text(json.dumps({"pid": os.getpid(), "ts": "2026-10-30T00:00:00Z", "child": "wf-nope-20260101-000000-deadbeef"}), encoding="utf-8")
+    res = s.run(*plan_args())
+    check("a claim whose child has no artifact is ignored and the mint recovers", res.returncode == 0 and line_value(res.stdout, "child_workflow_uuid")
+          and len(s.children()) == 1, f"rc={res.returncode} {res.stdout} {res.stderr}")
+
+
+def test_parallel_records(tmp: str) -> None:
+    p = Proj(tmp, "records")
+    res = parallel(p, 6, "--record-accept", "--target", "BUILD", "--answer", "yes")
+    ids = {line_value(r[1], "accepted_event_id") for r in res}
+    check("6 parallel --record-accept append one handoff_accepted", all(r[0] == 0 for r in res) and len(ids) == 1 and "" not in ids
+          and len([e for e in p.events() if e["event"] == "handoff_accepted"]) == 1, str([(r[0], r[1], r[2]) for r in res]))
+    check("the record lock is released", not [n for n in p.listing() if "lock" in n], str(p.listing()))
+
+
+def test_extra_keys(tmp: str) -> None:
+    p = Proj(tmp, "extra")
+    for key in ("workflow_uuid", "workflow_id", "session_id", "policy", "created_at"):
+        info = wid.mint_workflow_id("r", "", p.root)
+        try:
+            wid.init_artifact(p.root, info, workflow_type="PLAN", request="r", phase="plan", task_tools_available="false", extra={key: "x"})
+            raised = False
+        except ValueError:
+            raised = True
+        check(f"init_artifact(extra=) refuses {key}", raised, "")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         for fn in (test_race, test_lock_states, test_host_derivation, test_finalized_restart, test_input, test_accept_per_target,
-                   test_parent_type, test_flag_values, test_orphans, test_declined_blocks, test_task_tools, test_messages):
+                   test_parent_type, test_flag_values, test_orphans, test_declined_blocks, test_task_tools, test_messages,
+                   test_takeover_race, test_interrupt, test_sigterm, test_incomplete_child, test_claim_robustness, test_parallel_records,
+                   test_extra_keys):
             fn(tmp)
     print(f"\n{_passes} passed, {len(_errors)} failed")
     for err in _errors:

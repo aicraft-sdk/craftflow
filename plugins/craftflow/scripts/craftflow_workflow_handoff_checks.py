@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
-"""Pure checks and the exclusive claim used by craftflow_workflow_handoff.py (H5).
+"""Pure checks, child bookkeeping and the event log used by craftflow_workflow_handoff.py (H5); the claim is in
+craftflow_workflow_handoff_claim.py.
 
   parent_host / is_finalized / accepted_event / current_accept / declined_blocks   facts read from the parent log
   validate_flags / resolve_input                                                    input validation (exit 2 / exit 4)
-  acquire_claim / mark_claim / release_claim                                        `{parent}.handoff.lock`, an O_EXCL file
-                                                                                    that is kept after a mint as the
-                                                                                    durable "handed off" marker
+  scan_children / child_complete / remove_child                                     children of a parent; only a complete one
+                                                                                    (handoff block + handoff_started) is adopted
+  read_events / append_event / logged_child                                         the parent event log
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 WRITE_TARGETS = ("BUILD", "DEBUG")
 INPUT_KINDS = ("design", "brief", "bug-context")
 SOURCE_ROUTES = ("TRIAGE", "CODEBASE-HEALTH", "QA", "DEBUG")  # also the parent types that may hand off
-STALE_SECONDS = 120
+WF_RE = re.compile(r"wf-[A-Za-z0-9-]+")
 Failure = Tuple[int, str]
 Events = List[Dict[str, Any]]
 
@@ -88,64 +89,6 @@ def _stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _read_claim(lock: Path) -> Dict[str, Any]:
-    try:
-        value = json.loads(lock.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}  # missing, or caught between the O_EXCL create and the write
-    return value if isinstance(value, dict) else {}
-
-
-def _alive(pid: Any) -> bool:
-    if not isinstance(pid, int):
-        return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        return True
-    return True
-
-
-def acquire_claim(lock: Path, logged_child: Callable[[], Optional[str]]) -> Tuple[str, Optional[str]]:
-    """`("acquired", None)` once this process created the claim exclusively, or `("already", child)` when another
-    process finished the handoff. A held claim without a result is waited on; it is replaced when its process is gone or it
-    is older than STALE_SECONDS and no child is linked. OSError other than "exists" propagates (the caller maps it to exit 5)."""
-    while True:
-        try:
-            fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        except FileExistsError:
-            pass
-        else:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(json.dumps({"pid": os.getpid(), "ts": _stamp()}))
-            return "acquired", None
-        held = _read_claim(lock)
-        child = held.get("child") or logged_child()
-        if child:
-            return "already", str(child)
-        try:
-            age = time.time() - lock.stat().st_mtime
-        except FileNotFoundError:
-            continue  # released while we looked: try to take it
-        if age > STALE_SECONDS or not _alive(held.get("pid")):
-            lock.unlink(missing_ok=True)
-            continue
-        time.sleep(0.05)
-
-
-def mark_claim(lock: Path, child: str) -> None:
-    """Record the minted child in the claim (atomic replace), so a later call answers without the parent log line."""
-    tmp = lock.with_name(lock.name + ".tmp")
-    tmp.write_text(json.dumps({**_read_claim(lock), "child": child}), encoding="utf-8")
-    os.replace(str(tmp), str(lock))
-
-
-def release_claim(lock: Path) -> None:
-    lock.unlink(missing_ok=True)
-
-
 def read_json(path: Path) -> Dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -153,8 +96,29 @@ def read_json(path: Path) -> Dict[str, Any]:
     return value
 
 
-def find_child(wf_dir: Path, parent: str) -> Optional[str]:
-    """A child artifact whose `parent_workflow_uuid` is `parent` (covers a crash before the parent log line)."""
+def child_complete(wf_dir: Path, child: str) -> bool:
+    """A mint finished for `child`: its artifact has a `handoff` block with a `mode` and its log has `handoff_started`."""
+    if not WF_RE.fullmatch(child):
+        return False
+    try:
+        handoff = read_json(wf_dir / f"{child}.json").get("handoff")
+        lines = (wf_dir / f"{child}.events.jsonl").read_text(encoding="utf-8").splitlines()
+    except (OSError, ValueError):
+        return False
+    if not (isinstance(handoff, dict) and handoff.get("mode")):
+        return False
+    for line in lines:
+        try:
+            if json.loads(line).get("event") == "handoff_started":
+                return True
+        except (ValueError, AttributeError):
+            continue
+    return False
+
+
+def scan_children(wf_dir: Path, parent: str) -> Tuple[Optional[str], List[str]]:
+    """(a complete child of `parent` or None, the ids of its incomplete orphans); covers a crash before the parent log line."""
+    done, orphans = None, []
     for path in sorted(wf_dir.glob("wf-*.json")):
         try:
             if parent.encode() not in path.read_bytes():
@@ -162,17 +126,59 @@ def find_child(wf_dir: Path, parent: str) -> Optional[str]:
             art = read_json(path)
         except (OSError, ValueError):
             continue
-        if art.get("parent_workflow_uuid") == parent:
-            return str(art.get("workflow_uuid") or path.stem)
-    return None
+        if art.get("parent_workflow_uuid") != parent:
+            continue
+        if child_complete(wf_dir, path.stem):
+            done = done or str(art.get("workflow_uuid") or path.stem)
+        else:
+            orphans.append(path.stem)
+    return done, orphans
+
+
+def find_child(wf_dir: Path, parent: str) -> Optional[str]:
+    return scan_children(wf_dir, parent)[0]
 
 
 def remove_child(wf_dir: Path, child: str) -> None:
     """Delete everything a mint of `child` may have written; an OSError that is not "already gone" is reported."""
-    for path in (wf_dir / f"{child}.events.jsonl", wf_dir / f"{child}.json", wf_dir / f"{child}.json.tmp", wf_dir / child):
+    for path in (wf_dir / f"{child}.events.jsonl", wf_dir / f"{child}.json", *wf_dir.glob(f"{child}.json.tmp*"), wf_dir / child):
         try:
             path.rmdir() if path.name == child else path.unlink()
         except FileNotFoundError:
             pass
         except OSError as exc:
             sys.stderr.write(f"Warning: could not remove {path.name}: {exc}\n")
+
+
+def read_events(path: Path, warn: bool = True) -> Events:
+    events, skipped = [], 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except ValueError:
+            value = None
+        if isinstance(value, dict):
+            events.append(value)
+        else:
+            skipped += 1
+    if skipped and warn:
+        sys.stderr.write(f"Warning: skipped {skipped} malformed line(s) in {path.name}\n")
+    return events
+
+
+def append_event(path: Path, wf: str, event: str, **fields: Any) -> Dict[str, Any]:
+    record = {"ts": _stamp(), "wf": wf, "event": event, "agent": "router", **fields}
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+    return record
+
+
+def logged_child(log: Path) -> Optional[str]:
+    """The child named by a `handoff_started` line of the parent log (written only after the child is complete)."""
+    try:
+        events = read_events(log, warn=False)
+    except OSError:
+        return None
+    return next((e["child_workflow_uuid"] for e in events if e.get("event") == "handoff_started" and e.get("child_workflow_uuid")), None)

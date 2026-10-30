@@ -242,7 +242,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     reg = registry()
     paths = [args.fixture] if args.fixture else [PLUGIN_ROOT / "tests" / "fixtures" / name for name in reg]
     passed = failed = 0
-    for path in paths:
+    loaded = []
+    for path in paths:  # shape phase for EVERY fixture first: nothing runs against a mis-shaped fixture
         print(f"== {path.name}")
         try:
             fixture = load_fixture(path)
@@ -262,7 +263,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         print("PASS: fixture shape")
         passed += 1
-        for name, problems in run_fn(fixture):
+        loaded.append((path, fixture, run_fn))
+    for path, fixture, run_fn in loaded:
+        print(f"== {path.name} (checks)")
+        try:
+            results = list(run_fn(fixture))
+        except Exception as exc:  # a check that cannot read what the shape phase allowed is a FAIL, not a traceback
+            print(f"FAIL: {path.name}: {type(exc).__name__}: {exc}")
+            return 1
+        for name, problems in results:
             print(("PASS: " if not problems else "FAIL: ") + name)
             for problem in problems:
                 print("  - " + problem)

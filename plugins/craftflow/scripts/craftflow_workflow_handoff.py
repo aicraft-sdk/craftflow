@@ -12,14 +12,17 @@ Mints a linked child workflow from a finalized advisory/QA parent (H5; `_shared/
 Prints `child_workflow_uuid=wf-...` on a mint and `already_handed_off=wf-...` when the parent already has a child
 (nothing is written then). The parent ARTIFACT is never written (PP-6); only its event log gains lines.
 
-The mint takes an O_EXCL claim `{parent}.handoff.lock` first (kept after a mint as the "handed off" marker), so parallel
-calls mint exactly one child. The host comes from the parent's `workflow_started` event; `--host cursor` is only accepted
-for a Cursor parent. Validation helpers live in craftflow_workflow_handoff_checks.py.
+The mint takes an O_EXCL claim `{parent}.handoff.lock` first (kept after a mint as the "handed off" marker; a stale claim is
+taken over under a guard), so parallel calls mint exactly one child; `--record-*` take `{parent}.record.lock` for the
+append. Any interruption (also KeyboardInterrupt and SIGTERM) after the child is created rolls it back. Only a COMPLETE child
+(handoff block + `handoff_started`) is adopted; an incomplete one is removed. The host comes from the parent's
+`workflow_started` event; `--host cursor` is only accepted for a Cursor parent. Helpers: craftflow_workflow_handoff_checks.py,
+craftflow_workflow_handoff_claim.py.
 
 Exit: 0 ok | 2 usage, invalid flag values, `--host cursor` without a Cursor parent, QA without a session on claude |
 3 write target without a recorded accept, or declined (also --record-accept --just-go) | 4 parent not found, not
 finalized or of a type that cannot hand off, input or source QA invalid | 5 mint failed (`handoff_failed` is appended to
-the parent log when it is writable, and no child is left behind).
+the parent log when it is writable, and no child is left behind), or the claim path is not a regular file.
 """
 from __future__ import annotations
 
@@ -27,17 +30,18 @@ import argparse
 import json
 import os
 import re
+import signal
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import craftflow_workflow_handoff_checks as checks  # noqa: E402
+import craftflow_workflow_handoff_claim as claim  # noqa: E402
 import craftflow_workflow_id as wid  # noqa: E402
-from craftflow_workflow_handoff_checks import (accepted_event, find_child, is_finalized, read_json,  # noqa: E402,F401
-                                               remove_child)
+from craftflow_workflow_handoff_checks import (accepted_event, append_event, find_child, is_finalized, logged_child,  # noqa: E402,F401
+                                               read_events, read_json, remove_child)
 
 TARGETS = ("PLAN", "BUILD", "DEBUG", "QA")
 WRITE_TARGETS = checks.WRITE_TARGETS
@@ -71,42 +75,13 @@ def plan_handoff(parent_artifact: Dict[str, Any], parent_events: List[Dict[str, 
     return ("mint", "auto")
 
 
-def now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def read_events(path: Path, warn: bool = True) -> List[Dict[str, Any]]:
-    events, skipped = [], 0
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            value = json.loads(line)
-        except ValueError:
-            value = None
-        if isinstance(value, dict):
-            events.append(value)
-        else:
-            skipped += 1
-    if skipped and warn:
-        sys.stderr.write(f"Warning: skipped {skipped} malformed line(s) in {path.name}\n")
-    return events
-
-
-def append_event(path: Path, wf: str, event: str, **fields: Any) -> Dict[str, Any]:
-    record = {"ts": now(), "wf": wf, "event": event, "agent": "router", **fields}
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
-    return record
-
-
 def fail(code: int, message: str) -> int:
     sys.stderr.write(f"Error: {message}\n")
     return code
 
 
 def write_atomic(path: Path, value: Dict[str, Any]) -> None:
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}-{os.urandom(3).hex()}")
     tmp.write_text(json.dumps(value, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     os.replace(str(tmp), str(path))
 
@@ -127,6 +102,19 @@ def patch_child(path: Path, handoff: Dict[str, Any], parent: str, target: str, s
         negotiation = (source_qa.get("qa") or {}).get("negotiation")
         art["qa"] = {"negotiation": negotiation} if negotiation is not None else {}
     write_atomic(path, art)
+
+
+def recorded(args: argparse.Namespace, wf_dir: Path, log: Path) -> int:
+    """Run --record-accept/--record-decline under a short-lived `{parent}.record.lock` (the permanent handoff claim is the
+    "handed off" marker and cannot double as one), so parallel records append once; the events are read under the lock."""
+    try:
+        with claim.short_claim(wf_dir / f"{args.parent}.record.lock"):
+            events = read_events(log, warn=False)
+            return cmd_record_accept(args, log, events, args.parent) if args.record_accept else cmd_record_decline(args, log, args.parent)
+    except claim.ClaimPathError as exc:
+        return fail(5, str(exc))
+    except OSError as exc:
+        return fail(5, f"cannot record: {exc}")
 
 
 def cmd_record_accept(args: argparse.Namespace, log: Path, events: List[Dict[str, Any]], parent: str) -> int:
@@ -169,15 +157,6 @@ def cmd_record_decline(args: argparse.Namespace, log: Path, parent: str) -> int:
     return 0
 
 
-def logged_child(log: Path) -> Optional[str]:
-    """The child named by a `handoff_started` line of the parent log (written only after the child is complete)."""
-    try:
-        events = read_events(log, warn=False)
-    except OSError:
-        return None
-    return next((e["child_workflow_uuid"] for e in events if e.get("event") == "handoff_started" and e.get("child_workflow_uuid")), None)
-
-
 class Mint:
     """One mint attempt for one parent; `run` holds the claim, `locked` does the work under it."""
 
@@ -205,7 +184,11 @@ class Mint:
     def run(self) -> int:
         taken = kept = False
         try:
-            state, other = checks.acquire_claim(self.lock, lambda: logged_child(self.log))
+            signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # so a TERM unwinds through the rollback below
+        except ValueError:
+            pass  # not the main thread (in-process callers)
+        try:
+            state, other = claim.acquire_claim(self.lock, lambda: logged_child(self.log))
             if state == "already":
                 print(f"already_handed_off={other}")
                 return 0
@@ -213,7 +196,9 @@ class Mint:
             code = self.locked()
             kept = code == 0
             return code
-        except Exception as exc:  # every failure after the claim maps to exit 5 with a rollback
+        except claim.ClaimPathError as exc:
+            return fail(5, str(exc))
+        except BaseException as exc:  # every failure after the claim maps to exit 5 with a rollback; an interrupt re-raises
             message = wid.describe_init_error(exc) if isinstance(exc, OSError) else (
                 str(exc) if isinstance(exc, ValueError) else f"{type(exc).__name__}: {exc}")
             if self.child:
@@ -222,18 +207,23 @@ class Mint:
                 append_event(self.log, self.parent, "handoff_failed", target=self.args.target, reason=message[:200])
             except OSError as inner:
                 sys.stderr.write(f"Error: mint failed; could not append handoff_failed: {inner}\n")
+            if not isinstance(exc, Exception):
+                raise
             return fail(5, f"handoff mint failed: {message}")
         finally:
             if taken and not kept:
                 try:
-                    checks.release_claim(self.lock)
+                    claim.release_claim(self.lock)
                 except OSError as exc:
                     sys.stderr.write(f"Warning: could not remove {self.lock.name}: {exc}\n")
 
     def locked(self) -> int:
         args, parent = self.args, self.parent
         events = read_events(self.log, warn=False)
-        found = find_child(self.wf_dir, parent)  # re-run under the claim: a legacy or crashed mint may have left a child
+        found, orphans = checks.scan_children(self.wf_dir, parent)  # under the claim: a crashed mint may have left a child
+        for orphan in orphans:  # an incomplete one (no handoff block or no handoff_started) is never adopted
+            sys.stderr.write(f"Warning: removed incomplete child {orphan}\n")
+            remove_child(self.wf_dir, orphan)
         if found and not any(e.get("event") == "handoff_started" for e in events):
             events = events + [{"event": "handoff_started", "child_workflow_uuid": found}]
         plan = plan_handoff(self.parent_art, events, args.target, args.accepted_answer, args.just_go, host=self.host,
@@ -263,11 +253,10 @@ class Mint:
         inherited = (self.parent_art.get("capabilities") or {}).get("task_tools_available")
         tools = args.task_tools_available or (inherited if inherited in ("true", "false", "unknown") else "unknown")
         info = wid.mint_workflow_id(request, "", self.project)
-        child = info["workflow_uuid"]
+        child = self.child = info["workflow_uuid"]  # set before anything is written: an interrupt must find it to roll back
         wid.init_artifact(self.project, info, workflow_type=args.target, request=request, phase=PHASES[args.target],
                           task_tools_available=tools, host="cursor" if self.host == "cursor" else "claude-code",
                           allow_no_session=self.host == "cursor", extra={"parent_workflow_uuid": parent})
-        self.child = child
         patch_child(self.wf_dir / f"{child}.json", handoff, parent, args.target, source_qa, args.source_qa_wf)
         fields = {"target": args.target, "mode": plan[1], "source_route": handoff["source_route"],
                   "parent_workflow_uuid": parent, "child_workflow_uuid": child}
@@ -281,7 +270,7 @@ class Mint:
 
     def mark(self, child: str) -> None:
         try:
-            checks.mark_claim(self.lock, child)
+            claim.mark_claim(self.lock, child)
         except OSError as exc:
             sys.stderr.write(f"Warning: could not record {child} in {self.lock.name}: {exc}\n")
 
@@ -320,10 +309,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         events = read_events(log)
     except OSError:
         return fail(4, f"parent workflow log not found: {args.parent}")
-    if args.record_accept:
-        return cmd_record_accept(args, log, events, args.parent)
-    if args.record_decline:
-        return cmd_record_decline(args, log, args.parent)
+    if args.record_accept or args.record_decline:
+        return recorded(args, wf_dir, log)
     if args.target is None:
         return fail(2, "--target is required")
     mint = Mint(args, project, args.parent, parent_art, checks.parent_host(events))

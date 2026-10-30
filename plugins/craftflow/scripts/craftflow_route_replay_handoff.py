@@ -62,6 +62,7 @@ DOC_PINS = (
     (ADVISORY, "A second mint never happens."),
     (ADVISORY, "A Cursor parent is finalized by `workflow_completed`"),
     (ADVISORY, "`--host cursor`"),
+    (ADVISORY, "The host is always the first `workflow_started` event's host"),
     (KERNEL, "Advisory and QA routes hand off only through `_shared/route-advisory.md` and "
              "`scripts/craftflow_workflow_handoff.py`; BUILD/DEBUG targets need a recorded `handoff_accepted`, never JUST_GO."),
     (KERNEL, "a BUILD or DEBUG handoff question"),
@@ -145,15 +146,50 @@ def pp5_problems(steps: List[Dict[str, Any]]) -> List[str]:
     return problems
 
 
+STR, NSTR, LIST, DICT, BOOL, INT = (str,), (str, type(None)), (list,), (dict,), (bool,), (int,)
+# One schema for every key the checks below read. `shape` validates it before any check runs, so the checks may index
+# `name`, `steps`, `op` and the keys listed here without guarding; the runner still turns any other exception into a FAIL.
+STEP_KEYS: Dict[str, Dict[str, Tuple[type, ...]]] = {
+    "parent_terminal": {"event": STR}, "announce": {"text": STR}, "mint": {"target": STR}, "mint_call": {},
+    "offer": {"target": STR, "available": BOOL, "tool": STR}, "answer": {"outcome": STR, "text": STR},
+    "handoff_accepted": {"target": STR}, "handoff_declined": {"reason": STR, "detail": NSTR},
+    "gate": {"pending_gate": NSTR}, "resume": {"paused": LIST, "asks": STR, "re_asks": NSTR}, "status": {"value": STR},
+    "memory_task_created": {}, "memory_finalized": {}, "cli": {"prints": STR},
+    "adopt": {"skips": LIST, "appends": STR, "runs": LIST}, "session_ends": {},
+}
+SCENARIO_KEYS = {"name": STR, "steps": LIST, "target": STR, "matrix_source": STR, "just_go": BOOL, "expected": DICT,
+                 "crash": BOOL, "final": DICT}
+EXPECTED_KEYS = {"mode": STR, "offered": BOOL, "child_minted": BOOL, "workflow_adopted": INT, "child_workflow_started": INT}
+
+
+def type_name(spec: Tuple[type, ...]) -> str:
+    return "|".join("null" if s is type(None) else s.__name__ for s in spec)
+
+
+def typed_problems(label: str, obj: Dict[str, Any], table: Dict[str, Tuple[type, ...]]) -> List[str]:
+    """Every key of `table` that `obj` carries must have the listed type (a bool is not an int)."""
+    return [f"{label}: `{key}` must be {type_name(spec)}, got {type(obj[key]).__name__}"
+            for key, spec in table.items()
+            if key in obj and (not isinstance(obj[key], spec) or (spec == INT and isinstance(obj[key], bool)))]
+
+
 def shape(fixture: Any, kind: str) -> List[str]:
     if not isinstance(fixture, dict) or not isinstance(fixture.get("scenarios"), list) or not fixture["scenarios"]:
         return [f"{kind} fixture needs a non-empty `scenarios` list"]
-    problems = []
+    problems: List[str] = []
     for sc in fixture["scenarios"]:
-        if not isinstance(sc, dict) or not sc.get("name") or not isinstance(sc.get("steps"), list) or not sc["steps"]:
+        if not isinstance(sc, dict) or not isinstance(sc.get("name"), str) or not sc["name"] or not isinstance(sc.get("steps"), list) or not sc["steps"]:
             problems.append(f"scenario {sc.get('name') if isinstance(sc, dict) else sc!r} lacks `name` or `steps`")
-        elif any(not isinstance(s, dict) or "op" not in s for s in sc["steps"]):
-            problems.append(f"scenario {sc['name']} has a step without `op`")
+            continue
+        label = f"scenario {sc['name']}"
+        problems += typed_problems(label, sc, SCENARIO_KEYS)
+        if isinstance(sc.get("expected"), dict):
+            problems += typed_problems(f"{label} expected", sc["expected"], EXPECTED_KEYS)
+        for i, step in enumerate(sc["steps"]):
+            if not isinstance(step, dict) or step.get("op") not in STEP_KEYS:
+                problems.append(f"{label} has a step without a known `op` (step {i}: {step!r}; expected one of {', '.join(STEP_KEYS)})")
+            else:
+                problems += typed_problems(f"{label} step {i} ({step['op']})", step, STEP_KEYS[step["op"]])
     return problems
 
 

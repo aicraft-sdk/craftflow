@@ -7,6 +7,8 @@ replay check RED while an untouched copy passes.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import shutil
 import subprocess
 import sys
@@ -17,6 +19,7 @@ from typing import Callable, Dict
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 
+import craftflow_route_replay_check as rc_check  # noqa: E402
 import craftflow_route_replay_handoff as rh  # noqa: E402
 
 _passes = 0
@@ -102,7 +105,7 @@ def mutated_copies() -> None:
         {"scripts/craftflow_workflow_handoff.py": lambda t: t.replace("if not accepted_event(parent_events, answer, target):", "if False:")},
         "live CLI: PP-5 and PP-6")
     cli = "scripts/craftflow_workflow_handoff.py"
-    claim, already = 'checks.acquire_claim(self.lock, lambda: logged_child(self.log))', 'return ("already", event["child_workflow_uuid"])'
+    claim, already = 'claim.acquire_claim(self.lock, lambda: logged_child(self.log))', 'return ("already", event["child_workflow_uuid"])'
     red("a CLI that mints twice (no claim answer, no already rule) fails the live adopt check",
         {cli: lambda t: t.replace(claim, '"acquired", None').replace(already, "continue")},
         "live CLI: one mint, already_handed_off, decline")
@@ -125,6 +128,24 @@ def shape_controls() -> None:
           and "FAIL: doc pins" not in res.stdout and "matrix_source" in res.stdout, f"rc={res.returncode} {res.stdout[-500:]}")
     res = replay_on_copy({"tests/fixtures/handoff-adopt-child.json": lambda t: t.replace('"op": "adopt"', '"kind": "adopt"')})
     check("a step without `op` stops the replay at the shape phase", res.returncode == 1 and "route replay: stopped" in res.stdout, f"rc={res.returncode} {res.stdout[-300:]}")
+    res = replay_on_copy({"tests/fixtures/advisory-pause-resume.json": lambda t: t.replace('"paused": ["wf-a-20261030-100000-aaaaaaaa", "wf-b-20261030-100001-bbbbbbbb"]', '"paused": 5')})
+    check("`paused: 5` is a shape failure, not a traceback", res.returncode == 1 and "FAIL: fixture shape" in res.stdout and "paused" in res.stdout
+          and "Traceback" not in res.stderr + res.stdout, f"rc={res.returncode} {res.stdout[-400:]}{res.stderr[-400:]}")
+    res = replay_on_copy({"tests/fixtures/handoff-adopt-child.json": lambda t: t.replace('"appends": "workflow_adopted"', '"appends": 5', 1)})
+    check("a mis-shaped LAST fixture stops the replay before any fixture is run",
+          res.returncode == 1 and "FAIL: fixture shape" in res.stdout and "PASS: doc pins" not in res.stdout and "FAIL: doc pins" not in res.stdout,
+          f"rc={res.returncode} {res.stdout[-500:]}")
+    boom = lambda fx, root=None: (_ for _ in ()).throw(KeyError("pending_gate"))
+    saved = rc_check.registry
+    rc_check.registry = lambda: {"orient-inline.json": (lambda fx: [], boom)}
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            code = rc_check.main(["--fixture", str(PLUGIN_ROOT / "tests" / "fixtures" / "orient-inline.json")])
+    finally:
+        rc_check.registry = saved
+    check("an exception in the run phase becomes `FAIL: <fixture>: <Type>: <msg>` with exit 1", code == 1
+          and "FAIL: orient-inline.json: KeyError: 'pending_gate'" in out.getvalue(), f"{code} {out.getvalue()}")
     check("matrix_mode with an empty source is none, not the first row", rh.matrix_mode([("TRIAGE", "BUILD", "ask once", "asked")], "", "BUILD", False) == "none", "")
     with tempfile.TemporaryDirectory() as tmp:
         stray = Path(tmp) / "stray.json"

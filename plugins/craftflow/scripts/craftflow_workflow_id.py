@@ -425,6 +425,8 @@ def init_artifact(project_dir: Path, info: dict, *, workflow_type: str, request:
     every file this call created is removed first. `host` and `allow_no_session` serve the handoff CLI (Cursor)."""
     if workflow_type == "QA" and not allow_no_session and current_session_id() is None:
         raise ValueError("QA workflow needs a session id")  # fail closed before any file exists
+    if {"workflow_uuid", "workflow_id", "session_id", "policy", "created_at"} & set(extra or {}):
+        raise ValueError("extra may not set workflow_uuid, workflow_id, session_id, policy or created_at")
     wf = info["workflow_uuid"]
     ts = info["iso_timestamp"]
     if not (project_dir / ".craftflow").is_dir():

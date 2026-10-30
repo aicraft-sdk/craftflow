@@ -62,4 +62,4 @@ If the session ended after the mint but before the adopt, the next CLI call prin
 
 ### Cursor finalization signal
 
-A Cursor parent is finalized by `workflow_completed` (its `workflow_started` event carries `"host":"cursor"`), not by `memory_finalized`. Run the handoff with `--host cursor`, which the CLI accepts only when the parent's `workflow_started` says cursor: the child's `workflow_started` carries the same host, a QA child may be minted without a session id, and the Cursor router then rewrites `cursor-wf.json` for the child.
+A Cursor parent is finalized by `workflow_completed` (its `workflow_started` event carries `"host":"cursor"`), not by `memory_finalized`. Run the handoff with `--host cursor`, which the CLI accepts only when the parent's `workflow_started` says cursor: the child's `workflow_started` carries the same host, a QA child may be minted without a session id, and the Cursor router then rewrites `cursor-wf.json` for the child. The host is always the first `workflow_started` event's host; a later `workflow_started` (a restart) never changes it.

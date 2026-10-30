@@ -83,12 +83,12 @@ class Proj:
         kids = self.children()
         return json.loads(kids[0].read_text(encoding="utf-8")) if len(kids) == 1 else {}
 
-    def run(self, *args: str, session: str = SESSION, parent: str = None):
+    def run(self, *args: str, session: str = SESSION, parent: str = None, timeout: float = None):
         env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
         if session:
             env["CLAUDE_CODE_SESSION_ID"] = session
         cmd = [sys.executable, str(SCRIPT), "--project", str(self.root), "--parent", parent or self.parent, *args]
-        return subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(self.root))
+        return subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(self.root), timeout=timeout)
 
 
 def plan_args(*extra: str) -> tuple:
