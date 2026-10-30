@@ -147,6 +147,48 @@
       "to": 75732,
       "at_sha": "924808826fe619199ddaa3b5675062b474775b2a",
       "from": 75261
+    },
+    {
+      "phase": "H5",
+      "key": "kernel_bytes",
+      "to": 36009,
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 35638
+    },
+    {
+      "phase": "H5",
+      "key": "protocol_bytes",
+      "to": 16109,
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 16005
+    },
+    {
+      "phase": "H5",
+      "key": "readset.BUILD",
+      "to": 103281,
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 102167
+    },
+    {
+      "phase": "H5",
+      "key": "readset.PLAN",
+      "to": 91041,
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 89926
+    },
+    {
+      "phase": "H5",
+      "key": "readset.DEBUG",
+      "to": 78896,
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 77781
+    },
+    {
+      "phase": "H5",
+      "key": "readset.REVIEW",
+      "to": 76847,
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 75732
     }
   ]
 }
