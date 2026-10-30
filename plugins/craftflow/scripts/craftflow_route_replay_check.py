@@ -210,7 +210,6 @@ def load_fixture(path: Path) -> Any:
 
 def orient_results(fixture: Any) -> List[Any]:
     return [
-        ("fixture shape", check_fixture(fixture)),
         ("routing law sends the requests to ORIENT", check_routing(fixture)),
         ("protocol row derives the inline outcome", check_outcome(fixture)),
         ("read map registers the route file", check_registry()),
@@ -222,10 +221,11 @@ def orient_results(fixture: Any) -> List[Any]:
 
 
 def registry() -> Dict[str, Any]:
-    """fixture file name -> function(fixture) returning [(check name, problems)]; the H5 entries bind the plugin root."""
-    reg: Dict[str, Any] = {"orient-inline.json": orient_results}
-    for name, fn in handoff.CHECKS.items():
-        reg[name] = (lambda fx, fn=fn: fn(fx, PLUGIN_ROOT))
+    """fixture file name -> (shape(fixture) -> problems, run(fixture) -> [(check name, problems)]); the H5 entries bind the
+    plugin root. `main` runs the shape phase first and stops on a mis-shaped fixture."""
+    reg: Dict[str, Any] = {"orient-inline.json": (check_fixture, orient_results)}
+    for name, (shape_fn, run_fn) in handoff.CHECKS.items():
+        reg[name] = (shape_fn, (lambda fx, fn=run_fn: fn(fx, PLUGIN_ROOT)))
     return reg
 
 
@@ -249,14 +249,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         except ValueError as exc:
             print(f"FAIL: fixture shape: {exc}")
             return 1
-        results = reg.get(path.name, orient_results)(fixture)
-        if results[0][1]:
+        if path.name not in reg:
+            sys.stderr.write(f"Error: unregistered fixture {path.name}\n")
+            return 1
+        shape_fn, run_fn = reg[path.name]
+        shape_problems = shape_fn(fixture)
+        if shape_problems:
             print("FAIL: fixture shape")
-            for problem in results[0][1]:
+            for problem in shape_problems:
                 print("  - " + problem)
             print("route replay: stopped, fixture shape is invalid")
             return 1
-        for name, problems in results:
+        print("PASS: fixture shape")
+        passed += 1
+        for name, problems in run_fn(fixture):
             print(("PASS: " if not problems else "FAIL: ") + name)
             for problem in problems:
                 print("  - " + problem)

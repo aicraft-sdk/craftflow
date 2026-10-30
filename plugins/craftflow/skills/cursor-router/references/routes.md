@@ -18,6 +18,8 @@ Announce `-> ORIENT workflow (signals: {matched keywords})`, then `Read()` `tool
 python3 tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_workflow_handoff.py --host cursor --project . --parent {parent_wf} --target {PLAN|BUILD|DEBUG|QA} --input {path} --input-kind {design|brief} --source-route {ROUTE}
 ```
 
+`--task-tools-available` is inherited from the parent artifact; pass it only to override.
+
 - PLAN and the QA re-run mint with no question. On `child_workflow_uuid=` or `already_handed_off=`, adopt the child (`route-advisory.md` `### Adopting the handoff child`) and rewrite `cursor-wf.json` for it as at any workflow start, with `pending_handoff: null`. `workflow_completed` (appended at § 10 step 8) is the finalization signal.
 - BUILD and DEBUG are asked in plain text. Set `pending_handoff` in `cursor-wf.json` to `{parent_wf, target, input_path, question}`, ask the `question`, and stop. A `cursor-agent -p` run that ends with the question unanswered leaves `pending_handoff` set: it is pending, not declined, and the next user turn answers it.
 
@@ -27,7 +29,7 @@ Applied by § 1's precedence check while `pending_handoff` is non-null. The firs
 
 | Reply | Action |
 |---|---|
-| "yes", "(a)", "accept", "go ahead" | Run `craftflow_workflow_handoff.py --record-accept --parent {parent_wf} --target {target} --answer "<the reply, verbatim>"`, then `--host cursor --target {target} --input {input_path} --accepted-answer <accepted_event_id>`; rewrite `cursor-wf.json` for the child with `pending_handoff: null` |
+| "yes", "(a)", "accept", "go ahead" | Run `craftflow_workflow_handoff.py --record-accept --parent {parent_wf} --target {target} --answer "<the reply, verbatim>"`, then `craftflow_workflow_handoff.py --project . --parent {parent_wf} --host cursor --target {target} --input {input_path} --accepted-answer <accepted_event_id>`; rewrite `cursor-wf.json` for the child with `pending_handoff: null` |
 | "no", "(b)", "decline", "skip" | Run `craftflow_workflow_handoff.py --record-decline --reason user_declined --parent {parent_wf}`; set `pending_handoff: null` |
 | anything else | Re-ask `pending_handoff.question` verbatim and keep `pending_handoff` |
 

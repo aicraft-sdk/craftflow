@@ -12,9 +12,14 @@ Mints a linked child workflow from a finalized advisory/QA parent (H5; `_shared/
 Prints `child_workflow_uuid=wf-...` on a mint and `already_handed_off=wf-...` when the parent already has a child
 (nothing is written then). The parent ARTIFACT is never written (PP-6); only its event log gains lines.
 
-Exit: 0 ok | 2 usage, invalid --reason/--detail, QA without a session on claude | 3 write target without a recorded
-accept (also --record-accept --just-go) | 4 parent not found or not finalized, input missing | 5 mint failed
-(`handoff_failed` is appended to the parent log when it is writable, and no child is left behind).
+The mint takes an O_EXCL claim `{parent}.handoff.lock` first (kept after a mint as the "handed off" marker), so parallel
+calls mint exactly one child. The host comes from the parent's `workflow_started` event; `--host cursor` is only accepted
+for a Cursor parent. Validation helpers live in craftflow_workflow_handoff_checks.py.
+
+Exit: 0 ok | 2 usage, invalid flag values, `--host cursor` without a Cursor parent, QA without a session on claude |
+3 write target without a recorded accept, or declined (also --record-accept --just-go) | 4 parent not found, not
+finalized or of a type that cannot hand off, input or source QA invalid | 5 mint failed (`handoff_failed` is appended to
+the parent log when it is writable, and no child is left behind).
 """
 from __future__ import annotations
 
@@ -29,10 +34,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import craftflow_workflow_handoff_checks as checks  # noqa: E402
 import craftflow_workflow_id as wid  # noqa: E402
+from craftflow_workflow_handoff_checks import (accepted_event, find_child, is_finalized, read_json,  # noqa: E402,F401
+                                               remove_child)
 
 TARGETS = ("PLAN", "BUILD", "DEBUG", "QA")
-WRITE_TARGETS = ("BUILD", "DEBUG")
+WRITE_TARGETS = checks.WRITE_TARGETS
 PHASES = {"PLAN": "plan", "BUILD": "build", "DEBUG": "debug", "QA": "qa"}
 REASONS = ("user_declined", "non_interactive")
 DETAILS = ("tool_unavailable", "tool_error", "no_answer")
@@ -42,29 +50,18 @@ NO_SESSION = "QA workflow needs a session id (CLAUDE_CODE_SESSION_ID unset or in
 Plan = Tuple[Any, ...]  # ("mint", mode) | ("already", child) | ("error", code, message)
 
 
-def is_finalized(events: List[Dict[str, Any]]) -> bool:
-    """`memory_finalized`, or (a Cursor parent, D-12) a `workflow_started` with host cursor plus `workflow_completed`."""
-    names = {e.get("event") for e in events}
-    if "memory_finalized" in names:
-        return True
-    cursor = any(e.get("event") == "workflow_started" and e.get("host") == "cursor" for e in events)
-    return cursor and "workflow_completed" in names
-
-
-def accepted_event(events: List[Dict[str, Any]], event_id: Optional[str], target: str) -> bool:
-    return bool(event_id) and any(e.get("event") == "handoff_accepted" and e.get("event_id") == event_id
-                                  and e.get("target") == target for e in events)
-
-
 def plan_handoff(parent_artifact: Dict[str, Any], parent_events: List[Dict[str, Any]], target: str,
                  answer: Optional[str], just_go: bool, *, host: str = "claude", has_session: bool = True) -> Plan:
     """Decide a handoff from the parent's facts only. `answer` is the `--accepted-answer` event id; `just_go` never
-    stands in for it. Order: finalized (4), already handed off, accept for write targets (3), QA session (2)."""
+    stands in for it; `host` is derived from the parent. Order: finalized (4), already handed off, declined (3), accept
+    for write targets (3), QA session (2)."""
     if not is_finalized(parent_events):
         return ("error", 4, "parent workflow is not finalized")
     for event in parent_events:
         if event.get("event") == "handoff_started" and event.get("child_workflow_uuid"):
             return ("already", event["child_workflow_uuid"])
+    if checks.declined_blocks(parent_events, target):
+        return ("error", 3, "handoff was declined; never re-offered")
     if target in WRITE_TARGETS:
         if not accepted_event(parent_events, answer, target):
             return ("error", 3, "write-capable target needs a recorded accept")
@@ -78,22 +75,21 @@ def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def read_json(path: Path) -> Dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError(f"{path.name} is not a JSON object")
-    return value
-
-
-def read_events(path: Path) -> List[Dict[str, Any]]:
-    events = []
+def read_events(path: Path, warn: bool = True) -> List[Dict[str, Any]]:
+    events, skipped = [], 0
     for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
         try:
             value = json.loads(line)
         except ValueError:
-            continue
+            value = None
         if isinstance(value, dict):
             events.append(value)
+        else:
+            skipped += 1
+    if skipped and warn:
+        sys.stderr.write(f"Warning: skipped {skipped} malformed line(s) in {path.name}\n")
     return events
 
 
@@ -109,32 +105,6 @@ def fail(code: int, message: str) -> int:
     return code
 
 
-def find_child(wf_dir: Path, parent: str) -> Optional[str]:
-    """A child artifact whose `parent_workflow_uuid` is `parent` (covers a crash before the parent log line)."""
-    for path in sorted(wf_dir.glob("wf-*.json")):
-        try:
-            if parent.encode() not in path.read_bytes():
-                continue
-            art = read_json(path)
-        except (OSError, ValueError):
-            continue
-        if art.get("parent_workflow_uuid") == parent:
-            return str(art.get("workflow_uuid") or path.stem)
-    return None
-
-
-def remove_child(wf_dir: Path, child: str) -> None:
-    for path in (wf_dir / f"{child}.events.jsonl", wf_dir / f"{child}.json"):
-        try:
-            path.unlink()
-        except OSError:
-            pass
-    try:
-        (wf_dir / child).rmdir()
-    except OSError:
-        pass
-
-
 def write_atomic(path: Path, value: Dict[str, Any]) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(value, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
@@ -143,7 +113,7 @@ def write_atomic(path: Path, value: Dict[str, Any]) -> None:
 
 def patch_child(path: Path, handoff: Dict[str, Any], parent: str, target: str, source_qa: Optional[Dict[str, Any]],
                 source_qa_wf: Optional[str]) -> None:
-    """Link the freshly minted child artifact to its parent (and copy the QA grants and Denied reads)."""
+    """Add the handoff block to the freshly minted child artifact (and copy the QA grants and Denied reads)."""
     art = read_json(path)
     art["parent_workflow_uuid"] = parent
     art["handoff"] = handoff
@@ -166,10 +136,10 @@ def cmd_record_accept(args: argparse.Namespace, log: Path, events: List[Dict[str
         return fail(2, "--record-accept needs --target BUILD or DEBUG")
     if not (args.answer or "").strip():
         return fail(2, "--record-accept needs --answer (the user's reply, verbatim)")
-    for event in events:
-        if event.get("event") == "handoff_accepted":
-            print(f"accepted_event_id={event.get('event_id')}")
-            return 0
+    existing = checks.current_accept(events, args.target)
+    if existing:
+        print(f"accepted_event_id={existing}")
+        return 0
     event_id = "hacc-" + os.urandom(4).hex()
     try:
         append_event(log, parent, "handoff_accepted", event_id=event_id, target=args.target, answer=args.answer)
@@ -199,57 +169,121 @@ def cmd_record_decline(args: argparse.Namespace, log: Path, parent: str) -> int:
     return 0
 
 
-def cmd_mint(args: argparse.Namespace, project: Path, wf_dir: Path, parent: str, parent_art: Dict[str, Any],
-             log: Path, events: List[Dict[str, Any]]) -> int:
-    found = find_child(wf_dir, parent)
-    if found and not any(e.get("event") == "handoff_started" for e in events):
-        events = events + [{"event": "handoff_started", "child_workflow_uuid": found}]
-    plan = plan_handoff(parent_art, events, args.target, args.accepted_answer, args.just_go, host=args.host,
-                        has_session=wid.current_session_id() is not None)
-    if plan[0] == "error":
-        return fail(plan[1], plan[2])
-    if plan[0] == "already":
-        print(f"already_handed_off={plan[1]}")
-        return 0
-    if args.input and not (project / args.input).exists():
-        return fail(4, f"handoff input not found: {args.input}")
-    source_qa = None
-    if args.target == "QA":
-        if not args.source_qa_wf or not PARENT_RE.fullmatch(args.source_qa_wf):
-            return fail(2, "--target QA needs --source-qa-wf wf-...")
-        try:
-            source_qa = read_json(wf_dir / f"{args.source_qa_wf}.json")
-        except (OSError, ValueError):
-            return fail(4, f"source QA workflow not found: {args.source_qa_wf}")
-    handoff = {"source_route": args.source_route or parent_art.get("workflow_type"), "source_workflow_uuid": parent,
-               "input_path": args.input, "input_kind": args.input_kind, "mode": plan[1]}
-    request = args.request or parent_art.get("user_request") or f"{args.target} handoff from {parent}"
-    info = wid.mint_workflow_id(request, "", project)
-    child = info["workflow_uuid"]
-    created = False
+def logged_child(log: Path) -> Optional[str]:
+    """The child named by a `handoff_started` line of the parent log (written only after the child is complete)."""
     try:
-        wid.init_artifact(project, info, workflow_type=args.target, request=request, phase=PHASES[args.target],
-                          task_tools_available=args.task_tools_available,
-                          host="cursor" if args.host == "cursor" else "claude-code",
-                          allow_no_session=args.host == "cursor")
-        created = True
-        patch_child(wf_dir / f"{child}.json", handoff, parent, args.target, source_qa, args.source_qa_wf)
+        events = read_events(log, warn=False)
+    except OSError:
+        return None
+    return next((e["child_workflow_uuid"] for e in events if e.get("event") == "handoff_started" and e.get("child_workflow_uuid")), None)
+
+
+class Mint:
+    """One mint attempt for one parent; `run` holds the claim, `locked` does the work under it."""
+
+    def __init__(self, args: argparse.Namespace, project: Path, parent: str, parent_art: Dict[str, Any], host: str) -> None:
+        self.args, self.project, self.parent, self.parent_art, self.host = args, project, parent, parent_art, host
+        self.wf_dir = project / ".craftflow" / "state" / "workflows"
+        self.log = self.wf_dir / f"{parent}.events.jsonl"
+        self.lock = self.wf_dir / f"{parent}.handoff.lock"
+        self.child: Optional[str] = None  # a child artifact this attempt created and may have to roll back
+
+    def precheck(self) -> Optional[Tuple[int, str]]:
+        args = self.args
+        if args.host == "cursor" and self.host != "cursor":
+            return 2, "--host cursor needs a Cursor parent (workflow_started host)"
+        bad = checks.validate_flags(args.input_kind, args.source_route)
+        if bad:
+            return bad
+        ptype = self.parent_art.get("workflow_type")
+        if ptype not in checks.SOURCE_ROUTES or (ptype == "DEBUG" and args.target != "QA"):
+            return 4, f"parent workflow type {ptype} cannot hand off"
+        if args.target == "QA" and (not args.source_qa_wf or not PARENT_RE.fullmatch(args.source_qa_wf)):
+            return 2, "--target QA needs --source-qa-wf wf-..."
+        return None
+
+    def run(self) -> int:
+        taken = kept = False
+        try:
+            state, other = checks.acquire_claim(self.lock, lambda: logged_child(self.log))
+            if state == "already":
+                print(f"already_handed_off={other}")
+                return 0
+            taken = True
+            code = self.locked()
+            kept = code == 0
+            return code
+        except Exception as exc:  # every failure after the claim maps to exit 5 with a rollback
+            message = wid.describe_init_error(exc) if isinstance(exc, OSError) else (
+                str(exc) if isinstance(exc, ValueError) else f"{type(exc).__name__}: {exc}")
+            if self.child:
+                remove_child(self.wf_dir, self.child)
+            try:
+                append_event(self.log, self.parent, "handoff_failed", target=self.args.target, reason=message[:200])
+            except OSError as inner:
+                sys.stderr.write(f"Error: mint failed; could not append handoff_failed: {inner}\n")
+            return fail(5, f"handoff mint failed: {message}")
+        finally:
+            if taken and not kept:
+                try:
+                    checks.release_claim(self.lock)
+                except OSError as exc:
+                    sys.stderr.write(f"Warning: could not remove {self.lock.name}: {exc}\n")
+
+    def locked(self) -> int:
+        args, parent = self.args, self.parent
+        events = read_events(self.log, warn=False)
+        found = find_child(self.wf_dir, parent)  # re-run under the claim: a legacy or crashed mint may have left a child
+        if found and not any(e.get("event") == "handoff_started" for e in events):
+            events = events + [{"event": "handoff_started", "child_workflow_uuid": found}]
+        plan = plan_handoff(self.parent_art, events, args.target, args.accepted_answer, args.just_go, host=self.host,
+                            has_session=wid.current_session_id() is not None)
+        if plan[0] == "error":
+            return fail(plan[1], plan[2])
+        if plan[0] == "already":
+            self.mark(plan[1])
+            print(f"already_handed_off={plan[1]}")
+            return 0
+        input_path = None
+        if args.input:
+            bad, input_path = checks.resolve_input(self.project, args.input)
+            if bad:
+                return fail(*bad)
+        source_qa = None
+        if args.target == "QA":
+            try:
+                source_qa = read_json(self.wf_dir / f"{args.source_qa_wf}.json")
+            except (OSError, ValueError):
+                return fail(4, f"source QA workflow not found: {args.source_qa_wf}")
+            if source_qa.get("workflow_type") != "QA":
+                return fail(4, f"source workflow is not a QA workflow: {args.source_qa_wf}")
+        handoff = {"source_route": args.source_route or self.parent_art.get("workflow_type"), "source_workflow_uuid": parent,
+                   "input_path": input_path, "input_kind": args.input_kind, "mode": plan[1]}
+        request = args.request or self.parent_art.get("user_request") or f"{args.target} handoff from {parent}"
+        inherited = (self.parent_art.get("capabilities") or {}).get("task_tools_available")
+        tools = args.task_tools_available or (inherited if inherited in ("true", "false", "unknown") else "unknown")
+        info = wid.mint_workflow_id(request, "", self.project)
+        child = info["workflow_uuid"]
+        wid.init_artifact(self.project, info, workflow_type=args.target, request=request, phase=PHASES[args.target],
+                          task_tools_available=tools, host="cursor" if self.host == "cursor" else "claude-code",
+                          allow_no_session=self.host == "cursor", extra={"parent_workflow_uuid": parent})
+        self.child = child
+        patch_child(self.wf_dir / f"{child}.json", handoff, parent, args.target, source_qa, args.source_qa_wf)
         fields = {"target": args.target, "mode": plan[1], "source_route": handoff["source_route"],
                   "parent_workflow_uuid": parent, "child_workflow_uuid": child}
-        append_event(wf_dir / f"{child}.events.jsonl", child, "handoff_started", **fields)
-        append_event(log, parent, "handoff_started", **fields)
-    except (OSError, ValueError) as exc:
-        if created:
-            remove_child(wf_dir, child)
-        message = wid.describe_init_error(exc) if isinstance(exc, OSError) else str(exc)
+        append_event(self.wf_dir / f"{child}.events.jsonl", child, "handoff_started", **fields)
+        append_event(self.log, parent, "handoff_started", **fields)
+        self.child = None  # linked from the parent log now: nothing below may roll it back
+        self.mark(child)
+        print(f"child_workflow_uuid={child}")
+        print(f"mode={plan[1]}")
+        return 0
+
+    def mark(self, child: str) -> None:
         try:
-            append_event(log, parent, "handoff_failed", target=args.target, reason=message[:200])
-        except OSError:
-            pass
-        return fail(5, f"handoff mint failed: {message}")
-    print(f"child_workflow_uuid={child}")
-    print(f"mode={plan[1]}")
-    return 0
+            checks.mark_claim(self.lock, child)
+        except OSError as exc:
+            sys.stderr.write(f"Warning: could not record {child} in {self.lock.name}: {exc}\n")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -257,15 +291,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--project", default=None)
     ap.add_argument("--parent", required=True)
     ap.add_argument("--target", choices=TARGETS, default=None)
-    ap.add_argument("--input", default=None, help="design file (PLAN) or brief path (BUILD/DEBUG), relative to the project")
-    ap.add_argument("--input-kind", default=None, help="design|brief|bug-context")
-    ap.add_argument("--source-route", default=None)
+    ap.add_argument("--input", default=None, help="design file (PLAN) or brief path (BUILD/DEBUG), a regular file inside the project")
+    ap.add_argument("--input-kind", default=None, help="|".join(checks.INPUT_KINDS))
+    ap.add_argument("--source-route", default=None, help="|".join(checks.SOURCE_ROUTES))
     ap.add_argument("--source-qa-wf", default=None)
     ap.add_argument("--accepted-answer", default=None, help="event id printed by --record-accept")
     ap.add_argument("--just-go", action="store_true")
-    ap.add_argument("--host", choices=("claude", "cursor"), default="claude")
+    ap.add_argument("--host", choices=("claude", "cursor"), default="claude", help="`cursor` only for a Cursor parent (checked)")
     ap.add_argument("--request", default=None)
-    ap.add_argument("--task-tools-available", choices=("true", "false", "unknown"), default="unknown")
+    ap.add_argument("--task-tools-available", choices=("true", "false", "unknown"), default=None,
+                    help="default: the parent artifact's capabilities.task_tools_available")
     ap.add_argument("--record-accept", action="store_true")
     ap.add_argument("--answer", default=None)
     ap.add_argument("--record-decline", action="store_true")
@@ -278,16 +313,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     wf_dir = project / ".craftflow" / "state" / "workflows"
     artifact, log = wf_dir / f"{args.parent}.json", wf_dir / f"{args.parent}.events.jsonl"
     try:
-        parent_art, events = read_json(artifact), read_events(log)
+        parent_art = read_json(artifact)
     except (OSError, ValueError):
         return fail(4, f"parent workflow not found: {args.parent}")
+    try:
+        events = read_events(log)
+    except OSError:
+        return fail(4, f"parent workflow log not found: {args.parent}")
     if args.record_accept:
         return cmd_record_accept(args, log, events, args.parent)
     if args.record_decline:
         return cmd_record_decline(args, log, args.parent)
     if args.target is None:
         return fail(2, "--target is required")
-    return cmd_mint(args, project, wf_dir, args.parent, parent_art, log, events)
+    mint = Mint(args, project, args.parent, parent_art, checks.parent_host(events))
+    refusal = mint.precheck()
+    return fail(*refusal) if refusal else mint.run()
 
 
 if __name__ == "__main__":

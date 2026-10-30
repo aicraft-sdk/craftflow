@@ -47,6 +47,10 @@ DOC_PINS = (
     (ADVISORY, 'There is no "skip"'),
     (ADVISORY, '"skip" or "(b)" is a non-matching reply that is re-asked verbatim'),
     (ADVISORY, "JUST_GO never auto-accepts them"),
+    (ADVISORY, "Never pass `--just-go` to `--record-accept`; only the user's own reply is an accept, in normal and JUST_GO "
+               "mode. The CLI exits 3 if it is passed."),
+    (ADVISORY, "When two advisory or QA workflows are paused, ask which to resume first; resume neither without an answer."),
+    (ADVISORY, "on exit 2 do not retry with `--host cursor`"),
     (ADVISORY, "refuses either target without a recorded `handoff_accepted` event"),
     (ADVISORY, "--record-decline --reason non_interactive --detail " + DETAILS),
     (ADVISORY, "There is no environment-variable heuristic"),
@@ -98,6 +102,8 @@ def matrix_rows(route_text: str) -> List[Tuple[str, str, str, str]]:
 
 
 def matrix_mode(rows: List[Tuple[str, str, str, str]], source: str, target: str, just_go: bool) -> str:
+    if not source or not target:  # "".startswith-style matching would otherwise hit the first row
+        return "none"
     for src, tgt, mode, jg in rows:
         if src.startswith(source) and target in tgt:
             cell = jg if just_go else mode
@@ -151,6 +157,28 @@ def shape(fixture: Any, kind: str) -> List[str]:
     return problems
 
 
+def shape_linked(fixture: Any) -> List[str]:
+    """The generic shape plus the keys the matrix check reads: a non-empty `matrix_source` and `target` per scenario."""
+    problems = shape(fixture, "handoff")
+    if problems:
+        return problems
+    for sc in fixture["scenarios"]:
+        for key in ("matrix_source", "target"):
+            if not isinstance(sc.get(key), str) or not sc[key].strip():
+                problems.append(f"scenario {sc['name']} lacks a non-empty `{key}`")
+        if not isinstance(sc.get("expected"), dict):
+            problems.append(f"scenario {sc['name']} lacks an `expected` object")
+    return problems
+
+
+def live(fn: Callable[[Path], List[str]], root: Path) -> List[str]:
+    """Run a live-CLI check; a lab that cannot be built or a CLI that hangs is a problem, not a traceback."""
+    try:
+        return fn(root)
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+        return [f"live CLI could not run: {type(exc).__name__}: {exc}"]
+
+
 class Lab:
     """A temp project with one finalized parent, driven through the live scripts of `root`."""
 
@@ -163,8 +191,10 @@ class Lab:
         res = subprocess.run([sys.executable, str(root / "scripts" / "craftflow_workflow_id.py"), "--init-artifact",
                               "--project", str(self.project), "--workflow-type", parent_type, "--phase", parent_type.lower(),
                               "--request", "Review the router", "--task-tools-available", "false"],
-                             capture_output=True, text=True, env=self.env, cwd=str(self.project))
+                             capture_output=True, text=True, env=self.env, cwd=str(self.project), timeout=60)
         self.parent = res.stdout.strip().splitlines()[-1] if res.stdout.strip() else ""
+        if res.returncode != 0 or not self.parent.startswith("wf-"):
+            raise RuntimeError(f"parent init failed: exit {res.returncode}, stdout {res.stdout.strip()!r}, stderr {res.stderr.strip()!r}")
         self.dir = self.project / ".craftflow" / "state" / "workflows"
         (self.project / "d.md").write_text("# design\n", encoding="utf-8")
         if finalized:
@@ -177,7 +207,7 @@ class Lab:
     def cli(self, *args: str) -> Tuple[int, str, str]:
         res = subprocess.run([sys.executable, str(self.root / "scripts" / "craftflow_workflow_handoff.py"),
                               "--project", str(self.project), "--parent", self.parent, *args],
-                             capture_output=True, text=True, env=self.env, cwd=str(self.project))
+                             capture_output=True, text=True, env=self.env, cwd=str(self.project), timeout=60)
         return res.returncode, res.stdout, res.stderr
 
     def children(self) -> List[str]:
@@ -245,8 +275,8 @@ def check_linked(fixture: Any, root: Path) -> List[Tuple[str, List[str]]]:
         if jg and any(s["op"] == "handoff_accepted" for s in steps):
             problems.append(f"{sc['name']}: JUST_GO auto-accepted a write handoff")
         problems += [f"{sc['name']}: {p}" for p in pp5_problems(steps)]
-    return [("fixture shape", shape(fixture, "handoff")), ("doc pins", pin_problems(root)),
-            ("matrix and PP-5 transcript", problems), ("live CLI: PP-5 and PP-6", live_matrix_problems(root))]
+    return [("doc pins", pin_problems(root)), ("matrix and PP-5 transcript", problems),
+            ("live CLI: PP-5 and PP-6", live(live_matrix_problems, root))]
 
 
 def check_pause(fixture: Any, root: Path) -> List[Tuple[str, List[str]]]:
@@ -282,7 +312,7 @@ def check_pause(fixture: Any, root: Path) -> List[Tuple[str, List[str]]]:
             problems.append(f"{sc['name']}: ends with a gate pending yet created a memory task")
     if "ask which to resume" not in resume:
         problems.append("resume.md lacks the two-paused rule")
-    return [("fixture shape", shape(fixture, "pause")), ("doc pins", pin_problems(root)), ("pause, resume and PP-4 transcript", problems)]
+    return [("doc pins", pin_problems(root)), ("pause, resume and PP-4 transcript", problems)]
 
 
 def live_adopt_problems(root: Path) -> List[str]:
@@ -327,6 +357,8 @@ def check_adopt(fixture: Any, root: Path) -> List[Tuple[str, List[str]]]:
         for step in adopts:
             if step.get("skips") != ["mint"] or step.get("appends") != "workflow_adopted":
                 problems.append(f"{sc['name']}: adopt must skip only the mint and append workflow_adopted: {step}")
+            if sc.get("target", "PLAN") == "PLAN" and "plan_start_reads" not in step.get("runs", []):
+                problems.append(f"{sc['name']}: a PLAN adopt must run plan_start_reads: {step}")
             for phrase in ("skip only", "workflow_adopted", "every other start step"):
                 if phrase not in adopting:
                     problems.append(f"### Adopting the handoff child lacks {phrase!r}")
@@ -337,12 +369,14 @@ def check_adopt(fixture: Any, root: Path) -> List[Tuple[str, List[str]]]:
                 problems.append(f"{sc['name']}: the non-interactive decline must carry detail tool_unavailable: {step}")
         if any(s["op"] == "handoff_declined" for s in steps) and any(s["op"] in ("mint", "cli") for s in steps):
             problems.append(f"{sc['name']}: a declined offer minted a child")
-    return [("fixture shape", shape(fixture, "adopt")), ("doc pins", pin_problems(root)),
-            ("adopt transcript", problems), ("live CLI: one mint, already_handed_off, decline", live_adopt_problems(root))]
+    return [("doc pins", pin_problems(root)), ("adopt transcript", problems),
+            ("live CLI: one mint, already_handed_off, decline", live(live_adopt_problems, root))]
 
 
-CHECKS: Dict[str, Callable[[Any, Path], List[Tuple[str, List[str]]]]] = {
-    "handoff-linked-workflow.json": check_linked,
-    "advisory-pause-resume.json": check_pause,
-    "handoff-adopt-child.json": check_adopt,
+# fixture name -> (shape(fixture) -> problems, run(fixture, root) -> [(check name, problems)]); a runner executes the
+# shape phase first and stops on a mis-shaped fixture before any check reads it.
+CHECKS: Dict[str, Tuple[Callable[[Any], List[str]], Callable[[Any, Path], List[Tuple[str, List[str]]]]]] = {
+    "handoff-linked-workflow.json": (shape_linked, check_linked),
+    "advisory-pause-resume.json": (lambda fx: shape(fx, "pause"), check_pause),
+    "handoff-adopt-child.json": (lambda fx: shape(fx, "adopt"), check_adopt),
 }

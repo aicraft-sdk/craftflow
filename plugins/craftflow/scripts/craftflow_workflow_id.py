@@ -417,7 +417,8 @@ def init_artifact(project_dir: Path, info: dict, *, workflow_type: str, request:
                   workspace_writable_paths: list | None = None,
                   dropped_paths: list | None = None,
                   fallback_reason: str | None = None,
-                  host: str = "claude-code", allow_no_session: bool = False) -> Path:
+                  host: str = "claude-code", allow_no_session: bool = False,
+                  extra: dict | None = None) -> Path:
     """Write the artifact + events.jsonl + workflows/{wf}/ dir.
 
     Raises OSError (FileExistsError if the artifact/events log already exists); on any failure
@@ -434,6 +435,7 @@ def init_artifact(project_dir: Path, info: dict, *, workflow_type: str, request:
     events_path = wf_dir / f"{wf}.events.jsonl"
     artifact = build_artifact(info, workflow_type, request, phase, task_tools_available,
                               workspace_writable_paths)
+    artifact.update(extra or {})  # the handoff CLI links the parent at creation
     events = [{"ts": ts, "wf": wf, "event": "workflow_started", "host": host,
                "phase": phase, "task_id": task_id, "agent": "router", "decision": "start",
                "reason": "User request"}]

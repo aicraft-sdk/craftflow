@@ -218,7 +218,7 @@ def test_idempotence_and_failure(tmp: str) -> None:
         res = ro.run(*plan_args())
     finally:
         ro.wf_dir.chmod(0o755)
-    check("read-only workflows dir: exit 5", res.returncode == 5 and res.stderr.startswith("Error:"), f"rc={res.returncode} {res.stderr}")
+    check("read-only workflows dir: exit 5", res.returncode == 5 and res.stderr.startswith("Error: handoff mint failed: Permission denied"), f"rc={res.returncode} {res.stderr}")
     failed = [e for e in ro.events() if e["event"] == "handoff_failed"]
     check("read-only workflows dir: handoff_failed in the parent log", len(failed) == 1 and failed[0].get("reason"), str(failed))
     check("read-only workflows dir: no child left behind", ro.listing() == snap and ro.sha() == before, str(ro.listing()))
@@ -257,12 +257,15 @@ def test_qa_child(tmp: str) -> None:
     check("PP-17 QA child without a session on claude: exit 2", res.returncode == 2 and "Error: QA workflow needs a session id" in res.stderr,
           f"rc={res.returncode} {res.stderr}")
     check("QA child without a session: nothing written", q.snapshot() == snap, "")
-    res = q.run("--target", "QA", "--source-route", "DEBUG", "--source-qa-wf", src, "--host", "cursor", session="")
+    c = Proj(tmp, "qa-cursor", ptype="DEBUG", host="cursor", events=("workflow_completed",))
+    src = qa_source(c)
+    res = c.run("--target", "QA", "--source-route", "DEBUG", "--source-qa-wf", src, "--host", "cursor", session="")
+    q = c
     kids = [k for k in q.children() if k.stem != src]
     kid = json.loads(kids[0].read_text(encoding="utf-8")) if kids else {}
     child_id = line_value(res.stdout, "child_workflow_uuid")
     started = [e for e in q.events(q.wf_dir / f"{child_id}.events.jsonl") if e["event"] == "workflow_started"]
-    check("QA child with --host cursor and no session: minted with session_id null",
+    check("QA child of a Cursor parent with --host cursor and no session: minted with session_id null",
           res.returncode == 0 and kid.get("session_id") is None and [e.get("host") for e in started] == ["cursor"],
           f"rc={res.returncode} {res.stderr} {kid.get('session_id')} {started}")
     m = Proj(tmp, "qa-nosource", ptype="DEBUG")
@@ -282,12 +285,13 @@ def test_decline(tmp: str) -> None:
         res = p.run("--record-decline", "--reason", "non_interactive", "--detail", detail)
         check(f"detail {detail} accepted", res.returncode == 0, res.stderr)
     snap = p.snapshot()
-    for extra, why in ((("--reason", "non_interactive", "--detail", "bogus"), "bogus detail"),
-                       (("--reason", "non_interactive"), "non_interactive without detail"),
-                       (("--reason", "user_declined", "--detail", "tool_error"), "user_declined with detail"),
-                       (("--reason", "whatever"), "unknown reason")):
+    for extra, why, text in ((("--reason", "non_interactive", "--detail", "bogus"), "bogus detail", "Error: invalid --detail 'bogus'"),
+                             (("--reason", "non_interactive"), "non_interactive without detail", "Error: invalid --detail None"),
+                             (("--reason", "user_declined", "--detail", "tool_error"), "user_declined with detail",
+                              "Error: invalid --detail: user_declined takes none"),
+                             (("--reason", "whatever"), "unknown reason", "Error: invalid --reason 'whatever'")):
         res = p.run("--record-decline", *extra)
-        check(f"decline rejected: {why}: exit 2", res.returncode == 2 and "Error: invalid" in res.stderr, f"rc={res.returncode} {res.stderr}")
+        check(f"decline rejected: {why}: exit 2", res.returncode == 2 and text in res.stderr, f"rc={res.returncode} {res.stderr}")
     check("rejected declines wrote nothing", p.snapshot() == snap, "")
     res = p.run("--record-decline", "--reason", "user_declined")
     last = p.events()[-1]

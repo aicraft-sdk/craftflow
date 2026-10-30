@@ -101,14 +101,50 @@ def mutated_copies() -> None:
     red("a CLI that skips the accept check fails the live PP-5 check",
         {"scripts/craftflow_workflow_handoff.py": lambda t: t.replace("if not accepted_event(parent_events, answer, target):", "if False:")},
         "live CLI: PP-5 and PP-6")
-    red("a CLI that mints twice fails the live adopt check",
-        {"scripts/craftflow_workflow_handoff.py": lambda t: t.replace('return ("already", event["child_workflow_uuid"])', "continue")},
+    cli = "scripts/craftflow_workflow_handoff.py"
+    claim, already = 'checks.acquire_claim(self.lock, lambda: logged_child(self.log))', 'return ("already", event["child_workflow_uuid"])'
+    red("a CLI that mints twice (no claim answer, no already rule) fails the live adopt check",
+        {cli: lambda t: t.replace(claim, '"acquired", None').replace(already, "continue")},
         "live CLI: one mint, already_handed_off, decline")
+    red("reverting the --record-accept --just-go sentence fails the doc pins",
+        {adv: lambda t: t.replace("Never pass `--just-go` to `--record-accept`; only the user's own reply is an accept, in normal and JUST_GO "
+                                  "mode. The CLI exits 3 if it is passed.", "`--record-accept` with `--just-go` exits 3, because JUST_GO never accepts.")},
+        "doc pins")
+    red("dropping the two-paused rule from route-advisory.md fails the doc pins (resume.md still has it)",
+        {adv: lambda t: t.replace("When two advisory or QA workflows are paused, ask which to resume first; resume neither without an answer. ", "")},
+        "doc pins")
+    red("a PLAN adopt that never runs plan_start_reads fails the adopt transcript",
+        {"tests/fixtures/handoff-adopt-child.json": lambda t: t.replace(', "plan_start_reads"', "")}, "adopt transcript")
+
+
+def shape_controls() -> None:
+    fx = "tests/fixtures/handoff-linked-workflow.json"
+    res = replay_on_copy({fx: lambda t: t.replace('"matrix_source": "CODEBASE-HEALTH"', '"matrix_source": ""')})
+    check("a mis-shaped fixture (empty matrix_source) stops the replay at the shape phase",
+          res.returncode == 1 and "FAIL: fixture shape" in res.stdout and "route replay: stopped, fixture shape is invalid" in res.stdout
+          and "FAIL: doc pins" not in res.stdout and "matrix_source" in res.stdout, f"rc={res.returncode} {res.stdout[-500:]}")
+    res = replay_on_copy({"tests/fixtures/handoff-adopt-child.json": lambda t: t.replace('"op": "adopt"', '"kind": "adopt"')})
+    check("a step without `op` stops the replay at the shape phase", res.returncode == 1 and "route replay: stopped" in res.stdout, f"rc={res.returncode} {res.stdout[-300:]}")
+    check("matrix_mode with an empty source is none, not the first row", rh.matrix_mode([("TRIAGE", "BUILD", "ask once", "asked")], "", "BUILD", False) == "none", "")
+    with tempfile.TemporaryDirectory() as tmp:
+        stray = Path(tmp) / "stray.json"
+        shutil.copy(PLUGIN_ROOT / "tests" / "fixtures" / "orient-inline.json", stray)
+        res = subprocess.run([sys.executable, str(PLUGIN_ROOT / "scripts" / "craftflow_route_replay_check.py"), "--fixture", str(stray)],
+                             capture_output=True, text=True)
+        check("an unregistered fixture name is an error, not an ORIENT fallback",
+              res.returncode == 1 and "Error: unregistered fixture stray.json" in res.stderr, f"rc={res.returncode} {res.stdout[-200:]}{res.stderr[-200:]}")
+    try:
+        rh.Lab(PLUGIN_ROOT, tempfile.mkdtemp(), "NOT-A-TYPE")
+        check("a Lab whose parent init fails raises", False, "no RuntimeError")
+    except RuntimeError as exc:
+        check("a Lab whose parent init fails raises", "parent init failed" in str(exc), str(exc))
+    check("a live check turns a lab failure into a problem", any("could not run" in p for p in rh.live(lambda r: rh.Lab(r, tempfile.mkdtemp(), "NOT-A-TYPE") and [], PLUGIN_ROOT)), "")
 
 
 def main() -> int:
     literal_controls()
     mutated_copies()
+    shape_controls()
     print(f"\n{_passes} passed, {len(_errors)} failed")
     for err in _errors:
         print(err)

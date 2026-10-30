@@ -12,7 +12,7 @@ Human-action stops are never automatic, in normal or JUST_GO mode, and no Memory
 
 A workflow pauses, with `pending_gate` set, at one of eight gates: `candidate_choice`, `needs_info`, `needs_grilling`, `wontfix_confirm`, `qa_test_plan_approval`, `qa_grant_needed`, `qa_preflight_human_prerequisites` and `qa_source_contradiction`. While paused, no Memory Update task exists or is runnable.
 
-On resume the router re-asks the paused gate's question and nothing else. A fresh, unrelated request while `candidate_choice` is pending counts as a decline of the choice.
+On resume the router re-asks the paused gate's question and nothing else. When two advisory or QA workflows are paused, ask which to resume first; resume neither without an answer. A fresh, unrelated request while `candidate_choice` is pending counts as a decline of the choice.
 
 Under JUST_GO: `candidate_choice` auto-picks `TOP_RECOMMENDATION`, else the first `Strong`, else the first; grilling follows the PLAN brainstorming rule; `needs_info` and `wontfix_confirm` are never automatic; a QA gate follows `_shared/route-qa.md`.
 
@@ -36,7 +36,7 @@ Hand off only after the parent is finalized: its log has `memory_finalized` (a C
 
 ### Handoff inputs
 
-BUILD gets `## Pre-Answered Requirements` plus the brief path (`--input {path} --input-kind brief`). PLAN gets the saved design as `design_file` (`--input {path} --input-kind design`), so brainstorming is skipped exactly as for a saved design. DEBUG gets the brief, or `## QA Bug Context` for a QA bug candidate. The CLI exits 4 when the input path does not exist. The mint call is `scripts/craftflow_workflow_handoff.py --project {root} --parent {wf} --target PLAN|BUILD|DEBUG|QA --source-route {ROUTE}` plus the input flags; it prints `child_workflow_uuid=wf-...`.
+BUILD gets `## Pre-Answered Requirements` plus the brief path (`--input {path} --input-kind brief`). PLAN gets the saved design as `design_file` (`--input {path} --input-kind design`), so brainstorming is skipped exactly as for a saved design. DEBUG gets the brief, or `## QA Bug Context` for a QA bug candidate. The CLI exits 4 when the input path is not a regular file inside the project. The mint call is `scripts/craftflow_workflow_handoff.py --project {root} --parent {wf} --target PLAN|BUILD|DEBUG|QA --source-route {ROUTE}` plus the input flags (`--task-tools-available` is inherited from the parent); it prints `child_workflow_uuid=wf-...`.
 
 ### Never re-offer
 
@@ -44,7 +44,7 @@ After a decline (`handoff_declined`, whether `user_declined` or `non_interactive
 
 ### Handoff failure
 
-When the CLI exits 5 it has appended `handoff_failed` to the parent log and left no child. Report its `Error:` line; the parent stays terminal and nothing is retried. On exit 3 or 4, report the line and do not mint by any other path.
+When the CLI exits 5 it has appended `handoff_failed` to the parent log and left no child. Report its `Error:` line; the parent stays terminal and nothing is retried. On exit 2, 3 or 4, report the `Error:` line and do not mint by any other path; on exit 2 do not retry with `--host cursor`.
 
 ### Asking about a write handoff
 
@@ -52,7 +52,7 @@ Ask once, as a single yes/no question naming the target and the brief path.
 
 Non-interactive detection (Claude Code): treat the host as non-interactive when (a) `AskUserQuestion` is not among your available tools (when unsure, call it and apply (b) or (c)), (b) the call returns an error, or (c) the call returns no selected option and no free-text answer. Then mint nothing and never ask again: record `--record-decline --reason non_interactive --detail tool_unavailable|tool_error|no_answer`, with the value matching (a), (b) or (c). There is no environment-variable heuristic.
 
-Recording the answer: a clear yes is `--record-accept --parent {wf} --target BUILD|DEBUG --answer "<the user's reply, verbatim>"`, which prints `accepted_event_id=...`; then mint with `--accepted-answer <id>`. A clear no is `--record-decline --reason user_declined`. A reply that is neither is asked again. `--record-accept` with `--just-go` exits 3, because JUST_GO never accepts.
+Recording the answer: a clear yes is `--record-accept --parent {wf} --target BUILD|DEBUG --answer "<the user's reply, verbatim>"`, which prints `accepted_event_id=...`; then mint with `--accepted-answer <id>`. A clear no is `--record-decline --reason user_declined`. A reply that is neither is asked again. Never pass `--just-go` to `--record-accept`; only the user's own reply is an accept, in normal and JUST_GO mode. The CLI exits 3 if it is passed.
 
 ### Adopting the handoff child
 
@@ -62,4 +62,4 @@ If the session ended after the mint but before the adopt, the next CLI call prin
 
 ### Cursor finalization signal
 
-A Cursor parent is finalized by `workflow_completed` (its `workflow_started` event carries `"host":"cursor"`), not by `memory_finalized`. Run the handoff with `--host cursor`: the child's `workflow_started` carries the same host, a QA child may be minted without a session id, and the Cursor router then rewrites `cursor-wf.json` for the child.
+A Cursor parent is finalized by `workflow_completed` (its `workflow_started` event carries `"host":"cursor"`), not by `memory_finalized`. Run the handoff with `--host cursor`, which the CLI accepts only when the parent's `workflow_started` says cursor: the child's `workflow_started` carries the same host, a QA child may be minted without a session id, and the Cursor router then rewrites `cursor-wf.json` for the child.
