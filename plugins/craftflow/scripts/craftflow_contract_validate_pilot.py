@@ -300,7 +300,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     group.add_argument("--stdin", action="store_true")
     group.add_argument("--file")
     parser.add_argument("--workflow-uuid", default=None,
-                        help="architecture-scanner only: pin REPORT_PATH to "
+                        help="architecture-scanner only, required there: pin REPORT_PATH to "
                              ".craftflow/codebase-health/<uuid>/report.html and enforce the cross-field rules "
                              "of craftflow_contract_validate_scanner.py")
     args = parser.parse_args(argv)
@@ -325,7 +325,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     result = validate_contract(parsed, schema)
-    if args.workflow_uuid is not None:
+    if args.agent == "architecture-scanner" and args.workflow_uuid is None:
+        # Without the uuid REPORT_PATH is unpinned: fail closed rather than accept any path.
+        result = {"valid": False, "violations": result["violations"] + [
+            {"field": "--workflow-uuid", "reason": "required for --agent architecture-scanner (pins REPORT_PATH)"}]}
+    elif args.workflow_uuid is not None:
         if args.agent != "architecture-scanner":
             result = _fail_closed("--workflow-uuid applies to --agent architecture-scanner only")
         else:

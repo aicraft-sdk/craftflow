@@ -47,6 +47,9 @@ DOC_PINS = (
     (ROUTE, "### CODEBASE-HEALTH phases"),
     (ROUTE, "The only CODEBASE-HEALTH phase tokens are `codebase-health` and `memory-finalize`."),
     (ROUTE, "Dispatch the scanner with effort `high`."),
+    (ROUTE, "Under JUST_GO (`AUTO_PROCEED: true` in `project/activeContext.md ## Session Settings`) never ask and never end the turn here: "
+            "pick `TOP_RECOMMENDATION`"),
+    (ROUTE, "log `candidate_picked` in `## Decisions`, and continue to the grill in the same turn."),
     (ROUTE, "Ask one question that lists every candidate by number in its question text, with \"None\" as an option"),
     (ROUTE, "with more than 3 candidates the options are \"1\", \"2\", \"3\", \"None\" and any other number is typed as free text"),
     (ROUTE, "Under JUST_GO the router asks no question and picks `TOP_RECOMMENDATION`, else the first `Strong` candidate, "
@@ -84,6 +87,9 @@ DOC_PINS = (
     (GRAPH, "Asking whether to start the PLAN is wrong"),
     (GRAPH, "craftflow_contract_validate_pilot.py --agent architecture-scanner"),
     (GRAPH, "Under JUST_GO do not end the turn after the report"),
+    (GRAPH, "Showing the report is not a reply point: under JUST_GO continue immediately to step 3's pick without replying; "
+            "outside JUST_GO the only reply is the choice question."),
+    (GRAPH, "Under JUST_GO pick `TOP_RECOMMENDATION` now"),
     (GRAPH, "Create the Memory Update task only at a terminal state"),
     (GRAPH, "is created first from the `craftflow:session-memory` template, and is never a reason to stop before `memory_finalized`"),
     (GRAPH, "Completion is router-owned under task-tool fallback"),
@@ -107,7 +113,7 @@ STR, NSTR, LIST, DICT, BOOL, INT, NINT = (str,), (str, type(None)), (list,), (di
 STEP_KEYS: Dict[str, Dict[str, Tuple[type, ...]]] = {
     "announce": {"text": STR}, "mint": {"workflow_type": STR, "phase": STR},
     "scanner": {"status": STR, "candidate_count": INT, "strengths": LIST, "top": NINT, "report_exists": BOOL, "outcome": STR},
-    "scanner_failed": {}, "report_shown": {"how": STR, "platform": STR}, "gate": {"pending_gate": NSTR}, "question": {"options": LIST},
+    "scanner_failed": {}, "report_shown": {"how": STR, "platform": STR}, "gate": {"pending_gate": NSTR}, "question": {"text": STR, "options": LIST}, "reply": {},
     "answer": {"text": STR, "outcome": STR}, "auto_pick": {"candidate": INT}, "grill": {"candidate": INT, "pending_gate": STR},
     "design_saved": {"path": STR, "captured_in": STR}, "status": {"value": STR}, "memory_task_created": {}, "memory_finalized": {},
     "handoff": {"target": STR, "input_kind": STR, "announce": STR},
@@ -211,13 +217,16 @@ def sequence_problems(sc: Dict[str, Any]) -> List[str]:
     scan: Optional[Dict[str, Any]] = None
     pending: Optional[str] = None
     picked: Optional[int] = None
-    grilling = grilled = unshown = False
+    grilling = grilled = unshown = at_report = False
     saved: Optional[str] = None
     memory = terminal = False
     handoffs = 0
     final = ""
     for i, s in enumerate(steps):
         op = s["op"]
+        if at_report and op != "auto_pick":  # JUST_GO: the report is no reply point, the next step is the pick
+            out.append(f"step {i}: JUST_GO ended at the report ({op} where the auto_pick belongs)")
+        at_report = False
         if unshown and op != "report_shown":
             out.append(f"step {i}: {op} before report_shown (a valid scan shows its report first)")
             unshown = False
@@ -231,6 +240,7 @@ def sequence_problems(sc: Dict[str, Any]) -> List[str]:
             if scan is None or s["how"] != want:
                 out.append(f"step {i}: the report is shown with {want!r} on {s['platform']} and only after a valid scan")
             unshown = False
+            at_report = jg and scan is not None and scan["status"] == "CANDIDATES_FOUND"
         elif op == "gate":
             pending = s["pending_gate"]
             if pending == "candidate_choice" and (jg or scan is None or scan["status"] != "CANDIDATES_FOUND"):
@@ -242,6 +252,9 @@ def sequence_problems(sc: Dict[str, Any]) -> List[str]:
             want_opts = numbers[:3] + ["None"]  # AskUserQuestion takes 4 options: a number past 3 is typed as free text
             if jg or s["options"] != want_opts:
                 out.append(f"step {i}: the single question must offer {want_opts} (all numbers in its text) and never run under JUST_GO")
+            unnamed = [n for n in numbers if not re.search(rf"(?<!\d){n}(?!\d)", s.get("text", ""))]
+            if unnamed:
+                out.append(f"step {i}: the question text does not name candidate(s) {unnamed}")
         elif op == "auto_pick":
             if not jg or scan is None or s["candidate"] != expected_pick(scan):
                 out.append(f"step {i}: JUST_GO must pick {expected_pick(scan) if scan else None}, got {s['candidate']}")
@@ -286,6 +299,8 @@ def sequence_problems(sc: Dict[str, Any]) -> List[str]:
                 out.append(f"step {i}: the handoff is PLAN, after memory_finalized, announced with the saved design path: {s}")
     if unshown:
         out.append("the scenario ends after a valid scan without report_shown")
+    if at_report:
+        out.append("JUST_GO ended at the report (no auto_pick follows report_shown)")
     if pending and pending != FAILED:
         out.append(f"the scenario ends with {pending} still pending")
     path = "handoff" if handoffs else "failed" if final == "failed" else "completed_no_handoff"

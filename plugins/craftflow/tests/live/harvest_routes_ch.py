@@ -65,7 +65,7 @@ def ch_state(project):
     plans = Path(project) / "docs" / "plans"
     return {"parents": parents, "parent": parent, "events": events,
             "expected_report": report_rel(parent) if parent else None,
-            "report_exists": bool(text.strip()), "report_html": "<html" in text.lower(), "report_svg": "<svg" in text.lower(),
+            "report_exists": bool(text.strip()), "report_symlink": report.is_symlink(), "report_html": "<html" in text.lower(), "report_svg": "<svg" in text.lower(),
             "designs": sorted(p.relative_to(project).as_posix() for p in plans.glob("*-design.md")) if plans.is_dir() else [],
             "children": children,
             "handoffs": {w: arts[w].get("handoff") for w in children}}
@@ -76,7 +76,8 @@ def product_changes(git_fn, project, seed_sha):
     untracked files; `__pycache__` paths never count. '' when the product code is untouched."""
     diff = git_fn(project, "diff", "--name-status", seed_sha, "--", *PRODUCT_DIRS)
     new = git_fn(project, "ls-files", "--others", "--exclude-standard", "--", *PRODUCT_DIRS)
-    lines = [l for l in diff.splitlines() if l.strip()] + ["??\t" + p for p in new.splitlines() if p.strip()]
+    hidden = git_fn(project, "ls-files", "--others", "--ignored", "--exclude-standard", "--", *PRODUCT_DIRS)  # an ignore rule hides nothing
+    lines = [l for l in diff.splitlines() if l.strip()] + ["??\t" + p for p in (new + hidden).splitlines() if p.strip()]
     return "\n".join(l for l in lines if "__pycache__" not in l.split("\t")[-1].split("/"))
 
 
@@ -125,8 +126,8 @@ def judge_ch(announced, has_events, state, changes, open_calls):
         return "FAIL:" + problem, detail
     if not state["report_exists"]:
         return "FAIL:no_report(%s)" % state["expected_report"], detail
-    if not (state["report_html"] and state["report_svg"]):
-        return "FAIL:report_not_a_page(html=%s,svg=%s)" % (state["report_html"], state["report_svg"]), detail
+    if state.get("report_symlink") or not (state["report_html"] and state["report_svg"]):
+        return "FAIL:report_not_a_page(html=%s,svg=%s,symlink=%s)" % (state["report_html"], state["report_svg"], state.get("report_symlink")), detail
     if not state["designs"]:
         return "FAIL:no_design_file(docs/plans/*-design.md)", detail
     if not state["children"]:
@@ -153,9 +154,12 @@ def rejudge(scr, git_fn, stream_facts):
     transcript = scr / "transcripts" / "LV-CH.jsonl"
     if not project.is_dir() or not transcript.is_file():
         return "FAIL:not_a_kept_ch_dir(%s)" % scr, {}
-    seed_sha = git_fn(project, "rev-list", "--max-parents=0", "HEAD").split()[0]
     announced, has_events = stream_facts(transcript.read_text(encoding="utf-8", errors="replace"))
-    state, changes, calls = collect(project, scr, git_fn, seed_sha)
+    try:
+        seed_sha = git_fn(project, "rev-list", "--max-parents=0", "HEAD").split()[0]
+        state, changes, calls = collect(project, scr, git_fn, seed_sha)
+    except (RuntimeError, IndexError, OSError) as exc:  # not a repo / no commits / unreadable: a named FAIL, never a traceback
+        return "FAIL:not_a_kept_ch_dir(%s: %s)" % (scr, str(exc)[:120]), {}
     verdict, detail = judge_ch(announced, has_events, state, changes, calls)
     detail["seed_sha"] = seed_sha
     return verdict, detail

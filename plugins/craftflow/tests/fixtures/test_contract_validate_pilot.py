@@ -289,9 +289,9 @@ print("\n[CLI subprocess smoke test]")
 SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "../../scripts/craftflow_contract_validate_pilot.py")
 
 
-def run_cli(agent, text):
+def run_cli(agent, text, *extra):
     proc = subprocess.run(
-        [sys.executable, SCRIPT_PATH, "--agent", agent, "--stdin"],
+        [sys.executable, SCRIPT_PATH, "--agent", agent, "--stdin", *extra],
         input=text,
         capture_output=True,
         text=True,
@@ -425,11 +425,13 @@ verdict:
 rationale:
   SUMMARY: "2 deepening candidates in calc"
   CANDIDATES:
-    - files: ["calc/facade.py", "calc/core.py"]
+    - name: "facade"
+      files: ["calc/facade.py", "calc/core.py"]
       problem: "facade only forwards to core.apply"
       solution: "absorb the forwarding into core"
       strength: Strong
-    - files: ["calc/__main__.py"]
+    - name: "parser"
+      files: ["calc/__main__.py"]
       problem: "argument parsing is shallow"
       solution: "one parse function"
       strength: Speculative
@@ -450,7 +452,7 @@ for label, old, new, field in (
     ("TOP_RECOMMENDATION a string", "TOP_RECOMMENDATION: 1", "TOP_RECOMMENDATION: first", "TOP_RECOMMENDATION"),
     ("BLOCKING true", "BLOCKING: false", "BLOCKING: true", "BLOCKING"),
     ("NEXT_ACTION outside the enum", "NEXT_ACTION: choose", "NEXT_ACTION: build", "NEXT_ACTION"),
-    ("CANDIDATES not an array", "  CANDIDATES:\n    - files", "  CANDIDATES: none\n  X:\n    - files", "CANDIDATES"),
+    ("CANDIDATES not an array", "  CANDIDATES:\n    - name", "  CANDIDATES: none\n  X:\n    - name", "CANDIDATES"),
     ("MEMORY_NOTES missing", "  MEMORY_NOTES:\n", "  NOTES:\n", "MEMORY_NOTES"),
     ("SUMMARY missing", '  SUMMARY: "2 deepening candidates in calc"\n', "", "SUMMARY"),
 ):
@@ -459,8 +461,11 @@ for label, old, new, field in (
     check(f"invalid scanner case rejected: {label}", (bad != VALID_SCANNER_YAML, result["valid"], field in violation_fields(result)), (True, False, True))
 check("TOP_RECOMMENDATION null is valid (NO_CANDIDATES)",
       validate_contract(parse_block_yaml(VALID_SCANNER_YAML.replace("TOP_RECOMMENDATION: 1", "TOP_RECOMMENDATION: null")), SCANNER_SCHEMA)["valid"], True)
+rc, result = run_cli("architecture-scanner", VALID_SCANNER_YAML, "--workflow-uuid", "wf-x")
+check("CLI accepts --agent architecture-scanner (valid contract, with the now-mandatory --workflow-uuid)", (rc, result["valid"]), (0, True))
 rc, result = run_cli("architecture-scanner", VALID_SCANNER_YAML)
-check("CLI accepts --agent architecture-scanner (valid contract)", (rc, result["valid"]), (0, True))
+check("CLI rejects --agent architecture-scanner without --workflow-uuid (fail closed, named field)",
+      (rc, result["valid"], violation_fields(result)), (1, False, ["--workflow-uuid"]))
 rc, result = run_cli("architecture-scanner", VALID_SCANNER_YAML.replace('  REPORT_PATH: ".craftflow/codebase-health/wf-x/report.html"\n', ""))
 check("CLI rejects a scanner contract with no REPORT_PATH (exit 1)", (rc, result["valid"]), (1, False))
 

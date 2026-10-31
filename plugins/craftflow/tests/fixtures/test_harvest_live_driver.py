@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -365,11 +366,46 @@ def hollow_controls() -> None:
           replay.dispatch_problems(replay.read(replay.ROUTE_FILE)) == [], "")
 
 
+def hardening_controls() -> None:
+    """remfix-2 (RL1-RL4): a normal exit still kills the group, ignored product files and a symlinked report are judged, a non-repo dir is clean."""
+    with tempfile.TemporaryDirectory() as tmp:
+        pidfile = Path(tmp) / "grandchild.pid"
+        rc, _o, _e, why = driver.run_until(["sh", "-c", 'sleep 25 & echo $! > "$1"; exit 0', "sh", str(pidfile)], dict(os.environ), tmp, "", lambda: False, 20)
+        alive = True
+        for _ in range(20):
+            try:
+                os.kill(int(pidfile.read_text()), 0)
+            except ProcessLookupError:
+                alive = False
+                break
+            time.sleep(0.1)
+        check("run_until kills an orphan grandchild after a normal exit (RL1)", (rc, why) == (0, "exited") and not alive, f"{rc} {why} alive={alive}")
+        scr = kept_ch_dir(Path(tmp))
+        project = scr / "LV-CH"
+        seed = driver.git(project, "rev-list", "--max-parents=0", "HEAD").split()[0]
+        with open(project / ".gitignore", "a", encoding="utf-8") as f:
+            f.write("calc/hidden.py\n")
+        (project / "calc" / "hidden.py").write_text("x = 1\n")
+        found = ch_mod.product_changes(driver.git, project, seed)
+        check("product_changes: a product file added with an ignore rule is reported (RL2)", "calc/hidden.py" in found, repr(found))
+        report = project / ".craftflow" / "codebase-health" / "wf-a" / "report.html"
+        page = Path(tmp) / "elsewhere.html"
+        page.write_text("<html><svg></svg></html>")
+        report.unlink()
+        report.symlink_to(page)
+        v = driver.judge_ch(stream(text="-> CODEBASE-HEALTH workflow"), driver.ch_state(project), "", [REPORT])[0]
+        check("LV-CH with a symlinked report fails report_not_a_page (RL3)", v.startswith("FAIL:report_not_a_page"), v)
+        shutil.rmtree(project / ".git")
+        v, _ = driver.rejudge_dir(scr)
+        check("rejudge: a kept dir whose LV-CH is not a git repo fails cleanly (RL4)", v.startswith("FAIL:not_a_kept_ch_dir"), v)
+
+
 def main() -> int:
     driver_controls()
     ch_controls()
     product_controls()
     rejudge_controls()
+    hardening_controls()
     replay_controls()
     hollow_controls()
     print(f"\n{_passes} passed, {len(_errors)} failed")

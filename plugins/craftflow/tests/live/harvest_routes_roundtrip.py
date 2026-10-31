@@ -136,7 +136,7 @@ def run(cmd, env, cwd, data=None):
 def run_until(cmd, env, cwd, data, done, timeout):
     """(returncode, stdout, stderr, reason). Output goes to temp files so it survives a kill. Polls done() every CH_POLL_S and stops
     the child's process group CH_GRACE_S after done() turns true ('done') or at the timeout ('timeout'); 'exited' otherwise. The group
-    is killed in a `finally`, so a raising done() (or Ctrl-C) never leaves an orphan claude running."""
+    is killed in a `finally` even after a normal exit, so a raising done(), Ctrl-C or an orphaned grandchild never outlives the call."""
     with tempfile.TemporaryFile("w+", encoding="utf-8") as out_f, tempfile.TemporaryFile("w+", encoding="utf-8") as err_f:
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=out_f, stderr=err_f, env=env, cwd=str(cwd), text=True, start_new_session=True)
         deadline, reason = time.monotonic() + timeout, "exited"
@@ -156,12 +156,11 @@ def run_until(cmd, env, cwd, data, done, timeout):
                     break
                 time.sleep(min(CH_POLL_S, max(0.2, deadline - time.monotonic())))
         finally:
-            if p.poll() is None:
-                try:
-                    os.killpg(p.pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    pass  # group already gone
-                p.wait()
+            try:
+                os.killpg(p.pid, signal.SIGKILL)  # always: a grandchild outlives its exited leader
+            except (ProcessLookupError, PermissionError):
+                pass  # group already gone
+            p.wait()
         out_f.seek(0)
         err_f.seek(0)
         return p.returncode, out_f.read(), err_f.read(), reason

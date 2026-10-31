@@ -83,8 +83,14 @@ check("a well-formed contract passes with the uuid", run_uuid(contract()), (0, T
 check("a well-formed single-candidate contract passes", run_uuid(contract(count=1)), (0, True, []))
 check("NO_CANDIDATES (count 0, empty list, complete, null) passes",
       run_uuid(contract("NO_CANDIDATES", 0, "null", "complete")), (0, True, []))
-check("without --workflow-uuid the path is not pinned (library default unchanged)",
-      run_cli(contract(path="docs/other.html"))[:2], (0, True))
+check("without --workflow-uuid the scanner contract fails closed, even a well-formed one (RR1)",
+      run_cli(contract()), (1, False, ["--workflow-uuid"]))
+check("without --workflow-uuid a stray REPORT_PATH is not accepted either (RR1)",
+      run_cli(contract(path="docs/other.html"))[:2], (1, False))
+proc = subprocess.run([sys.executable, SCRIPT_PATH, "--agent", "component-builder", "--stdin"], input="verdict:\n  STATUS: PASS\n",
+                      capture_output=True, text=True)
+check("other agents never need --workflow-uuid (control: no such violation)",
+      "--workflow-uuid" not in {v["field"] for v in json.loads(proc.stdout)["violations"]}, True)
 
 for label, path in (
     ("absolute REPORT_PATH", "/etc/passwd"),

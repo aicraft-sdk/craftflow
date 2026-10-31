@@ -102,6 +102,23 @@ def literal_controls() -> None:
           broken("just-go-without-a-top", lambda sc: step(sc, "auto_pick").update(candidate=1)), "")
     check("transcript: a JUST_GO question is caught",
           broken("just-go-auto-picks", lambda sc: sc["steps"].insert(4, {"op": "question", "options": ["1", "2", "3", "None"]})), "")
+    jg = "just-go-auto-picks"
+    ended = lambda sc: any("JUST_GO ended at the report" in p for p in ch.sequence_problems(sc))  # noqa: E731
+    sc = scenario(jg)
+    check("JUST_GO: report_shown directly followed by auto_pick, no question step, is clean (attempt 5 control)",
+          [s["op"] for s in sc["steps"]][3:5] == ["report_shown", "auto_pick"] and ch.sequence_problems(sc) == [], str(ch.sequence_problems(sc)))
+    sc["steps"].insert(4, {"op": "question", "text": "Which of 1, 2, 3 or None?", "options": ["1", "2", "3", "None"]})
+    check("JUST_GO: a question after the report is RED 'JUST_GO ended at the report'", ended(sc), str(ch.sequence_problems(sc)))
+    sc = scenario(jg)
+    sc["steps"].insert(4, {"op": "reply"})
+    check("JUST_GO: a reply after the report is RED 'JUST_GO ended at the report'", ended(sc), str(ch.sequence_problems(sc)))
+    sc = scenario(jg)
+    sc["steps"] = sc["steps"][:4]
+    sc["expected"].update(path="completed_no_handoff", child_minted=False)
+    del sc["expected"]["candidate_picked"]
+    check("JUST_GO: a transcript that stops right after the report is RED (the turn ended at the report)", ended(sc), str(ch.sequence_problems(sc)))
+    check("question: a text that omits a candidate number is caught (RR2)",
+          broken(base, lambda sc: step(sc, "question").update(text="Which candidate: 1 or None?")), "")
     check("transcript: an accepted skip at the failure gate is caught",
           broken("scanner-failure", lambda sc: step(sc, "answer").update(outcome="ended")), "")
     check("transcript: a fixture outcome that contradicts the validation rule is caught",
