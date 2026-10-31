@@ -82,8 +82,25 @@ def product_changes(git_fn, project, seed_sha):
 
 
 def read_open_calls(scr):
+    """The shim's recorded `open` arguments, each made project-relative when it names a file inside <scr>/LV-CH (the router
+    may open the report by absolute path; `/private/var` and `/var` resolve to the same dir on darwin). Quotes are stripped;
+    a path outside the project is kept verbatim so the judge still rejects it."""
     log = Path(scr) / "open-calls.log"
-    return [l.strip() for l in log.read_text(encoding="utf-8").splitlines() if l.strip()] if log.is_file() else []
+    if not log.is_file():
+        return []
+    project = (Path(scr) / "LV-CH").resolve()
+    calls = []
+    for line in log.read_text(encoding="utf-8").splitlines():
+        call = line.strip().strip('"').strip("'")
+        if not call:
+            continue
+        if call.startswith("/"):
+            try:
+                call = Path(call).resolve().relative_to(project).as_posix()
+            except ValueError:
+                pass
+        calls.append(call)
+    return calls
 
 
 def order_problem(events):
