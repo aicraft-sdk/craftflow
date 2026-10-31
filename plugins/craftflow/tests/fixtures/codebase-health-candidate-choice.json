@@ -24,6 +24,27 @@
       ]
     },
     {
+      "name": "five-candidates-ask-three-numbers-plus-none-and-a-typed-number-picks",
+      "request": "codebase health check on the whole repo",
+      "just_go": false,
+      "expected": {"path": "handoff", "candidate_picked": 5, "child_minted": true},
+      "steps": [
+        {"op": "announce", "text": "-> CODEBASE-HEALTH workflow (signals: codebase health)"},
+        {"op": "mint", "workflow_type": "CODEBASE-HEALTH", "phase": "codebase-health"},
+        {"op": "scanner", "status": "CANDIDATES_FOUND", "candidate_count": 5, "strengths": ["Strong", "Worth exploring", "Speculative", "Worth exploring", "Strong"], "top": 1, "report_exists": true, "outcome": "ok"},
+        {"op": "report_shown", "how": "open", "platform": "darwin"},
+        {"op": "gate", "pending_gate": "candidate_choice"},
+        {"op": "question", "options": ["1", "2", "3", "None"]},
+        {"op": "answer", "text": "5", "outcome": "picked"},
+        {"op": "grill", "candidate": 5, "pending_gate": "candidate_choice"},
+        {"op": "design_saved", "path": "docs/plans/2026-10-30-calc-parser-design.md", "captured_in": "results.codebase_health.design_file"},
+        {"op": "status", "value": "completed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"},
+        {"op": "handoff", "target": "PLAN", "input_kind": "design", "announce": "-> handing off to PLAN (design: docs/plans/2026-10-30-calc-parser-design.md)"}
+      ]
+    },
+    {
       "name": "no-candidates-completes-without-a-gate-or-handoff",
       "request": "improve architecture of the billing module",
       "just_go": false,
@@ -177,6 +198,7 @@
         {"op": "gate", "pending_gate": "architecture_scanner_failed"},
         {"op": "answer", "text": "retry", "outcome": "retried"},
         {"op": "scanner", "status": "NO_CANDIDATES", "candidate_count": 0, "strengths": [], "top": null, "report_exists": true, "outcome": "ok"},
+        {"op": "report_shown", "how": "open", "platform": "darwin"},
         {"op": "status", "value": "completed"},
         {"op": "memory_task_created"},
         {"op": "memory_finalized"}

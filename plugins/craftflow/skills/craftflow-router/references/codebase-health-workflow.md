@@ -16,8 +16,8 @@ The dispatcher row `codebase-health` maps the task to the `architecture-scanner`
 
 ### CODEBASE-HEALTH after the scanner
 
-1. Validate the contract (`{plugin_root}/scripts/craftflow_contract_validate_pilot.py --agent architecture-scanner`, never the installed copy) and handle a failure as `_shared/route-codebase-health.md` `### CODEBASE-HEALTH contract validation` says: `architecture_scanner_failed` is answered "retry" or "end" only.
-2. Show the report: run `open {REPORT_PATH}` only on darwin, otherwise print the path. The agent never opens it.
+1. Validate the contract (`{plugin_root}/scripts/craftflow_contract_validate_pilot.py --agent architecture-scanner --workflow-uuid {workflow_uuid}`, never the installed copy) and handle a failure as `_shared/route-codebase-health.md` `### CODEBASE-HEALTH contract validation` says: `architecture_scanner_failed` is answered "retry" or "end" only.
+2. Show the report only after step 1 passed, so `REPORT_PATH` is exactly the pinned path: run `open "{REPORT_PATH}"` (quoted) only on darwin, otherwise print the path. The agent never opens it.
 3. Run the choice, the grill and the terminal states of the route file. The gate stays `candidate_choice` until the design file is saved. Under JUST_GO do not end the turn after the report: pick, grill, save the design and continue to step 4 in the same turn.
 4. Create the Memory Update task only at a terminal state (completed, declined, `NO_CANDIDATES` or `workflow_failed`), never while a gate or failure stop is pending. A memory target file that does not exist yet (the workflow-tier files of a fresh workflow, or an unseeded project file) is created first from the `craftflow:session-memory` template, and is never a reason to stop before `memory_finalized`:
 

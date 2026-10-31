@@ -70,6 +70,7 @@ Use the project's own vocabulary for the domain (its `CONTEXT.md` terms) and the
 Write one self-contained HTML file to `.craftflow/codebase-health/{workflow_uuid}/report.html` with the `Write` tool (it creates the folder). Write it even when no candidate is found.
 
 - Self-contained means: one file, inline `<style>`, inline SVG, no script, no external stylesheet, font, image or link target. It must render offline.
+- HTML-escape all repo-derived text (file names, code, messages) before writing it into the report.
 - Draw every diagram as inline SVG following `craftflow:diagram-design` (its tokens, its complexity budget, its anti-pattern gate).
 - One card per candidate, numbered from 1 in the same order as `CANDIDATES` in the contract:
   - **Files**: the files and modules involved;

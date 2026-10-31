@@ -299,6 +299,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--stdin", action="store_true")
     group.add_argument("--file")
+    parser.add_argument("--workflow-uuid", default=None,
+                        help="architecture-scanner only: pin REPORT_PATH to "
+                             ".craftflow/codebase-health/<uuid>/report.html and enforce the cross-field rules "
+                             "of craftflow_contract_validate_scanner.py")
     args = parser.parse_args(argv)
 
     schema_path = SCHEMAS_DIR / f"{args.agent}.json"
@@ -321,6 +325,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     result = validate_contract(parsed, schema)
+    if args.workflow_uuid is not None:
+        if args.agent != "architecture-scanner":
+            result = _fail_closed("--workflow-uuid applies to --agent architecture-scanner only")
+        else:
+            from craftflow_contract_validate_scanner import scanner_violations
+            extra = scanner_violations(parsed, args.workflow_uuid)
+            result = {"valid": result["valid"] and not extra, "violations": result["violations"] + extra}
     print(json.dumps(result))
     return 0 if result["valid"] else 1
 

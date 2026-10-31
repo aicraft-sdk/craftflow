@@ -83,9 +83,8 @@ def problems(text: str) -> List[str]:
     return out
 
 
-def schema_matches_contract() -> List[str]:
+def schema_matches_contract(text: str) -> List[str]:
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
-    text = AGENT.read_text(encoding="utf-8")
     return [f"agent contract lacks schema field {k}" for k in schema if k not in text]
 
 
@@ -95,7 +94,7 @@ def main() -> int:
     else:
         text = AGENT.read_text(encoding="utf-8")
         check("agent file satisfies every scanner pin", problems(text) == [], str(problems(text)))
-        check("every schema field appears in the agent's contract template", schema_matches_contract() == [], str(schema_matches_contract()))
+        check("every schema field appears in the agent's contract template", schema_matches_contract(text) == [], str(schema_matches_contract(text)))
         mutations: Dict[str, Callable[[str], str]] = {
             "model changed": lambda t: t.replace("model: opus", "model: sonnet", 1),
             "TaskUpdate granted": lambda t: t.replace("LSP, Write", "LSP, Write, TaskUpdate", 1),
@@ -111,7 +110,7 @@ def main() -> int:
         }
         for label, fn in mutations.items():
             mutated = fn(text)
-            check(f"control: {label} is caught", mutated != text and (problems(mutated) != [] or schema_matches_contract() == [] and "REPORT" in label), label)
+            check(f"control: {label} is caught", mutated != text and (problems(mutated) != [] or schema_matches_contract(mutated) != []), label)
     guard = subprocess.run([sys.executable, str(PLUGIN_ROOT / "scripts" / "craftflow_contract_validate_pilot.py"), "--agent",
                             "architecture-scanner", "--file", str(SCHEMA)], capture_output=True, text=True)
     check("the pilot CLI accepts the agent name (and rejects a schema file as a contract)", guard.returncode == 1 and '"valid": false' in guard.stdout,

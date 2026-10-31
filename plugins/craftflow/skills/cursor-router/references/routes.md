@@ -18,7 +18,7 @@ Announce `-> CODEBASE-HEALTH workflow (signals: {matched keywords})`, then `Read
 2. Report: print the project-relative `REPORT_PATH`. Do not open it.
 3. Choice: ask in plain text, listing every candidate by number plus "None". Set `pending_gate: candidate_choice` in `cursor-wf.json` and stop; the next user turn is answered by `### Cursor route gate answers`. Under JUST_GO there is no question: pick as the route file says and go to the grill.
 4. Grill: run `craftflow:brainstorming` inline in your own turn (never dispatched), seeded with the picked candidate card. Record the saved design in `results.codebase_health.design_file`; `pending_gate` stays `candidate_choice` until then.
-5. Terminal: run the Memory Update inline and append `workflow_completed` (§ 10 step 8). `NO_CANDIDATES` and a declined choice end here with no handoff.
+5. Terminal: run the Memory Update inline and append `workflow_completed` (§ 8 step 8). `NO_CANDIDATES` and a declined choice end here with no handoff.
 6. Handoff: a saved design hands off to PLAN with no question, by `### Advisory handoff (Cursor)` with `--host cursor --target PLAN --input {design_file} --input-kind design --source-route CODEBASE-HEALTH`; announce `-> handing off to PLAN (design: {path})`.
 
 ### Advisory handoff (Cursor)
@@ -31,7 +31,7 @@ python3 tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_workflow_hand
 
 `--task-tools-available` is inherited from the parent artifact; pass it only to override.
 
-- PLAN and the QA re-run mint with no question. On `child_workflow_uuid=` or `already_handed_off=`, adopt the child (`route-advisory.md` `### Adopting the handoff child`) and rewrite `cursor-wf.json` for it as at any workflow start, with `pending_handoff: null`. `workflow_completed` (appended at § 10 step 8) is the finalization signal.
+- PLAN and the QA re-run mint with no question. On `child_workflow_uuid=` or `already_handed_off=`, adopt the child (`route-advisory.md` `### Adopting the handoff child`) and rewrite `cursor-wf.json` for it as at any workflow start, with `pending_handoff: null`. `workflow_completed` (appended at § 8 step 8) is the finalization signal.
 - BUILD and DEBUG are asked in plain text. Set `pending_handoff` in `cursor-wf.json` to `{parent_wf, target, input_path, question}`, ask the `question`, and stop. A `cursor-agent -p` run that ends with the question unanswered leaves `pending_handoff` set: it is pending, not declined, and the next user turn answers it.
 
 ### Cursor handoff answers

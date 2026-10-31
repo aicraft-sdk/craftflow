@@ -115,6 +115,26 @@ def literal_controls() -> None:
     sc["expected"].update(path="completed_no_handoff", child_minted=False)
     check("transcript: a saved design that is never handed off is caught (attempt 3 of the live run ended this way)",
           any("never handed off" in p for p in ch.sequence_problems(sc)), str(ch.sequence_problems(sc)))
+    check("transcript: a design saved with no grill step is caught (M4)",
+          broken(base, lambda sc: sc["steps"].remove(step(sc, "grill"))), "")
+    check("transcript: a JUST_GO design saved with no grill step is caught (M4)",
+          broken("just-go-auto-picks", lambda sc: sc["steps"].remove(step(sc, "grill"))), "")
+    check("transcript: a valid scan with no report_shown is caught (M4)",
+          broken(base, lambda sc: sc["steps"].remove(step(sc, "report_shown"))), "")
+    check("transcript: the report never shown after a retried scan is caught (M4)",
+          broken("a-count-that", lambda sc: sc["steps"].remove(step(sc, "report_shown"))), "")
+    check("transcript: a NO_CANDIDATES scan with no report_shown is caught (M4)",
+          broken("no-candidates", lambda sc: sc["steps"].remove(step(sc, "report_shown"))), "")
+    check("transcript: a report shown before any valid scan is caught",
+          broken(base, lambda sc: sc["steps"].insert(2, {"op": "report_shown", "how": "open", "platform": "darwin"})), "")
+    five = "five-candidates"
+    check("question: five candidates ask options 1, 2, 3, None (AskUserQuestion allows 4), not five numbers (F1)",
+          broken(five, lambda sc: step(sc, "question").update(options=["1", "2", "3", "4", "5", "None"])), "")
+    check("question: five candidates with 4 numbers and no None is caught (F1)",
+          broken(five, lambda sc: step(sc, "question").update(options=["1", "2", "3", "4"])), "")
+    check("answer: a pick of candidate 5, typed as free text, is accepted (F1)",
+          ch.sequence_problems(scenario(five)) == [] and step(scenario(five), "answer")["text"] == "5", "")
+    check("answer: a pick of candidate 6 of 5 is caught (F1)", broken(five, lambda sc: step(sc, "answer").update(text="6")), "")
     check("transcript: a wrong expected path is caught", broken(base, lambda sc: sc["expected"].update(path="failed")), "")
     check("transcript: a wrong expected pick is caught", broken(base, lambda sc: sc["expected"].update(candidate_picked=2)), "")
 
@@ -181,6 +201,13 @@ def mutated_copies() -> None:
         {ROUTES: lambda t: "\n".join(l for l in t.splitlines() if not l.startswith("| `candidate_choice`")) + "\n"}, cur)
     red("a candidate_choice row that offers skip fails the Cursor check",
         {ROUTES: lambda t: t.replace("| `candidate_choice` | anything else |", "| `candidate_choice` | \"skip\" |", 1)}, cur)
+    for reply in ch.CHOICE_REPLIES:
+        red(f"a removed candidate_choice row ({reply[:28]}...) fails the Cursor check",
+            {ROUTES: lambda t, r=reply: "\n".join(l for l in t.splitlines() if not (l.startswith("| `candidate_choice` |") and f"| {r} |" in l)) + "\n"}, cur)
+    red("a candidate_choice None row that no longer says no handoff fails the Cursor check",
+        {ROUTES: lambda t: t.replace("clear `pending_gate` |\n| `candidate_choice` | anything else", "clear `pending_gate` |\n| `candidate_choice` | anything else", 1).replace("append `workflow_completed`, no handoff;", "append `workflow_completed`;", 1)}, cur)
+    red("a duplicated candidate_choice row fails the Cursor check",
+        {ROUTES: lambda t: t.replace("| `candidate_choice` | anything else |", "| `candidate_choice` | anything else |\n| `candidate_choice` | anything else |", 1)}, cur)
     red("a JUST_GO pick edited in the fixture fails the transcript check",
         {fx: lambda t: t.replace('{"op": "auto_pick", "candidate": 2}', '{"op": "auto_pick", "candidate": 3}', 1)},
         "scanner contract, choice, grill, terminal and handoff transcript")
@@ -198,10 +225,12 @@ def shape_controls() -> None:
         return lambda fx: fx.__setitem__("scenarios", [s for s in fx["scenarios"] if not s["name"].startswith(prefixes)])
 
     check("the live fixture has a clean shape", ch.shape(fixture()) == [], str(ch.shape(fixture())))
-    for label, prefixes in (("the PLAN handoff", ("candidates-found-choice",)), ("NO_CANDIDATES", ("no-candidates", "a-count-that")),
+    for label, prefixes in (("the PLAN handoff", ("candidates-found-choice", "five-candidates", "just-go")), ("NO_CANDIDATES", ("no-candidates", "a-count-that")),
                             ("the declined path", ("none-declines",)), ("the JUST_GO top pick", ("just-go-auto-picks",)),
                             ("the scanner failure", ("scanner-failure", "a-report-missing", "a-count-that"))):
         check(f"a fixture without {label} fails the coverage shape", any("lacks" in p for p in shape_after(drop(*prefixes))), str(prefixes))
+    check("a fixture without the more-than-3-candidates question fails the coverage shape (F1)",
+          any("lacks" in p for p in shape_after(drop("five-candidates"))), "")
     for prefix in ("just-go-without-a-top", "just-go-with-neither", "a-report-missing", "an-unrelated", "no-candidates", "scanner-failure"):
         check(f"dropping {prefix} alone leaves the coverage intact (it is not the only witness)", shape_after(drop(prefix)) == [], prefix)
     check("a step without a known op is a shape failure",

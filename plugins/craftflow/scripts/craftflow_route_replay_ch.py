@@ -47,7 +47,8 @@ DOC_PINS = (
     (ROUTE, "### CODEBASE-HEALTH phases"),
     (ROUTE, "The only CODEBASE-HEALTH phase tokens are `codebase-health` and `memory-finalize`."),
     (ROUTE, "Dispatch the scanner with effort `high`."),
-    (ROUTE, "Ask one question listing every candidate by number plus \"None\""),
+    (ROUTE, "Ask one question that lists every candidate by number in its question text, with \"None\" as an option"),
+    (ROUTE, "with more than 3 candidates the options are \"1\", \"2\", \"3\", \"None\" and any other number is typed as free text"),
     (ROUTE, "Under JUST_GO the router asks no question and picks `TOP_RECOMMENDATION`, else the first `Strong` candidate, "
             "else the first candidate, and logs the pick in `## Decisions`."),
     (ROUTE, "the request for the health check authorizes the whole route, so do not stop at the report to ask whether to continue"),
@@ -69,10 +70,15 @@ DOC_PINS = (
     (ROUTE, "`NO_CANDIDATES` is valid only with `CANDIDATE_COUNT` 0 and an empty `CANDIDATES`."),
     (ROUTE, "`TOP_RECOMMENDATION` must be null or between 1 and `CANDIDATE_COUNT`."),
     (ROUTE, "set `pending_gate` to `architecture_scanner_failed`"),
+    (ROUTE, "--workflow-uuid {workflow_uuid}"),
+    (ROUTE, "`REPORT_PATH` must equal `.craftflow/codebase-health/{workflow_uuid}/report.html` exactly (project-relative); "
+            "any other value is `architecture_scanner_failed`."),
     (GRAPH, "--workflow-type CODEBASE-HEALTH --phase codebase-health"),
     (GRAPH, "kind:agent\\norigin:router\\nphase:codebase-health\\nplan:N/A"),
-    (GRAPH, "open {REPORT_PATH}"),
+    (GRAPH, "open \"{REPORT_PATH}\""),
     (GRAPH, "only on darwin"),
+    (GRAPH, "only after step 1 passed"),
+    (GRAPH, "--workflow-uuid {workflow_uuid}"),
     (GRAPH, "Hand off now, in the same turn and before the final reply"),
     (GRAPH, "craftflow_workflow_handoff.py --project {PROJECT_ROOT} --parent {workflow_uuid} --target PLAN --input {design_file} --input-kind design --source-route CODEBASE-HEALTH"),
     (GRAPH, "Asking whether to start the PLAN is wrong"),
@@ -86,6 +92,14 @@ DOC_PINS = (
     (KERNEL, "then `Read()` `skills/_shared/route-codebase-health.md` and `references/codebase-health-workflow.md`."),
     (PROTOCOL, "| `codebase-health` | `craftflow:architecture-scanner` |"),
 )
+# The four `candidate_choice` rows of `### Cursor route gate answers`: reply cell -> text its action cell must carry.
+CHOICE_ROWS = (
+    ("any reply once a candidate is picked (the grill is running)", ("grill answer", "stays `candidate_choice`")),
+    ("a listed candidate number", ("run the grill",)),
+    ("\"None\"", ("no handoff", "Memory Update", "clear `pending_gate`")),
+    ("anything else", ("re-ask", "verbatim", "keep `pending_gate`")),
+)
+CHOICE_REPLIES = tuple(reply for reply, _ in CHOICE_ROWS)
 CURSOR_PINS = ("generalPurpose", "plain text", "`candidate_choice`", "`cursor-wf.json`", "--host cursor",
                "route-codebase-health.md", "route-advisory.md", "\"None\"")
 
@@ -179,6 +193,8 @@ def coverage_problems(scenarios: List[Dict[str, Any]]) -> List[str]:
         ("a JUST_GO scenario that picks the top recommendation",
          lambda sc: sc["just_go"] and any(s["top"] is not None for s in scans(sc)) and "auto_pick" in ops(sc)),
         ("a JUST_GO scenario with no top recommendation", lambda sc: sc["just_go"] and any(s["top"] is None and s["strengths"] for s in scans(sc))),
+        ("a more-than-3-candidates scenario asking 1, 2, 3, None", lambda sc: any(s["op"] == "scanner" and s["candidate_count"] > 3 for s in sc["steps"])
+         and any(s["op"] == "question" and s["options"] == ["1", "2", "3", "None"] for s in sc["steps"])),
         ("a scanner failure scenario", lambda sc: any(s["op"] == "gate" and s["pending_gate"] == FAILED for s in sc["steps"])),
     )
     return [f"the fixture lacks {label}" for label, ok in wants if not any(ok(sc) for sc in scenarios)]
@@ -195,21 +211,26 @@ def sequence_problems(sc: Dict[str, Any]) -> List[str]:
     scan: Optional[Dict[str, Any]] = None
     pending: Optional[str] = None
     picked: Optional[int] = None
-    grilling = False
+    grilling = grilled = unshown = False
     saved: Optional[str] = None
     memory = terminal = False
     handoffs = 0
     final = ""
     for i, s in enumerate(steps):
         op = s["op"]
+        if unshown and op != "report_shown":
+            out.append(f"step {i}: {op} before report_shown (a valid scan shows its report first)")
+            unshown = False
         if op == "scanner":
             if contract_outcome(s) != s["outcome"]:
                 out.append(f"step {i}: the validation rule gives {contract_outcome(s)!r}, the fixture says {s['outcome']!r}")
             scan = s if s["outcome"] == "ok" else None
+            unshown = scan is not None
         elif op == "report_shown":
             want = "open" if s["platform"] == "darwin" else "print"
             if scan is None or s["how"] != want:
                 out.append(f"step {i}: the report is shown with {want!r} on {s['platform']} and only after a valid scan")
+            unshown = False
         elif op == "gate":
             pending = s["pending_gate"]
             if pending == "candidate_choice" and (jg or scan is None or scan["status"] != "CANDIDATES_FOUND"):
@@ -217,18 +238,19 @@ def sequence_problems(sc: Dict[str, Any]) -> List[str]:
             if pending == FAILED and scan is not None:
                 out.append(f"step {i}: {FAILED} after a valid scan")
         elif op == "question":
-            want_opts = [str(n) for n in range(1, (scan or {"candidate_count": 0})["candidate_count"] + 1)] + ["None"]
+            numbers = [str(n) for n in range(1, (scan or {"candidate_count": 0})["candidate_count"] + 1)]
+            want_opts = numbers[:3] + ["None"]  # AskUserQuestion takes 4 options: a number past 3 is typed as free text
             if jg or s["options"] != want_opts:
-                out.append(f"step {i}: the single question must list {want_opts} and never run under JUST_GO")
+                out.append(f"step {i}: the single question must offer {want_opts} (all numbers in its text) and never run under JUST_GO")
         elif op == "auto_pick":
             if not jg or scan is None or s["candidate"] != expected_pick(scan):
                 out.append(f"step {i}: JUST_GO must pick {expected_pick(scan) if scan else None}, got {s['candidate']}")
-            picked, grilling = s["candidate"], True
+            picked, grilling, grilled = s["candidate"], True, False
         elif op == "answer":
             if pending == "candidate_choice":
                 numbers = [str(n) for n in range(1, (scan or {"candidate_count": 0})["candidate_count"] + 1)]
                 if s["outcome"] == "picked" and s["text"] in numbers:
-                    picked, grilling, pending = int(s["text"]), True, "candidate_choice"
+                    picked, grilling, grilled, pending = int(s["text"]), True, False, "candidate_choice"
                 elif s["outcome"] == "declined" and s["text"] not in numbers:
                     pending = None
                 else:
@@ -241,10 +263,13 @@ def sequence_problems(sc: Dict[str, Any]) -> List[str]:
         elif op == "grill":
             if s["candidate"] != picked or s["pending_gate"] != "candidate_choice":
                 out.append(f"step {i}: the grill must run on the picked candidate {picked} with the gate still candidate_choice")
+            grilled = True
         elif op == "design_saved":
             if not DESIGN_RE.match(s["path"]) or s["captured_in"] != "results.codebase_health.design_file" or not grilling:
                 out.append(f"step {i}: the design must be docs/plans/YYYY-MM-DD-<slug>-design.md, captured after a grill")
-            saved, grilling, pending = s["path"], False, None
+            if not grilled:
+                out.append(f"step {i}: the design was saved with no grill step between the pick and design_saved")
+            saved, grilling, grilled, pending = s["path"], False, False, None
         elif op in ("status", "memory_task_created", "memory_finalized"):
             if grilling:
                 out.append(f"step {i}: {op} while the grill runs (the gate must stay candidate_choice)")
@@ -259,6 +284,8 @@ def sequence_problems(sc: Dict[str, Any]) -> List[str]:
             if not (memory and saved and s["target"] == "PLAN" and s["input_kind"] == "design"
                     and s["announce"] == f"-> handing off to PLAN (design: {saved})"):
                 out.append(f"step {i}: the handoff is PLAN, after memory_finalized, announced with the saved design path: {s}")
+    if unshown:
+        out.append("the scenario ends after a valid scan without report_shown")
     if pending and pending != FAILED:
         out.append(f"the scenario ends with {pending} still pending")
     path = "handoff" if handoffs else "failed" if final == "failed" else "completed_no_handoff"
@@ -312,12 +339,16 @@ def cursor_problems(root: Path) -> List[str]:
     body = section(routes, "CODEBASE-HEALTH")
     problems = [f"{CURSOR_ROUTES} ### CODEBASE-HEALTH lacks {p!r}" for p in CURSOR_PINS if p not in body]
     gates = section(routes, "Cursor route gate answers")
-    rows = [l for l in gates.splitlines() if l.startswith("| `candidate_choice`")]
-    text = " ".join(rows)
-    for need in ("grill", "\"None\"", "no handoff", "re-ask"):
-        if need not in text:
-            problems.append(f"the `candidate_choice` gate rows lack {need!r}")
-    if "skip" in text.lower():
+    rows = [[c.strip() for c in l.strip().strip("|").split("|")] for l in gates.splitlines() if l.startswith("| `candidate_choice`")]
+    if len(rows) != len(CHOICE_ROWS):
+        problems.append(f"the `candidate_choice` gate has {len(rows)} rows, expected {len(CHOICE_ROWS)}")
+    for reply, needs in CHOICE_ROWS:
+        action = next((r[2] for r in rows if len(r) == 3 and r[1] == reply), None)
+        if action is None:
+            problems.append(f"the `candidate_choice` gate has no row for the reply {reply!r}")
+        else:
+            problems += [f"the `candidate_choice` row for {reply!r} lacks {n!r}" for n in needs if n not in action]
+    if "skip" in " ".join(" ".join(r) for r in rows).lower():
         problems.append("a candidate_choice gate row offers skip")
     if "AskUserQuestion" in body:
         problems.append("the Cursor chain uses AskUserQuestion")
