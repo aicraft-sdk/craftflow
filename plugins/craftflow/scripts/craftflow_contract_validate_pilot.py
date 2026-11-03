@@ -303,6 +303,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="architecture-scanner only, required there: pin REPORT_PATH to "
                              ".craftflow/codebase-health/<uuid>/report.html and enforce the cross-field rules "
                              "of craftflow_contract_validate_scanner.py")
+    parser.add_argument("--project", default=None,
+                        help="architecture-scanner only: project root; CANDIDATES_FOUND then also needs the report file on disk")
     args = parser.parse_args(argv)
 
     schema_path = SCHEMAS_DIR / f"{args.agent}.json"
@@ -334,7 +336,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             result = _fail_closed("--workflow-uuid applies to --agent architecture-scanner only")
         else:
             from craftflow_contract_validate_scanner import scanner_violations
-            extra = scanner_violations(parsed, args.workflow_uuid)
+            extra = scanner_violations(parsed, args.workflow_uuid, args.project)
             result = {"valid": result["valid"] and not extra, "violations": result["violations"] + extra}
     print(json.dumps(result))
     return 0 if result["valid"] else 1

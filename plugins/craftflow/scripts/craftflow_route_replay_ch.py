@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 import tempfile
 import os
@@ -70,6 +71,8 @@ DOC_PINS = (
     (ROUTE, "-> handing off to PLAN (design: {path})"),
     (ROUTE, "`CANDIDATES_FOUND` is valid only when the file at `REPORT_PATH` exists on disk and `CANDIDATE_COUNT` equals "
             "`len(CANDIDATES)` and is at least 1"),
+    (ROUTE, "Once the contract validates, show the report (the graph file says how). Outside JUST_GO the candidate summary "
+            "(number, name, files, one-line problem, strength) goes in the choice question; under JUST_GO print no summary and pick."),
     (ROUTE, "`NO_CANDIDATES` is valid only with `CANDIDATE_COUNT` 0 and an empty `CANDIDATES`."),
     (ROUTE, "`TOP_RECOMMENDATION` must be null or between 1 and `CANDIDATE_COUNT`."),
     (ROUTE, "set `pending_gate` to `architecture_scanner_failed`"),
@@ -139,16 +142,42 @@ def section(text: str, heading: str) -> str:
     return text[match.end():match.end() + nxt.start()] if nxt else text[match.end():]
 
 
-def contract_outcome(step: Dict[str, Any]) -> str:
-    """The `### CODEBASE-HEALTH contract validation` rule applied to a scanner step: 'ok' or the failure gate value."""
-    count, strengths, top = step["candidate_count"], step["strengths"], step["top"]
-    if top is not None and not 1 <= top <= count:
-        return FAILED
-    if step["status"] == "NO_CANDIDATES":
-        return "ok" if count == 0 and not strengths else FAILED
-    if step["status"] == "CANDIDATES_FOUND":
-        return "ok" if step["report_exists"] and count == len(strengths) and count >= 1 else FAILED
-    return FAILED
+_OUTCOMES: Dict[Tuple[Any, ...], str] = {}
+
+
+def scanner_contract(step: Dict[str, Any], uuid: str) -> str:
+    """The Router Contract text a scanner step stands for (one candidate per strength)."""
+    lines = ["verdict:", f"  STATUS: {step['status']}", f"  CANDIDATE_COUNT: {step['candidate_count']}",
+             f"  TOP_RECOMMENDATION: {'null' if step['top'] is None else step['top']}", "  BLOCKING: false",
+             f"  NEXT_ACTION: {'choose' if step['status'] == 'CANDIDATES_FOUND' else 'complete'}", "rationale:", '  SUMMARY: "scan"']
+    lines += ["  CANDIDATES:"] if step["strengths"] else ["  CANDIDATES: []"]
+    for i, strength in enumerate(step["strengths"], 1):
+        lines += [f'    - name: "c{i}"', '      files: ["calc/core.py"]', '      problem: "p"', '      solution: "s"', f"      strength: {strength}"]
+    return "\n".join(lines + [f'  REPORT_PATH: ".craftflow/codebase-health/{uuid}/report.html"', "  MEMORY_NOTES:",
+                              "    learnings: []", "    patterns: []", "    verification: []", "    deferred: []"]) + "\n"
+
+
+def contract_outcome(step: Dict[str, Any], root: Optional[Path] = None) -> str:
+    """The `### CODEBASE-HEALTH contract validation` rule applied to a scanner step: 'ok' or the failure gate value. The rule is not
+    modelled here: the step is rendered as a contract and run through the REAL `craftflow_contract_validate_pilot.py` of `root`
+    (the plugin root, default this one) with `--workflow-uuid` and `--project`, whose temp project holds the report iff `report_exists`."""
+    base = Path(root) if root else Path(__file__).resolve().parent.parent
+    key = (str(base), step["status"], step["candidate_count"], tuple(step["strengths"]), step["top"], step["report_exists"])
+    if key not in _OUTCOMES:
+        uuid = "wf-replay"
+        with tempfile.TemporaryDirectory() as project:
+            if step["report_exists"]:
+                report = Path(project) / ".craftflow" / "codebase-health" / uuid / "report.html"
+                report.parent.mkdir(parents=True)
+                report.write_text("<html><svg></svg></html>", encoding="utf-8")
+            try:
+                proc = subprocess.run([sys.executable, str(base / "scripts" / "craftflow_contract_validate_pilot.py"), "--agent",
+                                       "architecture-scanner", "--workflow-uuid", uuid, "--project", project, "--stdin"],
+                                      input=scanner_contract(step, uuid), capture_output=True, text=True, timeout=60)
+                _OUTCOMES[key] = "ok" if proc.returncode == 0 else FAILED
+            except (OSError, subprocess.SubprocessError):
+                _OUTCOMES[key] = FAILED
+    return _OUTCOMES[key]
 
 
 def expected_pick(step: Dict[str, Any]) -> int:
@@ -206,7 +235,7 @@ def coverage_problems(scenarios: List[Dict[str, Any]]) -> List[str]:
     return [f"the fixture lacks {label}" for label, ok in wants if not any(ok(sc) for sc in scenarios)]
 
 
-def sequence_problems(sc: Dict[str, Any]) -> List[str]:
+def sequence_problems(sc: Dict[str, Any], root: Optional[Path] = None) -> List[str]:
     steps, jg, exp, name = sc["steps"], sc["just_go"], sc["expected"], sc["name"]
     out: List[str] = []
     first, second = steps[0], steps[1] if len(steps) > 1 else {}
@@ -231,8 +260,9 @@ def sequence_problems(sc: Dict[str, Any]) -> List[str]:
             out.append(f"step {i}: {op} before report_shown (a valid scan shows its report first)")
             unshown = False
         if op == "scanner":
-            if contract_outcome(s) != s["outcome"]:
-                out.append(f"step {i}: the validation rule gives {contract_outcome(s)!r}, the fixture says {s['outcome']!r}")
+            real = contract_outcome(s, root)
+            if real != s["outcome"]:
+                out.append(f"step {i}: the real validator gives {real!r}, the fixture says {s['outcome']!r}")
             scan = s if s["outcome"] == "ok" else None
             unshown = scan is not None
         elif op == "report_shown":
@@ -383,7 +413,10 @@ def live_problems(root: Path) -> List[str]:
         child = hand.value(out, "child_workflow_uuid")
         if code != 0 or not child:
             return problems + [f"PLAN handoff: exit {code}, out {out.strip()!r}, err {err.strip()!r}"]
-        art = json.loads((lab.dir / f"{child}.json").read_text(encoding="utf-8"))
+        try:
+            art = json.loads((lab.dir / f"{child}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:  # a printed child id with no readable artifact is a named FAIL
+            return problems + [f"PLAN handoff printed child {child!r} but its child artifact is unreadable: {exc}"]
         link = art.get("handoff") or {}
         got = (art.get("workflow_type"), art.get("parent_workflow_uuid"), link.get("source_route"), link.get("input_kind"), link.get("input_path"))
         if got != ("PLAN", lab.parent, "CODEBASE-HEALTH", "design", "d.md"):
@@ -397,7 +430,7 @@ def live_problems(root: Path) -> List[str]:
 def check_ch(fixture: Any, root: Path) -> List[Tuple[str, List[str]]]:
     seq: List[str] = []
     for sc in fixture["scenarios"]:
-        seq += sequence_problems(sc)
+        seq += sequence_problems(sc, root)
     return [
         ("routing law sends the requests to CODEBASE-HEALTH", routing_problems(fixture)),
         ("doc pins", pin_problems(lambda rel: rd(root, rel))),

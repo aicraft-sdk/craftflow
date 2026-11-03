@@ -63,6 +63,7 @@ def literal_controls() -> None:
     check("rule: NO_CANDIDATES with a count is a scanner failure", out(scan(status="NO_CANDIDATES")) == ch.FAILED, "")
     check("rule: a valid NO_CANDIDATES is ok", out(scan(status="NO_CANDIDATES", candidate_count=0, strengths=[], top=None)) == "ok", "")
     check("rule: an unknown status is a scanner failure", out(scan(status="PASS")) == ch.FAILED, "")
+    check("rule: a null TOP_RECOMMENDATION with candidates is ok (route law and agent contract allow it)", out(scan(top=None)) == "ok", "")
     check("pick: TOP_RECOMMENDATION wins", ch.expected_pick(scan(top=2)) == 2, "")
     check("pick: else the first Strong", ch.expected_pick(scan(top=None, strengths=["Worth exploring", "Strong", "Strong"])) == 2, "")
     check("pick: else the first", ch.expected_pick(scan(top=None, strengths=["Speculative", "Worth exploring"])) == 1, "")
@@ -225,6 +226,16 @@ def mutated_copies() -> None:
         {ROUTES: lambda t: t.replace("clear `pending_gate` |\n| `candidate_choice` | anything else", "clear `pending_gate` |\n| `candidate_choice` | anything else", 1).replace("append `workflow_completed`, no handoff;", "append `workflow_completed`;", 1)}, cur)
     red("a duplicated candidate_choice row fails the Cursor check",
         {ROUTES: lambda t: t.replace("| `candidate_choice` | anything else |", "| `candidate_choice` | anything else |\n| `candidate_choice` | anything else |", 1)}, cur)
+    red("a validator that accepts everything fails the transcript: the replay delegates the contract rule to the real script",
+        {"scripts/craftflow_contract_validate_scanner.py": lambda t: t.replace("    out: List[dict] = []\n", "    return []\n", 1)},
+        "scanner contract, choice, grill, terminal and handoff transcript")
+    red("a validator that rejects a null TOP_RECOMMENDATION fails the transcript (parity with the JUST_GO-no-top scenarios)",
+        {"scripts/craftflow_contract_validate_scanner.py": lambda t: t.replace("if top is not None and (", "if (", 1)},
+        "scanner contract, choice, grill, terminal and handoff transcript")
+    res = replay_on_copy({"scripts/craftflow_workflow_handoff.py": lambda t: t.replace('print(f"child_workflow_uuid={child}")', 'print("child_workflow_uuid=wf-fake")', 1)})
+    check("a handoff that prints a fake child id is a named live FAIL, not a traceback",
+          res.returncode == 1 and f"FAIL: {live}" in res.stdout and "Traceback" not in res.stdout + res.stderr and "child artifact" in res.stdout,
+          f"rc={res.returncode} {res.stdout[-500:]}{res.stderr[-300:]}")
     red("a JUST_GO pick edited in the fixture fails the transcript check",
         {fx: lambda t: t.replace('{"op": "auto_pick", "candidate": 2}', '{"op": "auto_pick", "candidate": 3}', 1)},
         "scanner contract, choice, grill, terminal and handoff transcript")

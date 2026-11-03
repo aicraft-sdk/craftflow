@@ -6,7 +6,7 @@ Announce `-> CODEBASE-HEALTH workflow (signals: ...)`. Run every `scripts/` help
 
 ### CODEBASE-HEALTH scanner and report
 
-The `architecture-scanner` agent scans the subject the request names (else the git hot spots), runs the deletion test and writes `.craftflow/codebase-health/{workflow_uuid}/report.html`: one self-contained page with a before/after diagram per candidate. The agent never opens it. Once the contract validates, show the report path (the graph file says how the router opens it) and summarize the candidates in the reply: number, name, files, one-line problem and strength.
+The `architecture-scanner` agent scans the subject the request names (else the git hot spots), runs the deletion test and writes `.craftflow/codebase-health/{workflow_uuid}/report.html`: one self-contained page with a before/after diagram per candidate. The agent never opens it. Once the contract validates, show the report (the graph file says how). Outside JUST_GO the candidate summary (number, name, files, one-line problem, strength) goes in the choice question; under JUST_GO print no summary and pick.
 
 ### CODEBASE-HEALTH candidate choice
 
@@ -26,7 +26,7 @@ The workflow is terminal when the design file is saved, the choice is declined, 
 
 ### CODEBASE-HEALTH contract validation
 
-Extract the scanner's `verdict:`/`rationale:` block and validate it with `scripts/craftflow_contract_validate_pilot.py --agent architecture-scanner --workflow-uuid {workflow_uuid}`, which also checks the rules below. `REPORT_PATH` must equal `.craftflow/codebase-health/{workflow_uuid}/report.html` exactly (project-relative); any other value is `architecture_scanner_failed`. `CANDIDATES_FOUND` is valid only when the file at `REPORT_PATH` exists on disk and `CANDIDATE_COUNT` equals `len(CANDIDATES)` and is at least 1. `NO_CANDIDATES` is valid only with `CANDIDATE_COUNT` 0 and an empty `CANDIDATES`. `TOP_RECOMMENDATION` must be null or between 1 and `CANDIDATE_COUNT`. A contract that is missing, rejected by the validator or breaks these rules is a scanner failure: set `pending_gate` to `architecture_scanner_failed` and follow the failure law of `_shared/route-advisory.md`.
+Extract the scanner's `verdict:`/`rationale:` block and validate it with `scripts/craftflow_contract_validate_pilot.py --agent architecture-scanner --workflow-uuid {workflow_uuid} --project {PROJECT_ROOT}`, which also checks the rules below (including that the file at `REPORT_PATH` exists). `REPORT_PATH` must equal `.craftflow/codebase-health/{workflow_uuid}/report.html` exactly (project-relative); any other value is `architecture_scanner_failed`. `CANDIDATES_FOUND` is valid only when the file at `REPORT_PATH` exists on disk and `CANDIDATE_COUNT` equals `len(CANDIDATES)` and is at least 1. `NO_CANDIDATES` is valid only with `CANDIDATE_COUNT` 0 and an empty `CANDIDATES`. `TOP_RECOMMENDATION` must be null or between 1 and `CANDIDATE_COUNT`. A contract that is missing, rejected by the validator or breaks these rules is a scanner failure: set `pending_gate` to `architecture_scanner_failed` and follow the failure law of `_shared/route-advisory.md`.
 
 ### CODEBASE-HEALTH phases
 

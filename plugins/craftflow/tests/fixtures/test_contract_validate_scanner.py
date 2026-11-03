@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT_PATH = os.path.join(HERE, "../../scripts/craftflow_contract_validate_pilot.py")
@@ -108,10 +109,12 @@ check("rejects count below the list", run_uuid(contract(count=1, cands="".join(c
 check("rejects TOP_RECOMMENDATION 0", run_uuid(contract(top="0")), (1, False, ["TOP_RECOMMENDATION"]))
 check("rejects TOP_RECOMMENDATION count+1", run_uuid(contract(top="3")), (1, False, ["TOP_RECOMMENDATION"]))
 check("accepts TOP_RECOMMENDATION == count", run_uuid(contract(top="2")), (0, True, []))
-check("rejects CANDIDATES_FOUND with TOP_RECOMMENDATION null", run_uuid(contract(top="null")), (1, False, ["TOP_RECOMMENDATION"]))
+check("accepts CANDIDATES_FOUND with TOP_RECOMMENDATION null (route law, agent contract and fixture allow it)",
+      run_uuid(contract(top="null")), (0, True, []))
+check("still rejects a non-integer TOP_RECOMMENDATION", run_uuid(contract(top='"1"')), (1, False, ["TOP_RECOMMENDATION"]))
 check("rejects CANDIDATES_FOUND with NEXT_ACTION complete", run_uuid(contract(action="complete")), (1, False, ["NEXT_ACTION"]))
 check("rejects CANDIDATES_FOUND with count 0 and no list",
-      run_uuid(contract("CANDIDATES_FOUND", 0, "null", "choose")), (1, False, ["CANDIDATE_COUNT", "TOP_RECOMMENDATION"]))
+      run_uuid(contract("CANDIDATES_FOUND", 0, "null", "choose")), (1, False, ["CANDIDATE_COUNT"]))
 check("rejects NO_CANDIDATES with count 1", run_uuid(contract("NO_CANDIDATES", 1, "null", "complete")), (1, False, ["CANDIDATE_COUNT"]))
 check("rejects NO_CANDIDATES with NEXT_ACTION choose", run_uuid(contract("NO_CANDIDATES", 0, "null", "choose")), (1, False, ["NEXT_ACTION"]))
 check("rejects NO_CANDIDATES with TOP_RECOMMENDATION 1", run_uuid(contract("NO_CANDIDATES", 0, "1", "complete")), (1, False, ["TOP_RECOMMENDATION"]))
@@ -128,6 +131,40 @@ check("rejects a candidate whose files is not a list of strings",
 check("rejects an unsafe workflow uuid argument",
       run_cli(contract(), "--workflow-uuid", "../evil")[:2], (1, False))
 check("rejects an empty workflow uuid argument", run_cli(contract(), "--workflow-uuid", "")[:2], (1, False))
+
+print("[--project: the report must exist on disk under CANDIDATES_FOUND]")
+FIXTURE = os.path.join(HERE, "codebase-health-candidate-choice.json")
+
+
+def run_project(text, make_report, *extra):
+    with tempfile.TemporaryDirectory() as proj:
+        if make_report:
+            os.makedirs(os.path.join(proj, os.path.dirname(GOOD_PATH)))
+            with open(os.path.join(proj, GOOD_PATH), "w") as fh:
+                fh.write("<html></html>")
+        return run_cli(text, "--workflow-uuid", UUID, "--project", proj, *extra)
+
+
+check("--project with the report on disk passes", run_project(contract(), True), (0, True, []))
+check("--project with no report on disk fails REPORT_PATH", run_project(contract(), False), (1, False, ["REPORT_PATH"]))
+check("--project does not need a report for NO_CANDIDATES (law: CANDIDATES_FOUND only)",
+      run_project(contract("NO_CANDIDATES", 0, "null", "complete"), False), (0, True, []))
+check("without --project the disk is not consulted", run_uuid(contract()), (0, True, []))
+check("--project naming a missing directory fails closed",
+      run_cli(contract(), "--workflow-uuid", UUID, "--project", "/nonexistent-h6/x"), (1, False, ["REPORT_PATH"]))
+
+print("[PARITY: every scanner step of the replay fixture gets the real validator's verdict]")
+OUTCOME = {0: "ok", 1: "architecture_scanner_failed"}
+with open(FIXTURE) as fh:
+    steps = [s for sc in json.load(fh)["scenarios"] for s in sc["steps"] if s["op"] == "scanner"]
+check("the fixture has the 11 scanner steps the parity covers", len(steps), 11)
+for n, step in enumerate(steps):
+    cands = "".join(candidate(i, st) for i, st in enumerate(step["strengths"], 1))
+    text = contract(step["status"], step["candidate_count"], "null" if step["top"] is None else str(step["top"]),
+                    "choose" if step["status"] == "CANDIDATES_FOUND" else "complete", cands=cands)
+    rc = run_project(text, step["report_exists"])[0]
+    check(f"parity step {n}: {step['status']} count={step['candidate_count']} top={step['top']} report={step['report_exists']}",
+          OUTCOME.get(rc), step["outcome"])
 
 print(f"\n{PASS} PASS, {FAIL} FAIL")
 sys.exit(1 if FAIL else 0)

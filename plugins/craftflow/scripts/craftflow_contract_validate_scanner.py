@@ -9,8 +9,8 @@ craftflow_contract_validate_pilot.py when `--workflow-uuid` is given:
 - REPORT_PATH must equal `.craftflow/codebase-health/{workflow_uuid}/report.html`
   exactly (project-relative). The router opens that path, so it is pinned.
 - CANDIDATE_COUNT equals len(CANDIDATES); the STATUS pairings hold
-  (CANDIDATES_FOUND: count >= 1, NEXT_ACTION choose, TOP_RECOMMENDATION in
-  1..count; NO_CANDIDATES: count 0, empty list, NEXT_ACTION complete,
+  (CANDIDATES_FOUND: count >= 1, NEXT_ACTION choose, TOP_RECOMMENDATION null
+  or in 1..count, and with the pilot's optional `--project DIR` the report file exists under it; NO_CANDIDATES: count 0, empty list, NEXT_ACTION complete,
   TOP_RECOMMENDATION null).
 - Every candidate carries name, files, problem, solution and a known strength.
 
@@ -20,7 +20,8 @@ it never raises for a malformed `parsed` (fail-closed: odd shapes are violations
 from __future__ import annotations
 
 import re
-from typing import Any, List
+from pathlib import Path
+from typing import Any, List, Optional
 
 REPORT_PATH_TEMPLATE = ".craftflow/codebase-health/{uuid}/report.html"
 STRENGTHS = ("Strong", "Worth exploring", "Speculative")
@@ -58,7 +59,7 @@ def _candidate_problem(index: int, item: Any) -> str:
     return ""
 
 
-def scanner_violations(parsed: dict, workflow_uuid: str) -> List[dict]:
+def scanner_violations(parsed: dict, workflow_uuid: str, project: Optional[str] = None) -> List[dict]:
     out: List[dict] = []
 
     def bad(field: str, reason: str) -> None:
@@ -91,8 +92,10 @@ def scanner_violations(parsed: dict, workflow_uuid: str) -> List[dict]:
             bad("CANDIDATE_COUNT", "CANDIDATES_FOUND needs at least 1 candidate")
         if action != "choose":
             bad("NEXT_ACTION", "CANDIDATES_FOUND needs NEXT_ACTION choose")
-        if not _is_int(top) or not 1 <= top <= max(count, 0):
-            bad("TOP_RECOMMENDATION", f"must be an integer in 1..{count}, got {top!r}")
+        if top is not None and (not _is_int(top) or not 1 <= top <= max(count, 0)):
+            bad("TOP_RECOMMENDATION", f"must be null or an integer in 1..{count}, got {top!r}")
+        if project is not None and rationale.get("REPORT_PATH") == want and not (Path(project) / want).is_file():
+            bad("REPORT_PATH", f"CANDIDATES_FOUND needs the report file on disk at {want!r} under --project")
     elif status == "NO_CANDIDATES":
         if count != 0 or cands:
             bad("CANDIDATE_COUNT", "NO_CANDIDATES needs count 0 and an empty CANDIDATES list")

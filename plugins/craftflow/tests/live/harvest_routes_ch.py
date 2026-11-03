@@ -6,9 +6,10 @@ the driver hands in its own `git` function and the two stream facts (announced, 
 PASS needs, all at once:
   - the `-> CODEBASE-HEALTH workflow` announce and exactly one CODEBASE-HEALTH artifact;
   - events in order `workflow_started` < `memory_finalized` < `handoff_started` in the parent's log;
-  - `.craftflow/codebase-health/{parent}/report.html` that is non-empty and holds `<html` and `<svg`;
+  - `.craftflow/codebase-health/{parent}/report.html` of at least 2,000 bytes holding `<html` and `<svg`;
   - exactly one PLAN child linked by `parent_workflow_uuid`, whose `handoff` block says `source_route == CODEBASE-HEALTH`,
-    `input_kind == design` and `input_path` = a saved `docs/plans/*-design.md` that exists in the project;
+    `input_kind == design`, `mode == auto` and `input_path` = a saved `docs/plans/*-design.md` (>= 200 bytes, with a markdown
+    heading) that exists in the project; no other child (BUILD, ...) is linked to the parent;
   - exactly one `open` shim call, equal to the parent's project-relative report path (the router opened the report once);
   - no product change under calc/ and tests/ against the seed commit (committed edits, working-tree edits and new files).
 `rejudge(scr, git_fn)` applies the same judge to a kept scratch dir (transcripts/LV-CH.jsonl + LV-CH/ + open-calls.log).
@@ -17,11 +18,15 @@ Python 3.9 compatible.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 CH_ANNOUNCE = "-> CODEBASE-HEALTH workflow"
 CH_PROMPT = "run a codebase health check on calc"
 PRODUCT_DIRS = ("calc", "tests")
+REPORT_MIN_BYTES = 2000
+DESIGN_MIN_BYTES = 200
+ORIGINAL_SCRATCH = re.compile(r"/cf-harvest-live-[^/]+/LV-CH/(.+)$")
 ORDER = ("workflow_started", "memory_finalized", "handoff_started")
 
 
@@ -62,13 +67,26 @@ def ch_state(project):
     report = root / "codebase-health" / str(parent) / "report.html"
     text = report.read_text(encoding="utf-8", errors="replace") if parent and report.is_file() else ""
     children = [w for w, a in arts.items() if parent and a.get("workflow_type") == "PLAN" and a.get("parent_workflow_uuid") == parent]
+    extra = [w for w, a in arts.items() if parent and a.get("workflow_type") != "PLAN" and a.get("parent_workflow_uuid") == parent]
     plans = Path(project) / "docs" / "plans"
+    designs = sorted(plans.glob("*-design.md")) if plans.is_dir() else []
     return {"parents": parents, "parent": parent, "events": events,
             "expected_report": report_rel(parent) if parent else None,
             "report_exists": bool(text.strip()), "report_symlink": report.is_symlink(), "report_html": "<html" in text.lower(), "report_svg": "<svg" in text.lower(),
-            "designs": sorted(p.relative_to(project).as_posix() for p in plans.glob("*-design.md")) if plans.is_dir() else [],
-            "children": children,
+            "report_bytes": len(text.encode("utf-8")),
+            "designs": [p.relative_to(project).as_posix() for p in designs],
+            "valid_designs": [p.relative_to(project).as_posix() for p in designs if design_ok(p)],
+            "children": children, "extra_children": extra,
             "handoffs": {w: arts[w].get("handoff") for w in children}}
+
+
+def design_ok(path):
+    """A saved design is real when it is at least DESIGN_MIN_BYTES and holds a markdown heading line."""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return len(text.encode("utf-8")) >= DESIGN_MIN_BYTES and re.search(r"^#{1,6} \S", text, re.MULTILINE) is not None
 
 
 def product_changes(git_fn, project, seed_sha):
@@ -97,8 +115,10 @@ def read_open_calls(scr):
         if call.startswith("/"):
             try:
                 call = Path(call).resolve().relative_to(project).as_posix()
-            except ValueError:
-                pass
+            except ValueError:  # a copied kept dir: a path into the ORIGINAL scratch dir is relocated by its LV-CH suffix
+                moved = ORIGINAL_SCRATCH.search(call)
+                if moved:
+                    call = moved.group(1)
         calls.append(call)
     return calls
 
@@ -115,6 +135,8 @@ def order_problem(events):
 
 def handoff_problem(state):
     """'' when the single PLAN child's handoff block links the saved design; else the reason."""
+    if state.get("extra_children"):
+        return "extra child %s of another type is linked to the parent" % state["extra_children"]
     if len(state["children"]) != 1:
         return "plan_children=%s" % state["children"]
     child = state["children"][0]
@@ -125,6 +147,10 @@ def handoff_problem(state):
         return "child link is source_route=%r input_kind=%r" % (link.get("source_route"), link.get("input_kind"))
     if link.get("input_path") not in state["designs"]:
         return "input_path %r is not a saved design in %s" % (link.get("input_path"), state["designs"])
+    if link.get("input_path") not in state["valid_designs"]:
+        return "design %r is under %d bytes or has no markdown heading" % (link.get("input_path"), DESIGN_MIN_BYTES)
+    if link.get("mode") != "auto":
+        return "child handoff mode is %r, not 'auto' (the route must hand off without asking)" % link.get("mode")
     return ""
 
 
@@ -143,8 +169,9 @@ def judge_ch(announced, has_events, state, changes, open_calls):
         return "FAIL:" + problem, detail
     if not state["report_exists"]:
         return "FAIL:no_report(%s)" % state["expected_report"], detail
-    if state.get("report_symlink") or not (state["report_html"] and state["report_svg"]):
-        return "FAIL:report_not_a_page(html=%s,svg=%s,symlink=%s)" % (state["report_html"], state["report_svg"], state.get("report_symlink")), detail
+    if state.get("report_symlink") or not (state["report_html"] and state["report_svg"]) or state["report_bytes"] < REPORT_MIN_BYTES:
+        return "FAIL:report_not_a_page(html=%s,svg=%s,bytes=%s,symlink=%s)" % (
+            state["report_html"], state["report_svg"], state["report_bytes"], state.get("report_symlink")), detail
     if not state["designs"]:
         return "FAIL:no_design_file(docs/plans/*-design.md)", detail
     if not state["children"]:

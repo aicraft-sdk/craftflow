@@ -105,8 +105,8 @@ LINK = {"source_route": "CODEBASE-HEALTH", "input_kind": "design", "input_path":
 
 def ch_state(**kw: Any) -> Dict[str, Any]:
     base = {"parents": ["wf-a"], "parent": "wf-a", "events": ["workflow_started", "policy_loaded", "memory_finalized", "handoff_started"],
-            "expected_report": REPORT, "report_exists": True, "report_html": True, "report_svg": True, "designs": [DESIGN],
-            "children": ["wf-b"], "handoffs": {"wf-b": dict(LINK)}}
+            "expected_report": REPORT, "report_exists": True, "report_html": True, "report_svg": True, "report_bytes": 2500, "designs": [DESIGN],
+            "valid_designs": [DESIGN], "children": ["wf-b"], "extra_children": [], "handoffs": {"wf-b": dict(LINK)}}
     return {**base, **kw}
 
 
@@ -121,9 +121,9 @@ def kept_ch_dir(tmp: Path) -> Path:
     (wdir / "wf-a.events.jsonl").write_text("".join(json.dumps({"event": e}) + "\n" for e in ch_state()["events"]))
     (wdir / "wf-b.json").write_text(json.dumps({"workflow_type": "PLAN", "parent_workflow_uuid": "wf-a", "handoff": dict(LINK)}))
     (project / ".craftflow" / "codebase-health" / "wf-a").mkdir(parents=True)
-    (project / ".craftflow" / "codebase-health" / "wf-a" / "report.html").write_text("<html><body><svg></svg></body></html>")
+    (project / ".craftflow" / "codebase-health" / "wf-a" / "report.html").write_text("<html><body><svg></svg>" + "<p>candidate</p>" * 200 + "</body></html>")
     (project / "docs" / "plans").mkdir(parents=True)
-    (project / DESIGN).write_text("# design\n")
+    (project / DESIGN).write_text("# design\n\n" + "A real design paragraph about the picked candidate.\n" * 8)
     (scr / "open-calls.log").write_text(REPORT + "\n")
     (scr / "transcripts").mkdir()
     (scr / "transcripts" / "LV-CH.jsonl").write_text(stream(text="-> CODEBASE-HEALTH workflow (signals: codebase health)"))
@@ -154,6 +154,15 @@ def ch_controls() -> None:
     check("LV-CH without a PLAN child fails", verdict(st=ch_state(children=[], handoffs={})).startswith("FAIL:no_plan_child"), "")
     check("LV-CH with no saved design file fails (M3)", verdict(st=ch_state(designs=[])).startswith("FAIL:no_design_file"), "")
     check("LV-CH with two PLAN children fails", verdict(st=ch_state(children=["wf-b", "wf-d"])).startswith("FAIL:handoff_link"), "")
+    check("LV-CH with an extra non-PLAN child (a BUILD) fails handoff_link(extra child) (RR3 judge gap)",
+          "extra child" in verdict(st=ch_state(extra_children=["wf-x"])) and verdict(st=ch_state(extra_children=["wf-x"])).startswith("FAIL:handoff_link"), "")
+    check("LV-CH with a thin or headingless design fails (judge gap)", verdict(st=ch_state(valid_designs=[])).startswith("FAIL:handoff_link"), verdict(st=ch_state(valid_designs=[])))
+    check("LV-CH with a child handoff mode asked fails (judge gap)",
+          verdict(st=ch_state(handoffs={"wf-b": dict(LINK, mode="asked")})).startswith("FAIL:handoff_link"), "")
+    check("LV-CH with no handoff mode fails (judge gap)",
+          verdict(st=ch_state(handoffs={"wf-b": {k: v for k, v in LINK.items() if k != "mode"}})).startswith("FAIL:handoff_link"), "")
+    check("LV-CH with a 1999 byte report fails report_not_a_page (stub report)",
+          verdict(st=ch_state(report_bytes=1999)).startswith("FAIL:report_not_a_page") and verdict(st=ch_state(report_bytes=2000)) == "PASS", "")
     for label, link in (("another input_path", dict(LINK, input_path="docs/plans/other-design.md")),
                         ("source_route BUILD", dict(LINK, source_route="BUILD")), ("input_kind brief", dict(LINK, input_kind="brief")),
                         ("no input_path", {k: v for k, v in LINK.items() if k != "input_path"}), ("no handoff block", None)):
@@ -170,6 +179,7 @@ def ch_controls() -> None:
         (wf / "wf-a.events.jsonl").write_text(json.dumps({"event": "memory_finalized"}) + "\n" + json.dumps({"event": "handoff_started"}) + "\n")
         (wf / "wf-b.json").write_text(json.dumps({"workflow_type": "PLAN", "parent_workflow_uuid": "wf-a", "handoff": dict(LINK)}))
         (wf / "wf-z.json").write_text(json.dumps({"workflow_type": "PLAN", "parent_workflow_uuid": "wf-other"}))
+        (wf / "wf-q.json").write_text(json.dumps({"workflow_type": "BUILD", "parent_workflow_uuid": "wf-a"}))
         (Path(tmp) / ".craftflow" / "codebase-health" / "wf-a").mkdir(parents=True)
         (Path(tmp) / ".craftflow" / "codebase-health" / "wf-a" / "report.html").write_text("<svg></svg>")
         (Path(tmp) / "docs" / "plans").mkdir(parents=True)
@@ -179,6 +189,14 @@ def ch_controls() -> None:
               st["parent"] == "wf-a" and st["events"] == ["memory_finalized", "handoff_started"] and st["report_exists"] and st["children"] == ["wf-b"]
               and st["handoffs"] == {"wf-b": LINK} and st["designs"] == [DESIGN] and st["expected_report"] == REPORT
               and st["report_svg"] and not st["report_html"], str(st))
+        check("ch_state reports a linked BUILD child as extra, the stub report size and a 1-byte design as not valid",
+              st["extra_children"] == ["wf-q"] and st["report_bytes"] == len("<svg></svg>") and st["valid_designs"] == [], str(st))
+        (Path(tmp) / DESIGN).write_text("# t\n" + "x" * 200)
+        check("ch_state accepts a design with a heading and at least 200 bytes", driver.ch_state(tmp)["valid_designs"] == [DESIGN], "")
+        (Path(tmp) / DESIGN).write_text("plain text without a heading\n" * 20)
+        check("ch_state rejects a 200+ byte design with no markdown heading", driver.ch_state(tmp)["valid_designs"] == [], "")
+        (Path(tmp) / DESIGN).write_text("")
+        check("ch_state rejects an empty design", driver.ch_state(tmp)["valid_designs"] == [], "")
         (Path(tmp) / ".craftflow" / "codebase-health" / "wf-a" / "report.html").write_text("")
         check("ch_state treats an empty report as missing", driver.ch_state(tmp)["report_exists"] is False, "")
         shim = driver.open_shim(Path(tmp))
@@ -252,7 +270,7 @@ def rejudge_controls() -> None:
         (project / DESIGN).unlink()
         v, _ = driver.rejudge_dir(scr)
         check("rejudge: a missing design file fails", v.startswith("FAIL:no_design_file"), v)
-        (project / DESIGN).write_text("d")
+        (project / DESIGN).write_text("# design\n\n" + "A real design paragraph about the picked candidate.\n" * 8)
         (scr / "open-calls.log").write_text(REPORT + "\n" + REPORT + "\n")
         v, _ = driver.rejudge_dir(scr)
         check("rejudge: two open calls fail", v.startswith("FAIL:open_calls"), v)
@@ -263,6 +281,14 @@ def rejudge_controls() -> None:
         v, _ = driver.rejudge_dir(scr)
         check("rejudge: an absolute open call outside the project fails", v.startswith("FAIL:open_calls"), v)
         (scr / "open-calls.log").write_text(REPORT + "\n")
+        moved = Path(tmp) / "copied" / "cf-harvest-live-copy"
+        shutil.copytree(scr, moved, symlinks=True)
+        (moved / "open-calls.log").write_text("/var/folders/zz/T/cf-harvest-live-original/LV-CH/" + REPORT + "\n")
+        v, _ = driver.rejudge_dir(moved)
+        check("rejudge: an absolute open call into the ORIGINAL scratch dir is relocated when the kept dir was copied", v == "PASS", v)
+        (moved / "open-calls.log").write_text("/var/folders/zz/T/cf-harvest-live-original/LV-CH/docs/other.html\n")
+        v, _ = driver.rejudge_dir(moved)
+        check("rejudge: a relocated open call of another file still fails", v.startswith("FAIL:open_calls"), v)
         (project / "calc" / "core.py").write_text("# hacked\n")
         cli = subprocess.run(cli_args + [str(scr)], capture_output=True, text=True)
         check("rejudge CLI: a product edit exits 1", cli.returncode == 1 and "product_code_changed" in cli.stdout, cli.stdout + cli.stderr)
