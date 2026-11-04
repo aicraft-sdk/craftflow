@@ -101,11 +101,12 @@ DOC_PINS = (
     (KERNEL, "then `Read()` `skills/_shared/route-codebase-health.md` and `references/codebase-health-workflow.md`."),
     (PROTOCOL, "| `codebase-health` | `craftflow:architecture-scanner` |"),
 )
-# The four `candidate_choice` rows of `### Cursor route gate answers`: reply cell -> text its action cell must carry.
+# The five `candidate_choice` rows of `### Cursor route gate answers`: reply cell -> text its action cell must carry.
 CHOICE_ROWS = (
     ("any reply once a candidate is picked (the grill is running)", ("grill answer", "stays `candidate_choice`")),
     ("a listed candidate number", ("run the grill",)),
     ("\"None\"", ("no handoff", "Memory Update", "clear `pending_gate`")),
+    ("a fresh unrelated request", ("terminal declined", "Memory Update", "no handoff", "clear `pending_gate`")),
     ("anything else", ("re-ask", "verbatim", "keep `pending_gate`")),
 )
 CHOICE_REPLIES = tuple(reply for reply, _ in CHOICE_ROWS)
@@ -251,8 +252,14 @@ def sequence_problems(sc: Dict[str, Any], root: Optional[Path] = None) -> List[s
     memory = terminal = False
     handoffs = 0
     final = ""
+    asked: Optional[Dict[str, Any]] = None  # the last question step; a re-ask must repeat it
+    reask = False
     for i, s in enumerate(steps):
         op = s["op"]
+        if reask:
+            if op != "question" or (s["text"], s["options"]) != (asked["text"], asked["options"]):
+                out.append(f"step {i}: a re-ask is followed by the identical question (gate kept), got {op}")
+            reask = False
         if at_report and op != "auto_pick":  # JUST_GO: the report is no reply point, the next step is the pick
             out.append(f"step {i}: JUST_GO ended at the report ({op} where the auto_pick belongs)")
         at_report = False
@@ -278,6 +285,7 @@ def sequence_problems(sc: Dict[str, Any], root: Optional[Path] = None) -> List[s
             if pending == FAILED and scan is not None:
                 out.append(f"step {i}: {FAILED} after a valid scan")
         elif op == "question":
+            asked = s
             numbers = [str(n) for n in range(1, (scan or {"candidate_count": 0})["candidate_count"] + 1)]
             want_opts = numbers[:3] + ["None"]  # AskUserQuestion takes 4 options: a number past 3 is typed as free text
             if jg or s["options"] != want_opts:
@@ -292,10 +300,18 @@ def sequence_problems(sc: Dict[str, Any], root: Optional[Path] = None) -> List[s
         elif op == "answer":
             if pending == "candidate_choice":
                 numbers = [str(n) for n in range(1, (scan or {"candidate_count": 0})["candidate_count"] + 1)]
+                kind = s.get("kind")
                 if s["outcome"] == "picked" and s["text"] in numbers:
                     picked, grilling, grilled, pending = int(s["text"]), True, False, "candidate_choice"
-                elif s["outcome"] == "declined" and s["text"] not in numbers:
+                elif s["outcome"] == "declined" and s["text"] == "None":
                     pending = None
+                elif s["outcome"] == "declined" and kind == "unrelated_request" and s["text"] not in numbers:
+                    pending = None  # route law: a fresh unrelated request counts as a decline
+                elif s["outcome"] == "re_ask" and s["text"] not in numbers and s["text"] != "None" and kind in ("other", "out_of_range"):
+                    reask = True  # route law: neither a listed number nor "None" nor a fresh unrelated request is re-asked verbatim
+                elif s["outcome"] == "declined" and s["text"] not in numbers and kind in (None, "other", "out_of_range"):
+                    out.append(f"step {i}: answer {s['text']!r} is neither a listed number, \"None\" nor a fresh unrelated request "
+                               f"(kind {kind!r}): it is re-asked verbatim, not declined")
                 else:
                     out.append(f"step {i}: answer {s['text']!r} with outcome {s['outcome']!r} is not a pick of {numbers} or a decline")
             elif pending == FAILED:
@@ -327,6 +343,8 @@ def sequence_problems(sc: Dict[str, Any], root: Optional[Path] = None) -> List[s
             if not (memory and saved and s["target"] == "PLAN" and s["input_kind"] == "design"
                     and s["announce"] == f"-> handing off to PLAN (design: {saved})"):
                 out.append(f"step {i}: the handoff is PLAN, after memory_finalized, announced with the saved design path: {s}")
+    if reask:
+        out.append("the scenario ends on a re-ask with no repeated question")
     if unshown:
         out.append("the scenario ends after a valid scan without report_shown")
     if at_report:

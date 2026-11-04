@@ -89,7 +89,29 @@
         {"op": "report_shown", "how": "print", "platform": "linux"},
         {"op": "gate", "pending_gate": "candidate_choice"},
         {"op": "question", "text": "Which candidate should I take into the design grill: 1, 2, or None?", "options": ["1", "2", "None"]},
-        {"op": "answer", "text": "fix the failing login test", "outcome": "declined"},
+        {"op": "answer", "text": "fix the failing login test", "outcome": "declined", "kind": "unrelated_request"},
+        {"op": "status", "value": "completed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"}
+      ]
+    },
+    {
+      "name": "a-reply-that-is-neither-a-number-nor-none-is-re-asked-verbatim",
+      "request": "codebase health check",
+      "just_go": false,
+      "expected": {"path": "completed_no_handoff", "child_minted": false},
+      "steps": [
+        {"op": "announce", "text": "-> CODEBASE-HEALTH workflow (signals: codebase health)"},
+        {"op": "mint", "workflow_type": "CODEBASE-HEALTH", "phase": "codebase-health"},
+        {"op": "scanner", "status": "CANDIDATES_FOUND", "candidate_count": 2, "strengths": ["Strong", "Strong"], "top": 1, "report_exists": true, "outcome": "ok"},
+        {"op": "report_shown", "how": "print", "platform": "linux"},
+        {"op": "gate", "pending_gate": "candidate_choice"},
+        {"op": "question", "text": "Which candidate should I take into the design grill: 1, 2, or None?", "options": ["1", "2", "None"]},
+        {"op": "answer", "text": "maybe", "outcome": "re_ask", "kind": "other"},
+        {"op": "question", "text": "Which candidate should I take into the design grill: 1, 2, or None?", "options": ["1", "2", "None"]},
+        {"op": "answer", "text": "3", "outcome": "re_ask", "kind": "out_of_range"},
+        {"op": "question", "text": "Which candidate should I take into the design grill: 1, 2, or None?", "options": ["1", "2", "None"]},
+        {"op": "answer", "text": "None", "outcome": "declined", "kind": "none"},
         {"op": "status", "value": "completed"},
         {"op": "memory_task_created"},
         {"op": "memory_finalized"}

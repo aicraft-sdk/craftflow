@@ -65,4 +65,5 @@ Applied by § 1's precedence check when `pending_gate` does not start with `phas
 | `candidate_choice` | any reply once a candidate is picked (the grill is running) | the grill answer; `pending_gate` stays `candidate_choice` until the design file is saved |
 | `candidate_choice` | a listed candidate number | record the pick and run the grill on that candidate |
 | `candidate_choice` | "None" | terminal declined: run the Memory Update, append `workflow_completed`, no handoff; clear `pending_gate` |
-| `candidate_choice` | anything else | re-ask the same question verbatim and keep `pending_gate` |
+| `candidate_choice` | a fresh unrelated request | terminal declined: run the Memory Update, append `workflow_completed`, no handoff; clear `pending_gate` |
+| `candidate_choice` | anything else | re-ask the same question verbatim and keep `pending_gate`; a fresh unrelated request is the row above, not this one |

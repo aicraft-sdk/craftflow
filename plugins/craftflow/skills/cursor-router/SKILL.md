@@ -112,7 +112,8 @@ message** (mirrors § 2 Memory Load's "Run this before routing" note): read
   in this same live session or is being read back after a session restart — there is no
   separate "same session" vs "resumed session" code path. A router turn that receives a
   reply while `pending_skill_approval` (or `pending_gate`, or `pending_handoff`) is still non-null must never
-  fall through to Intent Routing below and start a new workflow from that reply's text.
+  fall through to Intent Routing below and start a new workflow from that reply's text. A fresh unrelated request while
+  `candidate_choice` is pending is decided by that gate's row (a decline), not by Intent Routing.
 - Only when `pending_skill_approval`, `pending_gate` and `pending_handoff` are all null does Intent
   Routing below apply to the incoming message.
 

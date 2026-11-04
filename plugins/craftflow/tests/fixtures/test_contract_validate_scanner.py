@@ -157,7 +157,7 @@ print("[PARITY: every scanner step of the replay fixture gets the real validator
 OUTCOME = {0: "ok", 1: "architecture_scanner_failed"}
 with open(FIXTURE) as fh:
     steps = [s for sc in json.load(fh)["scenarios"] for s in sc["steps"] if s["op"] == "scanner"]
-check("the fixture has the 11 scanner steps the parity covers", len(steps), 11)
+check("the fixture has the 12 scanner steps the parity covers", len(steps), 12)
 for n, step in enumerate(steps):
     cands = "".join(candidate(i, st) for i, st in enumerate(step["strengths"], 1))
     text = contract(step["status"], step["candidate_count"], "null" if step["top"] is None else str(step["top"]),

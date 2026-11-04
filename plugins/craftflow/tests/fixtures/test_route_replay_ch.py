@@ -153,6 +153,38 @@ def literal_controls() -> None:
     check("answer: a pick of candidate 5, typed as free text, is accepted (F1)",
           ch.sequence_problems(scenario(five)) == [] and step(scenario(five), "answer")["text"] == "5", "")
     check("answer: a pick of candidate 6 of 5 is caught (F1)", broken(five, lambda sc: step(sc, "answer").update(text="6")), "")
+    reask, unrel = "a-reply-that-is-neither", "an-unrelated"
+
+    def decline_gibberish(sc: dict) -> list:
+        step(sc, "answer", 0).update(outcome="declined")
+        return ch.sequence_problems(sc)
+
+    def after(sc: dict, nth: int) -> int:
+        return sc["steps"].index(step(sc, "answer", nth)) + 1
+
+    check("re-ask: the law-correct transcript (maybe, 3, then None) is clean",
+          ch.sequence_problems(scenario(reask)) == [], str(ch.sequence_problems(scenario(reask))))
+    check("re-ask: gibberish recorded as declined is a named failure",
+          broken(reask, lambda sc: step(sc, "answer", 0).update(outcome="declined")), "")
+    check("re-ask: a decline of gibberish names the re-ask rule", any("re-asked" in p for p in decline_gibberish(scenario(reask))), "")
+    check("re-ask: an out-of-range number recorded as declined is a named failure",
+          broken(reask, lambda sc: step(sc, "answer", 1).update(outcome="declined")), "")
+    check("re-ask: a re-ask not followed by the same question is caught",
+          broken(reask, lambda sc: sc["steps"].pop(after(sc, 0))), "")
+    check("re-ask: a re-ask followed by a reworded question is caught",
+          broken(reask, lambda sc: sc["steps"][after(sc, 0)].update(text="Pick one of 1, 2 or None, please?")), "")
+    check("re-ask: a re-ask followed by a question with other options is caught",
+          broken(reask, lambda sc: sc["steps"][after(sc, 0)].update(options=["1", "None"])), "")
+    check("re-ask: a re-ask that ends the scenario with no question is caught",
+          broken(reask, lambda sc: sc["steps"].__setitem__(slice(after(sc, 1), None), [])), "")
+    check("re-ask: a re-ask followed by a terminal status (the gate dropped) is caught",
+          broken(reask, lambda sc: sc["steps"].insert(after(sc, 0), {"op": "status", "value": "completed"})), "")
+    check("re-ask: a listed number marked re_ask is caught", broken(reask, lambda sc: step(sc, "answer", 0).update(text="1")), "")
+    check("decline: a fresh unrelated request still declines and carries kind unrelated_request",
+          ch.sequence_problems(scenario(unrel)) == [] and step(scenario(unrel), "answer")["kind"] == "unrelated_request", "")
+    check("decline: an unrelated-request decline with kind other is caught", broken(unrel, lambda sc: step(sc, "answer").update(kind="other")), "")
+    check("decline: a decline with no kind that is not None is caught", broken(unrel, lambda sc: step(sc, "answer").pop("kind")), "")
+    check("decline: a listed number recorded as declined is caught", broken(unrel, lambda sc: step(sc, "answer").update(text="2")), "")
     check("transcript: a wrong expected path is caught", broken(base, lambda sc: sc["expected"].update(path="failed")), "")
     check("transcript: a wrong expected pick is caught", broken(base, lambda sc: sc["expected"].update(candidate_picked=2)), "")
 
@@ -239,6 +271,12 @@ def mutated_copies() -> None:
     red("a JUST_GO pick edited in the fixture fails the transcript check",
         {fx: lambda t: t.replace('{"op": "auto_pick", "candidate": 2}', '{"op": "auto_pick", "candidate": 3}', 1)},
         "scanner contract, choice, grill, terminal and handoff transcript")
+    red("gibberish recorded as a decline in the fixture fails the transcript check (the law re-asks it)",
+        {fx: lambda t: t.replace('{"op": "answer", "text": "maybe", "outcome": "re_ask", "kind": "other"}',
+                                 '{"op": "answer", "text": "maybe", "outcome": "declined", "kind": "other"}', 1)},
+        "scanner contract, choice, grill, terminal and handoff transcript")
+    red("a Cursor gate row that no longer declines a fresh unrelated request fails the Cursor check",
+        {ROUTES: lambda t: t.replace("| `candidate_choice` | a fresh unrelated request |", "| `candidate_choice` | \"skip\" |", 1)}, cur)
     red("a handoff mint that skips the design link fails the live check",
         {"scripts/craftflow_workflow_handoff.py": lambda t: t.replace('"input_kind"', '"input_kind_x"')}, live)
 
@@ -254,7 +292,7 @@ def shape_controls() -> None:
 
     check("the live fixture has a clean shape", ch.shape(fixture()) == [], str(ch.shape(fixture())))
     for label, prefixes in (("the PLAN handoff", ("candidates-found-choice", "five-candidates", "just-go")), ("NO_CANDIDATES", ("no-candidates", "a-count-that")),
-                            ("the declined path", ("none-declines",)), ("the JUST_GO top pick", ("just-go-auto-picks",)),
+                            ("the declined path", ("none-declines", "a-reply-that-is-neither")), ("the JUST_GO top pick", ("just-go-auto-picks",)),
                             ("the scanner failure", ("scanner-failure", "a-report-missing", "a-count-that"))):
         check(f"a fixture without {label} fails the coverage shape", any("lacks" in p for p in shape_after(drop(*prefixes))), str(prefixes))
     check("a fixture without the more-than-3-candidates question fails the coverage shape (F1)",
