@@ -8,6 +8,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.35.0] - 2026-11-05
+
+### Features
+
+- add the advisory and auto-handoff law
+- mint linked child workflows for handoffs
+- diff review agents against the recorded BASE
+- add the BASE review package
+- add the ORIENT route live driver and announce rule
+- write the ORIENT route law and point the kernel, Cursor and README at it
+- accept the new workflow types and refuse an unguardable QA mint
+- route by primary deliverable, finalize the metadata tokens and stub the harvest route files
+- add signed behavior change rows to the rule inventory
+- model the primary-deliverable routing law and feed Jev from it
+- add the docs-rot ratchet with a seeded baseline
+- add the release gate runner
+
+### Fixes
+
+- take over stale handoff claims atomically and roll back on any interruption
+- make the handoff mint race-safe, derive the host from the parent, and validate its inputs
+- keep HEAD~1 out of the BASE fallback wording and fold the agent pins
+- define the BASE placeholder, harden the review package and the fallback wording
+- keep the TaskCreate( and Task( bans absolute in the route replay checker
+- make the ORIENT live proof non-vacuous and tighten the route replay checker
+- refuse a re-signature of ADR-0074 from the repo history alone, so a stale origin cannot launder decided_at_sha
+- make the routing model end the lead clause only where R1 says (no newline), pin the multi-line DEBUG case and drop the newline flip
+- make the routing model follow R4 (DEBUG beats QA) and end the lead clause at ! ? and newline
+- read ADR status from the front matter block only and classify the sbc cases in the test anchors
+- bind the ADR-0074 signature to the blob at decided_at_sha and tell a missing origin file from a git failure
+- harden signed behavior change rows before signature
+- stop the release cleanly when no bump is due
+
+### Documentation
+
+- David signs ADR-0074 and the 33 H2 signed-behavior cells
+- draft the H2 policy rows and ADR-0074 for signature
+- limit the release gate guarantee to post-gate refs
+- document the release gate
+- attribute cc10x (MIT) in NOTICE
+
+### Tests
+
+- count every tamper row before checking the BASE form
+- pin the BASE command forms, not the placeholder, and harden the package diff calls
+- pin every ORIENT route section and refuse plain-English hand-offs in the route replay checker
+- replay the ORIENT route, pin PP-3 and list the checker in the release gate
+- freeze a signed envelope against re-accept laundering and check envelope raises for ancestor at_sha and a consumed row
+- read the origin budget through git_show_state so a git failure is a skip, not a first introduction
+- derive the signature simulation's pending draft so it holds before and after the real signature
+- simulate the ADR-0074 signature in a scratch repo and read the ADR from the git top level
+- bind the ADR-0074 envelope signature to its content
+- bound router growth by the ADR-0074 envelope
+- check the release gate guard on the parsed workflow
+- allowlist the release gate step shape and ban status-function bypasses
+- guard the release gate step against continue-on-error and early exit
+
+### CI
+
+- install PyYAML before the fixture suite in CI
+- run the release gate on PRs
+- gate the plugin release on the release gate
+- shard the fixture suite across two release gate steps
+
+### Chores
+
+- add the ADR-0074 H5 envelope rows
+- add the ADR-0074 H4 envelope rows
+- apply the H3 envelope rows
+- apply the signed ADR-0074 envelope to the router budget
+
 ## [1.34.1] - 2026-10-24
 
 ### Fixes
