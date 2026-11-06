@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.37.0] - 2026-11-06
+
+### Features
+
+- add untangle-codebase skill
+- add tangle prevention rules and review checks
+
+### Fixes
+
+- carry untangle opt-in answers into the plan handoff
+- classify untangle contract tests in router-test-anchors
+
+### Refactoring
+
+- drop the CODEBASE-HEALTH stub hook from the untangle contract
+
+### Tests
+
+- content contract for untangle-codebase and tangle rules (red)
+
+### Chores
+
+- record the ADR-0076 description budget draw for untangle-codebase
+
 ## [1.36.0] - 2026-11-06
 
 ### Features
