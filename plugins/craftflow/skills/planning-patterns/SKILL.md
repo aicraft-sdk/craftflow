@@ -312,6 +312,13 @@ the project's own convention as authoritative, since it may be mechanically enfo
 **Save ADRs to (generic default, only when no project-specific convention is documented):**
 `docs/decisions/ADR-NNN-title.md`
 
+## Prevent Tangle
+
+- **Hidden link:** each phase names the single owner file of every value or rule two places must agree on; no task edits two copies.
+- **Needless link:** a task that couples modules that change for different reasons is split, or the plan states why the coupling is needed.
+- **Surplus:** no task adds a wrapper, option or extension point without a named second user.
+- **Special case:** every special case the plan needs is listed under Open Decisions as an unmet requirement, never buried in a task.
+
 ## Red Flags - STOP and Revise
 
 If you find yourself:

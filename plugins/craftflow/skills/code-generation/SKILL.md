@@ -34,6 +34,13 @@ Needs to exist at all (YAGNI)? > already in this codebase (reuse)? > stdlib? > n
 
 **Minimal diffs:** only change what is necessary; no drive-by refactors. Before editing, grep every caller of the function you touch and fix the shared function once, not each path.
 
+## Prevent Tangle
+
+- **Hidden link:** before writing, name what must change together with this code (shared constant, format, ordering, protocol) and give it one owner that both sides import.
+- **Needless link:** do not import or call across a boundary for code that changes for a different reason; pass data instead.
+- **Surplus:** no wrapper, option or extension point without a second real user today (Deletion Test in `codebase-deepening`).
+- **Special case:** a new branch for one caller or one input is a missing requirement; fix the model, or report it as an open question.
+
 ## Red Flags - STOP and go back to the Universal Questions
 
 Code before answering them; unrequested features; ignoring project patterns; happy path only; abstraction for one use case (rule of three); unrequested config options; magic numbers; comments instead of clear code; multiple valid approaches not presented.

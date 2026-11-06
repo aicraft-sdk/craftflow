@@ -174,6 +174,14 @@ Each smell reads *what it is* → *how to fix*; match against the diff:
 - **Middle Man** — a class or function that mostly just delegates onward. → cut it, call the real target directly.
 - **Refused Bequest** — a subclass or implementer that ignores most of what it inherits. → drop the inheritance, use composition.
 
+## Tangle Checks (Stage 2)
+
+Labelled heuristics like the smells above; the repo standard still overrides. Report each finding once, under the tangle name.
+- **Hidden link** — two places must change together but nothing connects them (copied constant, format parsed twice, ordering only one side knows). → one owner both sides import. Covers Shotgun Surgery.
+- **Needless link** — the diff adds an import or call between code that changes for different reasons. → pass data, or move the code to its owner. Covers Divergent Change, Feature Envy.
+- **Surplus** — new wrapper, unused option or extension point, dead branch, or one-user abstraction. → delete it (Deletion Test in `codebase-deepening`). Covers Speculative Generality, Middle Man.
+- A new special-case branch is reported as a missing requirement: ask which rule makes the case general.
+
 ## Clarity Over Brevity
 
 - Nested ternary `a ? b ? c : d : e` → Use if/else or switch
