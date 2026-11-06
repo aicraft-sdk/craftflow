@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.36.0] - 2026-11-06
+
+### Features
+
+- add the CODEBASE-HEALTH route
+
+### Fixes
+
+- make the CODEBASE-HEALTH replay treat every reply after the pick as a grill answer and name the no-question-asked case
+- make the replay re-ask a neither-number-nor-None reply and decline a fresh unrelated request in the Cursor gate row
+- align the scanner validator with the route law, add a replay parity check, and gate the report reply on JUST_GO
+- continue past the report under JUST_GO, require the workflow uuid for scanner validation, and close the judge gaps
+- constrain the scanner report path and harden the CODEBASE-HEALTH judge, replay and contract checks
+
+### Tests
+
+- accept an absolute in-project report path in the LV-CH open-call check
+
+### Chores
+
+- add the ADR-0074 H6 envelope rows
+
 ## [1.35.0] - 2026-11-05
 
 ### Features
