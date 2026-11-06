@@ -50,7 +50,7 @@ Tangle is code whose real connections do not match its visible structure. Four c
    - If the harness offers a read-only explore subagent, it may summarize one directory each. Never use an agent that can write.
    - Record each finding as: category | `file:line` evidence | why it costs | badge. Badges match `codebase-deepening`: **Strong**, **Worth-exploring**, **Speculative**.
 3. **Redesign.** Group findings by root cause and prefer one change that removes several. Turn each special case into a named requirement plus a change to the model that absorbs it.
-4. **Propose.** Present the fix set and a decision log (Decision | Options | Chosen | Why | Findings closed). The user picks. Then hand off to the planner and BUILD (builder, then reviewer alongside silent-failure-hunter, then verifier).
+4. **Propose.** Present the fix set and a decision log (Decision | Options | Chosen | Why | Findings closed). List any opt-in "yes" answers from step 1 in the proposal; they go to the planner as extra scope for the fix set and are never acted on during diagnosis. The user picks. Then hand off to the planner and BUILD (builder, then reviewer alongside silent-failure-hunter, then verifier).
 5. **Re-scan after BUILD lands.** Rerun step 2 on the touched area. Repeat steps 3 to 5 until no Strong finding remains. Behavior must be shown unchanged by the existing tests passing.
 
 ## Stop And Report
