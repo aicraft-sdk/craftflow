@@ -175,8 +175,11 @@ def literal_controls() -> None:
           broken(reask, lambda sc: sc["steps"][after(sc, 0)].update(text="Pick one of 1, 2 or None, please?")), "")
     check("re-ask: a re-ask followed by a question with other options is caught",
           broken(reask, lambda sc: sc["steps"][after(sc, 0)].update(options=["1", "None"])), "")
-    check("re-ask: a re-ask that ends the scenario with no question is caught",
-          broken(reask, lambda sc: sc["steps"].__setitem__(slice(after(sc, 1), None), [])), "")
+    sc = scenario(reask)
+    sc["steps"][after(sc, 1):] = []
+    got = ch.sequence_problems(sc)
+    check("re-ask: a re-ask that ends the scenario with no question names the end-on-re-ask rule",
+          any("the scenario ends on a re-ask with no repeated question" in p for p in got), str(got))
     check("re-ask: a re-ask followed by a terminal status (the gate dropped) is caught",
           broken(reask, lambda sc: sc["steps"].insert(after(sc, 0), {"op": "status", "value": "completed"})), "")
     check("re-ask: a listed number marked re_ask is caught", broken(reask, lambda sc: step(sc, "answer", 0).update(text="1")), "")
@@ -185,6 +188,38 @@ def literal_controls() -> None:
     check("decline: an unrelated-request decline with kind other is caught", broken(unrel, lambda sc: step(sc, "answer").update(kind="other")), "")
     check("decline: a decline with no kind that is not None is caught", broken(unrel, lambda sc: step(sc, "answer").pop("kind")), "")
     check("decline: a listed number recorded as declined is caught", broken(unrel, lambda sc: step(sc, "answer").update(text="2")), "")
+    grill_msg = "a reply while the grill runs is a grill answer, not a choice answer"
+    ask = "Which candidate should I take into the design grill: 1, 2, or None?"
+
+    def after_pick(extra: list) -> list:
+        sc = scenario(base)
+        sc["steps"][after(sc, 0):after(sc, 0)] = extra
+        return ch.sequence_problems(sc)
+
+    ask_step = {"op": "question", "text": ask, "options": ["1", "2", "None"]}
+    for label, extra in (
+            ("A: a re-pick of another candidate (answer 2)", [{"op": "answer", "text": "2", "outcome": "picked"}]),
+            ("J: an unrelated-request decline", [{"op": "answer", "text": "fix the login test", "outcome": "declined", "kind": "unrelated_request"}]),
+            ("K: gibberish re-asked with the identical question", [{"op": "answer", "text": "maybe", "outcome": "re_ask", "kind": "other"}, dict(ask_step)]),
+            ("None declined", [{"op": "answer", "text": "None", "outcome": "declined", "kind": "none"}])):
+        got = after_pick(extra)
+        check(f"grill: a choice answer while the grill runs is a named failure ({label})", any(grill_msg in p for p in got), str(got))
+    got = after_pick([dict(ask_step)])
+    check("grill: a second choice question after the pick is a named failure (A2)",
+          any("a candidate_choice question while the grill runs" in p for p in got), str(got))
+    sc = scenario(base)
+    sc["steps"].remove(step(sc, "question"))
+    got = ch.sequence_problems(sc)
+    check("answer: a choice answer with no question asked is a named failure (C, question deleted)",
+          any("a candidate_choice answer with no question asked" in p for p in got), str(got))
+    sc = scenario(reask)
+    sc["steps"].remove(step(sc, "question", 0))
+    try:
+        got = ch.sequence_problems(sc)
+    except TypeError as exc:
+        got = [f"TypeError: {exc}"]
+    check("answer: a re_ask before any question is a named failure, not a TypeError (B)",
+          any("a candidate_choice answer with no question asked" in p for p in got), str(got))
     check("transcript: a wrong expected path is caught", broken(base, lambda sc: sc["expected"].update(path="failed")), "")
     check("transcript: a wrong expected pick is caught", broken(base, lambda sc: sc["expected"].update(candidate_picked=2)), "")
 
@@ -297,7 +332,11 @@ def shape_controls() -> None:
         check(f"a fixture without {label} fails the coverage shape", any("lacks" in p for p in shape_after(drop(*prefixes))), str(prefixes))
     check("a fixture without the more-than-3-candidates question fails the coverage shape (F1)",
           any("lacks" in p for p in shape_after(drop("five-candidates"))), "")
-    for prefix in ("just-go-without-a-top", "just-go-with-neither", "a-report-missing", "an-unrelated", "no-candidates", "scanner-failure"):
+    check("a fixture without a re_ask followed by the identical question fails the coverage shape (RH3)",
+          any("re_ask followed by the identical question" in p for p in shape_after(drop("a-reply-that-is-neither"))), "")
+    check("a fixture without an unrelated-request decline fails the coverage shape (RH3)",
+          any("unrelated-request decline" in p for p in shape_after(drop("an-unrelated"))), "")
+    for prefix in ("just-go-without-a-top", "just-go-with-neither", "a-report-missing", "no-candidates", "scanner-failure"):
         check(f"dropping {prefix} alone leaves the coverage intact (it is not the only witness)", shape_after(drop(prefix)) == [], prefix)
     check("a step without a known op is a shape failure",
           any("no known `op`" in p for p in shape_after(lambda fx: fx["scenarios"][0]["steps"][0].update(op="nope"))), "")

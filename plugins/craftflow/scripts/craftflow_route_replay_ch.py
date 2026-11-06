@@ -33,6 +33,7 @@ GRAPH = "skills/craftflow-router/references/codebase-health-workflow.md"
 KERNEL = "skills/craftflow-router/SKILL.md"
 PROTOCOL = "skills/_shared/router-protocol.md"
 START = "skills/craftflow-router/references/workflow-start.md"
+CURSOR_SKILL = "skills/cursor-router/SKILL.md"
 CURSOR_ROUTES = "skills/cursor-router/references/routes.md"
 FILE_CAP = 18_500
 DESIGN_RE = re.compile(r"^docs/plans/\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]*-design\.md$")
@@ -96,6 +97,7 @@ DOC_PINS = (
     (GRAPH, "Create the Memory Update task only at a terminal state"),
     (GRAPH, "is created first from the `craftflow:session-memory` template, and is never a reason to stop before `memory_finalized`"),
     (GRAPH, "Completion is router-owned under task-tool fallback"),
+    (CURSOR_SKILL, "`candidate_choice` is pending is decided by that gate's row (a decline), not by Intent Routing."),
     (KERNEL, "### CODEBASE-HEALTH pointer"),
     (KERNEL, "first print `-> CODEBASE-HEALTH workflow (signals: ...)`"),
     (KERNEL, "then `Read()` `skills/_shared/route-codebase-health.md` and `references/codebase-health-workflow.md`."),
@@ -223,6 +225,10 @@ def coverage_problems(scenarios: List[Dict[str, Any]]) -> List[str]:
     wants = (
         ("a CANDIDATES_FOUND -> choice -> grill -> terminal -> PLAN handoff scenario",
          lambda sc: not sc["just_go"] and sc["expected"]["path"] == "handoff" and "question" in ops(sc) and "handoff" in ops(sc)),
+        ("a re_ask followed by the identical question scenario",
+         lambda sc: any(a["op"] == "answer" and a["outcome"] == "re_ask" and b["op"] == "question" for a, b in zip(sc["steps"], sc["steps"][1:]))),
+        ("an unrelated-request decline scenario",
+         lambda sc: any(s["op"] == "answer" and s["outcome"] == "declined" and s.get("kind") == "unrelated_request" for s in sc["steps"])),
         ("a NO_CANDIDATES scenario", lambda sc: any(s["status"] == "NO_CANDIDATES" for s in scans(sc))),
         ("a declined (\"None\") scenario",
          lambda sc: any(s["op"] == "answer" and s["outcome"] == "declined" and s["text"] == "None" for s in sc["steps"])),
@@ -257,7 +263,7 @@ def sequence_problems(sc: Dict[str, Any], root: Optional[Path] = None) -> List[s
     for i, s in enumerate(steps):
         op = s["op"]
         if reask:
-            if op != "question" or (s["text"], s["options"]) != (asked["text"], asked["options"]):
+            if asked is None or op != "question" or (s["text"], s["options"]) != (asked["text"], asked["options"]):
                 out.append(f"step {i}: a re-ask is followed by the identical question (gate kept), got {op}")
             reask = False
         if at_report and op != "auto_pick":  # JUST_GO: the report is no reply point, the next step is the pick
@@ -286,6 +292,8 @@ def sequence_problems(sc: Dict[str, Any], root: Optional[Path] = None) -> List[s
                 out.append(f"step {i}: {FAILED} after a valid scan")
         elif op == "question":
             asked = s
+            if grilling and pending == "candidate_choice":
+                out.append(f"step {i}: a candidate_choice question while the grill runs (the pick is made; every reply is a grill answer)")
             numbers = [str(n) for n in range(1, (scan or {"candidate_count": 0})["candidate_count"] + 1)]
             want_opts = numbers[:3] + ["None"]  # AskUserQuestion takes 4 options: a number past 3 is typed as free text
             if jg or s["options"] != want_opts:
@@ -298,7 +306,12 @@ def sequence_problems(sc: Dict[str, Any], root: Optional[Path] = None) -> List[s
                 out.append(f"step {i}: JUST_GO must pick {expected_pick(scan) if scan else None}, got {s['candidate']}")
             picked, grilling, grilled = s["candidate"], True, False
         elif op == "answer":
-            if pending == "candidate_choice":
+            if pending == "candidate_choice" and grilling:
+                out.append(f"step {i}: answer {s['text']!r} (outcome {s['outcome']!r}): a reply while the grill runs is a grill answer, "
+                           "not a choice answer")
+            elif pending == "candidate_choice" and asked is None and not jg:
+                out.append(f"step {i}: a candidate_choice answer with no question asked (one question comes first)")
+            elif pending == "candidate_choice":
                 numbers = [str(n) for n in range(1, (scan or {"candidate_count": 0})["candidate_count"] + 1)]
                 kind = s.get("kind")
                 if s["outcome"] == "picked" and s["text"] in numbers:
