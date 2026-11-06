@@ -130,6 +130,10 @@ Excluded tests. `tests/fixtures/router_test_enumerate.py` flags a test when its 
 - Not listed: fx::test_craftflow_retro_wiring.py::test_readme_counts_and_install — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
 - Not listed: fx::test_craftflow_retro_wiring.py::test_symlink_realpath_resolution — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
 - Not listed: fx::test_craftflow_retro_wiring.py::test_pruning_row_no_speculative_causation — reads the retro skill or `cursor-router/SKILL.md`, not the runtime router.
+- Not listed: fx::test_craftflow_untangle_rules.py::test_probes — runs the detectors on synthetic strings; no runtime router prose is read.
+- Not listed: fx::test_craftflow_untangle_rules.py::test_prevent_blocks — reads other skills' prevention blocks (a skill path is named), not router prose.
+- Not listed: fx::test_craftflow_untangle_rules.py::test_review_checks — reads the review skills' tangle checks (a skill path is named), not router prose.
+- Not listed: fx::test_craftflow_untangle_rules.py::test_untangle_skill — reads the `untangle-codebase` `SKILL.md`, not router prose.
 - Not listed: fx::test_router_xrefs.py::test_runtime_files_sorted_and_excludes_maintainer — corpus loader behavior (file ordering and maintainer exclusion), no router prose asserted.
 - Not listed: fx::test_router_xrefs.py::test_read_corpus_from_ref_matches_tree — corpus loader behavior (git ref versus tree), no router prose asserted.
 - Not listed: fx::test_rule_inventory.py::test_fence_is_one_block_entry — builds a synthetic corpus in memory (a dict keyed by router-looking paths such as `skills/craftflow-router/SKILL.md`); the live router is not read.
@@ -278,7 +282,7 @@ P1 test-net limits (P1 REM-FIX 5; also recorded in ADR-0073, section "P1 test-ne
 5. Pre-existing vacuity (not P1). `test_craftflow_router_documents_state_read_compaction_self_heal` has markers that also occur at SKILL.md:88-94; the P0 rule-inventory gate covers it.
 6. The enumerator misses sibling-module constants, subprocess and rglob reads and class-attribute reads, and the drills are not cumulative (both already stated above).
 
-Rows: 150 (C=35, K=63, F=52).
+Rows: 151 (C=35, K=63, F=53).
 
 Paths are relative to the plugin root (`tools/craftflow-plugin/plugins/craftflow/`). Test paths use the short form `hook::` for `scripts/craftflow_hook_unit_tests.py`, `fx::` for `tests/fixtures/` and `scripts::<file>::<binding>` for a hand row about a router check inside a plugin script (the stale-row check accepts a name the script binds).
 
@@ -433,4 +437,5 @@ Paths are relative to the plugin root (`tools/craftflow-plugin/plugins/craftflow
 | fx::test_craftflow_routing_law.py::test_a_protocol_table_parity | K | _shared/router-protocol.md#Intent Routing (the 8-row table equals `ROUTING_TABLE` of `craftflow_routing_law.py`) | never-move (the routing table stays in router-protocol.md) |
 | fx::test_craftflow_route_types.py::test_headings_and_type | C | the joined router corpus (`craftflow_router_corpus`): every heading text occurs once, checked through `router_relocation_drills.heading_problems` | none |
 | fx::test_craftflow_route_types.py::test_sizes | F | every `references/qa-*.md` and `_shared/route-*.md` is at most 18,500 B (per-file size) | none (the cap holds for every harvest route file) |
+| fx::test_craftflow_untangle_rules.py::test_route_hook | F | `skills/_shared/route-codebase-health.md` (the pending CODEBASE-HEALTH stub): the untangle override paragraph, the skill invoke, the Cursor `Read()` fallback and today's pre-harvest fallback sentence byte-identical | TBD-by-mover (the harvest phase that rewrites this stub retargets the test) |
 | fx::test_craftflow_route_types.py::test_attribution | F | every file under the plugin root: the attribution-name grep stays inside the pinned allowlist (counts per file); a control copy with one extra hit fails | none |
