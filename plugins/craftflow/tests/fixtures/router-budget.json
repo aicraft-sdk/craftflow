@@ -26,7 +26,7 @@
     "kernel_bytes": 36231,
     "protocol_bytes": 16166,
     "reference_max_bytes": 19097,
-    "description_chars": 3847,
+    "description_chars": 3957,
     "readset": {
       "BUILD": 103560,
       "PLAN": 91320,
@@ -362,6 +362,14 @@
       "envelope": "ADR-0074",
       "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
       "from": 76847
+    },
+    {
+      "phase": "H90",
+      "key": "description_chars",
+      "to": 3957,
+      "envelope": "ADR-0074",
+      "at_sha": "5df7af5752de045ddff92483117d9d3c714ba2c3",
+      "from": 3847
     }
   ],
   "targets": {
