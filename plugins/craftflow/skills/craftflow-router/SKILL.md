@@ -238,6 +238,10 @@ Router-owned interface fields:
 
 An explain or "how does X work" request is routed here, not answered ad hoc: first print `-> ORIENT workflow (signals: ...)`, then `Read()` `skills/_shared/route-orient.md` and answer inline; no workflow artifact, no tasks, no agents.
 
+### CODEBASE-HEALTH pointer
+
+An architecture-health request: first print `-> CODEBASE-HEALTH workflow (signals: ...)`, then `Read()` `skills/_shared/route-codebase-health.md` and `references/codebase-health-workflow.md`.
+
 ## 6. Workflow Task Graphs
 
 ### BUILD task graph

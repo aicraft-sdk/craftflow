@@ -86,6 +86,7 @@ All agent .md files live under:
 | planner | `tools/craftflow-plugin/plugins/craftflow/agents/planner.md` |
 | plan-gap-reviewer | `tools/craftflow-plugin/plugins/craftflow/agents/plan-gap-reviewer.md` |
 | skill-author | `tools/craftflow-plugin/plugins/craftflow/agents/skill-author.md` |
+| architecture-scanner | `tools/craftflow-plugin/plugins/craftflow/agents/architecture-scanner.md` |
 
 ## 1. Intent Routing
 
@@ -111,7 +112,8 @@ message** (mirrors § 2 Memory Load's "Run this before routing" note): read
   in this same live session or is being read back after a session restart — there is no
   separate "same session" vs "resumed session" code path. A router turn that receives a
   reply while `pending_skill_approval` (or `pending_gate`, or `pending_handoff`) is still non-null must never
-  fall through to Intent Routing below and start a new workflow from that reply's text.
+  fall through to Intent Routing below and start a new workflow from that reply's text. A fresh unrelated request while
+  `candidate_choice` is pending is decided by that gate's row (a decline), not by Intent Routing.
 - Only when `pending_skill_approval`, `pending_gate` and `pending_handoff` are all null does Intent
   Routing below apply to the incoming message.
 
@@ -958,6 +960,7 @@ unchanged, since these are operationally load-bearing pass/fail checks, not docu
 | planner | `STATUS=PLAN_CREATED` or `STATUS=DECISION_RFC_CREATED`, `GATE_PASSED=true`, `OPEN_DECISIONS=[]` |
 | plan-gap-reviewer | `BLOCKING_FINDINGS_COUNT=0`, `REPLAN_NEEDED=false` |
 | skill-author | `STATUS=COMPLETE` (non-empty `PROPOSAL_PATH` + `CANDIDATE_ID`) or `STATUS=SKIPPED` (non-empty `SKIP_REASON`, a passing state) — see § 5a for the full gate + approval flow |
+| architecture-scanner | `STATUS=CANDIDATES_FOUND` (`CANDIDATE_COUNT` equals `len(CANDIDATES)` >= 1, the `REPORT_PATH` file exists) or `STATUS=NO_CANDIDATES` (`CANDIDATE_COUNT=0`); `BLOCKING=false` |
 
 ### Override rules
 

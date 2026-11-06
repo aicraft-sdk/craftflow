@@ -189,6 +189,48 @@
       "to": 76847,
       "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
       "from": 75732
+    },
+    {
+      "phase": "H6",
+      "key": "kernel_bytes",
+      "to": 36231,
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 36009
+    },
+    {
+      "phase": "H6",
+      "key": "protocol_bytes",
+      "to": 16166,
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 16109
+    },
+    {
+      "phase": "H6",
+      "key": "readset.BUILD",
+      "to": 103560,
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 103281
+    },
+    {
+      "phase": "H6",
+      "key": "readset.PLAN",
+      "to": 91320,
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 91041
+    },
+    {
+      "phase": "H6",
+      "key": "readset.DEBUG",
+      "to": 79175,
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 78896
+    },
+    {
+      "phase": "H6",
+      "key": "readset.REVIEW",
+      "to": 77126,
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 76847
     }
   ]
 }

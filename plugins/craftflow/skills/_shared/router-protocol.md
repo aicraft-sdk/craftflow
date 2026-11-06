@@ -214,4 +214,5 @@ On `skill-author` `COMPLETE`, `Read()` `skills/_shared/skill-distill-approval.md
 | `build-doc-sync` | `craftflow:doc-syncer` |
 | `learn-distill` | `craftflow:learn-distiller` |
 | `skill-distill` | `craftflow:skill-author` |
+| `codebase-health` | `craftflow:architecture-scanner` |
 | `kind:remfix` + `origin:code-reviewer|silent-failure-hunter|integration-verifier|router` | `craftflow:component-builder` |

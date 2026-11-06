@@ -21,6 +21,8 @@ ROUTE_FILES = ("route-orient.md", "route-advisory.md", "route-triage.md", "route
 ROUTE_GATES = ("architecture_scanner_failed", "triage_agent_failed", "qa_researcher_failed", "qa_harness_builder_failed",
                "qa_executor_failed", "planner_failed", "plan_gap_reviewer_failed", "code_reviewer_failed",
                "silent_failure_hunter_failed")
+# `candidate_choice` is answered by its own reply|action table: five rows for one gate, so it cannot live in the dict keyed by gate.
+CANDIDATE_CHOICE_REPLIES = ("any reply once a candidate is picked (the grill is running)", "a listed candidate number", '"None"', "a fresh unrelated request", "anything else")
 POINTER = "Route by the shared doc's `## Intent Routing` table and rules (already read above); Cursor-only additions follow."
 
 _passes = 0
@@ -134,6 +136,10 @@ def main() -> int:
           f"missing={missing} header={header}")
     check("(g) no row offers skip, and skip is re-asked verbatim",
           all("skip" not in " ".join(r).lower() for r in gate_rows.values()) and '"skip"' in gates and "re-asked verbatim" in gates, gates[-300:])
+    choice_rows = [r for r in all_rows if r[0] == "`candidate_choice`"]
+    check("(g) the candidate_choice table has exactly five rows, one per reply cell",
+          len(choice_rows) == 5 and [r[1] for r in choice_rows if len(r) == 3] == list(CANDIDATE_CHOICE_REPLIES), str(choice_rows))
+    check("(g) no candidate_choice row offers skip", all("skip" not in " ".join(r).lower() for r in choice_rows), str(choice_rows))
     check("(g) control: an absent gate value is reported missing", "bogus_agent_failed" not in gate_rows, "")
     print()
     for e in _errors:

@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -26,7 +28,9 @@ def load(name: str, path: Path) -> Any:
     return mod
 
 
+sys.path.insert(0, str(PLUGIN_ROOT / "tests" / "live"))
 driver = load("harvest_driver", PLUGIN_ROOT / "tests" / "live" / "harvest_routes_roundtrip.py")
+import harvest_routes_ch as ch_mod  # noqa: E402
 replay = load("route_replay", PLUGIN_ROOT / "scripts" / "craftflow_route_replay_check.py")
 
 _passes = 0
@@ -92,6 +96,230 @@ def driver_controls() -> None:
     check("exit_for: a FAIL is 1", driver.exit_for({"load_probe": "FAIL:x", "class": "B-SIMULATED"}, ["load_probe"]) == 1, "")
     out = driver.decode_partial(b"partial")
     check("decode_partial keeps bytes output", out == "partial" and driver.decode_partial(None) == "", out)
+
+
+DESIGN = "docs/plans/2026-10-30-calc-design.md"
+REPORT = ".craftflow/codebase-health/wf-a/report.html"
+LINK = {"source_route": "CODEBASE-HEALTH", "input_kind": "design", "input_path": DESIGN, "mode": "auto"}
+
+
+def ch_state(**kw: Any) -> Dict[str, Any]:
+    base = {"parents": ["wf-a"], "parent": "wf-a", "events": ["workflow_started", "policy_loaded", "memory_finalized", "handoff_started"],
+            "expected_report": REPORT, "report_exists": True, "report_html": True, "report_svg": True, "report_bytes": 2500, "designs": [DESIGN],
+            "valid_designs": [DESIGN], "children": ["wf-b"], "extra_children": [], "handoffs": {"wf-b": dict(LINK)}}
+    return {**base, **kw}
+
+
+def kept_ch_dir(tmp: Path) -> Path:
+    """A scratch dir shaped like a kept passing LV-CH run: seeded project copy, parent + PLAN child, report, design, shim log, stream."""
+    scr = tmp / "cf-harvest-live-test"
+    scr.mkdir()
+    project = driver.fresh_copy(scr, driver.make_seed(scr), "LV-CH")
+    wdir = project / ".craftflow" / "state" / "workflows"
+    wdir.mkdir(parents=True, exist_ok=True)
+    (wdir / "wf-a.json").write_text(json.dumps({"workflow_type": "CODEBASE-HEALTH"}))
+    (wdir / "wf-a.events.jsonl").write_text("".join(json.dumps({"event": e}) + "\n" for e in ch_state()["events"]))
+    (wdir / "wf-b.json").write_text(json.dumps({"workflow_type": "PLAN", "parent_workflow_uuid": "wf-a", "handoff": dict(LINK)}))
+    (project / ".craftflow" / "codebase-health" / "wf-a").mkdir(parents=True)
+    (project / ".craftflow" / "codebase-health" / "wf-a" / "report.html").write_text("<html><body><svg></svg>" + "<p>candidate</p>" * 200 + "</body></html>")
+    (project / "docs" / "plans").mkdir(parents=True)
+    (project / DESIGN).write_text("# design\n\n" + "A real design paragraph about the picked candidate.\n" * 8)
+    (scr / "open-calls.log").write_text(REPORT + "\n")
+    (scr / "transcripts").mkdir()
+    (scr / "transcripts" / "LV-CH.jsonl").write_text(stream(text="-> CODEBASE-HEALTH workflow (signals: codebase health)"))
+    return scr
+
+
+def ch_controls() -> None:
+    """LV-CH (H6): each failure mode of the judge has a control; the run loop stops on `done` and on timeout."""
+    text = "-> CODEBASE-HEALTH workflow (signals: codebase health)"
+    calls = [REPORT]
+    verdict = lambda s=stream(text=text), st=None, changes="", oc=None: driver.judge_ch(s, st or ch_state(), changes, calls if oc is None else oc)[0]  # noqa: E731
+    check("LV-CH registered, not pending", "LV-CH" in driver.REGISTERED and "LV-CH" not in driver.NOT_REGISTERED, str(driver.REGISTERED))
+    check("LV-CH clean run passes", verdict() == "PASS", verdict())
+    check("LV-CH without the announce fails", verdict(stream(text="hello")).startswith("FAIL:no_ch_announce"), verdict(stream(text="hello")))
+    check("LV-CH with an empty stream fails", verdict("").startswith("FAIL:claude_session_failed"), verdict(""))
+    check("LV-CH without a CODEBASE-HEALTH artifact fails", verdict(st=ch_state(parents=[], parent=None)).startswith("FAIL:no_ch_artifact"), "")
+    check("LV-CH with two CODEBASE-HEALTH artifacts fails", verdict(st=ch_state(parents=["wf-a", "wf-c"])).startswith("FAIL:no_ch_artifact"), "")
+    for missing in ("workflow_started", "memory_finalized", "handoff_started"):
+        st = ch_state(events=[e for e in ch_state()["events"] if e != missing])
+        check(f"LV-CH without {missing} fails", verdict(st=st).startswith("FAIL:events_missing") and missing in verdict(st=st), verdict(st=st))
+    for label, events in (("handoff_started before memory_finalized", ["workflow_started", "handoff_started", "memory_finalized"]),
+                          ("memory_finalized before workflow_started", ["memory_finalized", "workflow_started", "handoff_started"]),
+                          ("handoff_started first", ["handoff_started", "workflow_started", "memory_finalized"])):
+        check(f"LV-CH with {label} fails (M3 order)", verdict(st=ch_state(events=events)).startswith("FAIL:event_order"), verdict(st=ch_state(events=events)))
+    check("LV-CH without the report file fails", verdict(st=ch_state(report_exists=False)).startswith("FAIL:no_report"), "")
+    check("LV-CH with a report holding no <svg fails (M3)", verdict(st=ch_state(report_svg=False)).startswith("FAIL:report_not_a_page"), "")
+    check("LV-CH with a report holding no <html fails (M3)", verdict(st=ch_state(report_html=False)).startswith("FAIL:report_not_a_page"), "")
+    check("LV-CH without a PLAN child fails", verdict(st=ch_state(children=[], handoffs={})).startswith("FAIL:no_plan_child"), "")
+    check("LV-CH with no saved design file fails (M3)", verdict(st=ch_state(designs=[])).startswith("FAIL:no_design_file"), "")
+    check("LV-CH with two PLAN children fails", verdict(st=ch_state(children=["wf-b", "wf-d"])).startswith("FAIL:handoff_link"), "")
+    check("LV-CH with an extra non-PLAN child (a BUILD) fails handoff_link(extra child) (RR3 judge gap)",
+          "extra child" in verdict(st=ch_state(extra_children=["wf-x"])) and verdict(st=ch_state(extra_children=["wf-x"])).startswith("FAIL:handoff_link"), "")
+    check("LV-CH with a thin or headingless design fails (judge gap)", verdict(st=ch_state(valid_designs=[])).startswith("FAIL:handoff_link"), verdict(st=ch_state(valid_designs=[])))
+    check("LV-CH with a child handoff mode asked fails (judge gap)",
+          verdict(st=ch_state(handoffs={"wf-b": dict(LINK, mode="asked")})).startswith("FAIL:handoff_link"), "")
+    check("LV-CH with no handoff mode fails (judge gap)",
+          verdict(st=ch_state(handoffs={"wf-b": {k: v for k, v in LINK.items() if k != "mode"}})).startswith("FAIL:handoff_link"), "")
+    check("LV-CH with a 1999 byte report fails report_not_a_page (stub report)",
+          verdict(st=ch_state(report_bytes=1999)).startswith("FAIL:report_not_a_page") and verdict(st=ch_state(report_bytes=2000)) == "PASS", "")
+    for label, link in (("another input_path", dict(LINK, input_path="docs/plans/other-design.md")),
+                        ("source_route BUILD", dict(LINK, source_route="BUILD")), ("input_kind brief", dict(LINK, input_kind="brief")),
+                        ("no input_path", {k: v for k, v in LINK.items() if k != "input_path"}), ("no handoff block", None)):
+        v = verdict(st=ch_state(handoffs={"wf-b": link}))
+        check(f"LV-CH with a child handoff of {label} fails (M3 link)", v.startswith("FAIL:handoff_link"), v)
+    for label, oc in (("two open calls", [REPORT, REPORT]), ("no open call", []), ("an open call of another path", ["/etc/passwd"]),
+                      ("the absolute report path", ["/tmp/x/" + REPORT]), ("an extra open call", [REPORT, "docs/x.html"])):
+        check(f"LV-CH with {label} fails (M3 open)", verdict(oc=oc).startswith("FAIL:open_calls"), verdict(oc=oc))
+    check("LV-CH with changed product code fails", verdict(changes="M\tcalc/core.py").startswith("FAIL:product_code_changed"), "")
+    with tempfile.TemporaryDirectory() as tmp:
+        wf = Path(tmp) / ".craftflow" / "state" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / "wf-a.json").write_text(json.dumps({"workflow_type": "CODEBASE-HEALTH"}))
+        (wf / "wf-a.events.jsonl").write_text(json.dumps({"event": "memory_finalized"}) + "\n" + json.dumps({"event": "handoff_started"}) + "\n")
+        (wf / "wf-b.json").write_text(json.dumps({"workflow_type": "PLAN", "parent_workflow_uuid": "wf-a", "handoff": dict(LINK)}))
+        (wf / "wf-z.json").write_text(json.dumps({"workflow_type": "PLAN", "parent_workflow_uuid": "wf-other"}))
+        (wf / "wf-q.json").write_text(json.dumps({"workflow_type": "BUILD", "parent_workflow_uuid": "wf-a"}))
+        (Path(tmp) / ".craftflow" / "codebase-health" / "wf-a").mkdir(parents=True)
+        (Path(tmp) / ".craftflow" / "codebase-health" / "wf-a" / "report.html").write_text("<svg></svg>")
+        (Path(tmp) / "docs" / "plans").mkdir(parents=True)
+        (Path(tmp) / DESIGN).write_text("d")
+        st = driver.ch_state(tmp)
+        check("ch_state reads the parent, its events, the report parts, the designs and only its own PLAN child",
+              st["parent"] == "wf-a" and st["events"] == ["memory_finalized", "handoff_started"] and st["report_exists"] and st["children"] == ["wf-b"]
+              and st["handoffs"] == {"wf-b": LINK} and st["designs"] == [DESIGN] and st["expected_report"] == REPORT
+              and st["report_svg"] and not st["report_html"], str(st))
+        check("ch_state reports a linked BUILD child as extra, the stub report size and a 1-byte design as not valid",
+              st["extra_children"] == ["wf-q"] and st["report_bytes"] == len("<svg></svg>") and st["valid_designs"] == [], str(st))
+        (Path(tmp) / DESIGN).write_text("# t\n" + "x" * 200)
+        check("ch_state accepts a design with a heading and at least 200 bytes", driver.ch_state(tmp)["valid_designs"] == [DESIGN], "")
+        (Path(tmp) / DESIGN).write_text("plain text without a heading\n" * 20)
+        check("ch_state rejects a 200+ byte design with no markdown heading", driver.ch_state(tmp)["valid_designs"] == [], "")
+        (Path(tmp) / DESIGN).write_text("")
+        check("ch_state rejects an empty design", driver.ch_state(tmp)["valid_designs"] == [], "")
+        (Path(tmp) / ".craftflow" / "codebase-health" / "wf-a" / "report.html").write_text("")
+        check("ch_state treats an empty report as missing", driver.ch_state(tmp)["report_exists"] is False, "")
+        shim = driver.open_shim(Path(tmp))
+        rc = subprocess.run([str(shim / "open"), "/r/report.html"]).returncode
+        check("the open shim records its argument and exits 0 (no browser in the proof)",
+              rc == 0 and (Path(tmp) / "open-calls.log").read_text().strip() == "/r/report.html", str(rc))
+        rc, out, err, why = driver.run_until([sys.executable, "-c", "import time; print('x', flush=True); time.sleep(30)"], dict(), tmp, "", lambda: True, 20)
+        check("run_until stops a running child once done() is true", why == "done" and "x" in out and rc != 0, f"{rc} {why} {out!r}")
+        rc, out, err, why = driver.run_until([sys.executable, "-c", "import time; time.sleep(30)"], dict(), tmp, "", lambda: False, 1)
+        check("run_until stops a child at the timeout", why == "timeout", why)
+        rc, out, err, why = driver.run_until([sys.executable, "-c", "import sys; print(sys.stdin.read())"], dict(), tmp, "hi", lambda: False, 20)
+        check("run_until passes stdin and reports a normal exit", (rc, why, out.strip()) == (0, "exited", "hi"), f"{rc} {why} {out!r}")
+        pidfile = Path(tmp) / "child.pid"
+        child = "import os, time; open(%r, 'w').write(str(os.getpid())); time.sleep(60)" % str(pidfile)
+
+        def boom() -> bool:
+            if pidfile.is_file() and pidfile.read_text():
+                raise RuntimeError("poll blew up")
+            return False
+
+        try:
+            driver.run_until([sys.executable, "-c", child], dict(), tmp, "", boom, 30)
+            raised = False
+        except RuntimeError:
+            raised = True
+        alive = True
+        try:
+            os.kill(int(pidfile.read_text()), 0)
+        except ProcessLookupError:
+            alive = False
+        check("run_until kills the child's group when the poll raises (M5: no orphan claude)", raised and not alive, f"raised={raised} alive={alive}")
+
+
+def product_controls() -> None:
+    """M2: product changes are judged against the recorded seed commit, so a committed edit cannot hide."""
+    with tempfile.TemporaryDirectory() as tmp:
+        scr = kept_ch_dir(Path(tmp))
+        project = scr / "LV-CH"
+        seed = driver.git(project, "rev-list", "--max-parents=0", "HEAD").split()[0]
+        changes = lambda: ch_mod.product_changes(driver.git, project, seed)  # noqa: E731
+        check("product_changes: an untouched project is empty", changes() == "", repr(changes()))
+        (project / "calc" / "__pycache__").mkdir()
+        (project / "calc" / "__pycache__" / "core.cpython-39.pyc").write_text("x")
+        check("product_changes: __pycache__ is ignored", changes() == "", repr(changes()))
+        (project / "calc" / "new.py").write_text("x = 1\n")
+        check("product_changes: a new untracked file is reported", changes() == "??\tcalc/new.py", repr(changes()))
+        (project / "calc" / "new.py").unlink()
+        (project / "tests" / "test_core.py").write_text("# edited\n")
+        check("product_changes: a working-tree edit is reported", changes() == "M\ttests/test_core.py", repr(changes()))
+        driver.git(project, "add", "-A")
+        driver.git(project, "commit", "-q", "-m", "model edit")
+        check("product_changes: a COMMITTED edit is still reported against the seed (the old porcelain check missed it)",
+              changes() == "M\ttests/test_core.py" and driver.git(project, "status", "--porcelain", "--", "calc", "tests").strip() == "", repr(changes()))
+        st, ch, oc = ch_mod.collect(project, scr, driver.git, seed)
+        v = driver.judge_ch(stream(text="-> CODEBASE-HEALTH workflow"), st, ch, oc)[0]
+        check("LV-CH with a committed product edit fails", v.startswith("FAIL:product_code_changed"), v)
+        (project / "calc" / "facade.py").unlink()
+        check("product_changes: a deleted tracked file is reported", "D\tcalc/facade.py" in changes().splitlines(), repr(changes()))
+
+
+def rejudge_controls() -> None:
+    """The kept-dir mode applies the same judge offline; every mutation of a passing kept dir must flip it."""
+    cli_args = [sys.executable, str(PLUGIN_ROOT / "tests" / "live" / "harvest_routes_roundtrip.py"), "--rejudge"]
+    with tempfile.TemporaryDirectory() as tmp:
+        scr = kept_ch_dir(Path(tmp))
+        v, detail = driver.rejudge_dir(scr)
+        check("rejudge: a well-formed kept dir passes", v == "PASS", f"{v} {detail.get('state')}")
+        cli = subprocess.run(cli_args + [str(scr)], capture_output=True, text=True)
+        check("rejudge CLI: exit 0 and a PASS line", cli.returncode == 0 and '"LV-CH":"PASS"' in cli.stdout.replace(" ", ""), cli.stdout + cli.stderr)
+        project = scr / "LV-CH"
+        (project / DESIGN).unlink()
+        v, _ = driver.rejudge_dir(scr)
+        check("rejudge: a missing design file fails", v.startswith("FAIL:no_design_file"), v)
+        (project / DESIGN).write_text("# design\n\n" + "A real design paragraph about the picked candidate.\n" * 8)
+        (scr / "open-calls.log").write_text(REPORT + "\n" + REPORT + "\n")
+        v, _ = driver.rejudge_dir(scr)
+        check("rejudge: two open calls fail", v.startswith("FAIL:open_calls"), v)
+        (scr / "open-calls.log").write_text('"' + str((project / REPORT).resolve()) + '"\n')
+        v, _ = driver.rejudge_dir(scr)
+        check("rejudge: one open call by absolute project path passes (normalized)", v == "PASS", v)
+        (scr / "open-calls.log").write_text(str(Path(tmp) / "elsewhere" / REPORT) + "\n")
+        v, _ = driver.rejudge_dir(scr)
+        check("rejudge: an absolute open call outside the project fails", v.startswith("FAIL:open_calls"), v)
+        (scr / "open-calls.log").write_text(REPORT + "\n")
+        moved = Path(tmp) / "copied" / "cf-harvest-live-copy"
+        shutil.copytree(scr, moved, symlinks=True)
+        (moved / "open-calls.log").write_text("/var/folders/zz/T/cf-harvest-live-original/LV-CH/" + REPORT + "\n")
+        v, _ = driver.rejudge_dir(moved)
+        check("rejudge: an absolute open call into the ORIGINAL scratch dir is relocated when the kept dir was copied", v == "PASS", v)
+        (moved / "open-calls.log").write_text("/var/folders/zz/T/cf-harvest-live-original/LV-CH/docs/other.html\n")
+        v, _ = driver.rejudge_dir(moved)
+        check("rejudge: a relocated open call of another file still fails", v.startswith("FAIL:open_calls"), v)
+        (project / "calc" / "core.py").write_text("# hacked\n")
+        cli = subprocess.run(cli_args + [str(scr)], capture_output=True, text=True)
+        check("rejudge CLI: a product edit exits 1", cli.returncode == 1 and "product_code_changed" in cli.stdout, cli.stdout + cli.stderr)
+        empty = Path(tmp) / "cf-harvest-live-empty"
+        empty.mkdir()
+        v, _ = driver.rejudge_dir(empty)
+        check("rejudge: a dir without LV-CH output fails cleanly", v.startswith("FAIL:not_a_kept_ch_dir"), v)
+
+    class Boom(Exception):
+        pass
+
+    def raiser(*_a: Any, **_k: Any) -> Any:
+        raise Boom("run_until failed")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        scr = Path(tmp) / "cf-harvest-live-step"
+        scr.mkdir()
+        ctx = {"scr": scr, "seed": driver.make_seed(scr), "plugin": Path(tmp), "model": "sonnet", "partial": {}}
+        ctx["seed_sha"] = driver.git(ctx["seed"], "rev-parse", "HEAD").strip()
+        real = driver.run_until
+        driver.run_until = raiser
+        try:
+            driver.step_ch(ctx)
+            raised = False
+        except Boom:
+            raised = True
+        finally:
+            driver.run_until = real
+        entry = ctx["partial"].get("LV-CH", {})
+        check("step_ch records a scenario entry (project, error) even when it raises (L4)",
+              raised and entry.get("project", "").endswith("LV-CH") and "Boom" in entry.get("error", ""), str(entry))
 
 
 def replay_controls() -> None:
@@ -170,8 +398,46 @@ def hollow_controls() -> None:
           replay.dispatch_problems(replay.read(replay.ROUTE_FILE)) == [], "")
 
 
+def hardening_controls() -> None:
+    """remfix-2 (RL1-RL4): a normal exit still kills the group, ignored product files and a symlinked report are judged, a non-repo dir is clean."""
+    with tempfile.TemporaryDirectory() as tmp:
+        pidfile = Path(tmp) / "grandchild.pid"
+        rc, _o, _e, why = driver.run_until(["sh", "-c", 'sleep 25 & echo $! > "$1"; exit 0', "sh", str(pidfile)], dict(os.environ), tmp, "", lambda: False, 20)
+        alive = True
+        for _ in range(20):
+            try:
+                os.kill(int(pidfile.read_text()), 0)
+            except ProcessLookupError:
+                alive = False
+                break
+            time.sleep(0.1)
+        check("run_until kills an orphan grandchild after a normal exit (RL1)", (rc, why) == (0, "exited") and not alive, f"{rc} {why} alive={alive}")
+        scr = kept_ch_dir(Path(tmp))
+        project = scr / "LV-CH"
+        seed = driver.git(project, "rev-list", "--max-parents=0", "HEAD").split()[0]
+        with open(project / ".gitignore", "a", encoding="utf-8") as f:
+            f.write("calc/hidden.py\n")
+        (project / "calc" / "hidden.py").write_text("x = 1\n")
+        found = ch_mod.product_changes(driver.git, project, seed)
+        check("product_changes: a product file added with an ignore rule is reported (RL2)", "calc/hidden.py" in found, repr(found))
+        report = project / ".craftflow" / "codebase-health" / "wf-a" / "report.html"
+        page = Path(tmp) / "elsewhere.html"
+        page.write_text("<html><svg></svg></html>")
+        report.unlink()
+        report.symlink_to(page)
+        v = driver.judge_ch(stream(text="-> CODEBASE-HEALTH workflow"), driver.ch_state(project), "", [REPORT])[0]
+        check("LV-CH with a symlinked report fails report_not_a_page (RL3)", v.startswith("FAIL:report_not_a_page"), v)
+        shutil.rmtree(project / ".git")
+        v, _ = driver.rejudge_dir(scr)
+        check("rejudge: a kept dir whose LV-CH is not a git repo fails cleanly (RL4)", v.startswith("FAIL:not_a_kept_ch_dir"), v)
+
+
 def main() -> int:
     driver_controls()
+    ch_controls()
+    product_controls()
+    rejudge_controls()
+    hardening_controls()
     replay_controls()
     hollow_controls()
     print(f"\n{_passes} passed, {len(_errors)} failed")

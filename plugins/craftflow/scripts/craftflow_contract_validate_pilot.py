@@ -3,7 +3,7 @@
 craftflow_contract_validate_pilot.py
 
 Schema-validates the nested `verdict:`/`rationale:` Router Contract YAML body
-emitted by the two pilot write-agents (component-builder, planner) against a
+emitted by the pilot write-agents (component-builder, planner, architecture-scanner) against a
 per-agent JSON schema table under scripts/schemas/.
 
 Distinct from, and NOT a replacement for, craftflow_contract_validate.py --
@@ -295,10 +295,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         description="Schema-validate a pilot write-agent's nested verdict/rationale "
                      "Router Contract YAML body."
     )
-    parser.add_argument("--agent", required=True, choices=["component-builder", "planner"])
+    parser.add_argument("--agent", required=True, choices=["component-builder", "planner", "architecture-scanner"])
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--stdin", action="store_true")
     group.add_argument("--file")
+    parser.add_argument("--workflow-uuid", default=None,
+                        help="architecture-scanner only, required there: pin REPORT_PATH to "
+                             ".craftflow/codebase-health/<uuid>/report.html and enforce the cross-field rules "
+                             "of craftflow_contract_validate_scanner.py")
+    parser.add_argument("--project", default=None,
+                        help="architecture-scanner only: project root; CANDIDATES_FOUND then also needs the report file on disk")
     args = parser.parse_args(argv)
 
     schema_path = SCHEMAS_DIR / f"{args.agent}.json"
@@ -321,6 +327,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     result = validate_contract(parsed, schema)
+    if args.agent == "architecture-scanner" and args.workflow_uuid is None:
+        # Without the uuid REPORT_PATH is unpinned: fail closed rather than accept any path.
+        result = {"valid": False, "violations": result["violations"] + [
+            {"field": "--workflow-uuid", "reason": "required for --agent architecture-scanner (pins REPORT_PATH)"}]}
+    elif args.workflow_uuid is not None:
+        if args.agent != "architecture-scanner":
+            result = _fail_closed("--workflow-uuid applies to --agent architecture-scanner only")
+        else:
+            from craftflow_contract_validate_scanner import scanner_violations
+            extra = scanner_violations(parsed, args.workflow_uuid, args.project)
+            result = {"valid": result["valid"] and not extra, "violations": result["violations"] + extra}
     print(json.dumps(result))
     return 0 if result["valid"] else 1
 

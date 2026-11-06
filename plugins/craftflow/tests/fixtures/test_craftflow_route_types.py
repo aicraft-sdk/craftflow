@@ -171,11 +171,54 @@ def test_attribution(tmp: str) -> None:
     check("control: one extra string fails", attribution_violations(attribution_hits(ctrl)) == ["adapted.md"], "")
 
 
+def classify_guard(rc: int, out: str, err: str) -> str:
+    """'allow' only for the guard's explicit allow output (rc 0, empty stdout, empty stderr); 'deny' for a parsed deny decision;
+    anything else (non-zero exit, stray output, an unparsable or non-deny JSON body) is reported, never read as an allow."""
+    if rc != 0:
+        return f"error rc={rc} {err[-200:]}"
+    if not out.strip() and not err.strip():
+        return "allow"
+    try:
+        body = json.loads(out)
+    except ValueError:
+        return f"unexpected output {out[:120]!r} {err[:80]!r}"
+    decision = (body.get("hookSpecificOutput") or {}).get("permissionDecision") if isinstance(body, dict) else None
+    return "deny" if decision == "deny" else f"unexpected output {out[:120]!r} {err[:80]!r}"
+
+
+def guard_decision(project: Path, target: str) -> str:
+    """'allow' or 'deny' from the real PreToolUse write guard for a subagent Write of `target` (payload shape per hooks.json)."""
+    payload = {"tool_name": "Write", "cwd": str(project), "session_id": SESSION, "agent_id": "agent-scanner-1",
+               "agent_type": "craftflow:architecture-scanner", "tool_input": {"file_path": target, "content": "<html></html>"}}
+    env = dict(os.environ, CLAUDE_PLUGIN_ROOT=str(PLUGIN_ROOT), CLAUDE_PROJECT_DIR=str(project))
+    res = subprocess.run([sys.executable, str(PLUGIN_ROOT / "scripts" / "craftflow_pretooluse_guard.py")], input=json.dumps(payload),
+                         capture_output=True, text=True, env=env, cwd=str(project), timeout=60)
+    return classify_guard(res.returncode, res.stdout, res.stderr)
+
+
+def test_report_write_guard(tmp: str) -> None:
+    """H6: the scanner's only Write (its report under .craftflow/codebase-health/) passes the write guard; a /tmp Write does not."""
+    project = new_project(tmp, "guard")
+    report = project / ".craftflow" / "codebase-health" / "x" / "report.html"
+    check("a subagent Write to .craftflow/codebase-health/x/report.html is allowed", guard_decision(project, str(report)) == "allow",
+          guard_decision(project, str(report)))
+    check("a subagent Write to /tmp/x is denied", guard_decision(project, "/tmp/x") == "deny", guard_decision(project, "/tmp/x"))
+    outside = Path(tmp) / "elsewhere" / "report.html"
+    deny_body = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "x"}})
+    others = ((1, "", ""), (0, "{}", ""), (0, "", "warning"), (0, "garbage", ""), (0, '{"permissionDecision": "ask"}', ""))
+    check("control: classify_guard reads only empty output as allow, a parsed deny as deny, everything else as neither",
+          (classify_guard(0, "", ""), classify_guard(0, deny_body, "")) == ("allow", "deny")
+          and all(classify_guard(rc, out, err) not in ("allow", "deny") for rc, out, err in others), "")
+    check("a subagent Write to a report path outside the project is denied", guard_decision(project, str(outside)) == "deny",
+          guard_decision(project, str(outside)))
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         test_mints(tmp)
         test_qa_needs_session(tmp)
         test_attribution(tmp)
+        test_report_write_guard(tmp)
     test_headings_and_type()
     test_sizes()
     print(f"\n{_passes} passed, {len(_errors)} failed")

@@ -289,9 +289,9 @@ print("\n[CLI subprocess smoke test]")
 SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "../../scripts/craftflow_contract_validate_pilot.py")
 
 
-def run_cli(agent, text):
+def run_cli(agent, text, *extra):
     proc = subprocess.run(
-        [sys.executable, SCRIPT_PATH, "--agent", agent, "--stdin"],
+        [sys.executable, SCRIPT_PATH, "--agent", agent, "--stdin", *extra],
         input=text,
         capture_output=True,
         text=True,
@@ -409,6 +409,65 @@ rationale:
 result = validate_contract(parse_block_yaml(REAL_SHAPE_PLANNER_YAML), PLANNER_SCHEMA)
 check("real-shape planner fixture passes", result["valid"], True)
 check("real-shape planner fixture has zero violations", result["violations"], [])
+
+# ---------------------------------------------------------------------------
+# 11. architecture-scanner (H6): one valid contract, one invalid case per field rule
+# ---------------------------------------------------------------------------
+print("\n[architecture-scanner contract]")
+SCANNER_SCHEMA = load_schema("architecture-scanner")
+VALID_SCANNER_YAML = """\
+verdict:
+  STATUS: CANDIDATES_FOUND
+  CANDIDATE_COUNT: 2
+  TOP_RECOMMENDATION: 1
+  BLOCKING: false
+  NEXT_ACTION: choose
+rationale:
+  SUMMARY: "2 deepening candidates in calc"
+  CANDIDATES:
+    - name: "facade"
+      files: ["calc/facade.py", "calc/core.py"]
+      problem: "facade only forwards to core.apply"
+      solution: "absorb the forwarding into core"
+      strength: Strong
+    - name: "parser"
+      files: ["calc/__main__.py"]
+      problem: "argument parsing is shallow"
+      solution: "one parse function"
+      strength: Speculative
+  REPORT_PATH: ".craftflow/codebase-health/wf-x/report.html"
+  MEMORY_NOTES:
+    learnings: []
+    patterns: []
+    verification: []
+    deferred: []
+"""
+result = validate_contract(parse_block_yaml(VALID_SCANNER_YAML), SCANNER_SCHEMA)
+check("valid architecture-scanner contract passes with zero violations", (result["valid"], result["violations"]), (True, []))
+for label, old, new, field in (
+    ("missing REPORT_PATH", '  REPORT_PATH: ".craftflow/codebase-health/wf-x/report.html"\n', "", "REPORT_PATH"),
+    ("STATUS outside the enum", "STATUS: CANDIDATES_FOUND", "STATUS: PASS", "STATUS"),
+    ("CANDIDATE_COUNT not an integer", "CANDIDATE_COUNT: 2", 'CANDIDATE_COUNT: "two"', "CANDIDATE_COUNT"),
+    ("missing CANDIDATE_COUNT", "  CANDIDATE_COUNT: 2\n", "", "CANDIDATE_COUNT"),
+    ("TOP_RECOMMENDATION a string", "TOP_RECOMMENDATION: 1", "TOP_RECOMMENDATION: first", "TOP_RECOMMENDATION"),
+    ("BLOCKING true", "BLOCKING: false", "BLOCKING: true", "BLOCKING"),
+    ("NEXT_ACTION outside the enum", "NEXT_ACTION: choose", "NEXT_ACTION: build", "NEXT_ACTION"),
+    ("CANDIDATES not an array", "  CANDIDATES:\n    - name", "  CANDIDATES: none\n  X:\n    - name", "CANDIDATES"),
+    ("MEMORY_NOTES missing", "  MEMORY_NOTES:\n", "  NOTES:\n", "MEMORY_NOTES"),
+    ("SUMMARY missing", '  SUMMARY: "2 deepening candidates in calc"\n', "", "SUMMARY"),
+):
+    bad = VALID_SCANNER_YAML.replace(old, new, 1)
+    result = validate_contract(parse_block_yaml(bad), SCANNER_SCHEMA)
+    check(f"invalid scanner case rejected: {label}", (bad != VALID_SCANNER_YAML, result["valid"], field in violation_fields(result)), (True, False, True))
+check("TOP_RECOMMENDATION null is valid (NO_CANDIDATES)",
+      validate_contract(parse_block_yaml(VALID_SCANNER_YAML.replace("TOP_RECOMMENDATION: 1", "TOP_RECOMMENDATION: null")), SCANNER_SCHEMA)["valid"], True)
+rc, result = run_cli("architecture-scanner", VALID_SCANNER_YAML, "--workflow-uuid", "wf-x")
+check("CLI accepts --agent architecture-scanner (valid contract, with the now-mandatory --workflow-uuid)", (rc, result["valid"]), (0, True))
+rc, result = run_cli("architecture-scanner", VALID_SCANNER_YAML)
+check("CLI rejects --agent architecture-scanner without --workflow-uuid (fail closed, named field)",
+      (rc, result["valid"], violation_fields(result)), (1, False, ["--workflow-uuid"]))
+rc, result = run_cli("architecture-scanner", VALID_SCANNER_YAML.replace('  REPORT_PATH: ".craftflow/codebase-health/wf-x/report.html"\n', ""))
+check("CLI rejects a scanner contract with no REPORT_PATH (exit 1)", (rc, result["valid"]), (1, False))
 
 # ---------------------------------------------------------------------------
 # Summary

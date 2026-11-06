@@ -17809,6 +17809,7 @@ _MEMORY_UPDATE_POINTER_COUNTS = {
     "build-graph-fast.md": 1,
     "debug-workflow.md": 1,
     "review-workflow.md": 1,
+    "codebase-health-workflow.md": 1,
 }
 _MEMORY_UPDATE_POINTER = "Follow references/memory-finalize.md § Memory Update task instructions"
 

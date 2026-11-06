@@ -19,6 +19,7 @@ from typing import Callable, Dict
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 
+import craftflow_route_replay_ch as ch  # noqa: E402
 import craftflow_route_replay_check as rc_check  # noqa: E402
 import craftflow_route_replay_handoff as rh  # noqa: E402
 
@@ -67,7 +68,7 @@ def replay_on_copy(mutations: Dict[str, Callable[[str], str]]) -> subprocess.Com
         for sub in ("skills", "config", "scripts"):
             shutil.copytree(PLUGIN_ROOT / sub, root / sub, ignore=shutil.ignore_patterns("__pycache__"))
         (root / "tests" / "fixtures").mkdir(parents=True)
-        for name in ("orient-inline.json", *rh.CHECKS):
+        for name in ("orient-inline.json", *rh.CHECKS, *ch.CHECKS):
             shutil.copy(PLUGIN_ROOT / "tests" / "fixtures" / name, root / "tests" / "fixtures" / name)
         for rel, fn in mutations.items():
             path = root / rel
@@ -86,7 +87,7 @@ def red(name: str, mutations: Dict[str, Callable[[str], str]], failing: str) -> 
 
 def mutated_copies() -> None:
     res = replay_on_copy({})
-    check("an untouched plugin copy passes all four fixtures", res.returncode == 0 and "0 failed" in res.stdout, f"rc={res.returncode} {res.stdout[-400:]}{res.stderr[-300:]}")
+    check("an untouched plugin copy passes all five fixtures", res.returncode == 0 and "0 failed" in res.stdout, f"rc={res.returncode} {res.stdout[-400:]}{res.stderr[-300:]}")
     adv, ker = "skills/_shared/route-advisory.md", "skills/craftflow-router/SKILL.md"
     red("a hollow route-advisory.md fails the doc pins", {adv: lambda t: "### Advisory law\n\nNothing here.\n"}, "doc pins")
     red("BUILD/DEBUG marked automatic in the matrix fails the matrix check",
