@@ -50,7 +50,7 @@ BUILD takes the **fast path** when the request has no risk keywords. Words such 
 flowchart LR
     U([Your request]) --> R[craftflow-router]
     R -->|dispatch| A[14 specialist agents]
-    R -.->|loads on demand| S[34 skills]
+    R -.->|loads on demand| S[35 skills]
     A -->|BUILD only| W[(isolated git worktree)]
     R <-->|read / write| ST[(.craftflow/state)]
     H{{Hooks: guards, memory protection, stop gates}} -.->|enforce| R
@@ -216,7 +216,7 @@ State lives in `.craftflow/state/` at the project root:
 ```
 plugins/craftflow/
 ├── agents/       # 15 agent definitions
-├── skills/       # 34 skills, each with SKILL.md and on-demand references/
+├── skills/       # 35 skills, each with SKILL.md and on-demand references/
 ├── scripts/      # 80 Python and shell scripts: hooks, validators, benchmarks
 ├── hooks/        # hook bindings for Claude Code
 ├── hooks.json    # hook bindings for Cursor

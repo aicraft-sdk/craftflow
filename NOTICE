@@ -47,3 +47,14 @@ Adapted artifacts (added over the cc10x routes harvest, SPEC-0035 / ADR-0075; th
 - `hooks/{register.tsx,loop-state.ts,loop-routes.ts,loop-fixtures.ts}` and their tests.
 
 Wording adapted to craftflow conventions; no file copied verbatim except where marked.
+
+---
+
+The tangle categories and five-step method of skills/untangle-codebase are adapted from caldoai/skills:
+
+  https://github.com/caldoai/skills
+  Copyright (c) 2026 Maze
+  MIT License
+  Pinned at commit 442c29918339cc8dbf09ae27aaf17b05745465a3
+
+Concepts only; no text copied.
