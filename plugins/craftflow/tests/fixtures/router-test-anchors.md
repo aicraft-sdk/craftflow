@@ -282,7 +282,7 @@ P1 test-net limits (P1 REM-FIX 5; also recorded in ADR-0073, section "P1 test-ne
 5. Pre-existing vacuity (not P1). `test_craftflow_router_documents_state_read_compaction_self_heal` has markers that also occur at SKILL.md:88-94; the P0 rule-inventory gate covers it.
 6. The enumerator misses sibling-module constants, subprocess and rglob reads and class-attribute reads, and the drills are not cumulative (both already stated above).
 
-Rows: 151 (C=35, K=63, F=53).
+Rows: 150 (C=35, K=63, F=52).
 
 Paths are relative to the plugin root (`tools/craftflow-plugin/plugins/craftflow/`). Test paths use the short form `hook::` for `scripts/craftflow_hook_unit_tests.py`, `fx::` for `tests/fixtures/` and `scripts::<file>::<binding>` for a hand row about a router check inside a plugin script (the stale-row check accepts a name the script binds).
 
@@ -437,5 +437,4 @@ Paths are relative to the plugin root (`tools/craftflow-plugin/plugins/craftflow
 | fx::test_craftflow_routing_law.py::test_a_protocol_table_parity | K | _shared/router-protocol.md#Intent Routing (the 8-row table equals `ROUTING_TABLE` of `craftflow_routing_law.py`) | never-move (the routing table stays in router-protocol.md) |
 | fx::test_craftflow_route_types.py::test_headings_and_type | C | the joined router corpus (`craftflow_router_corpus`): every heading text occurs once, checked through `router_relocation_drills.heading_problems` | none |
 | fx::test_craftflow_route_types.py::test_sizes | F | every `references/qa-*.md` and `_shared/route-*.md` is at most 18,500 B (per-file size) | none (the cap holds for every harvest route file) |
-| fx::test_craftflow_untangle_rules.py::test_route_hook | F | `skills/_shared/route-codebase-health.md` (the pending CODEBASE-HEALTH stub): the untangle override paragraph, the skill invoke, the Cursor `Read()` fallback and today's pre-harvest fallback sentence byte-identical | TBD-by-mover (the harvest phase that rewrites this stub retargets the test) |
 | fx::test_craftflow_route_types.py::test_attribution | F | every file under the plugin root: the attribution-name grep stays inside the pinned allowlist (counts per file); a control copy with one extra hit fails | none |

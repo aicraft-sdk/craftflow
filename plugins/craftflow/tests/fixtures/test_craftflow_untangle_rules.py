@@ -19,15 +19,6 @@ PREVENT_SKILLS = ("code-generation", "architecture-patterns", "planning-patterns
 MAX_BLOCK_LINES = 10
 GATE_PHRASE = "**Diagnosis is read-only. This skill never edits code: every fix goes to PLAN, then BUILD.**"
 READ_ONLY_TOOLS = {"Read", "Grep", "Glob", "Bash"}
-ROUTE_STUB = SKILLS / "_shared" / "route-codebase-health.md"
-ROUTE_INVOKE = 'Skill(skill="craftflow:untangle-codebase")'
-ROUTE_CURSOR_PATH = "tools/craftflow-plugin/plugins/craftflow/skills/untangle-codebase/SKILL.md"
-ROUTE_OVERRIDE = ("overrides the pending fallback below and the one in "
-                  "`skills/craftflow-router/references/codebase-health-workflow.md`")
-# Today's whole stub sentence (route-codebase-health.md line 3), kept byte-identical for every non-untangle request.
-ROUTE_FALLBACK = ("Not yet available in this release. Announce `-> CODEBASE-HEALTH workflow (signals: …; pending)`, then route the "
-                  "request by the pre-harvest order ERROR → DEBUG, PLAN → PLAN, REVIEW → REVIEW, otherwise BUILD, and continue "
-                  "under that route's law.")
 
 _passes = 0
 _errors: List[str] = []
@@ -107,23 +98,6 @@ def untangle_problems(label: str, text: str) -> List[str]:
     return probs
 
 
-def route_problems(label: str, text: str) -> List[str]:
-    """Plain-language path (OD-3): the CODEBASE-HEALTH stub sends untangle requests to the skill and keeps its fallback."""
-    probs = []
-    if "untangle" not in text.lower() or ROUTE_INVOKE not in text:
-        probs.append(f"{label}: untangle requests must invoke {ROUTE_INVOKE}")
-    if ROUTE_CURSOR_PATH not in text:
-        probs.append(f"{label}: Cursor fallback Read() of {ROUTE_CURSOR_PATH} missing")
-    if ROUTE_OVERRIDE not in text:
-        probs.append(f"{label}: untangle branch must state it {ROUTE_OVERRIDE} (OD-4)")
-    if ROUTE_FALLBACK not in text:
-        probs.append(f"{label}: pre-harvest fallback sentence not byte-identical to today's line 3")
-    return probs
-
-
-GOOD_ROUTE = ("### route-codebase-health (pending)\n\nUntangle requests: when the request asks to untangle the codebase, this rule "
-              + ROUTE_OVERRIDE + ": invoke `" + ROUTE_INVOKE + "` (Cursor: `Read()` `" + ROUTE_CURSOR_PATH + "`).\n\n"
-              + ROUTE_FALLBACK + "\n")
 GOOD_PREVENT = ("---\nname: x\n---\n## Prevent Tangle\n- **Hidden link:** a\n- **Needless link:** b\n- **Surplus:** c\n"
                 "- **Special case:** d\n## Next\n")
 GOOD_UNTANGLE = ('---\nname: untangle-codebase\ndescription: "Use when x"\nallowed-tools: Read Grep Glob Bash\n---\n'
@@ -150,13 +124,6 @@ def test_probes() -> None:
                       ("desc", GOOD_UNTANGLE.replace('"Use when x"', '"Helps untangle"')),
                       ("attribution", GOOD_UNTANGLE.replace("github.com/caldoai/skills", ""))):
         check(f"probe_untangle_{name}", len(untangle_problems("u", bad)) >= 1, f"mutation {name} not caught")
-    check("probe_route_good_passes", route_problems("r", GOOD_ROUTE) == [], f"{route_problems('r', GOOD_ROUTE)}")
-    no_invoke = route_problems("r", GOOD_ROUTE.replace(ROUTE_INVOKE, "the skill"))
-    check("probe_route_missing_invoke", len(no_invoke) == 1 and "must invoke" in no_invoke[0], f"{no_invoke}")
-    no_override = route_problems("r", GOOD_ROUTE.replace(ROUTE_OVERRIDE, "applies first"))
-    check("probe_route_missing_override", len(no_override) == 1 and "(OD-4)" in no_override[0], f"{no_override}")
-    reworded = route_problems("r", GOOD_ROUTE.replace(", then route the request by", ". Otherwise route the request by"))
-    check("probe_route_missing_fallback", len(reworded) == 1 and "byte-identical" in reworded[0], f"{reworded}")
 
 
 def test_prevent_blocks() -> None:
@@ -186,18 +153,11 @@ def test_untangle_skill() -> None:
     check("untangle_contract", probs == [], "; ".join(probs))
 
 
-def test_route_hook() -> None:
-    print("\n[plain-language route hook]")
-    probs = route_problems(str(ROUTE_STUB.relative_to(PLUGIN_ROOT)), ROUTE_STUB.read_text(encoding="utf-8"))
-    check("route_codebase-health", probs == [], "; ".join(probs))
-
-
 def main() -> int:
     test_probes()
     test_prevent_blocks()
     test_review_checks()
     test_untangle_skill()
-    test_route_hook()
     print()
     for e in _errors:
         print(e)
