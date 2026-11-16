@@ -24,7 +24,8 @@ concurrency:
 
 jobs:
   gate:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest (26.04) has no Python 3.9 build for actions/setup-python; 24.04 is the newest image that does.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Check out full history (the merge-base must be reachable)
