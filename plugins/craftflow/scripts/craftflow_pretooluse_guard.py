@@ -7,6 +7,7 @@ import re
 import sys
 import unicodedata
 from pathlib import Path
+from typing import Tuple
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -30,23 +31,22 @@ import craftflow_pretooluse_bash_guard as bash_guard  # noqa: E402
 # crash checks (memory-write, worktree-confinement, bash-traversal) that have
 # nothing to do with skill-ledger at all.
 try:
-    import craftflow_skill_ledger as skill_ledger  # noqa: E402
+    import craftflow_skill_ledger as skill_ledger
 except ImportError:
     skill_ledger = None
 try:
-    import craftflow_skill_promote as skill_promote  # noqa: E402
+    import craftflow_skill_promote as skill_promote
 except ImportError:
     skill_promote = None
 
 try:
-    from craftflow_policy import enter_plan_mode_decision  # noqa: E402
+    from craftflow_policy import enter_plan_mode_decision
 except Exception:  # a broken policy module must still deny EnterPlanMode (fail closed), never crash the hook
 
     def enter_plan_mode_decision(native_plan_mode, status):  # type: ignore[no-redef]
         return "deny", "craftflow-policy: policy-invalid —"
 
-from craftflow_hooklib import (
-    DENIAL_ESCALATION_THRESHOLD,
+from craftflow_hooklib import (  # noqa: E402 - must follow the fail-closed policy-import fallback above
     clear_denial,
     extract_redirect_targets,
     has_memory_finalize_permit,

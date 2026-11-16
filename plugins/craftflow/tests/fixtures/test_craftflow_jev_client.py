@@ -18,7 +18,6 @@ import socket
 import sys
 import tempfile
 import threading
-import time
 import urllib.error
 from pathlib import Path
 from unittest import mock

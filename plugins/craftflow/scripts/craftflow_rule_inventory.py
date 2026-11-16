@@ -28,7 +28,7 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 import craftflow_router_corpus as cor
 import craftflow_rule_inventory_sbc as sbc
-from craftflow_rule_inventory_reach import (covers, heading_related, group_relations, narrowed_cover, near_rule_count, related,  # noqa: F401
+from craftflow_rule_inventory_reach import (covers, heading_related, group_relations, narrowed_cover, near_rule_count, related,
                                             verify_lock, widening)
 from craftflow_rule_inventory_readmap import (CLASSES, RANK, check_readmap_files, coverage,  # noqa: F401
                                                load_readmap)

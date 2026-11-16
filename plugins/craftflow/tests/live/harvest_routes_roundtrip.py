@@ -55,7 +55,7 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import harvest_routes_ch as chj  # noqa: E402  (the LV-CH judge)
+import harvest_routes_ch as chj
 
 CALL_TIMEOUT_S = 240
 DEFAULT_MODEL = "sonnet"
@@ -380,7 +380,7 @@ def step_ch(ctx):
         partial.update({"transcript": str(transcript), "stop_reason": why, "rc": rc})
         state, changes, calls = chj.collect(project, ctx["scr"], git, ctx["seed_sha"])
         verdict, detail = judge_ch(out, state, changes, calls)
-    except BaseException as exc:  # noqa: BLE001 - recorded, then re-raised for main's clean FAIL row
+    except BaseException as exc:
         partial["error"] = "%s: %s" % (type(exc).__name__, exc)
         raise
     detail.update({"transcript": str(transcript), "stop_reason": why, "rc": rc, "stderr_tail": err[-300:], "project": str(project),

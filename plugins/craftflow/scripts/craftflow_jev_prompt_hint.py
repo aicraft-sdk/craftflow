@@ -4,7 +4,7 @@ OFF BY DEFAULT: inert unless config/jev.json has enabled:true AND TYPESAFE_API_K
 Never blocks (no decision/blockReason, exit 0 always). Design: docs/plans/2026-09-19-jev-routing-hint-design.md
 """
 from __future__ import annotations
-import json, os, re, sys, uuid
+import json, os, re, uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from craftflow_hooklib import (

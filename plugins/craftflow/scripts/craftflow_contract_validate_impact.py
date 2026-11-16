@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any, List
+from typing import List
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))

@@ -314,7 +314,7 @@ def test_write_enabled_flag_rejects_invalid_consent_status() -> None:
     disk with no guard. This exercises that internal contract directly,
     since the CLI itself never reaches this path (argparse `choices` already
     restricts --record-consent, and --enable/--disable pass fixed literals)."""
-    from craftflow_jev_setup import _write_enabled_flag  # noqa: E402 (whitebox internal-contract test)
+    from craftflow_jev_setup import _write_enabled_flag
 
     with tempfile.TemporaryDirectory() as tmp:
         cfg_path = Path(tmp) / "jev.json"
@@ -339,7 +339,7 @@ def test_write_enabled_flag_rejects_invalid_consent_status() -> None:
 def test_write_consent_rejects_invalid_status() -> None:
     """Same guard as above, for the sibling _write_consent helper used by
     --record-consent."""
-    from craftflow_jev_setup import _write_consent  # noqa: E402 (whitebox internal-contract test)
+    from craftflow_jev_setup import _write_consent
 
     with tempfile.TemporaryDirectory() as tmp:
         cfg_path = Path(tmp) / "jev.json"

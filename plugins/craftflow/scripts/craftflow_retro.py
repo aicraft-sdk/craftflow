@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # One-way import: the signals module is a leaf and never imports this module.
-from craftflow_retro_signals import (  # noqa: F401
+from craftflow_retro_signals import (
     EXCERPT_MAX, EXTRACTORS, RetroError, _excerpt, _history_entries, _is_int, _type_name,
 )
 

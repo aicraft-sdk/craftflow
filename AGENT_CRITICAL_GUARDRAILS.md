@@ -7,7 +7,8 @@ Hard rules only. One bullet, no exceptions. For rationale and full context, see
   for code changes without routing through it first.
 - TDD is mandatory: RED (failing test) → GREEN (minimal passing code) → REFACTOR. No
   production code without a failing test first.
-- File size: prefer < 400 lines per file, max 500; functions ~30–40 lines.
+- File size: prefer < 400 lines per file, max 500; functions ~30–40 lines. Enforced by
+  `python3 plugins/craftflow/scripts/craftflow_file_size_ratchet.py` (oversized files may only shrink).
 - Never hand-edit `CHANGELOG.md`'s released sections or any version field in this plugin.
   CI auto-releases on every push to `main` touching `tools/craftflow-plugin/**` — manual
   edits are overwritten or fail the consistency gate.
@@ -16,5 +17,6 @@ Hard rules only. One bullet, no exceptions. For rationale and full context, see
 - Never edit `.craftflow/state/*.md` memory files directly from a write agent — emit
   structured `MEMORY_NOTES`; only the router/workflow finalizer persists memory.
 - No secrets, tokens, or private keys committed — use environment variables.
-- No `any` / `@ts-ignore` without an inline justification comment.
+- No `# noqa` / `# type: ignore` without a rule code and a reason. Enforced by
+  `plugins/craftflow/scripts/craftflow_suppression_ratchet.py` and the clean-state check.
 - Spec before code — no implementation without a linked feature spec or approved plan.
