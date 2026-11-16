@@ -1,0 +1,72 @@
+# Code health: runs the craftflow local gate (ruff, suppression ratchet, file-size ratchet, clean-state check in block
+# mode, baseline integrity, py-compile, curated test suites) on every pull request and on pushes to main.
+#
+# NOTE FOR THE OWNER: this repository is a published copy of a monorepo subtree. The upstream publish process must carry
+# .github/, .githooks/ and ruff.toml (repo root) through to this repository, or these files are LOST on the next publish.
+#
+# Also do once, by hand: in the repository settings, make the "gate" job of this workflow a required status check on the
+# default branch. Without that, a red run does not block merging.
+#
+# Third-party actions below use the official major tags; pinning them to a full commit SHA is recommended.
+name: code-health
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-health-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out full history (the merge-base must be reachable)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.9 (the shipped code must stay 3.9-compatible)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install ruff (dev-only tool, pinned to the version ruff.toml was written for)
+        run: python -m pip install ruff==0.16.9
+
+      - name: Pick the base ref the gate judges
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -eu
+          base=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$PR_BASE_SHA"
+          else
+            base="$PUSH_BEFORE_SHA"
+            # first push of a branch has an all-zero "before"; a force push can leave a sha that is not in the clone
+            if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+              base="$(git rev-parse --verify --quiet HEAD^ || true)"
+            fi
+          fi
+          echo "Base ref for this run: ${base:-<none: gate default>}"
+          echo "GATE_BASE_REF=$base" >> "$GITHUB_ENV"
+
+      - name: Run the craftflow local gate
+        # CI=true is set by GitHub: that makes missing ruff and an unresolvable base ref FAIL. Never add
+        # --allow-missing-base, --skip, --only or --fast here.
+        run: |
+          set -eu
+          if [ -n "$GATE_BASE_REF" ]; then
+            python plugins/craftflow/scripts/craftflow_local_gate.py --require-ruff --require-base --base-ref "$GATE_BASE_REF"
+          else
+            python plugins/craftflow/scripts/craftflow_local_gate.py --require-ruff --require-base
+          fi

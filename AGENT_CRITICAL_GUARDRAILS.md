@@ -17,6 +17,7 @@ Hard rules only. One bullet, no exceptions. For rationale and full context, see
 - Never edit `.craftflow/state/*.md` memory files directly from a write agent — emit
   structured `MEMORY_NOTES`; only the router/workflow finalizer persists memory.
 - No secrets, tokens, or private keys committed — use environment variables.
-- No `# noqa` / `# type: ignore` without a rule code and a reason. Enforced by
-  `plugins/craftflow/scripts/craftflow_suppression_ratchet.py` and the clean-state check.
+- No `# noqa` / `# type: ignore` without a rule code and a reason (suppression ratchet, clean-state check).
+- Never raise a ratchet baseline, add a ruff per-file-ignore, or weaken `hook-mode.json` to make a check
+  pass: CI rejects it (`craftflow_baseline_integrity.py`). Ask the user.
 - Spec before code — no implementation without a linked feature spec or approved plan.
