@@ -213,6 +213,9 @@ def _rule(**extra) -> dict:
         "fix": "move it",
     }
     rule.update(extra)
+    if rule.get("mode") == "blocking":  # blocking rules must carry provenance (schema)
+        rule.setdefault("origin", "test incident")
+        rule.setdefault("owner", "test owner")
     return rule
 
 

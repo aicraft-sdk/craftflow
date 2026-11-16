@@ -128,6 +128,8 @@ saved = os.environ.pop("CI", None)
 steps = gate.build_steps(gate.ROOT, args)
 names = [s["name"] for s in steps]
 check("fixed leading order", names[:6], ["ruff", "suppression-ratchet", "file-size-ratchet", "clean-state", "baseline-integrity", "py-compile"])
+check("guardrail-refs follows py-compile and is in the pre-commit subset", (names[6], "--only guardrail-refs" in (gate.ROOT / ".githooks" / "pre-commit").read_text()), ("guardrail-refs", True))
+check("guardrail-refs suite is listed", ("test_craftflow_guardrail_refs", "") in gate.SUITES, True)
 check("no duplicate suites", len(gate.SUITES), len({s for s, _ in gate.SUITES}))
 check("every listed suite exists", [s for s, _ in gate.SUITES if not (PLUGIN / "tests" / "fixtures" / f"{s}.py").is_file()], [])
 check("clean-state runs in block mode", "block" in steps[3]["argv"], True)

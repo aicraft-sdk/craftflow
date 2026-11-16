@@ -87,7 +87,7 @@ from the plugin bundle and runs the referenced scripts from `${CLAUDE_PLUGIN_ROO
 The shipped runtime hooks are intentionally minimal. Most hooks operate in audit mode; `memoryWrites`, `protectedWrites`, `taskMetadata`, `bashDestructiveTraversal`, `safeShellGuard`, and `stateReadCompaction` are enforced in block mode (config: `config/hook-mode.json`; each toggle enum-validates its value and fails closed — block — on a missing or malformed config, via the shared `resolve_toggle_decision()` helper in `craftflow_hooklib.py`):
 - protect and enforce direct memory markdown writes on Edit/Write (block mode, `memoryWrites`)
 - protect the same memory files, the `.memory-finalize` permit, and workflow JSON artifacts against Bash-write bypasses — redirects, `tee`, and python-script writes (block mode, `protectedWrites`)
-- protect the architecture-lint rule registry (`.craftflow/state/project/arch-rules.json`, where a rule's `"mode": "blocking"` lives) so an agent cannot flip a rule to advisory, add or delete rules: Edit/Write is denied unconditionally (same hardened path matching as the reliability-gates ledger); Bash redirects, `tee`, python writes and `cp`/`mv` are gated by `protectedWrites`. `sed -i`-style in-place edits are not detected by this hook for any protected file. Plugin-owned files (`config/*.json`, test baselines) are outside this hook's scope: it anchors every protected path to the consumer project's own state.
+- protect the architecture-lint rule registry (`.craftflow/state/project/arch-rules.json`, where a rule's `"mode": "blocking"` lives) so an agent cannot flip a rule to advisory, add or delete rules: Edit/Write is denied unconditionally (same hardened path matching as the reliability-gates ledger); Bash redirects, `tee`, python writes and `cp`/`mv` are gated by `protectedWrites`. `sed -i`-style in-place edits are not detected by this hook for any protected file. Plugin-owned files (`config/*.json`, test baselines) are outside this hook's scope: it anchors every protected path to the consumer project's own state. A rule is proposed, proven (`craftflow_arch_lint.py --check-proposal`) and promoted by the procedure in `skills/retro/references/mistake-to-rule.md`.
 - deny destructive Bash commands (in-cwd or cwd/worktree-escaping) across a widened command vocabulary (block mode, `bashDestructiveTraversal`)
 - deny an absolute denylist of catastrophic Bash commands — `rm -rf /`, `mkfs`, fork bombs (block mode, `safeShellGuard`; concept ported from `xai-org/grok-build`, see `NOTICE`)
 - deny a Read of an oversized `.craftflow/state/**` file and redirect the agent to `craftflow_state_query.py` (never mutating the target file's bytes; block mode, `stateReadCompaction`)
@@ -182,6 +182,7 @@ git config core.hooksPath .githooks                                  # once per 
 | `clean-state` | `craftflow_clean_state_check.py --suppression-mode block`: newly added suppressions need a rule code and a reason | none |
 | `baseline-integrity` | `craftflow_baseline_integrity.py`: baselines, `ruff.toml` and `config/hook-mode.json` may not get looser than at the merge-base | none |
 | `py-compile` | tracked `.py` under `scripts/` and `tests/fixtures/` compile | none |
+| `guardrail-refs` | `craftflow_guardrail_refs.py`: every backticked path in `AGENT_CRITICAL_GUARDRAILS.md` resolves in this repository (a doc may not cite monorepo-only files; the only allowlist is consumer runtime paths such as `.craftflow/`, inside the script) | none |
 | `suite:<name>` | the curated test suites listed in `SUITES` at the top of `craftflow_local_gate.py` (inclusion rule and exclusions are documented there) | none |
 
 - **Exit codes.** `0` every non-skipped step passed, `2` at least one step failed (every step still runs, so one run
@@ -193,7 +194,7 @@ git config core.hooksPath .githooks                                  # once per 
   `merge-base..working tree` in a throwaway worktree and scans that, so the PR diff is judged; untracked files are not
   seen in that mode.
 - **Pre-commit hook.** `.githooks/pre-commit` runs the fast subset in about 2 seconds: ruff (if installed), both
-  ratchets, clean-state, baseline-integrity (skips loudly when no base ref exists) and py-compile. The test suites (and
+  ratchets, clean-state, baseline-integrity (skips loudly when no base ref exists), py-compile and guardrail-refs. The test suites (and
   the real PR base) are CI's job; run the full gate before opening a PR. The hook is separate from the consumer-project
   helper `hooks/pre-commit` in this directory.
 - **CI.** `.github/workflows/code-health.yml` runs the full gate on pull requests and pushes to `main` with Python 3.9
@@ -218,7 +219,8 @@ git config core.hooksPath .githooks                                  # once per 
   with `pip install ruff==0.16.9`, run `ruff check` from the repo root. Never run `ruff format` or `--fix`. `RUF100`
   makes a stale `# noqa` an error. The `per-file-ignores` entries in `ruff.toml` are debt to pay down, not a place to
   add files.
-- **Tests.** `python3 plugins/craftflow/tests/fixtures/test_craftflow_{suppression_ratchet,file_size_ratchet,baseline_integrity,local_gate}.py`.
+- **Guardrail references.** `craftflow_guardrail_refs.py [--file DOC] [--root DIR] [--format text|json]` takes backticked path-like tokens (a `/` or a known extension, or the path argument of a backticked command), strips glob tails, and exits 2 with `WHAT/WHY/FIX` and the line number for any that do not resolve here; bare names must match exactly one file. Reword the doc instead of allowlisting a monorepo-only path.
+- **Tests.** `python3 plugins/craftflow/tests/fixtures/test_craftflow_{suppression_ratchet,file_size_ratchet,baseline_integrity,local_gate,guardrail_refs}.py`.
 
 ## Skill Candidate Ledger (router-invoked, not a registered hook)
 
