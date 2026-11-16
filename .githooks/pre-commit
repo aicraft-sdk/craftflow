@@ -4,8 +4,8 @@
 # Enable once per clone:   git config core.hooksPath .githooks
 #
 # Runs the fast subset of the local gate (about 2 seconds): ruff (if installed), suppression ratchet, file-size ratchet,
-# clean-state check in block mode, baseline integrity (skips loudly when no base ref exists, e.g. a shallow clone) and
-# py-compile. The test suites and the baseline comparison against the real PR base run in CI:
+# clean-state check in block mode, baseline integrity (skips loudly when no base ref exists, e.g. a shallow clone),
+# py-compile and the guardrail-refs check. The test suites and the baseline comparison against the real PR base run in CI:
 #   python3 plugins/craftflow/scripts/craftflow_local_gate.py           (the full gate, about 3 minutes)
 # POSIX sh only.
 
@@ -19,7 +19,7 @@ fi
 
 python3 -B plugins/craftflow/scripts/craftflow_local_gate.py \
     --only ruff --only suppression-ratchet --only file-size-ratchet \
-    --only clean-state --only baseline-integrity --only py-compile
+    --only clean-state --only baseline-integrity --only py-compile --only guardrail-refs
 status=$?
 
 if [ "$status" -ne 0 ]; then

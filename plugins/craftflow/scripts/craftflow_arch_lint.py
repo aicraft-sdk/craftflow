@@ -13,6 +13,24 @@ per-rule `"mode": "blocking"`; only then does this script signal failure.
 Usage:
     craftflow_arch_lint.py [--project-root PATH] [--rules PATH]
         [--state-dir PATH] [--format text|json]
+    craftflow_arch_lint.py --self-test [--rules PATH | --project-root PATH --state-dir DIR] [--format text|json]
+    craftflow_arch_lint.py --check-proposal FILE.json [--format text|json]
+
+Optional per-rule provenance and proof fields (all backward compatible; a registry without them behaves as before):
+    "origin"    non-empty string: the incident/evidence that motivated the rule.
+    "owner"     non-empty string: who decides to keep, demote or delete it.
+    "added"     ISO date string (YYYY-MM-DD).
+    "examples"  {"bad": [{"path", "content"}, ...], "good": [...]}. `path` is relative and must match the rule's
+                scope_globs. --self-test writes each example to a throwaway directory outside the project and runs the
+                real lint() on it: every bad example must produce a finding for the rule, every good one none.
+A rule with "mode": "blocking" MUST carry non-empty `origin` and `owner`, otherwise the registry is a rules-schema error
+(exit 1). Advisory rules may omit them. NOTE: this makes an older registry whose blocking rules lack provenance exit 1
+until a human adds the two fields.
+
+--self-test / --check-proposal live in craftflow_arch_rule_selftest.py (this file stays under the size cap). Exit codes
+there: 0 proven (or no rules with examples), 1 tool/schema error (missing registry, unreadable or invalid rule, an
+example whose path is outside scope_globs), 2 an example behaves wrongly, a blocking rule lacks a bad or a good example,
+or a proposal lacks either. --self-test never scans the project and never writes or bootstraps the registry.
 
 Per-rule `mode` (optional string, default "advisory"):
     "advisory"  findings are reported, never affect the exit code.
@@ -52,6 +70,7 @@ full static-analysis coverage.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import re
 import sys
@@ -108,6 +127,9 @@ def _seed_rules() -> list:
         {
             "id": "no-tools-import-packages",
             "mode": MODE_ADVISORY,
+            "origin": "seed rule shipped with craftflow_arch_lint.py (v1.13.0): tools/ is internal-only and must not import the publishable @ai-craft/* scope",
+            "owner": "craftflow maintainers",
+            "added": "2026-09-26",
             "scope_globs": ["tools/**/*.ts", "tools/**/*.tsx", "tools/**/*.js"],
             "forbidden_import_prefixes": ["@ai-craft/"],
             "what": "imports from the publishable @ai-craft/* package scope from inside tools/",
@@ -121,8 +143,72 @@ def _seed_rules() -> list:
                 "depend on, or duplicate the narrow utility locally inside the tools/ "
                 "package instead of importing @ai-craft/*."
             ),
+            "examples": {
+                "bad": [{"path": "tools/pkg/bad.ts", "content": "import { run } from '@ai-craft/agent-loop';\n"}],
+                "good": [{"path": "tools/pkg/good.ts", "content": "import { run } from './local';\n"}],
+            },
         }
     ]
+
+
+def validate_rule(rule: object, index: int, where: str) -> None:
+    """Validate one rule object (`where` prefixes every message, e.g. "rules file at <path>"). Raises RulesCorruptError."""
+    if not isinstance(rule, dict):
+        raise RulesCorruptError(f"{where}: rule at index {index} is not an object")
+    rule_id = rule.get("id")
+    if not isinstance(rule_id, str) or not rule_id:
+        raise RulesCorruptError(f"{where}: rule at index {index} missing non-empty 'id'")
+    if not isinstance(rule.get("scope_globs"), list) or not rule.get("scope_globs"):
+        raise RulesCorruptError(f"{where}: rule '{rule_id}' (index {index}) missing non-empty 'scope_globs' list")
+    if not isinstance(rule.get("forbidden_import_prefixes"), list) or not rule.get("forbidden_import_prefixes"):
+        raise RulesCorruptError(
+            f"{where}: rule '{rule_id}' (index {index}) missing non-empty 'forbidden_import_prefixes' list"
+        )
+    if "mode" in rule and (not isinstance(rule["mode"], str) or rule["mode"] not in VALID_MODES):
+        raise RulesCorruptError(
+            f"{where}: rule '{rule_id}' (index {index}) has invalid 'mode' "
+            f"{rule['mode']!r}; expected one of {', '.join(VALID_MODES)} (or omit it for advisory)"
+        )
+    _validate_provenance(rule, rule_id, index, where)
+    _validate_examples(rule.get("examples"), rule_id, index, where)
+
+
+def _validate_provenance(rule: dict, rule_id: str, index: int, where: str) -> None:
+    head = f"{where}: rule '{rule_id}' (index {index})"
+    for key in ("origin", "owner", "added"):
+        if key in rule and not isinstance(rule[key], str):
+            raise RulesCorruptError(f"{head} has non-string '{key}' {rule[key]!r}; it must be a string")
+    if "added" in rule:
+        try:
+            datetime.date.fromisoformat(rule["added"])
+        except ValueError as exc:
+            raise RulesCorruptError(f"{head} has 'added' {rule['added']!r}, which is not an ISO date (YYYY-MM-DD)") from exc
+    if rule.get("mode") == MODE_BLOCKING:
+        missing = [k for k in ("origin", "owner") if not (isinstance(rule.get(k), str) and rule[k].strip())]
+        if missing:
+            raise RulesCorruptError(
+                f"{head} has \"mode\": \"blocking\" but is missing non-empty {' and '.join(repr(k) for k in missing)}. "
+                "Add 'origin' (the incident or evidence that motivated the rule) and 'owner' (who decides to keep or "
+                "delete it), or set the rule to advisory; a blocking rule must say where it came from."
+            )
+
+
+def _validate_examples(examples: object, rule_id: str, index: int, where: str) -> None:
+    if examples is None:
+        return
+    head = f"{where}: rule '{rule_id}' (index {index}) 'examples'"
+    if not isinstance(examples, dict) or set(examples) - {"bad", "good"}:
+        raise RulesCorruptError(f"{head} must be an object with only the keys 'bad' and 'good'")
+    for kind, items in examples.items():
+        if not isinstance(items, list):
+            raise RulesCorruptError(f"{head}.{kind} must be a list of {{\"path\", \"content\"}} objects")
+        for n, item in enumerate(items):
+            ok = isinstance(item, dict) and isinstance(item.get("path"), str) and isinstance(item.get("content"), str)
+            ok = ok and bool(item["path"]) and not item["path"].startswith("/") and ".." not in Path(item["path"]).parts
+            if not ok:
+                raise RulesCorruptError(
+                    f"{head}.{kind}[{n}] must be {{\"path\": <relative path inside scope_globs>, \"content\": <file text>}}"
+                )
 
 
 def _validate_rules_shape(data: dict, rules_path: Path) -> None:
@@ -131,25 +217,7 @@ def _validate_rules_shape(data: dict, rules_path: Path) -> None:
     scope_globs) must fail loudly here -- never silently degrade to a no-op
     scan that still reports a clean-looking rule_count/findings=[]."""
     for index, rule in enumerate(data.get("rules", [])):
-        if not isinstance(rule, dict):
-            raise RulesCorruptError(f"rules file at {rules_path}: rule at index {index} is not an object")
-        rule_id = rule.get("id")
-        if not isinstance(rule_id, str) or not rule_id:
-            raise RulesCorruptError(f"rules file at {rules_path}: rule at index {index} missing non-empty 'id'")
-        if not isinstance(rule.get("scope_globs"), list) or not rule.get("scope_globs"):
-            raise RulesCorruptError(
-                f"rules file at {rules_path}: rule '{rule_id}' (index {index}) missing non-empty 'scope_globs' list"
-            )
-        if not isinstance(rule.get("forbidden_import_prefixes"), list) or not rule.get("forbidden_import_prefixes"):
-            raise RulesCorruptError(
-                f"rules file at {rules_path}: rule '{rule_id}' (index {index}) missing non-empty "
-                "'forbidden_import_prefixes' list"
-            )
-        if "mode" in rule and (not isinstance(rule["mode"], str) or rule["mode"] not in VALID_MODES):
-            raise RulesCorruptError(
-                f"rules file at {rules_path}: rule '{rule_id}' (index {index}) has invalid 'mode' "
-                f"{rule['mode']!r}; expected one of {', '.join(VALID_MODES)} (or omit it for advisory)"
-            )
+        validate_rule(rule, index, f"rules file at {rules_path}")
 
 
 def load_or_seed_rules(rules_path: Path) -> dict:
@@ -220,6 +288,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state-dir", default=DEFAULT_STATE_DIR, help=f"Craftflow state dir (default: {DEFAULT_STATE_DIR})")
     parser.add_argument("--rules", default=None, help="Rules file path (default: derived from --state-dir)")
     parser.add_argument("--format", choices=("text", "json"), default="text")
+    parser.add_argument("--self-test", action="store_true", help="prove every rule's bad/good examples (no project scan)")
+    parser.add_argument("--check-proposal", metavar="FILE", default=None,
+                        help="validate and self-test one proposed rule object; never touches the registry")
     return parser
 
 
@@ -228,6 +299,17 @@ def main() -> int:
     args = parser.parse_args()
     project_root = Path(args.project_root).resolve()
     rules_path = Path(args.rules) if args.rules else project_root / args.state_dir / DEFAULT_RULES_REL
+
+    if args.self_test or args.check_proposal:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import craftflow_arch_rule_selftest as selftest  # lazy: that module imports this one
+
+        if args.self_test and args.check_proposal:
+            print(json.dumps({"error": "usage error: --self-test and --check-proposal are mutually exclusive"}), file=sys.stderr)
+            return EXIT_TOOL_ERROR
+        if args.check_proposal:
+            return selftest.check_proposal_main(Path(args.check_proposal), args.format)
+        return selftest.self_test_main(rules_path, args.format)
 
     bootstrapped = not rules_path.exists()
     try:

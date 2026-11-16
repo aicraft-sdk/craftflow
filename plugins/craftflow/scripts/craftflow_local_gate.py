@@ -20,6 +20,7 @@ Steps, always in this order, each a subprocess (see --list):
                           breaking every commit.
     py-compile            every tracked .py under plugins/craftflow/scripts and tests/fixtures compiles (compile(); no
                           .pyc is written)
+    guardrail-refs        craftflow_guardrail_refs.py: every backticked path in AGENT_CRITICAL_GUARDRAILS.md resolves here
     suite:<name>          the curated test suites in SUITES below
 
 Every step runs even after a failure (so one run shows everything that is wrong); fail-closed means a step that cannot
@@ -79,9 +80,10 @@ STEP_TIMEOUT = 900
 SUITES = [
     ("test_agent_structure", ""), ("test_architecture_scanner_agent", ""), ("test_contract_validate", ""),
     ("test_contract_validate_impact", ""), ("test_contract_validate_pilot", ""), ("test_contract_validate_scanner", ""),
-    ("test_craftflow_arch_lint", "root"), ("test_craftflow_baseline_integrity", ""),
+    ("test_craftflow_arch_lint", "root"), ("test_craftflow_arch_rule_selftest", ""),
+    ("test_craftflow_baseline_integrity", ""),
     ("test_craftflow_clean_state_check", "slow"), ("test_craftflow_conductor_inspection", ""),
-    ("test_craftflow_feature_backlog", ""), ("test_craftflow_file_size_ratchet", ""),
+    ("test_craftflow_feature_backlog", ""), ("test_craftflow_file_size_ratchet", ""), ("test_craftflow_guardrail_refs", ""),
     ("test_craftflow_harness_capabilities_impact", ""), ("test_craftflow_jev_ab_report", ""),
     ("test_craftflow_jev_client", ""), ("test_craftflow_jev_config", ""), ("test_craftflow_jev_corpus_build", ""),
     ("test_craftflow_jev_heuristic", ""), ("test_craftflow_jev_remfix_scope", ""), ("test_craftflow_jev_replay", ""),
@@ -126,6 +128,8 @@ def build_steps(root: Path, args: argparse.Namespace) -> List[Dict[str, object]]
         make_step("baseline-integrity", integrity_argv(root, args), desc="baselines, ruff.toml and hook-mode.json may not loosen"),
         make_step("py-compile", [py, "-B", str(Path(__file__).resolve()), "--internal", "compile"],
                   desc="tracked scripts/ and tests/fixtures .py files compile"),
+        make_step("guardrail-refs", [py, "-B", script("craftflow_guardrail_refs.py"), "--root", str(root)],
+                  desc="paths cited in AGENT_CRITICAL_GUARDRAILS.md exist in this repository"),
     ] + [suite_step(stem, tags) for stem, tags in SUITES]
 
 
