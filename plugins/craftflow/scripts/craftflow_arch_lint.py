@@ -2,22 +2,45 @@
 """
 craftflow_arch_lint.py
 
-Advisory architecture-boundary linter. Reads a rule registry
+Architecture-boundary linter. Reads a rule registry
 (.craftflow/state/project/arch-rules.json by default) and scans the repo for
 violations, reporting WHAT/WHY/FIX per finding. Self-bootstraps the registry
-with one seed rule if the file is missing. Never fails a workflow -- findings
-are advisory input into code-reviewer's dispatch context only; the ROUTER
-decides what to do with a non-empty findings list, this script never does.
+with one seed rule if the file is missing. Advisory by default: findings are
+input into code-reviewer's dispatch context, and the ROUTER decides what to do
+with a non-empty findings list. A rule can opt in to blocking with an explicit
+per-rule `"mode": "blocking"`; only then does this script signal failure.
 
 Usage:
     craftflow_arch_lint.py [--project-root PATH] [--rules PATH]
         [--state-dir PATH] [--format text|json]
 
-Exit 0 on a completed scan, even with findings (findings are not a failure
-signal for this script). Exit 1 only on a genuine tool error: the rules file
-exists but is corrupt JSON / has an invalid schema shape, a rule object is
-missing/misspells a required key (never silently degrades to a no-op scan),
-or a scope_glob scan itself raises an unexpected OSError.
+Per-rule `mode` (optional string, default "advisory"):
+    "advisory"  findings are reported, never affect the exit code.
+    "blocking"  findings are reported AND make the run exit 2.
+Any other value (wrong spelling, wrong case, non-string) is a rules-schema
+error, handled exactly like a corrupt rule (exit 1) -- an unrecognised mode
+never silently degrades to advisory, because that would let a typo turn an
+enforced rule into a no-op. A registry with no `mode` keys behaves exactly as
+before this field existed.
+
+Exit codes (distinct on purpose, so a caller can tell a verdict from a crash):
+    0  completed scan; no findings, or only advisory findings.
+    1  genuine tool error: the rules file exists but is corrupt JSON / has an
+       invalid schema shape, a rule object is missing/misspells a required
+       key or carries an invalid `mode` (never silently degrades to a no-op
+       scan), a scope_glob scan itself raises an unexpected OSError, or the
+       command line is malformed (argparse usage errors are mapped to 1 so
+       they cannot be mistaken for 2).
+    2  completed scan with at least one finding from a "blocking" rule. The
+       full report is still printed to stdout (text or json); stderr is not
+       used. A caller that gates on the result must treat 2 as "violations
+       found", never as a crash.
+
+Output: every finding carries its rule's `mode`. JSON adds a top-level
+`summary` ({"total", "blocking", "advisory"}); text ends with the same counts.
+JSON also carries `bootstrapped` (true when the rules file was missing and the
+advisory seed registry was written). A deleted registry therefore re-seeds as
+advisory, which is visible here rather than a silent downgrade.
 
 Known syntax boundary: the import detector matches literal
 `from '<prefix>`, `require('<prefix>`, `import('<prefix>`, and the bare
@@ -35,6 +58,12 @@ import sys
 from pathlib import Path
 
 SCHEMA_VERSION = 1
+MODE_ADVISORY = "advisory"
+MODE_BLOCKING = "blocking"
+VALID_MODES = (MODE_ADVISORY, MODE_BLOCKING)
+EXIT_OK = 0
+EXIT_TOOL_ERROR = 1
+EXIT_BLOCKING_FINDINGS = 2
 DEFAULT_STATE_DIR = ".craftflow/state"
 DEFAULT_RULES_REL = "project/arch-rules.json"
 
@@ -55,6 +84,16 @@ _IMPORT_RE_TEMPLATE = (
 )
 
 
+class _ToolArgumentParser(argparse.ArgumentParser):
+    """argparse exits 2 on a usage error, which would collide with this
+    script's exit 2 ("blocking findings"). Report usage errors as a tool
+    error (exit 1) instead."""
+
+    def error(self, message: str):
+        print(json.dumps({"error": f"usage error: {message}"}), file=sys.stderr)
+        raise SystemExit(EXIT_TOOL_ERROR)
+
+
 class RulesCorruptError(Exception):
     """Rules file EXISTS but content cannot be trusted (parse failure,
     invalid top-level shape, or a rule object missing/misspelling a required
@@ -68,6 +107,7 @@ def _seed_rules() -> list:
     return [
         {
             "id": "no-tools-import-packages",
+            "mode": MODE_ADVISORY,
             "scope_globs": ["tools/**/*.ts", "tools/**/*.tsx", "tools/**/*.js"],
             "forbidden_import_prefixes": ["@ai-craft/"],
             "what": "imports from the publishable @ai-craft/* package scope from inside tools/",
@@ -104,6 +144,11 @@ def _validate_rules_shape(data: dict, rules_path: Path) -> None:
             raise RulesCorruptError(
                 f"rules file at {rules_path}: rule '{rule_id}' (index {index}) missing non-empty "
                 "'forbidden_import_prefixes' list"
+            )
+        if "mode" in rule and (not isinstance(rule["mode"], str) or rule["mode"] not in VALID_MODES):
+            raise RulesCorruptError(
+                f"rules file at {rules_path}: rule '{rule_id}' (index {index}) has invalid 'mode' "
+                f"{rule['mode']!r}; expected one of {', '.join(VALID_MODES)} (or omit it for advisory)"
             )
 
 
@@ -164,12 +209,13 @@ def lint(project_root: Path, registry: dict) -> tuple:
                         "fix": rule.get("fix", ""),
                         "file": rel,
                         "line": line_no,
+                        "mode": rule.get("mode", MODE_ADVISORY),
                     })
     return findings, skipped
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Craftflow advisory architecture-boundary linter.")
+    parser = _ToolArgumentParser(description="Craftflow architecture-boundary linter (advisory by default; per-rule opt-in blocking).")
     parser.add_argument("--project-root", default=".", help="Project root to scan (default: .)")
     parser.add_argument("--state-dir", default=DEFAULT_STATE_DIR, help=f"Craftflow state dir (default: {DEFAULT_STATE_DIR})")
     parser.add_argument("--rules", default=None, help="Rules file path (default: derived from --state-dir)")
@@ -183,28 +229,47 @@ def main() -> int:
     project_root = Path(args.project_root).resolve()
     rules_path = Path(args.rules) if args.rules else project_root / args.state_dir / DEFAULT_RULES_REL
 
+    bootstrapped = not rules_path.exists()
     try:
         registry = load_or_seed_rules(rules_path)
         findings, skipped = lint(project_root, registry)
     except (OSError, UnicodeDecodeError, RulesCorruptError) as exc:
         print(json.dumps({"error": f"unexpected error: {exc}"}), file=sys.stderr)
-        return 1
+        return EXIT_TOOL_ERROR
+
+    blocking = sum(1 for f in findings if f.get("mode") == MODE_BLOCKING)
+    summary = {"total": len(findings), "blocking": blocking, "advisory": len(findings) - blocking}
 
     if args.format == "json":
         print(json.dumps(
-            {"findings": findings, "rule_count": len(registry.get("rules", [])), "skipped": skipped},
+            {
+                "findings": findings,
+                "rule_count": len(registry.get("rules", [])),
+                "skipped": skipped,
+                "summary": summary,
+                "bootstrapped": bootstrapped,
+            },
             indent=2,
         ))
     else:
+        if bootstrapped:
+            print(f"Arch lint: rules file {rules_path} was missing; seeded the default advisory registry.")
         if not findings:
             print("Arch lint: 0 findings.")
         for f in findings:
-            print(f"WHAT: {f['what']}\nWHY: {f['why']}\nFIX: {f['fix']}\n")
+            print(f"WHAT: {f['what']}\nMODE: {f['mode']}\nWHY: {f['why']}\nFIX: {f['fix']}\n")
+        if findings:
+            print(
+                f"Arch lint: {summary['total']} finding(s): "
+                f"{summary['blocking']} blocking, {summary['advisory']} advisory."
+            )
+            if blocking:
+                print("Arch lint: BLOCKING findings present (exit 2); fix them or report a wrong rule to the user.")
         if skipped:
             print(f"Skipped {len(skipped)} unreadable file(s):")
-            for s in skipped:
-                print(f"  {s['path']}: {s['reason']}")
-    return 0
+            for s_ in skipped:
+                print(f"  {s_['path']}: {s_['reason']}")
+    return EXIT_BLOCKING_FINDINGS if blocking else EXIT_OK
 
 
 if __name__ == "__main__":

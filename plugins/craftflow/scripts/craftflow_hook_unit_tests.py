@@ -4387,6 +4387,145 @@ def test_pretooluse_guard_denies_bash_redirect_to_reliability_gates_ledger(tmp_d
         fail(name, f"expected deny reliability-gates-write, got: {out!r}")
 
 
+def _is_deny(out: str) -> bool:
+    return '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out
+
+
+def _arch_rules_project(tmp_dir: Path) -> tuple:
+    project_root = tmp_dir / "project"
+    rules_path = project_root / ".craftflow" / "state" / "project" / "arch-rules.json"
+    rules_path.parent.mkdir(parents=True, exist_ok=True)
+    rules_path.write_text('{"schema_version": 1, "rules": [{"id": "r", "mode": "blocking"}]}')
+    return project_root, rules_path
+
+
+def test_pretooluse_guard_denies_edit_write_to_arch_rules_registry(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/denies-edit-write-to-arch-rules-registry"
+    project_root, rules_path = _arch_rules_project(tmp_dir)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    # Write replacing the registry, and Edit flipping a blocking rule to advisory.
+    payloads = [
+        {"tool_name": "Write", "cwd": str(project_root.resolve()),
+         "tool_input": {"file_path": str(rules_path), "content": '{"schema_version": 1, "rules": []}'}},
+        {"tool_name": "Edit", "cwd": str(project_root.resolve()),
+         "tool_input": {"file_path": str(rules_path), "old_string": '"blocking"', "new_string": '"advisory"'}},
+    ]
+    for payload in payloads:
+        _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+        if not (_is_deny(out) and "arch-rules-write" in out):
+            fail(name, f"expected deny arch-rules-write for {payload['tool_name']}; got: {out!r}")
+            return
+        for forbidden in ("skill_promote", "skill_propose", "skill-candidate ledger", "reliability-gates ledger"):
+            if forbidden in out:
+                fail(name, f"arch-rules-write message must not mention {forbidden!r}; got: {out!r}")
+                return
+        if "arch-rules" not in out:
+            fail(name, f"expected the message to describe the arch-rules registry; got: {out!r}")
+            return
+    if rules_path.read_text() != '{"schema_version": 1, "rules": [{"id": "r", "mode": "blocking"}]}':
+        fail(name, "the hook must not modify the registry itself")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_arch_rules_registry_case_variant_and_ancestor_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/denies-arch-rules-registry-case-variant-and-ancestor-cwd"
+    project_root, rules_path = _arch_rules_project(tmp_dir)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    variant = project_root / ".craftflow" / "State" / "project" / "Arch-Rules.json"
+    # cwd is an ANCESTOR of the project (a workspace root), so the registry sits
+    # deeper below cwd than its fixed relative path alone accounts for.
+    ancestor = tmp_dir
+    cases = [
+        ("case-variant spelling", {"tool_name": "Write", "cwd": str(project_root.resolve()),
+                                   "tool_input": {"file_path": str(variant), "content": "{}"}}),
+        ("cwd above the project root", {"tool_name": "Write", "cwd": str(ancestor.resolve()),
+                                        "tool_input": {"file_path": str(rules_path), "content": "{}"}}),
+    ]
+    for label, payload in cases:
+        _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+        if not (_is_deny(out) and "arch-rules-write" in out):
+            fail(name, f"expected deny arch-rules-write for {label}; got: {out!r}")
+            return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_edit_write_to_other_project_state_files(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/allows-edit-write-to-non-registry-files"
+    project_root, _rules_path = _arch_rules_project(tmp_dir)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    for target in (
+        project_root / ".craftflow" / "state" / "project" / "arch-rules.notes.json",
+        project_root / "src" / "arch-rules.json",
+        project_root / "src" / "app.py",
+    ):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"tool_name": "Write", "cwd": str(project_root.resolve()),
+                   "tool_input": {"file_path": str(target), "content": "x"}}
+        _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+        if _is_deny(out):
+            fail(name, f"unexpected deny for {target.name}; got: {out!r}")
+            return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_writes_to_arch_rules_registry(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/denies-bash-writes-to-arch-rules-registry"
+    project_root, _rules_path = _arch_rules_project(tmp_dir)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    commands = {
+        "redirect": "echo '{}' > .craftflow/state/project/arch-rules.json",
+        "tee": "echo '{}' | tee .craftflow/state/project/arch-rules.json",
+        "cp": "cp /tmp/empty.json .craftflow/state/project/arch-rules.json",
+        "python": "python3 -c \"open('.craftflow/state/project/arch-rules.json','w').write('{}')\"",
+    }
+    for label, command in commands.items():
+        payload = {"tool_name": "Bash", "cwd": str(project_root.resolve()), "tool_input": {"command": command}}
+        _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+        if not (_is_deny(out) and "arch-rules.json" in out):
+            fail(name, f"expected deny naming arch-rules.json for Bash {label}; got: {out!r}")
+            return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_arch_rules_write_is_gated_by_protected_writes(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/bash-arch-rules-write-gated-by-protectedWrites-audit-allows"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text(
+        json.dumps({"protectedWrites": "audit"}), encoding="utf-8"
+    )
+    project_root, _rules_path = _arch_rules_project(tmp_dir)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo '{}' > .craftflow/state/project/arch-rules.json"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if _is_deny(out):
+        fail(name, f"protectedWrites=audit must log, not deny, a Bash write to the registry; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_write_to_unrelated_arch_rules_name_allowed(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/allows-bash-write-to-unrelated-arch-rules-name"
+    project_root, _rules_path = _arch_rules_project(tmp_dir)
+    (project_root / "docs").mkdir()
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo '{}' > docs/arch-rules.json"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if _is_deny(out):
+        fail(name, f"a write to docs/arch-rules.json is not the registry; got: {out!r}")
+        return
+    ok(name)
+
+
 def test_pretooluse_guard_allows_authorized_reliability_gates_script_bash_invocation(tmp_dir: Path) -> None:
     name = "pretooluse-guard/allows-reliability-gates-script-invocation"
     project_root = tmp_dir / "project"
@@ -29134,6 +29273,15 @@ def main() -> int:
         test_pretooluse_guard_denies_edit_write_to_reliability_gates_ledger(tmp / "pg-rg1")
         test_pretooluse_guard_denies_bash_redirect_to_reliability_gates_ledger(tmp / "pg-rg2")
         test_pretooluse_guard_allows_authorized_reliability_gates_script_bash_invocation(tmp / "pg-rg3")
+
+        print()
+        print("[ pretooluse-guard: arch-rules registry protection (blocking/advisory mode must not be agent-editable) ]")
+        test_pretooluse_guard_denies_edit_write_to_arch_rules_registry(tmp / "pg-ar1")
+        test_pretooluse_guard_denies_arch_rules_registry_case_variant_and_ancestor_cwd(tmp / "pg-ar2")
+        test_pretooluse_guard_allows_edit_write_to_other_project_state_files(tmp / "pg-ar3")
+        test_pretooluse_guard_denies_bash_writes_to_arch_rules_registry(tmp / "pg-ar4")
+        test_pretooluse_guard_bash_arch_rules_write_is_gated_by_protected_writes(tmp / "pg-ar5")
+        test_pretooluse_guard_bash_write_to_unrelated_arch_rules_name_allowed(tmp / "pg-ar6")
 
         print()
         print(

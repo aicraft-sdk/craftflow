@@ -4,8 +4,8 @@ craftflow_harness_capabilities_impact.py
 
 Before/after impact comparison for the 3 harness capabilities shipped on main
 in commit 519718a5:
-    - craftflow_arch_lint.py           (advisory import-boundary linter)
-    - craftflow_clean_state_check.py   (advisory diff-scoped debug-artifact scanner)
+    - craftflow_arch_lint.py           (import-boundary linter; advisory by default, per-rule blocking)
+    - craftflow_clean_state_check.py   (diff-scoped debug-artifact scanner; advisory, new bare suppressions can block)
     - craftflow_feature_backlog.py     (durable feature backlog + VCR metric)
 
 This script does NOT re-implement or re-test any of the three tools' own

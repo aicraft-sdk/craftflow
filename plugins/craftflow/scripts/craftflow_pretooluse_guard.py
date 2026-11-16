@@ -98,6 +98,14 @@ PROTECTED_MEMORY_FILES = ("activeContext.md", "patterns.md", "progress.md")
 
 RELIABILITY_GATES_LEDGER_REL_PATH = ".craftflow/state/project/reliability-gates.json"
 
+# The architecture-lint rule registry (craftflow_arch_lint.py). A rule's
+# `mode` ("advisory"/"blocking") lives in this file, so an agent that could
+# rewrite it could turn an enforced rule into a no-op (or delete it) and so
+# pass its own check. Protected with the reliability-gates ledger's machinery
+# (same project-relative shape, same trusted-root anchoring) -- see
+# `_is_protected_arch_rules_path()`.
+ARCH_RULES_REL_PATH = ".craftflow/state/project/arch-rules.json"
+
 # Captured from `craftflow_skill_ledger.DEFAULT_LEDGER_PATH` /
 # `craftflow_skill_promote.DEFAULT_PROPOSALS_DIR` AT IMPORT TIME, not
 # hand-duplicated as a separate string literal (REM-FIX cycle 9,
@@ -1295,15 +1303,15 @@ def _is_protected_skill_ledger_or_proposal_path(
     return False
 
 
-def _protected_reliability_gates_path(root: Path) -> Path:
+def _protected_reliability_gates_path(root: Path, rel_path: str = RELIABILITY_GATES_LEDGER_REL_PATH) -> Path:
     """Resolved path for the reliability-gates ledger -- protected the same
     unconditional way as the skill-candidate ledger (CRITICAL 1, REM-FIX
     round 3 precedent), since it is a single script-owned JSON file, not a
     markdown memory file eligible for the memory-finalize permit."""
-    return (root / RELIABILITY_GATES_LEDGER_REL_PATH).resolve()
+    return (root / rel_path).resolve()
 
 
-def _reliability_gates_path_shape_match(path: Path) -> bool:
+def _reliability_gates_path_shape_match(path: Path, rel_path: str = RELIABILITY_GATES_LEDGER_REL_PATH) -> bool:
     """Shape-only match against the reliability-gates ledger's fixed relative
     path suffix (`RELIABILITY_GATES_LEDGER_REL_PATH`), with NO project-root
     comparison at all -- there is no trustworthy root to relate `path` to.
@@ -1327,7 +1335,7 @@ def _reliability_gates_path_shape_match(path: Path) -> bool:
     since it only activates when the caller's identity itself is uncertain.
     Fixed by comparing each trailing component through `_normalized_leaf()`,
     matching the main logic's own comparison exactly."""
-    rel_parts = Path(RELIABILITY_GATES_LEDGER_REL_PATH).parts
+    rel_parts = Path(rel_path).parts
     path_parts = path.parts
     if len(path_parts) < len(rel_parts):
         return False
@@ -1362,9 +1370,16 @@ def _is_protected_reliability_gates_path(
     project_root: "Path | None" = None,
     *,
     identity_unresolved: bool = False,
+    rel_path: str = RELIABILITY_GATES_LEDGER_REL_PATH,
 ) -> bool:
     """True if `path` is exactly the reliability-gates ledger for the project
     identified by `project_root`.
+
+    `rel_path` (default: the reliability-gates ledger) names the project-
+    relative file being protected, so the arch-rules registry reuses this
+    exact hardened logic (`_is_protected_arch_rules_path()`) instead of a
+    weaker copy. Everything below that says "ledger" applies to whichever
+    `rel_path` was passed.
 
     `project_root`, when given, anchors the protected-path root to that
     SPECIFIC project identity instead of this process's own
@@ -1524,10 +1539,10 @@ def _is_protected_reliability_gates_path(
     safety trade-off, not a claim that the fallback has no downside.
     """
     if identity_unresolved:
-        return _reliability_gates_path_shape_match(path)
+        return _reliability_gates_path_shape_match(path, rel_path)
     try:
         root = (project_root or project_dir()).resolve()
-        protected = _protected_reliability_gates_path(root)
+        protected = _protected_reliability_gates_path(root, rel_path)
     except Exception:
         return False
     if path == protected:
@@ -1538,7 +1553,7 @@ def _is_protected_reliability_gates_path(
     except (OSError, ValueError):
         pass
 
-    rel_parts = Path(RELIABILITY_GATES_LEDGER_REL_PATH).parts
+    rel_parts = Path(rel_path).parts
     path_parts = path.parts
     root_parts = root.parts
 
@@ -1564,7 +1579,7 @@ def _is_protected_reliability_gates_path(
         return True
 
     if not root.exists():
-        return _reliability_gates_path_shape_match(path)
+        return _reliability_gates_path_shape_match(path, rel_path)
 
     root_prefix_path = Path(*root_prefix_parts)
     try:
@@ -1588,6 +1603,24 @@ def _is_protected_reliability_gates_path(
             _normalized_leaf(a) == _normalized_leaf(b)
             for a, b in zip(root_prefix_parts, root_parts)
         )
+
+
+def _is_protected_arch_rules_path(
+    path: Path,
+    project_root: "Path | None" = None,
+    *,
+    identity_unresolved: bool = False,
+) -> bool:
+    """True if `path` is the arch-lint rule registry
+    (`ARCH_RULES_REL_PATH`) of the project identified by `project_root`.
+    Same contract, anchoring and fail-closed fallbacks as
+    `_is_protected_reliability_gates_path()`."""
+    return _is_protected_reliability_gates_path(
+        path,
+        project_root,
+        identity_unresolved=identity_unresolved,
+        rel_path=ARCH_RULES_REL_PATH,
+    )
 
 
 def _denial_escalation_suffix(count: int) -> str:
@@ -1672,6 +1705,24 @@ def _protected_bash_write_paths(project_root: "Path | None" = None) -> set:
     the workflow-JSON glob to that SPECIFIC project identity instead of this
     process's environment-derived one (see `_protected_memory_paths()`)."""
     paths: set = set(_protected_memory_paths(project_root))
+    # Arch-lint rule registry (see ARCH_RULES_REL_PATH): a Bash redirect/tee,
+    # python write or cp/mv onto it is gated by `protectedWrites` like the
+    # memory files and workflow JSON above. Exact resolved-path match only;
+    # the Edit/Write handler uses the fuller ancestor/case-fold predicate.
+    try:
+        paths.add(_protected_reliability_gates_path(
+            (project_root or project_dir()).resolve(), ARCH_RULES_REL_PATH
+        ))
+    except Exception as exc:
+        log_event(
+            "plugin_pretooluse_guard",
+            {
+                "event": "pretool_guard_parse_error",
+                "command_name": "protected_arch_rules_path_resolve",
+                "error": repr(exc),
+                "reason": "skipped_arch_rules_path_only",
+            },
+        )
     # REM-FIX (silent-failure-hunter, live-reproduced CRITICAL): this used to
     # wrap the ENTIRE `for candidate in ... glob("*.json")` loop in ONE try,
     # so a single unresolvable candidate (e.g. a self-referential symlink at
@@ -2204,6 +2255,12 @@ _UNCONDITIONAL_VIOLATION_EXPLANATIONS = {
         "reliability-gates script tooling, or do it manually outside the "
         "agent session."
     ),
+    "arch-rules-write": (
+        "The architecture-lint rule registry (arch-rules.json) holds each "
+        "rule's blocking/advisory mode; weakening, adding or deleting rules "
+        "through the agent is not allowed. Ask the user to change it, or do "
+        "it manually outside the agent session."
+    ),
 }
 
 
@@ -2342,6 +2399,14 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     ):
         violations.append("reliability-gates-write")
 
+    # Arch-lint rule registry: a rule's blocking/advisory `mode` lives here,
+    # so a raw Edit/Write could weaken or delete the very check that gates
+    # the agent. Script/human-owned, so protected unconditionally.
+    if _is_protected_arch_rules_path(
+        path, project_root=trusted_root, identity_unresolved=trusted_root_unresolved
+    ):
+        violations.append("arch-rules-write")
+
     # Worktree confinement (Task 4.2 step 3): an independent violation type
     # that applies to every Edit/Write target, denied regardless of
     # protected-memory-path status. Any internal parsing exception here
@@ -2428,7 +2493,13 @@ def _handle_edit_write(data: dict, mode: dict, tool_input: dict) -> int:
     # permit or gated by memoryWrites mode.
     unconditional_violations = [
         v for v in violations
-        if v in ("worktree-confinement", "skill-promotion-path", "skill-ledger-write", "reliability-gates-write")
+        if v in (
+            "worktree-confinement",
+            "skill-promotion-path",
+            "skill-ledger-write",
+            "reliability-gates-write",
+            "arch-rules-write",
+        )
     ]
     if unconditional_violations:
         # Item B fix: record this denial against the (session, target)
