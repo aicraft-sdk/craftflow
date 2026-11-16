@@ -43,7 +43,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import stop_gate_roundtrip as base  # noqa: E402  (Slice-1 driver: process, fixture and observation helpers)
+import stop_gate_roundtrip as base
 
 WF = "wf-live-act-0001"
 HOOK_P90_GATE_MS = 1500
@@ -74,7 +74,7 @@ class ActStub:
         stub = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_POST(self):  # noqa: N802 - http.server API
+            def do_POST(self):
                 length = int(self.headers.get("Content-Length") or 0)
                 if length:
                     self.rfile.read(length)

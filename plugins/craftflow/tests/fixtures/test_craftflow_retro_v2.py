@@ -5,7 +5,6 @@ Run: python3 tests/fixtures/test_craftflow_retro_v2.py
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re

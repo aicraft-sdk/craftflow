@@ -22,8 +22,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import craftflow_stop_gate as gate  # noqa: E402
-import craftflow_stop_gate_core as core  # noqa: E402
+import craftflow_stop_gate as gate
+import craftflow_stop_gate_core as core
 
 MAX_EVENTS_BYTES = 64 * 1024 * 1024
 MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024

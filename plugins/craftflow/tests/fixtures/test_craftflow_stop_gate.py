@@ -1213,7 +1213,7 @@ class Stub:
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_POST(self):  # noqa: N802
+            def do_POST(self):
                 raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 try:
                     outer.bodies.append(json.loads(raw.decode("utf-8")))

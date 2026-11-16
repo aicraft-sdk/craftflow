@@ -17,8 +17,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import test_craftflow_workflow_handoff as base  # noqa: E402
-from test_craftflow_workflow_handoff import SCRIPT, SESSION, NOT_FINAL, Proj, line_value, plan_args  # noqa: E402
+import test_craftflow_workflow_handoff as base
+from test_craftflow_workflow_handoff import SCRIPT, SESSION, NOT_FINAL, Proj, line_value, plan_args
 
 hand, wid = base.hand, base.wid
 _passes = 0

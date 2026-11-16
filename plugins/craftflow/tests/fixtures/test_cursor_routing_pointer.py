@@ -8,7 +8,6 @@ announce line) and `Read()`s the shared doc, the five route files and the Cursor
 """
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 

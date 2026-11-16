@@ -1,0 +1,51 @@
+# Ruff configuration for craftflow. DEVELOPER TOOL ONLY: nothing shipped in plugins/ imports or requires ruff, and
+# there is deliberately no pyproject.toml (the bundled pre-commit helper treats it as a signal to run pytest, which
+# this repo does not use).
+#
+# Location: the repo root, because every .py file lives under plugins/craftflow/ (scripts/ and tests/) and the
+# marketplace (.claude-plugin/marketplace.json) publishes from the root. Ruff discovers this file for every path below
+# it, so `ruff check` works from the root or from any subdirectory. It is not part of the shipped plugin payload.
+#
+# Install and run:  pip install ruff   (version used to introduce this file: 0.16.9)
+#                   ruff check
+# Never run `ruff format` and never use `--fix` here: this repo has no formatter and fixes are made by hand.
+#
+# Scope: only rules the existing `# noqa` comments already name, and which are clean today (or have a documented
+# per-file exception below). Nothing is excluded from checking.
+
+target-version = "py39"
+
+[lint]
+select = [
+    "E402",   # module-level import not at top of file
+    "E731",   # lambda assigned to a name (use def)
+    "F401",   # unused import
+    "F811",   # redefinition of an unused name
+    "F821",   # undefined name
+    "N802",   # function name should be lowercase
+    "S602",   # subprocess call with shell=True
+    "RUF100", # unused or unknown-to-ruff `# noqa` directive: stale suppressions fail the check
+]
+
+# Codes that existing `# noqa` comments use but that are NOT enforced here. They are listed so RUF100 does not report
+# them as "non-enabled" (and so nobody auto-removes them). Enabling them today reports far more violations than the
+# comments cover: BLE001 ~157 unsuppressed, D401 ~269, PLC0415 ~180 (counts at introduction); making them clean would
+# mean mass edits to application code. WPS433 is a wemake-python-styleguide code and is not a Ruff rule at all.
+external = ["BLE001", "D401", "PLC0415", "WPS433"]
+
+# Pre-existing violations that carry no noqa, kept as an explicit ratchet-by-file list rather than mass-adding noqa.
+# Fix a file's violations by hand, then delete its entry here; never add a new entry (fix the code instead, or report
+# the false positive to the user).
+[lint.per-file-ignores]
+# deliberate: runs a user-configured shell command string (config["command"]); shell=True is the feature
+"plugins/craftflow/scripts/craftflow_stop_verify.py" = ["S602"]
+# test scripts that import mid-file after sys.path setup or after earlier test sections (files whose E402 sites
+# already carry line-level `# noqa: E402` cannot use this list: RUF100 would flag those noqa as non-enabled)
+"plugins/craftflow/tests/fixtures/test_craftflow_jev_report.py" = ["E402"]
+"plugins/craftflow/tests/fixtures/test_memory_merge.py" = ["E402"]
+"plugins/craftflow/tests/fixtures/test_memory_repair.py" = ["E402"]
+# test scripts with lambda stubs assigned to names (13 sites in 4 files)
+"plugins/craftflow/tests/fixtures/test_route_replay_handoff.py" = ["E731"]
+"plugins/craftflow/tests/fixtures/test_rule_inventory.py" = ["E731"]
+"plugins/craftflow/tests/fixtures/test_rule_inventory_doubt.py" = ["E731"]
+"plugins/craftflow/tests/fixtures/test_rule_inventory_hardening.py" = ["E731"]

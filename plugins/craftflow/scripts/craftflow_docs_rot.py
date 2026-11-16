@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Optional, Sequence, Set
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import craftflow_docs_rot_checks as checks  # noqa: E402
+import craftflow_docs_rot_checks as checks
 
 ROOT = Path(__file__).resolve().parents[5]
 PLUGIN_REL = "tools/craftflow-plugin/plugins/craftflow"

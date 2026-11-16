@@ -25,8 +25,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import craftflow_route_replay_handoff as hand  # noqa: E402
-import craftflow_routing_law as law  # noqa: E402
+import craftflow_route_replay_handoff as hand
+import craftflow_routing_law as law
 
 ROUTE = "skills/_shared/route-codebase-health.md"
 GRAPH = "skills/craftflow-router/references/codebase-health-workflow.md"

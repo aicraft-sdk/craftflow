@@ -5,7 +5,6 @@ Run from anywhere:
     python3 tests/fixtures/test_craftflow_docs_rot.py
 """
 import json
-import os
 import shutil
 import subprocess
 import sys

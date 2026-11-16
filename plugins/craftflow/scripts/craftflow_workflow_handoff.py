@@ -37,10 +37,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import craftflow_workflow_handoff_checks as checks  # noqa: E402
-import craftflow_workflow_handoff_claim as claim  # noqa: E402
-import craftflow_workflow_id as wid  # noqa: E402
-from craftflow_workflow_handoff_checks import (accepted_event, append_event, find_child, is_finalized, logged_child,  # noqa: E402,F401
+import craftflow_workflow_handoff_checks as checks
+import craftflow_workflow_handoff_claim as claim
+import craftflow_workflow_id as wid
+from craftflow_workflow_handoff_checks import (accepted_event, append_event, find_child, is_finalized, logged_child,  # noqa: F401 - find_child is re-exported for importers
                                                read_events, read_json, remove_child)
 
 TARGETS = ("PLAN", "BUILD", "DEBUG", "QA")

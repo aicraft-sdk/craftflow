@@ -24,7 +24,7 @@ from typing import Dict, Iterable, List, Optional
 import craftflow_router_corpus as cor
 import craftflow_router_readset_core as core
 import craftflow_router_readset_guard as grd
-from craftflow_router_readset_guard import ALL_PHASES, ProjectionError  # noqa: F401 - re-exported for callers and tests
+from craftflow_router_readset_guard import ALL_PHASES, ProjectionError
 
 SKILL = "skills/craftflow-router/SKILL.md"
 PROTOCOL = "skills/_shared/router-protocol.md"

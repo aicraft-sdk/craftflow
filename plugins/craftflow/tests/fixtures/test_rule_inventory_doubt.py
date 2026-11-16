@@ -9,7 +9,6 @@ real router corpus and run the real CLI against the committed baseline.
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import subprocess
 import sys
