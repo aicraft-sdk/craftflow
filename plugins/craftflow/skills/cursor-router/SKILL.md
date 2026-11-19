@@ -86,6 +86,7 @@ All agent .md files live under:
 | planner | `tools/craftflow-plugin/plugins/craftflow/agents/planner.md` |
 | plan-gap-reviewer | `tools/craftflow-plugin/plugins/craftflow/agents/plan-gap-reviewer.md` |
 | skill-author | `tools/craftflow-plugin/plugins/craftflow/agents/skill-author.md` |
+| architecture-scanner | `tools/craftflow-plugin/plugins/craftflow/agents/architecture-scanner.md` |
 
 ## 1. Intent Routing
 
@@ -101,13 +102,19 @@ message** (mirrors § 2 Memory Load's "Run this before routing" note): read
   retry/skip/stop answer — the same kind of pending-question state, used analogously),
   treat the incoming message as the answer to that question instead and process it per
   § 6's own options ((a) retry, (b) skip, (c) stop), re-asking verbatim on a
-  non-matching reply. Skip Intent Routing entirely for this turn.
+  non-matching reply. Skip Intent Routing entirely for this turn. A `pending_gate` value that does not start with `phase_` is
+  a route gate set by `references/routes.md`; answer it per that file's `### Cursor route gate answers` row, not § 6's options.
+- If `pending_handoff` is non-null (set by `references/routes.md` while a BUILD/DEBUG handoff question
+  waits), treat the incoming message as the answer to that question and process it per
+  `references/routes.md` `### Cursor handoff answers`, re-asking verbatim on a non-matching reply.
+  Skip Intent Routing entirely for this turn.
 - This precedence rule applies uniformly whether the pending state was set moments ago
   in this same live session or is being read back after a session restart — there is no
   separate "same session" vs "resumed session" code path. A router turn that receives a
-  reply while `pending_skill_approval` (or `pending_gate`) is still non-null must never
-  fall through to Intent Routing below and start a new workflow from that reply's text.
-- Only when both `pending_skill_approval` and `pending_gate` are null does Intent
+  reply while `pending_skill_approval` (or `pending_gate`, or `pending_handoff`) is still non-null must never
+  fall through to Intent Routing below and start a new workflow from that reply's text. A fresh unrelated request while
+  `candidate_choice` is pending is decided by that gate's row (a decline), not by Intent Routing.
+- Only when `pending_skill_approval`, `pending_gate` and `pending_handoff` are all null does Intent
   Routing below apply to the incoming message.
 
 ### Router-exempt inspection skills
@@ -122,7 +129,7 @@ router exemption it has in Claude Code.
 | failure-digest | *show* recurring failures across Craftflow workflows ("failure digest", "craftflow failure report", "what keeps failing", "recurring failures", "top blockers") | `~/.cursor/skills/failure-digest/SKILL.md` | a request to fix a recurring failure, add a guard, or otherwise act on a finding |
 
 Precedence: this block runs only AFTER the pending-answer check above. While
-`pending_skill_approval` or `pending_gate` is non-null, a request for any skill in the table is
+`pending_skill_approval`, `pending_gate` or `pending_handoff` is non-null, a request for any skill in the table is
 handled by that check like any other reply (the pending question is re-asked); tell the user to
 answer it first, then ask again. For status, the `cfstatus` terminal alias (status skill, Terminal
 Usage) works at any time. The exemption never clears or consumes pending state.
@@ -140,17 +147,17 @@ to re-run `install-cursor.sh` from a local checkout and stop. A message that mat
 a row's "NOT exempt" column, or matches no row clearly, is a normal development request — it is
 NOT exempt and falls through to the routing table below.
 
-Route using the first matching signal:
+Route by the shared doc's `## Intent Routing` table and rules (already read above); Cursor-only additions follow.
 
-| Priority | Signal | Keywords | Workflow | Chain |
-|----------|--------|----------|----------|-------|
-| 1 | ERROR | error, bug, fix, broken, crash, fail, debug, troubleshoot, issue | DEBUG | bug-investigator → code-reviewer → integration-verifier |
-| 2 | PLAN | plan, design, architect, roadmap, strategy, spec, brainstorm | PLAN | brainstorming (inline) → planner (dispatched) → plan-gap-reviewer (dispatched, 1-2 passes) |
-| 3 | REVIEW | review, audit, analyze, assess, "is this good" | REVIEW | code-reviewer |
-| 4 | DEFAULT | Everything else | BUILD | component-builder → code-reviewer → silent-failure-hunter → integration-verifier |
+- `Read()` `tools/craftflow-plugin/plugins/craftflow/skills/_shared/router-protocol.md` § "Intent Routing" if not already read this session.
+- `Read()` `tools/craftflow-plugin/plugins/craftflow/skills/_shared/route-orient.md` when ORIENT is routed.
+- `Read()` `tools/craftflow-plugin/plugins/craftflow/skills/_shared/route-qa.md` when QA is routed.
+- `Read()` `tools/craftflow-plugin/plugins/craftflow/skills/_shared/route-triage.md` when TRIAGE is routed.
+- `Read()` `tools/craftflow-plugin/plugins/craftflow/skills/_shared/route-codebase-health.md` when CODEBASE-HEALTH is routed.
+- `Read()` `tools/craftflow-plugin/plugins/craftflow/skills/_shared/route-advisory.md` at a TRIAGE, CODEBASE-HEALTH or QA pause or terminal state.
+- `Read()` `tools/craftflow-plugin/plugins/craftflow/skills/cursor-router/references/routes.md` when ORIENT, QA, TRIAGE or CODEBASE-HEALTH is routed (the Cursor binding).
 
 Rules:
-- ERROR always wins over BUILD.
 - REVIEW is advisory only. Never let REVIEW create implementation tasks.
 - BUILD uses a risk scan: if no risk keywords match, fast path (builder → verifier only).
   Risk keywords (case-insensitive, matches request text):
@@ -953,6 +960,7 @@ unchanged, since these are operationally load-bearing pass/fail checks, not docu
 | planner | `STATUS=PLAN_CREATED` or `STATUS=DECISION_RFC_CREATED`, `GATE_PASSED=true`, `OPEN_DECISIONS=[]` |
 | plan-gap-reviewer | `BLOCKING_FINDINGS_COUNT=0`, `REPLAN_NEEDED=false` |
 | skill-author | `STATUS=COMPLETE` (non-empty `PROPOSAL_PATH` + `CANDIDATE_ID`) or `STATUS=SKIPPED` (non-empty `SKIP_REASON`, a passing state) — see § 5a for the full gate + approval flow |
+| architecture-scanner | `STATUS=CANDIDATES_FOUND` (`CANDIDATE_COUNT` equals `len(CANDIDATES)` >= 1, the `REPORT_PATH` file exists) or `STATUS=NO_CANDIDATES` (`CANDIDATE_COUNT=0`); `BLOCKING=false` |
 
 ### Override rules
 
@@ -975,6 +983,9 @@ label, letter, or unambiguous restatement — e.g. "retry", "(a)", "try it again
 retry; "skip it" matches skip; "abort"/"halt" match stop), re-ask the same Step 3
 question verbatim. Never guess, never silently fall through to a default — the same rule
 § 5a Step 4.4 uses for `pending_skill_approval` replies.
+These three options answer only `phase_{phase}_failed` gates; any other `pending_gate` value is answered per
+`references/routes.md` `### Cursor route gate answers`. Route chains (CODEBASE-HEALTH, TRIAGE, QA) never use this section:
+a failed route phase sets `{agent}_failed`, and skip is never an answer for a route phase.
 
 ### Resolution (Step 5 — mirrors § 5a Step 4.5's `pending_skill_approval` resolution)
 

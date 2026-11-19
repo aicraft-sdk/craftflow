@@ -1,0 +1,38 @@
+#!/bin/sh
+# craftflow pre-commit hook for THIS repository (not the consumer-project helper in plugins/craftflow/hooks/pre-commit).
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+#
+# Runs the fast subset of the local gate (about 2 seconds): ruff (if installed), suppression ratchet, file-size ratchet,
+# clean-state check in block mode, baseline integrity (skips loudly when no base ref exists, e.g. a shallow clone),
+# py-compile and the guardrail-refs check. The test suites and the baseline comparison against the real PR base run in CI:
+#   python3 plugins/craftflow/scripts/craftflow_local_gate.py           (the full gate, about 3 minutes)
+# POSIX sh only.
+
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "pre-commit: python3 is required to run the craftflow gate; install Python 3.9 or newer and retry." >&2
+    exit 1
+fi
+
+python3 -B plugins/craftflow/scripts/craftflow_local_gate.py \
+    --only ruff --only suppression-ratchet --only file-size-ratchet \
+    --only clean-state --only baseline-integrity --only py-compile --only guardrail-refs
+status=$?
+
+if [ "$status" -ne 0 ]; then
+    cat >&2 <<'MSG'
+
+pre-commit: the craftflow gate failed (see "GATE FAILED" above), so no commit was made.
+How to fix:
+  1. Read the failing step's output above; each message says what to change.
+  2. Fix the code, not the check: remove the unused import, shrink the file, give a suppression a rule code and a reason.
+  3. Never raise a ratchet baseline, add a ruff per-file-ignore, or weaken config/hook-mode.json to make a check pass.
+     If you believe a check is wrong or an increase is legitimate, ask a maintainer.
+  4. Re-run the same checks with:  sh .githooks/pre-commit
+     then `git commit` again.
+MSG
+fi
+exit "$status"

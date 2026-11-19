@@ -1,0 +1,258 @@
+"""ADR-0074 router growth envelope: pure checks shared by test_router_growth_envelope.py and test_router_budget.py (plan H2 task 17).
+
+The envelope file (router-growth-envelope.json) is David's signed allowance per gated key, plus signed absolute ceilings for the new routes.
+Nothing here reads git or the tree: callers inject measured values, caps and an ancestor test, so every rule has a literal-fixture control.
+"""
+from __future__ import annotations
+
+import copy
+import json
+import re
+from pathlib import Path
+from typing import Callable, Dict, List, Optional
+
+ADR = "ADR-0074"
+FIELDS = {"adr", "decided_by", "decided_at_sha", "base", "allowances", "new_route_ceilings", "consumed"}
+ENTRY = {"phase", "key", "from", "to", "at_sha"}
+PENDING = "PENDING-SIGNATURE"
+SIGNED_FIELDS = ("base", "allowances", "new_route_ceilings")
+HEX_SHA = re.compile(r"^[0-9a-f]{7,40}\Z")  # \Z, not $: a trailing newline must not pass
+SIGNATURE_LINE = re.compile(r"^David Gracia \(\d{4}-\d{2}-\d{2}\)\s*$", re.M)
+REL_ENVELOPE = "tools/craftflow-plugin/plugins/craftflow/tests/fixtures/router-growth-envelope.json"
+REL_ADR = "docs/ai/decisions/0074-craftflow-router-growth-envelope.md"
+NEW_ROUTES = ("ORIENT", "TRIAGE", "CODEBASE-HEALTH", "QA")
+_H_PHASE = re.compile(r"^H\d+$")
+
+
+def load(path: Path) -> dict:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _int(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _h_phase(entry: dict) -> bool:
+    return bool(_H_PHASE.match(str(entry.get("phase", ""))))
+
+
+def is_envelope_entry(entry: dict) -> bool:
+    """A ceiling_raises entry the envelope path may judge: tagged with this ADR and an H<n> phase."""
+    return entry.get("envelope") == ADR and _h_phase(entry)
+
+
+def shape_problems(e: dict) -> List[str]:
+    if not isinstance(e, dict) or set(e) != FIELDS:
+        return [f"envelope keys differ: {sorted(set(e) ^ FIELDS) if isinstance(e, dict) else 'not an object'}"]
+    out = []
+    if e["adr"] != ADR:
+        out.append(f"adr must be {ADR}")
+    if not (isinstance(e["base"], dict) and set(e["base"]) == set(e["allowances"]) and all(_int(v) for v in e["base"].values())
+            and all(_int(v) and v >= 0 for v in e["allowances"].values())):
+        out.append("base and allowances must hold the same keys with integer values")
+    if not (isinstance(e["new_route_ceilings"], dict) and set(e["new_route_ceilings"]) == set(NEW_ROUTES)
+            and all(_int(v) for v in e["new_route_ceilings"].values())):
+        out.append(f"new_route_ceilings must hold exactly {list(NEW_ROUTES)} with integer values")
+    if not (isinstance(e["consumed"], list) and all(isinstance(c, dict) and set(c) == ENTRY for c in e["consumed"])):
+        out.append(f"every consumed entry must hold exactly {sorted(ENTRY)}")
+    return out
+
+
+def identity_problems(e: dict, is_ancestor: Callable[[str], bool]) -> List[str]:
+    out = [] if e["decided_by"] == "David" else [f"decided_by must be David, not {e['decided_by']!r}"]
+    if not is_ancestor(e["decided_at_sha"]):
+        out.append(f"decided_at_sha {e['decided_at_sha']!r} is not an ancestor of HEAD")
+    return out
+
+
+def bound_problems(e: dict, ceilings: Dict[str, int], measured: Dict[str, int], caps: Dict[str, int]) -> List[str]:
+    """Per key: measured <= ceiling <= base + allowance <= effective cap."""
+    out = []
+    for k, base in e["base"].items():
+        high = base + e["allowances"][k]
+        if measured[k] > ceilings[k]:
+            out.append(f"{k}: measured {measured[k]} > ceiling {ceilings[k]}")
+        elif ceilings[k] > high:
+            out.append(f"{k}: ceiling {ceilings[k]} > base {base} + allowance {e['allowances'][k]}")
+        if high > caps[k]:
+            out.append(f"{k}: base + allowance {high} > effective cap {caps[k]}")
+    return out
+
+
+def route_problems(e: dict, totals: Dict[str, int]) -> List[str]:
+    return [f"{r}: start total {totals[r]} > signed ceiling {e['new_route_ceilings'][r]}" for r in NEW_ROUTES
+            if totals[r] > e["new_route_ceilings"][r]]
+
+
+def _adr_front_status(text: str) -> Optional[str]:
+    """`status:` of the ADR's leading front matter with any inline `#` comment stripped; None when absent."""
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return None
+        if line.startswith("status:"):
+            return line.split(":", 1)[1].split("#", 1)[0].strip().strip("\"'")
+    return None
+
+
+def _adr_signed(text: str) -> bool:
+    """A `David Gracia (YYYY-MM-DD)` line inside the ADR's `## Signature` section."""
+    m = re.search(r"^## Signature\s*$(.*?)(?=^## |\Z)", text, re.M | re.S)
+    return bool(m and SIGNATURE_LINE.search(m.group(1)))
+
+
+def _accepted_and_signed(text: Optional[str]) -> bool:
+    return text is not None and _adr_front_status(text) == "accepted" and _adr_signed(text)
+
+
+def signed_problems(e: dict, adr_text: Optional[str], touches_adr: Optional[Callable[[str], bool]],
+                    envelope_at: Optional[Callable[[str], Optional[dict]]],
+                    adr_at: Optional[Callable[[str], Optional[str]]] = None,
+                    prior_adr_commits: Optional[Callable[[str], Optional[List[str]]]] = None) -> List[str]:
+    """Once decided_at_sha is no longer PENDING-SIGNATURE the signature must be real and content-bound (H-1, H-A): the ADR blob AT
+    decided_at_sha is `status: accepted` with a David Gracia signature line, that commit introduced the signature (the ADR at its first
+    parent, `<sha>^1`, is not accepted+signed), the working-tree ADR is still accepted+signed, and base / allowances /
+    new_route_ceilings equal the envelope file as committed at that sha (consumed[] and ceiling raises are judged elsewhere).
+    `adr_at(ref)` returns the committed ADR text at `ref` (a sha or `<sha>^1`), None when unreadable.
+    Origin-independent re-signature guard: `prior_adr_commits(sha)` lists every commit that touched the ADR among the ancestors of
+    `<sha>^1` (None when git cannot answer); none of them may hold an accepted+signed ADR, so a sign -> unsign -> re-sign sequence
+    cannot re-point decided_at_sha at a fresh signature even while origin/main is stale or unreadable."""
+    sha = e["decided_at_sha"]
+    if sha == PENDING:
+        return []
+    if adr_text is None or touches_adr is None or envelope_at is None or adr_at is None or prior_adr_commits is None:
+        return [f"signed envelope cannot be verified: the {ADR} text, the commit lookups, the ADR history lookup and the envelope-at-sha lookup are all required"]
+    if not HEX_SHA.match(sha):
+        return [f"decided_at_sha {sha!r} is not a hex commit id"]
+    out = []
+    if _adr_front_status(adr_text) != "accepted":
+        out.append(f"{ADR} front matter must read status: accepted (got {_adr_front_status(adr_text)!r})")
+    if not _adr_signed(adr_text):
+        out.append(f"{ADR} has no 'David Gracia (YYYY-MM-DD)' signature line under ## Signature")
+    if not touches_adr(sha):
+        out.append(f"decided_at_sha {sha} does not touch {ADR} (it must be the signing commit)")
+    if not _accepted_and_signed(adr_at(sha)):
+        out.append(f"{ADR} at decided_at_sha {sha} is not status: accepted with a David Gracia signature line (or is unreadable there)")
+    elif _accepted_and_signed(adr_at(f"{sha}^1")):
+        out.append(f"decided_at_sha {sha} is not the commit that introduced the {ADR} signature (its parent already holds it)")
+    earlier = prior_adr_commits(sha)
+    if earlier is None:
+        out.append(f"the {ADR} history before decided_at_sha {sha} cannot be read, so a re-signature cannot be ruled out")
+    else:
+        already = next((c for c in earlier if _accepted_and_signed(adr_at(c))), None)  # an unreadable blob (a deletion) is not a signature
+        if already is not None:
+            out.append(f"{ADR} was already signed at {already}; a re-signature cannot re-point decided_at_sha")
+    signed = envelope_at(sha)
+    for field in SIGNED_FIELDS:
+        if not isinstance(signed, dict) or field not in signed:
+            out.append(f"{field}: the envelope file is unreadable at decided_at_sha {sha}")
+        elif signed[field] != e[field]:
+            out.append(f"{field} differs from the envelope signed at {sha} (the signed values are frozen)")
+    return out
+
+
+def origin_envelope(available: bool, show: Callable[[str, str], "tuple[str, Optional[bytes]]"], ci: bool = False) -> "tuple[Optional[dict], Optional[str]]":
+    """(origin's envelope, note). `show(ref, rel)` returns ('ok', bytes) | ('absent', None) | ('error', None). An unreadable origin or a
+    git failure gives (None, 'SKIP: <reason>') so the consumed[] append-only check is visibly skipped rather than silently passing, or
+    'FAIL: <reason>' when `ci` is set (CI must always be able to read origin); only a path truly absent at a readable origin is a
+    first introduction (None, None) (M-1, M-A)."""
+    level = "FAIL" if ci else "SKIP"
+    if not available:
+        return None, f"{level}: origin/main is unreadable, so consumed[] append-only was not checked against it"
+    state, raw = show("origin/main", REL_ENVELOPE)
+    if state == "absent":
+        return None, None
+    if state != "ok" or raw is None:
+        return None, f"{level}: git could not read {REL_ENVELOPE} at origin/main, so consumed[] append-only was not checked against it"
+    return json.loads(raw.decode("utf-8")), None
+
+
+def consumed_problems(e: dict, origin: Optional[dict]) -> List[str]:
+    old = (origin or {}).get("consumed", [])
+    return [] if e["consumed"][:len(old)] == old else ["consumed[] is not an append-only extension of origin/main's"]
+
+
+def frozen_problems(e: dict, origin: Optional[dict]) -> List[str]:
+    """Once origin/main holds a signed (non-PENDING) envelope its signature fields are frozen: re-proposing and re-accepting the ADR at a
+    fresh commit must not be a way to change decided_at_sha, base, allowances or new_route_ceilings (consumed[] is judged elsewhere)."""
+    if not isinstance(origin, dict) or origin.get("decided_at_sha", PENDING) == PENDING:
+        return []
+    return [f"{field} differs from origin/main's signed envelope (the signed values and decided_at_sha are frozen once origin/main is signed)"
+            for field in ("decided_at_sha",) + SIGNED_FIELDS if e[field] != origin.get(field)]
+
+
+def tag_problems(added: List[dict]) -> List[str]:
+    """An envelope tag needs an H<n> phase and an H<n> phase needs the tag (a raise outside the cut plan must say which rule judges it)."""
+    return [f"ceiling_raises {x.get('key')}: phase {x.get('phase')!r} and envelope {x.get('envelope')!r} do not form an {ADR} entry"
+            for x in added if (x.get("envelope") == ADR) != _h_phase(x)]
+
+
+def problems(e: dict, origin: Optional[dict], ceilings: Dict[str, int], measured: Dict[str, int], caps: Dict[str, int],
+             totals: Dict[str, int], added_raises: List[dict], is_ancestor: Callable[[str], bool],
+             adr_text: Optional[str] = None, touches_adr: Optional[Callable[[str], bool]] = None,
+             envelope_at: Optional[Callable[[str], Optional[dict]]] = None,
+             adr_at: Optional[Callable[[str], Optional[str]]] = None,
+             prior_adr_commits: Optional[Callable[[str], Optional[List[str]]]] = None) -> List[str]:
+    bad = shape_problems(e)
+    if bad:
+        return bad
+    return (identity_problems(e, is_ancestor) + signed_problems(e, adr_text, touches_adr, envelope_at, adr_at, prior_adr_commits)
+            + bound_problems(e, ceilings, measured, caps) + route_problems(e, totals)
+            + consumed_problems(e, origin) + frozen_problems(e, origin) + tag_problems(added_raises))
+
+
+def checker(e: dict, measured: Dict[str, int],
+            is_ancestor: Optional[Callable[[str], bool]] = None) -> Callable[[str, List[dict], int, int], Optional[List[str]]]:
+    """For check_raise_bounds: None = not an envelope raise (the projection rule applies); a list = the envelope verdict for that key.
+    ADR-0074 Rule 3: each added entry's at_sha must be a commit that is an ancestor of HEAD (`is_ancestor`, which must reject a non-hex
+    value) and its matching consumed[] row must exist."""
+    def run(key: str, added: List[dict], old: int, new: int) -> Optional[List[str]]:
+        if not any(x.get("envelope") == ADR or _h_phase(x) for x in added):
+            return None
+        bad = tag_problems(added)
+        if bad:
+            return bad
+        if not all(is_envelope_entry(x) for x in added):
+            return [f"{key}: envelope raises mixed with non-envelope raises"]
+        out = []
+        if added[0]["from"] != old or added[-1]["to"] != new or any(a["to"] != b["from"] for a, b in zip(added, added[1:])):
+            out.append(f"{key}: envelope entries do not chain origin's {old} to {new}")
+        if new > e["base"][key] + e["allowances"][key]:
+            out.append(f"{key}: ceiling {new} > base {e['base'][key]} + allowance {e['allowances'][key]}")
+        if new < measured[key]:
+            out.append(f"{key}: ceiling {new} < measured {measured[key]}")
+        if not all(isinstance(x.get("at_sha"), str) and x["at_sha"] for x in added):
+            out.append(f"{key}: envelope entry without at_sha")
+        elif is_ancestor is not None and not all(is_ancestor(x["at_sha"]) for x in added):
+            out.append(f"{key}: an envelope entry's at_sha is not a commit that is an ancestor of HEAD")
+        rows = [{f: c.get(f) for f in ENTRY} for c in e["consumed"] if isinstance(c, dict)]
+        if not all({f: x.get(f) for f in ENTRY} in rows for x in added):
+            out.append(f"{key}: an envelope entry has no matching consumed[] row (phase, key, from, to, at_sha)")
+        return out
+    return run
+
+
+def slack(budget: dict, e: dict) -> Dict[str, int]:
+    """ceiling - envelope base for keys that carry an accepted envelope raise (the projection check may add it to its +1000)."""
+    def get(d: dict, key: str) -> int:
+        for part in key.split("."):
+            d = d[part]
+        return d
+    keyed = {x["key"] for x in budget["ceiling_raises"] if is_envelope_entry(x)}
+    return {k: get(budget["ceilings"], k) - e["base"][k] for k in e["base"] if k in keyed}
+
+
+def envelope_only_change(origin: dict, b: dict) -> bool:
+    """True when b differs from origin and every difference is an envelope-only field: ceilings, measured_at_sha, envelope-tagged
+    ceiling_raises entries and enforced_caps_decision.amendments (their append-only prefix is checked elsewhere)."""
+    def mask(x: dict) -> dict:
+        x = copy.deepcopy(x)
+        x.pop("measured_at_sha", None)
+        x.pop("ceilings", None)
+        x["ceiling_raises"] = [r for r in x.get("ceiling_raises", []) if not is_envelope_entry(r)]
+        if isinstance(x.get("enforced_caps_decision"), dict):
+            x["enforced_caps_decision"].pop("amendments", None)
+        return x
+    return origin != b and mask(origin) == mask(b)

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any, Dict
 from unittest.mock import patch
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -27,7 +28,7 @@ from craftflow_jev_report import (
     aggregate,
     build_arg_parser,
     verdict,
-)  # noqa: E402
+)
 
 _passes = 0
 _errors: list[str] = []
@@ -899,7 +900,7 @@ class _EvilStr(str):
     allocation failure during UTF-8 encoding (worst case is 4x the codepoint
     count in bytes)."""
 
-    def encode(self, *args, **kwargs):  # noqa: D401
+    def encode(self, *args, **kwargs):
         raise MemoryError("simulated OOM during utf-8 encode")
 
 
@@ -928,7 +929,7 @@ class _EvilStripStr(str):
     """A str subclass whose .strip() raises MemoryError, simulating an
     allocation failure during the strip() call's new-string copy."""
 
-    def strip(self, *args, **kwargs):  # noqa: D401
+    def strip(self, *args, **kwargs):
         raise MemoryError("simulated OOM during strip")
 
 

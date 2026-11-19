@@ -106,6 +106,14 @@ System Flow (example):
 - **Dependencies**: What it needs
 - **Error handling**: What can fail
 
+## Prevent Tangle
+
+Draw boundaries by reason to change, not by layer name.
+- **Hidden link:** anything two components must agree on (schema, format, ordering, IDs) has one named owner; list it under Dependencies.
+- **Needless link:** components that change for different reasons do not depend on each other directly; connect them through data or an interface the owner defines.
+- **Surplus:** no layer, service or extension point without a second real user (Deletion Test in `codebase-deepening`).
+- **Special case:** a flow that needs a special branch is a requirement the model is missing; add it to the model or record it as a decision.
+
 ## Architecture Views
 
 ### System Context (C4 Level 1)

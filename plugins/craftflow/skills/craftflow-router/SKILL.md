@@ -1,7 +1,7 @@
 ---
 name: craftflow-router
 description: |
-  THE ONLY ENTRY POINT FOR CRAFTFLOW. Activate this skill for build, debug, review, and plan requests.
+  THE ONLY ENTRY POINT FOR CRAFTFLOW. Activate this skill for build, debug, review, plan, QA/testing, triage, codebase-health and explain-the-code requests.
 
   Use when the user asks to implement, fix, review, plan, test, refactor, or continue code work.
 
@@ -55,6 +55,21 @@ Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset
 | start | build_mode fast_path | `references/build-graph-fast.md` | BUILD | fast_path | yes |
 | stage | fast-path verifier FAIL | `references/build-fast-path-escalation.md` | BUILD | fast_path | no |
 | stage | bake-off qualifies (decision_rfc or critical_path) | `references/plan-bakeoff.md` | PLAN | - | no |
+| start | ORIENT routed | `_shared/route-orient.md` | ORIENT | - | yes |
+| start | TRIAGE preparation | `_shared/route-triage.md` | TRIAGE | - | yes |
+| start | CODEBASE-HEALTH preparation | `_shared/route-codebase-health.md` | CODEBASE-HEALTH | - | yes |
+| start | QA preparation | `_shared/route-qa.md` | QA | - | yes |
+| stage | first TRIAGE, CODEBASE-HEALTH or QA pause or terminal state (handoff law) | `_shared/route-advisory.md` | TRIAGE, CODEBASE-HEALTH, QA | - | yes |
+| start | TRIAGE preparation | `references/triage-workflow.md` | TRIAGE | - | yes |
+| start | CODEBASE-HEALTH preparation | `references/codebase-health-workflow.md` | CODEBASE-HEALTH | - | yes |
+| start | QA preparation | `references/qa-workflow.md` | QA | - | yes |
+| stage | QA research fan-out | `references/qa-research.md` | QA | - | yes |
+| stage | qa-plan dispatch | `references/qa-plan.md` | QA | standard | yes |
+| stage | qa-plan returns | `references/qa-plan-review.md` | QA | standard | yes |
+| stage | test-plan approval cleared, or any QA grant gate | `references/qa-preflight-and-grants.md` | QA | - | yes |
+| stage | qa-build dispatch | `references/qa-build-and-review.md` | QA | - | yes |
+| stage | qa-execute dispatch | `references/qa-execute.md` | QA | - | yes |
+| stage | QA bug candidates persisted; a DEBUG workflow carrying `## QA Bug Context` (dispatch, and after its memory finalization for the automatic QA re-run) | `references/qa-bug-handoff.md` | QA, DEBUG | - | no |
 <!-- readmap:end -->
 
 ## 1. Intent Routing
@@ -64,7 +79,7 @@ Generated from `config/router-readmap.json` by `scripts/craftflow_router_readset
 for the risk-keyword detection table used to choose between BUILD's fast path and full
 chain. An optional Jev hint block (Claude Code only; produced by the opt-in
 `UserPromptSubmit` hook gated by `config/jev.json`, off by default), when present, is
-consulted per the shared doc's hint-precedence rule (ERROR keywords always win).
+consulted per the shared doc's hint-precedence rule (the shared doc's deliverable law decides; ERROR wins when the deliverable is a fix).
 
 **Jev auto-detect consent contract:** When a consent-request block appears in `additionalContext` during the optional auto-detect SessionStart hook, execute the embedded `AskUserQuestion` contract before your first substantive reply and run the matching `--record-consent` command. See `router-protocol.md` "## Jev Auto-Detect Consent Request Contract" for the full contract and tag format.
 
@@ -142,6 +157,7 @@ JUST_GO:
 - Read `$PROJECT_ROOT/.craftflow/state/project/activeContext.md ## Session Settings`.
 - If `AUTO_PROCEED: true`, set `JUST_GO=true`.
 - While `JUST_GO=true`, auto-default all non-REVERT AskUserQuestion gates to the recommended option and log the choice in `## Decisions`.
+- Exception: a BUILD or DEBUG handoff question (`_shared/route-advisory.md`) is asked even under `JUST_GO`, never auto-accepted; a non-interactive host records `handoff_declined`.
 - Exception: the Skill-Distill Approval Flow's `AskUserQuestion` (`_shared/skill-distill-approval.md`, was § 8) is carved out as a de
   facto REVERT-class gate under JUST_GO — see its own "JUST_GO carve-out" for the fail-closed
   default (`Defer`, never `Approve`).
@@ -217,6 +233,14 @@ Router-owned interface fields:
 - Before any PLAN-specific readiness decision or child-task creation, immediately read `references/plan-workflow.md`.
 - Use the `### PLAN preparation` and `### PLAN task graph` blocks in that file as the canonical PLAN law.
 - If planner clarification, review-loop findings, or plan remediation rules trigger later in the workflow, also read `references/remediation-and-research.md` before continuing.
+
+### ORIENT pointer
+
+An explain or "how does X work" request is routed here, not answered ad hoc: first print `-> ORIENT workflow (signals: ...)`, then `Read()` `skills/_shared/route-orient.md` and answer inline; no workflow artifact, no tasks, no agents.
+
+### CODEBASE-HEALTH pointer
+
+An architecture-health request: first print `-> CODEBASE-HEALTH workflow (signals: ...)`, then `Read()` `skills/_shared/route-codebase-health.md` and `references/codebase-health-workflow.md`.
 
 ## 6. Workflow Task Graphs
 
@@ -437,7 +461,7 @@ After any agent returns, read `references/post-agent-validation.md` (once per co
 - `DIFF_DRIVEN_DOCS: skip` in Session Settings disables doc-syncer for projects that manage documentation separately; when present, skip `build-doc-sync` task creation and block Memory Update on `verifier_task_id` directly.
 - `SKILL_DISTILL: skip` in Session Settings disables the `skill-distill` phase entirely; when present, never run the ledger gate check, never create the `skill-distill` task, and block Memory Update on whatever task it would otherwise have depended on (`learn-distill` if gated in, otherwise `doc_sync_task_id`/`verifier_task_id` per the normal chain). This toggle does NOT disable the unconditional `--observe` step in `references/memory-finalize.md → ## 13. Memory Finalization` — that call still runs every workflow regardless of this setting (cheap, deterministic, preserves future calibration value).
 - Agents must never reference or read internal skill files from other agents or skills (e.g., component-builder must never read code-review-patterns/SKILL.md). Cross-agent knowledge flows exclusively through router-mediated scaffolds and workflow artifacts.
-- Never use EnterPlanMode. Claude Code's native plan mode is incompatible with Craftflow. Planning requests go through the Craftflow PLAN workflow (brainstorming → planner → bounded fresh review → memory finalization), which provides orchestration state, workflow artifacts, intent contracts, and verification. Native plan mode provides none of these.
+- Advisory and QA routes hand off only through `_shared/route-advisory.md` and `scripts/craftflow_workflow_handoff.py`; BUILD/DEBUG targets need a recorded `handoff_accepted`, never JUST_GO.
 
 ### Policy table
 

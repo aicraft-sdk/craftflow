@@ -447,6 +447,30 @@ def test_gate_skips_workflow_choice_not_in_known_set() -> None:
         fail("gate-skips-unknown-workflow-choice", f"lines={lines!r} lines_empty={lines_empty!r}")
 
 
+def test_workflow_labels_cover_the_eight_routes() -> None:
+    expected = {
+        "ORIENT": "Explain or map existing code; no changes",
+        "QA": "Design, build and run a test system for existing code",
+        "TRIAGE": "Triage incoming issues/PRs into briefs",
+        "CODEBASE-HEALTH": "Architecture health scan and deepening candidates",
+    }
+    cfg = advise_cfg(thresholds={"routing": 0.85, "skill": 0.7})
+    accepted = {}
+    for name in expected:
+        answers = dict(_GATE_ANSWERS, workflow=dict(_GATE_ANSWERS["workflow"], choice=name))
+        accepted[name] = any(
+            ln.startswith(f"workflow: {name} ") for ln in gate_answers(answers, cfg, _GATE_ROSTER_IDS)
+        )
+    if (
+        set(WORKFLOWS) == {"DEBUG", "PLAN", "REVIEW", "BUILD", *expected}
+        and all(WORKFLOWS[name] == label for name, label in expected.items())
+        and all(accepted.values())
+    ):
+        ok("WORKFLOWS carries the 8 route labels and gate_answers accepts each new route")
+    else:
+        fail("workflow-labels-eight", f"keys={sorted(WORKFLOWS)!r} accepted={accepted!r}")
+
+
 def test_roster_rejects_hostile_skill_id_with_newline_or_tag_content() -> None:
     # doubt-verifier finding: a SKILL.md `name:` frontmatter field (block-scalar
     # style, so real newlines survive parse_frontmatter) can carry a hostile
@@ -1138,12 +1162,13 @@ def test_router_docs_carry_jev_precedence_rules() -> None:
 
     shared_rule = (
         '- Optional routing hint: when the turn context contains a '
-        '`<craftflow_routing_hint source="jev">` block, priority-1 ERROR keywords still win '
-        "unconditionally. Otherwise, a `workflow:` line in that block is consulted BEFORE the "
-        "keyword table (the hook only emits lines already at/above the configured confidence "
-        "threshold). A `risk_full_chain` value ≥ 0.5 counts as one additional risk signal "
+        '`<craftflow_routing_hint source="jev">` block, a `workflow:` line in that block is one '
+        "more nomination at the start of the request (the hook only emits lines already at/above "
+        "the configured confidence threshold); the deliverable law above decides, and an ERROR "
+        "keyword in the request's lead clause still wins over the hint. A `risk_full_chain` "
+        "value ≥ 0.5 counts as one additional risk signal "
         "for the fast-path decision and never removes a keyword-matched signal. No block, or no "
-        "`workflow:` line → the keyword table applies unchanged. Announce as "
+        "`workflow:` line → the routing table and rules apply unchanged. Announce as "
         "`-> {WORKFLOW} workflow (signals: {matched keywords}; jev: {workflow} {confidence})` "
         "when the hint was consulted."
     )
@@ -1171,7 +1196,8 @@ def test_router_docs_carry_jev_precedence_rules() -> None:
     section1_sentence = (
         "An optional Jev hint block (Claude Code only; produced by the opt-in "
         "`UserPromptSubmit` hook gated by `config/jev.json`, off by default), when present, is "
-        "consulted per the shared doc's hint-precedence rule (ERROR keywords always win)."
+        "consulted per the shared doc's hint-precedence rule (the shared doc's deliverable law "
+        "decides; ERROR wins when the deliverable is a fix)."
     )
     # SKILL.md § 1 uses manual paragraph line-wrapping (real newlines mid-sentence); collapse
     # whitespace runs on both sides before the substring check.
@@ -1274,6 +1300,7 @@ def main() -> int:
     test_session_active_false_when_state_root_raises()
     test_session_active_never_makes_a_network_call()
 
+    test_workflow_labels_cover_the_eight_routes()
     test_router_docs_carry_jev_precedence_rules()
     test_readme_and_hook_inventory_docs_document_jev()
 

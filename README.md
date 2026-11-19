@@ -10,7 +10,7 @@
 
 Craftflow turns every development request into a **tracked, verified workflow**. One router classifies the request, dispatches a chain of specialist agents, enforces quality gates, and refuses to call anything done without evidence. State lives in plain files under `.craftflow/state/`, shared by Claude Code and Cursor.
 
-**Current version:** 1.33.5
+**Current version:** 1.37.0
 
 > Working on this plugin itself? Read [`AGENT_CRITICAL_GUARDRAILS.md`](AGENT_CRITICAL_GUARDRAILS.md) first.
 
@@ -50,7 +50,7 @@ BUILD takes the **fast path** when the request has no risk keywords. Words such 
 flowchart LR
     U([Your request]) --> R[craftflow-router]
     R -->|dispatch| A[14 specialist agents]
-    R -.->|loads on demand| S[34 skills]
+    R -.->|loads on demand| S[35 skills]
     A -->|BUILD only| W[(isolated git worktree)]
     R <-->|read / write| ST[(.craftflow/state)]
     H{{Hooks: guards, memory protection, stop gates}} -.->|enforce| R
@@ -100,6 +100,7 @@ Each agent pins its model in its `model:` frontmatter.
 | `plan-bakeoff-judge` | opus | Compares competing plans and synthesizes one |
 | `bug-investigator` | opus | Root-cause proof before any fix |
 | `doubt-verifier` | opus | Adversarial verification of claims and fixes |
+| `architecture-scanner` | opus | Deepening-candidate scan and HTML report (CODEBASE-HEALTH) |
 | `component-builder` | sonnet | TDD execution of an approved phase |
 | `code-reviewer` | sonnet | Diff review |
 | `silent-failure-hunter` | sonnet | Error-handling and swallowed-failure review |
@@ -214,8 +215,8 @@ State lives in `.craftflow/state/` at the project root:
 
 ```
 plugins/craftflow/
-├── agents/       # 14 agent definitions
-├── skills/       # 34 skills, each with SKILL.md and on-demand references/
+├── agents/       # 15 agent definitions
+├── skills/       # 35 skills, each with SKILL.md and on-demand references/
 ├── scripts/      # 80 Python and shell scripts: hooks, validators, benchmarks
 ├── hooks/        # hook bindings for Claude Code
 ├── hooks.json    # hook bindings for Cursor
@@ -226,7 +227,7 @@ plugins/craftflow/
 
 ## Releases
 
-Releases are automatic. Merging to `main` with changes under `tools/craftflow-plugin/**` bumps the version, writes a `CHANGELOG.md` entry, runs a fail-closed consistency gate across all version-bearing files, tags the release and publishes it here.
+Releases are automatic. Merging to `main` with changes under `tools/craftflow-plugin/**` runs the release gate (`plugins/craftflow/scripts/craftflow_release_gate.py`, see the Release gate section of `plugins/craftflow/hooks/README.md`) and refuses to continue unless its last line is `RELEASE GATE: OK`; then it bumps the version, writes a `CHANGELOG.md` entry, runs a fail-closed consistency gate across all version-bearing files, tags the release and publishes it here. Resuming a publish for a version tagged before the gate existed is unsupported: publish a new version instead. The gate, and its resume guard, only apply when the publish workflow is dispatched from `main` or another ref that contains the gate: a `workflow_dispatch` runs the workflow file of the ref it is dispatched from, so never dispatch it from an older tag or branch (an old ref runs its own gate-less workflow). Closing that hole for good means restricting `CRAFTFLOW_PUBLIC_TOKEN` to a GitHub Environment with a `main`-only deployment-branch rule, which is a repository setting for the owner to decide and would also affect branch dry runs.
 
 | Commit type | Bump |
 |---|---|

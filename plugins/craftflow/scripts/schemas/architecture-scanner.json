@@ -1,0 +1,11 @@
+{
+  "STATUS": {"type": "string", "required": true, "enum": ["CANDIDATES_FOUND", "NO_CANDIDATES"], "nested_under": "verdict"},
+  "CANDIDATE_COUNT": {"type": "integer", "required": true, "nested_under": "verdict"},
+  "TOP_RECOMMENDATION": {"type": ["integer", "null"], "required": true, "nested_under": "verdict"},
+  "BLOCKING": {"type": "boolean", "required": true, "enum": [false], "nested_under": "verdict"},
+  "NEXT_ACTION": {"type": "string", "required": true, "enum": ["choose", "complete"], "nested_under": "verdict"},
+  "SUMMARY": {"type": "string", "required": true, "nested_under": "rationale"},
+  "CANDIDATES": {"type": "array", "required": true, "nested_under": "rationale"},
+  "REPORT_PATH": {"type": "string", "required": true, "nested_under": "rationale"},
+  "MEMORY_NOTES": {"type": "object", "required": true, "nested_under": "rationale"}
+}

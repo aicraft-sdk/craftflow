@@ -27,9 +27,12 @@ import craftflow_router_corpus as cor  # noqa: E402
 import craftflow_router_readset as rs  # noqa: E402
 import craftflow_router_readset_guard as grd  # noqa: E402
 import craftflow_router_readset_project as prj  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import router_envelope as renv  # noqa: E402  (ADR-0074 growth envelope logic)
 
 FIXTURES = PLUGIN_ROOT / "tests" / "fixtures"
 BUDGET = FIXTURES / "router-budget.json"
+ENVELOPE = FIXTURES / "router-growth-envelope.json"
 PROJECTION = FIXTURES / "router-projection.json"
 CUTPLAN = FIXTURES / "router-cut-plan.json"
 REL_BUDGET = "tools/craftflow-plugin/plugins/craftflow/tests/fixtures/router-budget.json"
@@ -127,17 +130,43 @@ def origin_available() -> bool:
     return subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "-q", "origin/main"], capture_output=True).returncode == 0
 
 
+def is_ancestor_of_head(sha: str) -> bool:
+    """True when `sha` is a hex commit id that is an ancestor of HEAD (a non-hex or option-shaped value never reaches git)."""
+    if not isinstance(sha, str) or not renv.HEX_SHA.match(sha):
+        return False
+    return subprocess.run(["git", "-C", str(REPO_ROOT), "merge-base", "--is-ancestor", sha, "HEAD"], capture_output=True).returncode == 0
+
+
 def git_show(ref: str, rel: str) -> Optional[bytes]:
     res = subprocess.run(["git", "-C", str(REPO_ROOT), "show", f"{ref}:{rel}"], capture_output=True)
     return res.stdout if res.returncode == 0 else None
 
 
-def origin_budget() -> "tuple[str, Optional[dict]]":
-    """('skip', None) without a remote, ('new', None) when origin/main has no budget file yet, else ('ok', parsed)."""
-    if not origin_available():
+def git_show_state(ref: str, rel: str, root: Optional[Path] = None) -> "tuple[str, Optional[bytes]]":
+    """('ok', bytes) | ('absent', None) when the ref resolves but the path is not in it | ('error', None) when git itself failed (M-A)."""
+    top = str(root if root is not None else REPO_ROOT)
+    try:
+        if subprocess.run(["git", "-C", top, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], capture_output=True).returncode != 0:
+            return "error", None
+        if subprocess.run(["git", "-C", top, "cat-file", "-e", f"{ref}:{rel}"], capture_output=True).returncode != 0:
+            return "absent", None
+        res = subprocess.run(["git", "-C", top, "show", f"{ref}:{rel}"], capture_output=True)
+    except OSError:
+        return "error", None
+    return ("ok", res.stdout) if res.returncode == 0 else ("error", None)
+
+
+def origin_budget(available: Optional[bool] = None, show: Optional[Callable] = None) -> "tuple[str, Optional[dict]]":
+    """('skip', None) without a remote or when git fails to read origin/main, ('new', None) only when a readable origin/main has no budget
+    file yet, else ('ok', parsed). `available` and `show` (the git_show_state shape) are injectable for tests."""
+    if not (origin_available() if available is None else available):
         return "skip", None
-    raw = git_show("origin/main", REL_BUDGET)
-    return ("new", None) if raw is None else ("ok", json.loads(raw.decode("utf-8")))
+    state, raw = (show or git_show_state)("origin/main", REL_BUDGET)
+    if state == "absent":
+        return "new", None
+    if state != "ok" or raw is None:
+        return "skip", None
+    return "ok", json.loads(raw.decode("utf-8"))
 
 
 # ---------------------------------------------------------------------------------------------- pure bound checks
@@ -147,10 +176,11 @@ def is_prefix(old: list, new: list) -> bool:
     return len(old) <= len(new) and new[:len(old)] == old
 
 
-def check_raise_bounds(budget: dict, origin: Optional[dict], projector: Callable[[List[str]], Dict[str, int]]) -> List[str]:
+def check_raise_bounds(budget: dict, origin: Optional[dict], projector: Callable[[List[str]], Dict[str, int]], envelope: Optional[Callable] = None) -> List[str]:
     """PP-8 / DD-6: a ceiling that rose against `origin` needs a ceiling_raises entry for this phase and key with
     projected_delta > 0, raise <= projected_delta + 500 and new ceiling <= project(merged_phases) + 1000.
-    `projector(phases)` returns {key: projected value} for a list of phase ids (effective tier, recorded conditions)."""
+    `projector(phases)` returns {key: projected value} for a list of phase ids (effective tier, recorded conditions).
+    ADR-0074: `envelope` (renv.checker) judges a key whose raises this change adds are all envelope-tagged H<n> entries instead."""
     if origin is None:
         return []  # first introduction of the ratchet: nothing to compare with
     problems = []
@@ -160,6 +190,10 @@ def check_raise_bounds(budget: dict, origin: Optional[dict], projector: Callable
     for k in KEYS:
         old, new = ceiling(origin, k), ceiling(budget, k)
         if new <= old:
+            continue
+        verdict = envelope(k, [e for e in budget["ceiling_raises"][len(origin.get("ceiling_raises", [])):] if e.get("key") == k], old, new) if envelope else None
+        if verdict is not None:
+            problems += verdict
             continue
         entries = [e for e in budget["ceiling_raises"] if e.get("phase") == phase and e.get("key") == k]
         if not entries:
@@ -494,7 +528,7 @@ def test_ceiling_changes_bounded_vs_origin_main() -> None:
         ok("ceiling_changes_bounded_vs_origin_main:first_introduction")
         return
     b = load_budget()
-    problems = check_raise_bounds(b, origin, effective_values(b))
+    problems = check_raise_bounds(b, origin, effective_values(b), renv.checker(renv.load(ENVELOPE), MEASURED, is_ancestor_of_head))
     check("ceiling_changes_bounded_vs_origin_main", not problems, "; ".join(problems))
 
 
@@ -507,7 +541,7 @@ def append_only_problems(origin: dict, b: dict, identical: bool) -> List[str]:
     if not is_prefix(old, new):
         problems.append("enforced_caps_decision.amendments is not an append-only extension of origin/main's")
     added = len(b["merged_phases"]) - len(origin["merged_phases"])
-    want = 0 if identical else 1
+    want = 0 if identical or renv.envelope_only_change(origin, b) else 1  # ADR-0074: envelope-only changes add no phase
     if added != want:
         problems.append(f"merged_phases added {added}, expected {want} "
                         f"({'the file equals origin/main, so nothing' if identical else 'a phase PR adds exactly its own id'})")
@@ -632,6 +666,7 @@ def test_measured_within_phase_projection() -> None:
     b = load_budget()
     project = effective_values(b)
     projected = project(b["merged_phases"])
+    projected = {k: v + renv.slack(b, renv.load(ENVELOPE)).get(k, 0) for k, v in projected.items()}  # ADR-0074: accepted envelope raises
     problems = check_within_projection(MEASURED, projected)
     inflated = dict(MEASURED, **{"readset.BUILD": projected["readset.BUILD"] + 1001})
     control = check_within_projection(inflated, projected)
@@ -710,16 +745,16 @@ def test_enforce_ratchet_vs_origin_main() -> None:
 
 
 def test_revision_phases_are_merged_phases() -> None:
-    """A relabelled last phase (P12 -> P13) leaves the P12 revision entry naming a phase that is not merged: the entry is the tell."""
+    """A relabelled last phase (P13 -> P14) leaves the P13 revision entry naming a phase that is not merged: the entry is the tell."""
     live = load_budget()
-    relabel = dict(live, merged_phases=live["merged_phases"][:-1] + ["P13"], last_phase="P13")
+    relabel = dict(live, merged_phases=live["merged_phases"][:-1] + ["P14"], last_phase="P14")
     ceiling_34203 = dict(relabel, ceilings=dict(live["ceilings"], kernel_bytes=34203), enforce=True)
     controls = {
-        "relabel_p13": len(revision_phase_problems(relabel)) == 1,
-        "relabel_p13_with_ceiling_34203": len(revision_phase_problems(ceiling_34203)) == 1,
+        "relabel_p14": len(revision_phase_problems(relabel)) == 1,
+        "relabel_p14_with_ceiling_34203": len(revision_phase_problems(ceiling_34203)) == 1,
         "all_revisions_merged": revision_phase_problems(dict(live, projection_revisions=[{"phase": "P5"}])) == [],
         "no_revisions": revision_phase_problems(dict(live, projection_revisions=[])) == [],
-        "revision_for_unmerged_phase": len(revision_phase_problems(dict(live, projection_revisions=[{"phase": "P13"}]))) == 1,
+        "revision_for_unmerged_phase": len(revision_phase_problems(dict(live, projection_revisions=[{"phase": "P14"}]))) == 1,
     }
     problems = revision_phase_problems(live)
     check("revision_phases_are_merged_phases", all(controls.values()) and not problems, f"controls={controls} live={problems}")

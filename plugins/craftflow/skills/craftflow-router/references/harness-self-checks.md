@@ -1,6 +1,7 @@
 # Harness Self-Checks (Arch Lint, Clean-State Check, Feature Backlog)
 
-Cross-cutting wiring for 3 advisory, non-blocking harness capabilities. Each is a plain
+Cross-cutting wiring for 3 harness capabilities, advisory by default (arch lint and the clean-state
+check each have an opt-in blocking mode, see their sections). Each is a plain
 `Bash()` call to a pure-stdlib Python script under `{plugin_root}/scripts/` — none use
 `Task()`/`TaskCreate()`, so `capabilities.task_tools_available == false` fallback mode is a
 non-issue for all 3: every call below runs identically whether or not Task tools are
@@ -18,16 +19,24 @@ available this session.
 python3 {plugin_root}/scripts/craftflow_arch_lint.py --project-root . --format json
 ```
 
-Parse stdout `{"findings": [...], "rule_count": N, "skipped": [...]}`.
+Parse stdout `{"findings": [...], "rule_count": N, "skipped": [...], "summary": {...}}`. Each finding
+carries its rule's `mode`: `advisory` (default when a rule has no `mode`) or `blocking`
+(opt-in per rule in `.craftflow/state/project/arch-rules.json`). Exit `0` = scan completed,
+advisory findings only (or none); exit `2` = scan completed with at least one `blocking`
+finding (stdout is the same JSON); exit `1` = tool error.
 - `findings == []` → do nothing; omit any new prompt section.
 - `findings != []` → append a `## Arch Lint Findings` section to the upcoming code-reviewer
   dispatch prompt's `## Project Patterns` scaffold field (per
   `skills/_shared/router-protocol.md` § "Dispatch Prompt Scaffold"), one `WHAT`/`WHY`/`FIX`
-  block per finding. This is advisory context only — never a required field, never a new
-  Contract Override row, never a change to `code-reviewer`'s verdict-extraction rules in
-  `SKILL.md` § 8 (`references/post-agent-validation.md`).
+  block per finding, each labelled with its `mode`. This is advisory context only — never a
+  required field, never a new Contract Override row, never a change to `code-reviewer`'s
+  verdict-extraction rules in `SKILL.md` § 8 (`references/post-agent-validation.md`).
+- Exit `2` → this is a verdict, not a crash: do NOT log `arch_lint_failed`. Include the
+  findings as above, then report every `blocking` finding to the user in the workflow summary
+  as unresolved architecture violations (never drop them); the router must not present the
+  workflow as clean while one remains.
 
-Non-zero exit or unparseable stdout: capture the script's stderr content (where the real
+Exit `1`, any other non-zero exit, or unparseable stdout: capture the script's stderr content (where the real
 diagnostic lives, not just the exit code) into `error`, and append
 `{"event":"arch_lint_failed","error":"{stderr_content}","ts":"{iso_now}"}` to
 `.craftflow/state/workflows/{workflow_uuid}.events.jsonl` (same convention as
@@ -46,18 +55,26 @@ exists. DEBUG — immediately before creating the DEBUG Memory Update task
 python3 {plugin_root}/scripts/craftflow_clean_state_check.py --project-root . --format json
 ```
 
-Parse stdout `{"findings": [...], "skipped": [...]}`.
+Parse stdout `{"findings": [...], "skipped": [...], "summary": {...}, "suppression_mode": ...}`.
+Each finding has a `severity`: `advisory`, or `blocking` for a newly added Python `noqa` /
+`type: ignore` lacking a rule code or a written reason (message states the fix). Blocking only
+happens when `config/hook-mode.json` `cleanStateSuppressions` is `block` (shipped: `audit`, so
+the same finding is `advisory`); exit `2` = completed scan with a blocking finding, stdout is
+the same JSON, exit `1` = tool error.
 - `findings == []` and `skipped == []` → nothing to add.
 - `findings != []` → add one `[Deferred]: clean-state-check: {pattern} at {file}:{line}` line
   per finding directly into the SAME workflow-scoped `activeContext.md` write that this
   memory-finalize task already performs (via the `deferred` `MEMORY_NOTES` routing in
-  `references/memory-finalize.md → ## 13. Memory Finalization`) — never a separate write, never a blocking gate.
+  `references/memory-finalize.md → ## 13. Memory Finalization`) — never a separate write.
+- Exit `2` → a verdict, not a crash: do NOT log `clean_state_check_failed`. Fold the findings
+  in as above, and also report each `blocking` finding (with its `message`) to the user as
+  unresolved before finishing; never present the workflow as clean.
 - `skipped != []` → fold skipped entries into that SAME deferred-note write, one
   `[Deferred]: clean-state-check: could not scan {file} ({error})` line per skipped entry.
   This is the one signal that distinguishes "clean" from "couldn't tell" — never silently
   discard it just because `findings` is empty.
 
-Non-zero exit or unparseable stdout: log `{"event":"clean_state_check_failed","error":"..."}`
+Exit `1`, any other non-zero exit, or unparseable stdout: log `{"event":"clean_state_check_failed","error":"..."}`
 and proceed to memory-finalize without a deferred note — never block or retry.
 
 ## Feature Backlog

@@ -19,7 +19,7 @@ SCRIPTS = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import craftflow_jev_session_check  # noqa: E402
-from craftflow_jev_session_check import main, CONSENT_REQUEST_TEMPLATE  # noqa: E402
+from craftflow_jev_session_check import main  # noqa: E402
 import craftflow_jev_session_cache  # noqa: E402
 from craftflow_jev_session_cache import read_session_status  # noqa: E402
 from craftflow_jev_setup import privacy_note  # noqa: E402
@@ -658,8 +658,6 @@ def test_canary_notify_delivery_failure_on_active_transition_logs_distinct_event
 
 
 def test_canary_notify_delivery_failure_on_inactive_transition_logs_distinct_event() -> None:
-    import urllib.error
-
     tmp, project, plugin, sessions_dir = _setup(
         cfg_overrides={"enabled": False, "consent": {"status": "granted", "ts": "2026-01-01T00:00:00Z"}}
     )

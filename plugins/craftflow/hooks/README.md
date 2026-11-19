@@ -87,9 +87,11 @@ from the plugin bundle and runs the referenced scripts from `${CLAUDE_PLUGIN_ROO
 The shipped runtime hooks are intentionally minimal. Most hooks operate in audit mode; `memoryWrites`, `protectedWrites`, `taskMetadata`, `bashDestructiveTraversal`, `safeShellGuard`, and `stateReadCompaction` are enforced in block mode (config: `config/hook-mode.json`; each toggle enum-validates its value and fails closed — block — on a missing or malformed config, via the shared `resolve_toggle_decision()` helper in `craftflow_hooklib.py`):
 - protect and enforce direct memory markdown writes on Edit/Write (block mode, `memoryWrites`)
 - protect the same memory files, the `.memory-finalize` permit, and workflow JSON artifacts against Bash-write bypasses — redirects, `tee`, and python-script writes (block mode, `protectedWrites`)
+- protect the architecture-lint rule registry (`.craftflow/state/project/arch-rules.json`, where a rule's `"mode": "blocking"` lives) so an agent cannot flip a rule to advisory, add or delete rules: Edit/Write is denied unconditionally (same hardened path matching as the reliability-gates ledger); Bash redirects, `tee`, python writes and `cp`/`mv` are gated by `protectedWrites`. `sed -i`-style in-place edits are not detected by this hook for any protected file. Plugin-owned files (`config/*.json`, test baselines) are outside this hook's scope: it anchors every protected path to the consumer project's own state. A rule is proposed, proven (`craftflow_arch_lint.py --check-proposal`) and promoted by the procedure in `skills/retro/references/mistake-to-rule.md`.
 - deny destructive Bash commands (in-cwd or cwd/worktree-escaping) across a widened command vocabulary (block mode, `bashDestructiveTraversal`)
 - deny an absolute denylist of catastrophic Bash commands — `rm -rf /`, `mkfs`, fork bombs (block mode, `safeShellGuard`; concept ported from `xai-org/grok-build`, see `NOTICE`)
 - deny a Read of an oversized `.craftflow/state/**` file and redirect the agent to `craftflow_state_query.py` (never mutating the target file's bytes; block mode, `stateReadCompaction`)
+- not a hook, but read from the same file: `cleanStateSuppressions` (`audit` shipped, or `block`) makes `scripts/craftflow_clean_state_check.py` exit 2 on a newly added Python `noqa` / `type: ignore` without a rule code and a written reason; `audit` reports the same findings as advisory with exit 0
 - inject workflow resume context
 - self-check that every sibling hook script still imports cleanly under python3, warning (not blocking) on failure
 - optionally run Jev auto-detect consent-ask + session-canary via `SessionStart` — inert unless `TYPESAFE_API_KEY` is set and `config/jev.json` has neither `enabled:true` (manual path) nor `consent.status="declined"`; when active, asks the user once per session to opt in, then gates activation to a short-budget canary call (off by default)
@@ -115,6 +117,110 @@ It validates the publication-critical contract:
 - workflow replay fixtures and checker are present
 - key router headings still exist for invariant coverage
 - router-consumed task metadata and agent contract fields are still present
+
+### Release gate
+
+`scripts/craftflow_release_gate.py` is the fail-closed gate in front of auto-release. The publish workflow runs it on
+every path (dry run, real run and resume) after `Checkout resume tag`, and the `release-gate` job in `craftflow-ci.yml`
+runs the same gate on pull requests. Run it locally from anywhere in the checkout (Node 22 and the `claude` CLI on `PATH`):
+
+```bash
+python3 tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_release_gate.py
+```
+
+Steps run in this fixed order, each in its own process group: `version_consistency`, `hook_unit_tests`,
+`fixture_suite_a` and `fixture_suite_b` (the fixture suite as two `FIXTURE_SHARD=i/2` slices, with `CI=true` and without
+`CRAFTFLOW_PERF`), `rule_inventory_diff`, `workflow_replay_check`, `graph_check`, `event_contract`, `decisions`,
+`docs_rot`, `plugin_validate`.
+
+- **Caps.** Every step is killed (whole process group) after `min(600 s, remaining total budget)` and printed as
+  `FAIL <step>: timed out after <n> s`; the gate then continues. `--total-seconds` (default 1200) bounds the whole run:
+  once it is spent, every step not yet started prints `FAIL <step>: total budget exhausted` and does not run.
+  `gate wall time: <s> s` is printed before the verdict.
+- **Flags.** `--list` prints the step ids. `--only STEP` (repeatable) runs a subset, which can never print OK.
+  `--allow-no-claude` turns a missing `claude` CLI into a skipped `plugin_validate` (verdict PARTIAL, exit 1). Neither
+  flag, nor `--total-seconds`, is passed by CI.
+- **Last-line contract.** The last line is exactly one of `RELEASE GATE: OK`, `RELEASE GATE: FAIL (<steps>)`,
+  `RELEASE GATE: PARTIAL (<skipped or not run>)` or `RELEASE GATE: NOTHING RAN (...)`. Only OK exits 0, and CI accepts
+  only the exact OK line. The gate leaves no tracked or non-ignored file in the checkout (hook logs under the ignored
+  `.craftflow/` directory may appear); the publish job and the CI job both check `git status --porcelain` is empty
+  afterwards.
+- **Docs-rot ratchet.** `docs_rot` runs `scripts/craftflow_docs_rot.py` (checks D1 to D10 over the READMEs, the agent and
+  skill lists, the hook scripts, the versions and the routing table). Violations must match
+  `tests/fixtures/docs-rot-baseline.json` exactly: an unlisted one prints `NEW <id>` and a fixed one prints
+  `STALE <id>`, both exit 1. The baseline may only shrink relative to `git merge-base HEAD origin/main`. Fix the
+  drift, then delete its id from the baseline; never add one.
+- **Resuming a version tagged before the gate existed is unsupported.** The resume step runs the gate of the tag, and a
+  tag without `craftflow_release_gate.py` fails with `RELEASE GATE: FAIL (resume tag predates the release gate; publish
+  a new version instead)`. There is no skip input.
+- **The guarantee covers only refs that contain the gate.** A `workflow_dispatch` runs the workflow file of the ref it
+  is dispatched from. Dispatched from `main`, or from another ref that already contains the gate step, the gate and its
+  resume guard apply on every path. Dispatched from a tag or branch older than the gate (for example
+  `--ref craftflow-v1.34.1 -f resume_publish=true`), that ref's own workflow file runs and it has no gate at all. Never
+  dispatch the publish workflow from an older tag or branch. The hard fix is a repository setting, not code: restrict
+  `CRAFTFLOW_PUBLIC_TOKEN` to a GitHub Environment with a `main`-only deployment-branch rule. That is the owner's
+  decision, and it would also stop branch dry runs from reaching the token.
+
+## Code-health checks: local gate, pre-commit hook and CI (not part of the monorepo release gate)
+
+Python in this repo is guarded by ruff, two shrink-only ratchets, a clean-state check, a baseline-integrity check and
+a curated set of test suites. `craftflow_release_gate.py` is the monorepo release gate: it hardcodes
+`tools/craftflow-plugin/` paths and Node scripts that do not exist in this checkout, so it cannot run here and none of
+this is a step of it. The checks below are wired into one fail-closed command instead.
+
+```bash
+python3 plugins/craftflow/scripts/craftflow_local_gate.py            # full gate, about 3 minutes
+python3 plugins/craftflow/scripts/craftflow_local_gate.py --list     # the steps
+git config core.hooksPath .githooks                                  # once per clone: enables .githooks/pre-commit
+```
+
+| Step | What it checks | Baseline |
+|---|---|---|
+| `ruff` | `ruff check` (dev-only; missing locally = SKIP with an install hint, missing with `--require-ruff` or `CI=true` = FAIL) | `ruff.toml` |
+| `suppression-ratchet` | `craftflow_suppression_ratchet.py`: `# noqa` / `# type: ignore` counts per file | `tests/fixtures/suppression-baseline.json` |
+| `file-size-ratchet` | `craftflow_file_size_ratchet.py`: 500-line limit, oversized files may only shrink | `tests/fixtures/file-size-baseline.json` |
+| `clean-state` | `craftflow_clean_state_check.py --suppression-mode block`: newly added suppressions need a rule code and a reason | none |
+| `baseline-integrity` | `craftflow_baseline_integrity.py`: baselines, `ruff.toml` and `config/hook-mode.json` may not get looser than at the merge-base | none |
+| `py-compile` | tracked `.py` under `scripts/` and `tests/fixtures/` compile | none |
+| `guardrail-refs` | `craftflow_guardrail_refs.py`: every backticked path in `AGENT_CRITICAL_GUARDRAILS.md` resolves in this repository (a doc may not cite monorepo-only files; the only allowlist is consumer runtime paths such as `.craftflow/`, inside the script) | none |
+| `suite:<name>` | the curated test suites listed in `SUITES` at the top of `craftflow_local_gate.py` (inclusion rule and exclusions are documented there) | none |
+
+- **Exit codes.** `0` every non-skipped step passed, `2` at least one step failed (every step still runs, so one run
+  shows everything), `1` gate error (bad arguments, a flag refused in CI). `--format json` for machines. `SKIP` (tool
+  missing, or a root-only suite run as uid 0) and `SKIPPED BY FLAG` (`--skip`, `--only`, `--fast`, which are refused when
+  `CI=true`) are always listed in the summary; a green run excludes them.
+- **Clean-state scope.** The script scans the uncommitted diff against `HEAD` plus untracked files and has no base-ref
+  option, so locally it judges the change you are about to commit. With `--base-ref <ref>` (CI) the gate replays
+  `merge-base..working tree` in a throwaway worktree and scans that, so the PR diff is judged; untracked files are not
+  seen in that mode.
+- **Pre-commit hook.** `.githooks/pre-commit` runs the fast subset in about 2 seconds: ruff (if installed), both
+  ratchets, clean-state, baseline-integrity (skips loudly when no base ref exists), py-compile and guardrail-refs. The test suites (and
+  the real PR base) are CI's job; run the full gate before opening a PR. The hook is separate from the consumer-project
+  helper `hooks/pre-commit` in this directory.
+- **CI.** `.github/workflows/code-health.yml` runs the full gate on pull requests and pushes to `main` with Python 3.9
+  and `ruff==0.16.9`, full history, `--require-ruff --require-base` and `--base-ref` set to the PR base SHA (push: the
+  previous commit). Make the `gate` job a required status check in branch protection, and make sure the upstream publish
+  process carries `.github/`, `.githooks/` and `ruff.toml`.
+- **Baselines only shrink.** `baseline-integrity` compares the working tree with `git merge-base HEAD <default branch>`
+  (or `--base-ref`) and fails (exit 2) if a suppression or file-size entry was added or a count/limit raised, if
+  `ruff.toml` gained `per-file-ignores`/`external`/`ignore`/`exclude` entries or lost `select` entries, or if
+  `config/hook-mode.json` dropped a key or weakened a value (`block` to `audit`/off). A baseline absent at the base is a
+  first introduction and passes with a notice. An unresolvable base (for example a shallow clone) exits 1 with the fetch
+  command; the local gate passes `--allow-missing-base` so a shallow clone skips this step loudly instead of breaking
+  every commit, CI never does. `docs-rot-baseline.json` is not duplicated here: `craftflow_docs_rot.py` enforces it.
+  Fix the code instead. If an increase is legitimate (for example splitting a file moves suppressions), a human decides:
+  they either run the check by hand with `--approved-increase <file>` or an administrator merges the red PR knowingly;
+  agents never pass that flag, and the next PR then compares against the new, approved base.
+- **Each ratchet** is a committed baseline of today's debt that may only shrink. `--update-baseline` lowers it and
+  refuses to raise it; `--init-baseline` writes a first one. Output is text by default, `--format json` for machines;
+  exit `0` within baseline, `1` tool error, `2` violation. If a check looks wrong, report it instead of editing a
+  baseline or adding a suppression.
+- **ruff is a developer tool only.** No shipped script imports it, and there is no `pyproject.toml` on purpose. Install
+  with `pip install ruff==0.16.9`, run `ruff check` from the repo root. Never run `ruff format` or `--fix`. `RUF100`
+  makes a stale `# noqa` an error. The `per-file-ignores` entries in `ruff.toml` are debt to pay down, not a place to
+  add files.
+- **Guardrail references.** `craftflow_guardrail_refs.py [--file DOC] [--root DIR] [--format text|json]` takes backticked path-like tokens (a `/` or a known extension, or the path argument of a backticked command), strips glob tails, and exits 2 with `WHAT/WHY/FIX` and the line number for any that do not resolve here; bare names must match exactly one file. Reword the doc instead of allowlisting a monorepo-only path.
+- **Tests.** `python3 plugins/craftflow/tests/fixtures/test_craftflow_{suppression_ratchet,file_size_ratchet,baseline_integrity,local_gate,guardrail_refs}.py`.
 
 ## Skill Candidate Ledger (router-invoked, not a registered hook)
 

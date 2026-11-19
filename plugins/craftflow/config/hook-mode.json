@@ -13,5 +13,6 @@
   "instructionsLoadedAudit": "audit",
   "contractValidation": "audit",
   "stateReadCompaction": "block",
-  "bashDestructiveTraversal": "block"
+  "bashDestructiveTraversal": "block",
+  "cleanStateSuppressions": "audit"
 }

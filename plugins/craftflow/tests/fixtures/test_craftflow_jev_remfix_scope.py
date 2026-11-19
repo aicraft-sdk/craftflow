@@ -25,7 +25,6 @@ from craftflow_jev_remfix_scope import (  # noqa: E402
     telemetry_row,
     _append_event,
     main,
-    build_arg_parser,
 )
 
 _passes = 0

@@ -1,0 +1,243 @@
+{
+  "adr": "ADR-0074",
+  "decided_by": "David",
+  "decided_at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+  "base": {
+    "kernel_bytes": 33797,
+    "protocol_bytes": 13486,
+    "reference_max_bytes": 19097,
+    "description_chars": 3793,
+    "readset.BUILD": 96727,
+    "readset.PLAN": 84933,
+    "readset.DEBUG": 72719,
+    "readset.REVIEW": 70739
+  },
+  "allowances": {
+    "kernel_bytes": 4800,
+    "protocol_bytes": 6500,
+    "reference_max_bytes": 0,
+    "description_chars": 700,
+    "readset.BUILD": 13500,
+    "readset.PLAN": 13000,
+    "readset.DEBUG": 13500,
+    "readset.REVIEW": 13000
+  },
+  "new_route_ceilings": {
+    "ORIENT": 95000,
+    "TRIAGE": 112000,
+    "CODEBASE-HEALTH": 112000,
+    "QA": 130000
+  },
+  "consumed": [
+    {
+      "phase": "H2",
+      "key": "kernel_bytes",
+      "to": 35382,
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 33797
+    },
+    {
+      "phase": "H2",
+      "key": "protocol_bytes",
+      "to": 15863,
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 13486
+    },
+    {
+      "phase": "H2",
+      "key": "description_chars",
+      "to": 3847,
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 3793
+    },
+    {
+      "phase": "H2",
+      "key": "readset.BUILD",
+      "to": 100895,
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 96727
+    },
+    {
+      "phase": "H2",
+      "key": "readset.PLAN",
+      "to": 89101,
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 84933
+    },
+    {
+      "phase": "H2",
+      "key": "readset.DEBUG",
+      "to": 76887,
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 72719
+    },
+    {
+      "phase": "H2",
+      "key": "readset.REVIEW",
+      "to": 74907,
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 70739
+    },
+    {
+      "phase": "H3",
+      "key": "kernel_bytes",
+      "to": 35638,
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 35382
+    },
+    {
+      "phase": "H3",
+      "key": "readset.BUILD",
+      "to": 101249,
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 100895
+    },
+    {
+      "phase": "H3",
+      "key": "readset.PLAN",
+      "to": 89455,
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 89101
+    },
+    {
+      "phase": "H3",
+      "key": "readset.DEBUG",
+      "to": 77241,
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 76887
+    },
+    {
+      "phase": "H3",
+      "key": "readset.REVIEW",
+      "to": 75261,
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 74907
+    },
+    {
+      "phase": "H4",
+      "key": "protocol_bytes",
+      "to": 16005,
+      "at_sha": "924808826fe619199ddaa3b5675062b474775b2a",
+      "from": 15863
+    },
+    {
+      "phase": "H4",
+      "key": "readset.BUILD",
+      "to": 102167,
+      "at_sha": "924808826fe619199ddaa3b5675062b474775b2a",
+      "from": 101249
+    },
+    {
+      "phase": "H4",
+      "key": "readset.PLAN",
+      "to": 89926,
+      "at_sha": "924808826fe619199ddaa3b5675062b474775b2a",
+      "from": 89455
+    },
+    {
+      "phase": "H4",
+      "key": "readset.DEBUG",
+      "to": 77781,
+      "at_sha": "924808826fe619199ddaa3b5675062b474775b2a",
+      "from": 77241
+    },
+    {
+      "phase": "H4",
+      "key": "readset.REVIEW",
+      "to": 75732,
+      "at_sha": "924808826fe619199ddaa3b5675062b474775b2a",
+      "from": 75261
+    },
+    {
+      "phase": "H5",
+      "key": "kernel_bytes",
+      "to": 36009,
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 35638
+    },
+    {
+      "phase": "H5",
+      "key": "protocol_bytes",
+      "to": 16109,
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 16005
+    },
+    {
+      "phase": "H5",
+      "key": "readset.BUILD",
+      "to": 103281,
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 102167
+    },
+    {
+      "phase": "H5",
+      "key": "readset.PLAN",
+      "to": 91041,
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 89926
+    },
+    {
+      "phase": "H5",
+      "key": "readset.DEBUG",
+      "to": 78896,
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 77781
+    },
+    {
+      "phase": "H5",
+      "key": "readset.REVIEW",
+      "to": 76847,
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 75732
+    },
+    {
+      "phase": "H6",
+      "key": "kernel_bytes",
+      "to": 36231,
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 36009
+    },
+    {
+      "phase": "H6",
+      "key": "protocol_bytes",
+      "to": 16166,
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 16109
+    },
+    {
+      "phase": "H6",
+      "key": "readset.BUILD",
+      "to": 103560,
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 103281
+    },
+    {
+      "phase": "H6",
+      "key": "readset.PLAN",
+      "to": 91320,
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 91041
+    },
+    {
+      "phase": "H6",
+      "key": "readset.DEBUG",
+      "to": 79175,
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 78896
+    },
+    {
+      "phase": "H6",
+      "key": "readset.REVIEW",
+      "to": 77126,
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 76847
+    },
+    {
+      "phase": "H90",
+      "key": "description_chars",
+      "to": 3957,
+      "at_sha": "5df7af5752de045ddff92483117d9d3c714ba2c3",
+      "from": 3847
+    }
+  ]
+}

@@ -1,0 +1,373 @@
+{
+  "version": 1,
+  "_note": "Suppression counts per file (craftflow_suppression_ratchet.py). This file may only shrink: lower it with --update-baseline; raising a number or adding a file is a human decision made by editing it.",
+  "files": {
+    "plugins/craftflow/scripts/craftflow_context_nudge.py": {
+      "noqa:BLE001": 29,
+      "unexplained": 6
+    },
+    "plugins/craftflow/scripts/craftflow_context_nudge_compact.py": {
+      "noqa:BLE001": 8
+    },
+    "plugins/craftflow/scripts/craftflow_contract_validate_impact.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/scripts/craftflow_harness_capabilities_impact.py": {
+      "noqa:E402": 3,
+      "unexplained": 3
+    },
+    "plugins/craftflow/scripts/craftflow_hook_unit_tests.py": {
+      "noqa:BLE001": 2,
+      "noqa:E402": 11,
+      "type-ignore": 4,
+      "unexplained": 15
+    },
+    "plugins/craftflow/scripts/craftflow_hooklib.py": {
+      "type-ignore": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/scripts/craftflow_memory_merge.py": {
+      "noqa:BLE001": 1
+    },
+    "plugins/craftflow/scripts/craftflow_model_report.py": {
+      "noqa:PLC0415": 4,
+      "unexplained": 3
+    },
+    "plugins/craftflow/scripts/craftflow_pretooluse_guard.py": {
+      "noqa:E402": 2,
+      "type-ignore": 1,
+      "unexplained": 2
+    },
+    "plugins/craftflow/scripts/craftflow_route_replay_ch.py": {
+      "noqa:E731": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/scripts/craftflow_route_replay_check.py": {
+      "noqa:E402": 3,
+      "unexplained": 3
+    },
+    "plugins/craftflow/scripts/craftflow_router_context_impact.py": {
+      "noqa:E731": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/scripts/craftflow_router_corpus.py": {
+      "noqa:F401": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/scripts/craftflow_router_readset_burden.py": {
+      "noqa:E731": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/scripts/craftflow_router_readset_guard.py": {
+      "noqa:E731": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/scripts/craftflow_rule_inventory.py": {
+      "noqa:E731": 2,
+      "noqa:F401": 3,
+      "unexplained": 5
+    },
+    "plugins/craftflow/scripts/craftflow_skill_ledger.py": {
+      "noqa:E402": 1,
+      "noqa:WPS433": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/scripts/craftflow_skill_promote.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/scripts/craftflow_skill_propose.py": {
+      "noqa:E402": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/scripts/craftflow_state_digest.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/scripts/craftflow_state_query.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/scripts/craftflow_status_report.py": {
+      "noqa:E402": 1
+    },
+    "plugins/craftflow/scripts/craftflow_stop_gate.py": {
+      "noqa:BLE001": 8,
+      "noqa:E402": 12,
+      "unexplained": 11
+    },
+    "plugins/craftflow/scripts/craftflow_stop_gate_arm.py": {
+      "noqa:BLE001": 2
+    },
+    "plugins/craftflow/scripts/craftflow_stop_gate_core.py": {
+      "noqa:BLE001": 23
+    },
+    "plugins/craftflow/scripts/craftflow_stop_gate_report.py": {
+      "noqa:BLE001": 1
+    },
+    "plugins/craftflow/scripts/craftflow_subagent_stop_audit.py": {
+      "noqa:BLE001": 3
+    },
+    "plugins/craftflow/scripts/craftflow_transcript_usage.py": {
+      "noqa:BLE001": 4,
+      "noqa:PLC0415": 1
+    },
+    "plugins/craftflow/scripts/craftflow_workflow_handoff.py": {
+      "noqa:F401": 1
+    },
+    "plugins/craftflow/scripts/craftflow_workflow_id.py": {
+      "type-ignore": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/scripts/craftflow_workflow_replay_check.py": {
+      "noqa:BLE001": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/scripts/craftflow_worktree_merge_guard_check.py": {
+      "noqa:BLE001": 3,
+      "unexplained": 3
+    },
+    "plugins/craftflow/tests/fixtures/build_normative_allowlist.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/router_relocation_drills.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/router_test_enumerate.py": {
+      "type-ignore": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_agent_structure.py": {
+      "noqa:E731": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_architecture_scanner_agent.py": {
+      "type-ignore": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_context_nudge.py": {
+      "noqa:BLE001": 1,
+      "noqa:E402": 2,
+      "noqa:E731": 1,
+      "unexplained": 3
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_docs_rot.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_jev_ab_report.py": {
+      "noqa:BLE001": 1,
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_jev_client.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_jev_config.py": {
+      "noqa:E402": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_jev_corpus_build.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_jev_heuristic.py": {
+      "noqa:E402": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_jev_prompt_hint.py": {
+      "noqa:E402": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_jev_remfix_scope.py": {
+      "noqa:E402": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_jev_replay.py": {
+      "noqa:E402": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_jev_risk_gate.py": {
+      "noqa:E402": 3,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_jev_session_cache.py": {
+      "noqa:E402": 2,
+      "type-ignore": 3,
+      "unexplained": 5
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_jev_session_check.py": {
+      "noqa:E402": 6,
+      "unexplained": 6
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_jev_setup.py": {
+      "noqa:E402": 3,
+      "unexplained": 3
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_model_report.py": {
+      "noqa:BLE001": 1,
+      "noqa:E402": 4,
+      "unexplained": 4
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_release_gate.py": {
+      "noqa:E402": 6,
+      "unexplained": 5
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_route_types.py": {
+      "noqa:E402": 3,
+      "unexplained": 3
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_routing_law.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_status_chains.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_stop_gate.py": {
+      "noqa:BLE001": 1,
+      "noqa:E402": 4,
+      "unexplained": 4
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_stop_gate_act.py": {
+      "noqa:BLE001": 1,
+      "noqa:E402": 2,
+      "noqa:E731": 1,
+      "unexplained": 3
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_transcript_usage.py": {
+      "noqa:BLE001": 1,
+      "noqa:E402": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/tests/fixtures/test_craftflow_workflow_handoff.py": {
+      "noqa:E402": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/tests/fixtures/test_harvest_live_driver.py": {
+      "noqa:E402": 1,
+      "noqa:E731": 2,
+      "unexplained": 3
+    },
+    "plugins/craftflow/tests/fixtures/test_resolve_workspace_root.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_route_replay_ch.py": {
+      "noqa:E402": 2,
+      "noqa:E731": 1,
+      "unexplained": 3
+    },
+    "plugins/craftflow/tests/fixtures/test_route_replay_handoff.py": {
+      "noqa:E402": 3,
+      "unexplained": 3
+    },
+    "plugins/craftflow/tests/fixtures/test_router_budget.py": {
+      "noqa:BLE001": 1,
+      "noqa:E402": 5,
+      "noqa:E731": 14,
+      "unexplained": 18
+    },
+    "plugins/craftflow/tests/fixtures/test_router_context_impact.py": {
+      "noqa:BLE001": 2,
+      "noqa:E402": 2,
+      "unexplained": 3
+    },
+    "plugins/craftflow/tests/fixtures/test_router_growth_envelope.py": {
+      "noqa:BLE001": 1,
+      "noqa:E402": 3,
+      "unexplained": 3
+    },
+    "plugins/craftflow/tests/fixtures/test_router_policy_prose.py": {
+      "noqa:E402": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/tests/fixtures/test_router_readset.py": {
+      "noqa:BLE001": 1,
+      "noqa:E402": 4,
+      "noqa:E731": 6,
+      "unexplained": 10
+    },
+    "plugins/craftflow/tests/fixtures/test_router_relocation_drills.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_router_test_anchors.py": {
+      "noqa:E402": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/tests/fixtures/test_router_xrefs.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_rule_inventory.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_rule_inventory_doubt.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_rule_inventory_doubt2.py": {
+      "noqa:E402": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_rule_inventory_doubt3.py": {
+      "noqa:E402": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_rule_inventory_hardening.py": {
+      "noqa:E402": 3,
+      "unexplained": 3
+    },
+    "plugins/craftflow/tests/fixtures/test_rule_inventory_rows2.py": {
+      "noqa:E402": 1,
+      "noqa:E731": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/tests/fixtures/test_rule_inventory_sbc.py": {
+      "noqa:E402": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/tests/fixtures/test_workflow_id_and_progress.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/fixtures/test_workspace_init.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/live/context_nudge_compact_roundtrip.py": {
+      "noqa:BLE001": 1
+    },
+    "plugins/craftflow/tests/live/context_nudge_roundtrip.py": {
+      "noqa:BLE001": 1
+    },
+    "plugins/craftflow/tests/live/context_nudge_timing.py": {
+      "noqa:E402": 2,
+      "unexplained": 2
+    },
+    "plugins/craftflow/tests/live/harvest_routes_roundtrip.py": {
+      "noqa:BLE001": 1
+    },
+    "plugins/craftflow/tests/live/jev_ab_benchmark_roundtrip.py": {
+      "noqa:E402": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/live/router_context_cut_roundtrip.py": {
+      "noqa:BLE001": 1
+    },
+    "plugins/craftflow/tests/live/stop_gate_act_roundtrip.py": {
+      "noqa:BLE001": 1,
+      "noqa:E731": 1,
+      "noqa:S602": 1,
+      "unexplained": 1
+    },
+    "plugins/craftflow/tests/live/stop_gate_roundtrip.py": {
+      "noqa:BLE001": 3
+    }
+  }
+}

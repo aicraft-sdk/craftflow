@@ -541,6 +541,7 @@ AGENTS_DIR = os.path.join(_FIXTURES_DIR, "../../agents")
 
 EXPECTED_AGENT_MODELS = {
     "planner": "opus",
+    "architecture-scanner": "opus",
     "plan-gap-reviewer": "opus",
     "plan-bakeoff-judge": "opus",
     "bug-investigator": "opus",
@@ -596,6 +597,26 @@ print("\n[test_agent_frontmatter_has_single_model_line]")
 for _f in _agent_files:
     _models = read_frontmatter_model(os.path.join(AGENTS_DIR, _f))
     check(f"agents/{_f} has exactly one frontmatter model line", len(_models), 1)
+
+print("\n[test_review_agents_diff_against_recorded_base] (H4)")
+_FALLBACK = "If no BASE is recorded or it is `unavailable`, fall back to `git diff HEAD` and say so"
+
+_agent = lambda name: open(os.path.join(AGENTS_DIR, name + ".md"), encoding="utf-8").read()  # noqa: E731
+_SUBST = "substitute the sha from `## Review Base` for `<BASE>`"
+# command forms, not the bare placeholder (_SUBST itself contains <BASE>); the iv/bi tail entries are their fallbacks
+_R = ("## Review Base", _FALLBACK, "UNVERIFIED")
+_CMDS = {"code-reviewer": ("git log --oneline <BASE>..HEAD", "git diff --stat <BASE>", "`git diff <BASE>`") + _R,
+         "silent-failure-hunter": ("git diff --name-only <BASE>",) + _R, "doc-syncer": ("git diff <BASE> --stat && git diff <BASE>",) + _R,
+         "integration-verifier": ("git diff <BASE> -- '*.test.*' '*.spec.*'", "if none is recorded or it is `unavailable`, use `git diff HEAD` and say so"),
+         "bug-investigator": ("`git diff <BASE>` for the fix so far", "if no BASE is recorded or it is `unavailable`, fall back to `git diff HEAD` and say so.")}
+for _n, _cmds in _CMDS.items():
+    _t = _agent(_n)  # $BASE is not a shell variable: a pasted command would diff against nothing
+    check(f"{_n} pins its <BASE> command forms, fallback", [x for x in _cmds if x not in _t], [])
+    check(f"{_n} uses <BASE> outside the substitution sentence, no literal $BASE", "$BASE" not in _t and _SUBST in _t and _t.replace(_SUBST, "").count("<BASE>") >= 1, True)
+    check(f"{_n} has no HEAD~N diff", [h for h in ("HEAD~1", "HEAD~5") if h in _t and _n != "bug-investigator"], [])
+_rows = [ln for ln in _agent("integration-verifier").splitlines() if "Test tampering" in ln]
+check("integration-verifier has one tamper row", len(_rows) == 1 and "git diff <BASE>" in _rows[0], True)
+check_count("bug-investigator keeps HEAD~5 only in history exploration", _agent("bug-investigator"), "HEAD~5", 1)
 
 # ---------------------------------------------------------------------------
 # Summary

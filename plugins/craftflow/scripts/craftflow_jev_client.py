@@ -182,7 +182,7 @@ def _resolve_endpoint(log, config_path: Optional[Path] = None) -> str:
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Fail any 3xx so the bearer key can never be forwarded to a redirect target."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
 

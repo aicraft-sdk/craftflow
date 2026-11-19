@@ -4,7 +4,7 @@ OFF BY DEFAULT: inert unless config/jev.json has enabled:true AND TYPESAFE_API_K
 Never blocks (no decision/blockReason, exit 0 always). Design: docs/plans/2026-09-19-jev-routing-hint-design.md
 """
 from __future__ import annotations
-import json, os, re, sys, uuid
+import json, os, re, uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from craftflow_hooklib import (
@@ -131,6 +131,10 @@ WORKFLOWS: Dict[str, str] = {
     "DEBUG": "Fix an error, bug, crash, failing test, or broken behavior; troubleshoot an issue",
     "PLAN": "Plan, design, architect, roadmap, strategy, spec, or brainstorm",
     "REVIEW": "Review, audit, analyze, or assess existing code; advisory only",
+    "ORIENT": "Explain or map existing code; no changes",
+    "QA": "Design, build and run a test system for existing code",
+    "TRIAGE": "Triage incoming issues/PRs into briefs",
+    "CODEBASE-HEALTH": "Architecture health scan and deepening candidates",
     "BUILD": "Everything else: implement, add, create, write, change, refactor",
 }
 

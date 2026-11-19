@@ -42,9 +42,11 @@ Get the current diff using the appropriate command for the context:
 # Pre-commit (staged changes — preferred when commits are being staged):
 git diff --cached --stat && git diff --cached
 
-# Post-build (most recent commit — use when no staged changes exist):
-git diff HEAD~1 --stat && git diff HEAD~1
+# Post-build (the whole phase — use when no staged changes exist; substitute the sha from `## Review Base` for `<BASE>`):
+git diff <BASE> --stat && git diff <BASE>
 ```
+
+If no BASE is recorded or it is `unavailable`, fall back to `git diff HEAD` and say so. An empty diff under this fallback means UNVERIFIED (no recorded BASE), never "no changes"; for a committed build inspect the commits themselves with `git log -p -n 5` (or the router-provided changed-file list) and say that BASE was missing.
 
 Read the full diff output before classifying. Do not skim the stat summary only — the full diff reveals whether signatures, exports, or structural patterns changed.
 

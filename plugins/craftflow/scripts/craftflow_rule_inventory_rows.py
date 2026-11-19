@@ -14,6 +14,9 @@ from typing import Dict, List, Optional, Set, Tuple
 import craftflow_router_corpus as cor
 
 VARIANTS = {"BUILD": ["fast_path", "standard"], "PLAN": ["standard"], "DEBUG": ["standard"], "REVIEW": ["standard"]}
+# Row tokens may also name the harvest workflows. `VARIANTS` stays the legacy four: it is the default coverage() uses for a
+# map without a `variants` key.
+ROW_VARIANTS = dict(VARIANTS, ORIENT=["standard"], QA=["standard", "probe"], TRIAGE=["standard"], **{"CODEBASE-HEALTH": ["standard"]})
 HEADERS = {
     "policy": "| Baseline ID or group (file:start-end@sha) | Policy key | Enforcing script::function | Test | Status | live_verified | Reviewed by | Evidence |",
     "rewrites": "| Baseline ID(s) or group | New IDs | Kind (pointer/dedupe/trigger/literal-to-key/xref/split/heading/group/section-move) | Justification | Equivalence note | Reviewed by | Evidence |",
@@ -102,10 +105,10 @@ def tokens_of(cell: str, errors: List[str]) -> Dict[Tuple[str, str], Optional[st
     for tok in re.split(r"[,;]", cell):
         body, _, reach = tok.strip().partition("@")
         wf, _, var = body.partition(":")
-        if wf not in VARIANTS or (var and var not in VARIANTS[wf]) or (reach and reach not in REACH_NAMES):
+        if wf not in ROW_VARIANTS or (var and var not in ROW_VARIANTS[wf]) or (reach and reach not in REACH_NAMES):
             errors.append(f"bad narrowed coverage token '{tok.strip()}'")
         else:
-            out.update(((wf, v), reach or None) for v in ([var] if var else VARIANTS[wf]))
+            out.update(((wf, v), reach or None) for v in ([var] if var else ROW_VARIANTS[wf]))
     return out
 
 

@@ -24,7 +24,7 @@ released once a write under the lock had moved that position.
 from __future__ import annotations
 
 try:
-    from fcntl import LOCK_EX, LOCK_NB, LOCK_SH, LOCK_UN, flock  # noqa: F401  (POSIX: re-exported unchanged)
+    from fcntl import LOCK_EX, LOCK_NB, LOCK_SH, LOCK_UN, flock  # POSIX: re-exported unchanged
 except ImportError:  # Windows
     import errno
     import msvcrt

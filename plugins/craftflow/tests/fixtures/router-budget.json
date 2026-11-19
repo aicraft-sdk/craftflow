@@ -1,7 +1,7 @@
 {
   "baseline_ref": "0439c33932463d257b881ce50f136ab7661c0a39",
-  "measured_at_sha": "491ed3d9bb9a77a9b63704e6b7819591a7c45946",
-  "last_phase": "P12",
+  "measured_at_sha": "6c3bf83cca842bb77fdbc7915fd0b739f3d9cf4e",
+  "last_phase": "P13",
   "merged_phases": [
     "P2",
     "P2C",
@@ -14,23 +14,24 @@
     "P9",
     "P10",
     "P11",
-    "P12"
+    "P12",
+    "P13"
   ],
   "conditions": {
     "difference_17": true,
-    "live_verified_enterplanmode": false
+    "live_verified_enterplanmode": true
   },
   "reach_amendment": null,
   "ceilings": {
-    "kernel_bytes": 34155,
-    "protocol_bytes": 13808,
+    "kernel_bytes": 36231,
+    "protocol_bytes": 16166,
     "reference_max_bytes": 19097,
-    "description_chars": 3793,
+    "description_chars": 3957,
     "readset": {
-      "BUILD": 97407,
-      "PLAN": 85613,
-      "DEBUG": 73399,
-      "REVIEW": 71419
+      "BUILD": 103560,
+      "PLAN": 91320,
+      "DEBUG": 79175,
+      "REVIEW": 77126
     }
   },
   "ceiling_raises": [
@@ -129,6 +130,246 @@
       "to": 34921,
       "projected_delta": 1010,
       "at_sha": "2ee4c77d7562608537f12b957940ec0a1e1daa16"
+    },
+    {
+      "phase": "H2",
+      "key": "kernel_bytes",
+      "to": 35382,
+      "envelope": "ADR-0074",
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 33797
+    },
+    {
+      "phase": "H2",
+      "key": "protocol_bytes",
+      "to": 15863,
+      "envelope": "ADR-0074",
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 13486
+    },
+    {
+      "phase": "H2",
+      "key": "description_chars",
+      "to": 3847,
+      "envelope": "ADR-0074",
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 3793
+    },
+    {
+      "phase": "H2",
+      "key": "readset.BUILD",
+      "to": 100895,
+      "envelope": "ADR-0074",
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 96727
+    },
+    {
+      "phase": "H2",
+      "key": "readset.PLAN",
+      "to": 89101,
+      "envelope": "ADR-0074",
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 84933
+    },
+    {
+      "phase": "H2",
+      "key": "readset.DEBUG",
+      "to": 76887,
+      "envelope": "ADR-0074",
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 72719
+    },
+    {
+      "phase": "H2",
+      "key": "readset.REVIEW",
+      "to": 74907,
+      "envelope": "ADR-0074",
+      "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+      "from": 70739
+    },
+    {
+      "phase": "H3",
+      "key": "kernel_bytes",
+      "to": 35638,
+      "envelope": "ADR-0074",
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 35382
+    },
+    {
+      "phase": "H3",
+      "key": "readset.BUILD",
+      "to": 101249,
+      "envelope": "ADR-0074",
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 100895
+    },
+    {
+      "phase": "H3",
+      "key": "readset.PLAN",
+      "to": 89455,
+      "envelope": "ADR-0074",
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 89101
+    },
+    {
+      "phase": "H3",
+      "key": "readset.DEBUG",
+      "to": 77241,
+      "envelope": "ADR-0074",
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 76887
+    },
+    {
+      "phase": "H3",
+      "key": "readset.REVIEW",
+      "to": 75261,
+      "envelope": "ADR-0074",
+      "at_sha": "a880c7eeee64a62c18edb68502cf8e596411b326",
+      "from": 74907
+    },
+    {
+      "phase": "H4",
+      "key": "protocol_bytes",
+      "to": 16005,
+      "envelope": "ADR-0074",
+      "at_sha": "924808826fe619199ddaa3b5675062b474775b2a",
+      "from": 15863
+    },
+    {
+      "phase": "H4",
+      "key": "readset.BUILD",
+      "to": 102167,
+      "envelope": "ADR-0074",
+      "at_sha": "924808826fe619199ddaa3b5675062b474775b2a",
+      "from": 101249
+    },
+    {
+      "phase": "H4",
+      "key": "readset.PLAN",
+      "to": 89926,
+      "envelope": "ADR-0074",
+      "at_sha": "924808826fe619199ddaa3b5675062b474775b2a",
+      "from": 89455
+    },
+    {
+      "phase": "H4",
+      "key": "readset.DEBUG",
+      "to": 77781,
+      "envelope": "ADR-0074",
+      "at_sha": "924808826fe619199ddaa3b5675062b474775b2a",
+      "from": 77241
+    },
+    {
+      "phase": "H4",
+      "key": "readset.REVIEW",
+      "to": 75732,
+      "envelope": "ADR-0074",
+      "at_sha": "924808826fe619199ddaa3b5675062b474775b2a",
+      "from": 75261
+    },
+    {
+      "phase": "H5",
+      "key": "kernel_bytes",
+      "to": 36009,
+      "envelope": "ADR-0074",
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 35638
+    },
+    {
+      "phase": "H5",
+      "key": "protocol_bytes",
+      "to": 16109,
+      "envelope": "ADR-0074",
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 16005
+    },
+    {
+      "phase": "H5",
+      "key": "readset.BUILD",
+      "to": 103281,
+      "envelope": "ADR-0074",
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 102167
+    },
+    {
+      "phase": "H5",
+      "key": "readset.PLAN",
+      "to": 91041,
+      "envelope": "ADR-0074",
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 89926
+    },
+    {
+      "phase": "H5",
+      "key": "readset.DEBUG",
+      "to": 78896,
+      "envelope": "ADR-0074",
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 77781
+    },
+    {
+      "phase": "H5",
+      "key": "readset.REVIEW",
+      "to": 76847,
+      "envelope": "ADR-0074",
+      "at_sha": "0c713fd38bf5e3af7cddc4de7cada27b4680f630",
+      "from": 75732
+    },
+    {
+      "phase": "H6",
+      "key": "kernel_bytes",
+      "to": 36231,
+      "envelope": "ADR-0074",
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 36009
+    },
+    {
+      "phase": "H6",
+      "key": "protocol_bytes",
+      "to": 16166,
+      "envelope": "ADR-0074",
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 16109
+    },
+    {
+      "phase": "H6",
+      "key": "readset.BUILD",
+      "to": 103560,
+      "envelope": "ADR-0074",
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 103281
+    },
+    {
+      "phase": "H6",
+      "key": "readset.PLAN",
+      "to": 91320,
+      "envelope": "ADR-0074",
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 91041
+    },
+    {
+      "phase": "H6",
+      "key": "readset.DEBUG",
+      "to": 79175,
+      "envelope": "ADR-0074",
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 78896
+    },
+    {
+      "phase": "H6",
+      "key": "readset.REVIEW",
+      "to": 77126,
+      "envelope": "ADR-0074",
+      "at_sha": "1b9b0899c763ba551bcb20223a5c47721d329680",
+      "from": 76847
+    },
+    {
+      "phase": "H90",
+      "key": "description_chars",
+      "to": 3957,
+      "envelope": "ADR-0074",
+      "at_sha": "5df7af5752de045ddff92483117d9d3c714ba2c3",
+      "from": 3847
     }
   ],
   "targets": {
@@ -163,9 +404,65 @@
     "adr": "ADR-0073",
     "decided_at_sha": "38326dd2",
     "projection_sha256": "5b27b389a30d7205e0c07a231d218d1fd2ae16958c99fe919ca7879d84d9f832",
-    "cause": "P2C: Difference 17 dropped (D17-A, reach_amendment null) and REACH-B adopted as the reach option; caps are the guaranteed effective tier of router-projection.json, exact values, ratchet-only afterwards"
+    "cause": "P2C: Difference 17 dropped (D17-A, reach_amendment null) and REACH-B adopted as the reach option; caps are the guaranteed effective tier of router-projection.json, exact values, ratchet-only afterwards",
+    "amendments": [
+      {
+        "key": "kernel_bytes",
+        "to": 38597,
+        "cause": "ADR-0074 growth envelope",
+        "decided_by": "David",
+        "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+        "adr": "ADR-0073",
+        "from": 34202
+      },
+      {
+        "key": "protocol_bytes",
+        "to": 19986,
+        "cause": "ADR-0074 growth envelope",
+        "decided_by": "David",
+        "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+        "adr": "ADR-0073",
+        "from": 14606
+      },
+      {
+        "key": "readset.BUILD",
+        "to": 110227,
+        "cause": "ADR-0074 growth envelope",
+        "decided_by": "David",
+        "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+        "adr": "ADR-0073",
+        "from": 98180
+      },
+      {
+        "key": "readset.PLAN",
+        "to": 97933,
+        "cause": "ADR-0074 growth envelope",
+        "decided_by": "David",
+        "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+        "adr": "ADR-0073",
+        "from": 86940
+      },
+      {
+        "key": "readset.DEBUG",
+        "to": 86219,
+        "cause": "ADR-0074 growth envelope",
+        "decided_by": "David",
+        "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+        "adr": "ADR-0073",
+        "from": 74204
+      },
+      {
+        "key": "readset.REVIEW",
+        "to": 83739,
+        "cause": "ADR-0074 growth envelope",
+        "decided_by": "David",
+        "at_sha": "b362eb8d2cb8a1d67a1a9dc0b53e3ad1badc7923",
+        "adr": "ADR-0073",
+        "from": 72266
+      }
+    ]
   },
-  "projection_sha256": "953f1646bdb5e395beac81749f35c9da831996ee70d2b1e07bd77f5b9470fb98",
+  "projection_sha256": "2f4febd314ed2d55c53e911a22f53ab984da0f750db989d0258361fd92662d2f",
   "projection_revisions": [
     {
       "phase": "P5",
@@ -205,7 +502,7 @@
       "to_projection_sha256": "a467a2850885b98c8ba7fa2f4f166fc46894d7ed0048d1443936894c8a690505",
       "fits_enforced_caps": true,
       "decided_by": "David",
-      "cause": "P10 kernel relocation: SKILL.md falls from 86251 to about 33.8 K. Section 4 (resume), the section 0a probe body, section 3 and Parent workflow creation, the verifier workload telemetry, section 8 (read-only contracts, YAML contracts, schema validation, Contract overrides, Skill-Distill pointer), 'After every agent completion', 'Verifier findings handoff', Doubt-Verify and Fix-Verify (with fix_verify_keyword_scan from fast-path.md), the Intent Interview Gate, the brainstorming handoff, chain-loop steps 5a/5b, Fast Path Detection, Worktree Isolation steps 1-3 and the step 5a workspace details with the state-read self-heal move to five new files (workflow-start.md start/all, resume.md conditional/all, post-agent-validation.md happy-path/all, verify-dispatch.md happy-path/BUILD+DEBUG, memory-load-workspace.md conditional/all) and to build-workflow.md and plan-workflow.md; the artifact policy's session_id sub-bullets move to resume.md. The cut-plan P10 rows now carry the as-built text: 35 delta rows (anchored replace and insert rows generated against the mechanical move result) reproduce the working tree byte for byte, so the kernel pointers are the shortened as-built lines, the moved text carries the cross-reference qualifiers (SKILL.md or the new file named, cross-reference fix 3 exactly as planned), the carry-item-1 sentence of Worktree Isolation step 1 no longer cites the retired MERGE_EXIT pattern, the telemetry block has no heading of its own (it ends the 'After every agent completion' section, so the largest reference gains no heading), workflow-start.md has no H1 and its Parent workflow creation is a '## ' section, and section 0a gains a one-line probe trigger. Two later-phase rows only change their anchors to the as-built kernel lines: p11-g6-kernel-5a-5b-pointer and p12-c2-discover-workspace (replacement texts unchanged). Plan B2 conflict found and resolved inside the caps: nine units (SCENARIOS_TOTAL, SCENARIOS_PASSED, SCENARIOS_FAILED, REMEDIATION_REASON: ..., REPLAN_REASON: ..., DESIGN_FILE, 'telemetry:', and the Agent/Override table header, plus the Group/Keywords header handled by a dedupe row) have fewer than two words or a cell delimiter, so no Applicability quote can narrow their reach; the plan says such a block stays in the kernel. The kernel keeps a seven-item list and a one-row table (about 230 bytes) instead of the 3,913 B kernel penalty the P2 analysis disclosed for REACH-A, and the projection now reports reach_a_kernel_penalty_bytes 0 and single_token_units 0. Offsets that keep the full-plan projection inside enforced_caps: shorter kernel pointers, the section 0a probe sentence is one line, the kernel keeps no heading for moved sections, policy-table and loop-caps cells say 'verify-dispatch.md Doubt-Verify' without a section number, and the fast-path.md paragraph drops the word 'above' instead of naming the new file. Carry item 2 (naming craftflow_worktree_finalize.py in the worktree_merge enforced-by cell) was measured at +34 B of kernel and not applied: the full plan has 21 B of kernel headroom, reported instead. The policy map gains 42 Rewrites rows (18 section-move, 14 xref, 4 pointer, 3 group, 2 split and 1 dedupe), 161 Applicability rows and 5 Read-map widening rows, all unsigned; the projection's reach_feasibility reads them, so signing them changes it again and needs its own revision entry. Full-plan projection (first P10 draft, superseded by the remediation below): kernel 34181 of 34202, reference max 19097 of 19101, BUILD/PLAN/DEBUG/REVIEW 98157/86930/74181/72243 of 98180/86940/74204/72266. Live ceilings are re-ratcheted to the measured tree; only reference_max_bytes rises (build-workflow.md and plan-workflow.md receive Fast Path Detection, Worktree steps 1-3, the Intent Interview Gate, the brainstorming handoff and steps 5a/5b), recorded in ceiling_raises within its projected delta. decided_by is pending-David. P10 remediation (doubt cycle 1 REFUTED, hunter and reviewer findings): the Chain Execution Loop fence and the Memory Load fence are covered by `pointer` rows that list only their kernel ids (an id-level Applicability row had switched the reach check off for the kernel half, so moving the kernel chain loop into plan-workflow.md or the kernel Memory Load fence into resume.md still passed; both mutations fail now); chain loop step 5a moves from plan-workflow.md to remediation-and-research.md (PLAN and DEBUG both read it), 5b stays in plan-workflow.md; the kernel gains the state-read-compaction condition, a grep of ## Decisions for the scope-marker prefixes, 'once per context' and a Task Metadata Contract pointer that says 'before any TaskCreate()' (the separate Fast Path Detection pointer line and the Parent workflow creation pointer line are folded away); 13 stale SKILL.md section pointers get 13 `xref` rows and the Worktree step 1 reword becomes a `pointer` row; five P11/P12 rows change their anchors (p11-g6-kernel-5a-5b-pointer, p11-pw-bakeoff-step5b, p11-mr-skill-distill-fast-path, p11-mr-skill-distill-build-graph, p12-c2-discover-workspace) and p11-g6-pw-chain-heading is dropped (plan-workflow.md keeps only step 5b, which P11 moves whole); the P10 delta rows are kept and 41 remediation delta rows (p10r-delta-*) carry the diff of this change on top of them, so the unanchored p3-kernel-when-to-use bias stays out of the projection as before; three read-map triggers change (two lose their parentheticals, memory-load-workspace.md gains the state-read-compaction condition) through P10 `update` rows. The policy map holds 220 unsigned rows (56 Rewrites, 159 Applicability, 5 Read-map widening), among them the P9 row David signed for b32a2901866e, re-opened. Full-plan projection stays under enforced_caps: kernel 34195 of 34202 (7 B headroom), reference max 19097 of 19101, BUILD/PLAN/DEBUG/REVIEW 98151/86458/74195/72257 of 98180/86940/74204/72266. Live ceilings are re-ratcheted to the measured tree (kernel 33911, protocol 29360, BUILD/PLAN/DEBUG/REVIEW 121664/112299/88665/86727); reference_max_bytes keeps its recorded P10 raise (the largest reference is now plan-workflow.md at 26869). Reported, not fitted (enforced_caps unchanged): the kernel carve-out bullet keeps `(§ 8)` until p11-mr-skill-distill-kernel rewrites it, and the section 8 residue table says only 'in that file'. Doubt cycle 2 (R2): the PLAN bake-off assembly fence in plan-workflow.md now cites post-agent-validation.md for \"structured agent results\" (7 bytes shorter; cut-plan row p10r-delta-plan-workflow-02 carries it, the kernel is unchanged at 33,911 bytes). decided_by is pending-David."
+      "cause": "P10 kernel relocation: SKILL.md falls from 86251 to about 33.8 K. Section 4 (resume), the section 0a probe body, section 3 and Parent workflow creation, the verifier workload telemetry, section 8 (read-only contracts, YAML contracts, schema validation, Contract overrides, Skill-Distill pointer), 'After every agent completion', 'Verifier findings handoff', Doubt-Verify and Fix-Verify (with fix_verify_keyword_scan from fast-path.md), the Intent Interview Gate, the brainstorming handoff, chain-loop steps 5a/5b, Fast Path Detection, Worktree Isolation steps 1-3 and the step 5a workspace details with the state-read self-heal move to five new files (workflow-start.md start/all, resume.md conditional/all, post-agent-validation.md happy-path/all, verify-dispatch.md happy-path/BUILD+DEBUG, memory-load-workspace.md conditional/all) and to build-workflow.md and plan-workflow.md; the artifact policy's session_id sub-bullets move to resume.md. The cut-plan P10 rows now carry the as-built text: 35 delta rows (anchored replace and insert rows generated against the mechanical move result) reproduce the working tree byte for byte, so the kernel pointers are the shortened as-built lines, the moved text carries the cross-reference qualifiers (SKILL.md or the new file named, cross-reference fix 3 exactly as planned), the carry-item-1 sentence of Worktree Isolation step 1 no longer cites the retired MERGE_EXIT pattern, the telemetry block has no heading of its own (it ends the 'After every agent completion' section, so the largest reference gains no heading), workflow-start.md has no H1 and its Parent workflow creation is a '## ' section, and section 0a gains a one-line probe trigger. Two later-phase rows only change their anchors to the as-built kernel lines: p11-g6-kernel-5a-5b-pointer and p12-c2-discover-workspace (replacement texts unchanged). Plan B2 conflict found and resolved inside the caps: nine units (SCENARIOS_TOTAL, SCENARIOS_PASSED, SCENARIOS_FAILED, REMEDIATION_REASON: ..., REPLAN_REASON: ..., DESIGN_FILE, 'telemetry:', and the Agent/Override table header, plus the Group/Keywords header handled by a dedupe row) have fewer than two words or a cell delimiter, so no Applicability quote can narrow their reach; the plan says such a block stays in the kernel. The kernel keeps a seven-item list and a one-row table (about 230 bytes) instead of the 3,913 B kernel penalty the P2 analysis disclosed for REACH-A, and the projection now reports reach_a_kernel_penalty_bytes 0 and single_token_units 0. Offsets that keep the full-plan projection inside enforced_caps: shorter kernel pointers, the section 0a probe sentence is one line, the kernel keeps no heading for moved sections, policy-table and loop-caps cells say 'verify-dispatch.md Doubt-Verify' without a section number, and the fast-path.md paragraph drops the word 'above' instead of naming the new file. Carry item 2 (naming craftflow_worktree_finalize.py in the worktree_merge enforced-by cell) was measured at +34 B of kernel and not applied: the full plan has 21 B of kernel headroom, reported instead. The policy map gains 42 Rewrites rows (18 section-move, 14 xref, 4 pointer, 3 group, 2 split and 1 dedupe), 161 Applicability rows and 5 Read-map widening rows, all unsigned; the projection's reach_feasibility reads them, so signing them changes it again and needs its own revision entry. Full-plan projection (first P10 draft, superseded by the remediation below): kernel 34181 of 34202, reference max 19097 of 19101, BUILD/PLAN/DEBUG/REVIEW 98157/86930/74181/72243 of 98180/86940/74204/72266. Live ceilings are re-ratcheted to the measured tree; only reference_max_bytes rises (build-workflow.md and plan-workflow.md receive Fast Path Detection, Worktree steps 1-3, the Intent Interview Gate, the brainstorming handoff and steps 5a/5b), recorded in ceiling_raises within its projected delta. decided_by is pending-David. P10 remediation (doubt cycle 1 REFUTED, hunter and reviewer findings): the Chain Execution Loop fence and the Memory Load fence are covered by `pointer` rows that list only their kernel ids (an id-level Applicability row had switched the reach check off for the kernel half, so moving the kernel chain loop into plan-workflow.md or the kernel Memory Load fence into resume.md still passed; both mutations fail now); chain loop step 5a moves from plan-workflow.md to remediation-and-research.md (PLAN and DEBUG both read it), 5b stays in plan-workflow.md; the kernel gains the state-read-compaction condition, a grep of ## Decisions for the scope-marker prefixes, 'once per context' and a Task Metadata Contract pointer that says 'before any TaskCreate()' (the separate Fast Path Detection pointer line and the Parent workflow creation pointer line are folded away); 13 stale SKILL.md section pointers get 13 `xref` rows and the Worktree step 1 reword becomes a `pointer` row; five P11/P12 rows change their anchors (p11-g6-kernel-5a-5b-pointer, p11-pw-bakeoff-step5b, p11-mr-skill-distill-fast-path, p11-mr-skill-distill-build-graph, p12-c2-discover-workspace) and p11-g6-pw-chain-heading is dropped (plan-workflow.md keeps only step 5b, which P11 moves whole); the P10 delta rows are kept and 41 remediation delta rows (p10r-delta-*) carry the diff of this change on top of them, so the unanchored p3-kernel-when-to-use bias stays out of the projection as before; three read-map triggers change (two lose their parentheticals, memory-load-workspace.md gains the state-read-compaction condition) through P10 `update` rows. The policy map holds 220 unsigned rows (56 Rewrites, 159 Applicability, 5 Read-map widening), among them the P9 row David signed for b32a2901866e, re-opened. Full-plan projection stays under enforced_caps: kernel 34195 of 34202 (7 B headroom), reference max 19097 of 19101, BUILD/PLAN/DEBUG/REVIEW 98151/86458/74195/72257 of 98180/86940/74204/72266. Live ceilings are re-ratcheted to the measured tree (kernel 33911, protocol 29360, BUILD/PLAN/DEBUG/REVIEW 121664/112299/88665/86727); reference_max_bytes keeps its recorded P10 raise (the largest reference is now plan-workflow.md at 26869). Reported, not fitted (enforced_caps unchanged): the kernel carve-out bullet keeps `(\u00a7 8)` until p11-mr-skill-distill-kernel rewrites it, and the section 8 residue table says only 'in that file'. Doubt cycle 2 (R2): the PLAN bake-off assembly fence in plan-workflow.md now cites post-agent-validation.md for \"structured agent results\" (7 bytes shorter; cut-plan row p10r-delta-plan-workflow-02 carries it, the kernel is unchanged at 33,911 bytes). decided_by is pending-David."
     },
     {
       "phase": "P11",
@@ -222,6 +519,14 @@
       "fits_enforced_caps": true,
       "decided_by": "David",
       "cause": "P12 policy-mapped deletions, rationale relocation and enforcement of the P2C caps. Task 1 deletes nothing new: every live_verified deleted row (plan_commit at P5, worktree_merge at P8) is already deleted, and the two EnterPlanMode rows stay pending-prose-deletion because conditions.live_verified_enterplanmode is false (LV-3 and HV-4 are P13). Task 2: the \"Shared with Cursor\" boilerplate collapses to the tag (shared) at nine sites (the plan counted eight; the ninth is the lower-case Required sections lead at Memory Load) with one kernel header sentence as the kept copy; the eight drafted p12-shared-* cut-plan rows are applied as drafted and a ninth row is added. Task 3: the Dispatcher note (baseline id 1be8628b06e4, 795 B) moves verbatim from router-protocol.md to docs/router-rationale.md with a Rationale row (carry item from P11; the other classifier candidates in the start files are labels, Read() pointers or instructions and stay, as listed in the policy map). The router description sheds its Trigger keywords paragraph (223 B, Rewrites row 46d6f6359eeb, kind trigger): plan P3 task 3 deferred the router description, the unapplied p3-kernel-when-to-use row (+290 B) is void (est_bytes 0, no When To Use section is added) and the projection's 362 B kernel gap to the P11 tree was exactly that description. Sixteen descriptions rows record the as-built descriptions P3 landed for skills the plan gave no draft for (the projection kept their pre-P3 length). Contingencies C1-C4 are not applied: ADR-0073 Budget decision (P2C) records none as approved. Four P11 xref rows (Resolve Project Root, Previous Agent Findings, Skill-Distill Approval Flow and Verifier Findings Handoff pointers) are re-opened because their new ids changed. The policy map holds 11 unsigned rows (10 Rewrites, 1 Rationale); the projection's reach_feasibility counts them, so signing can change it again and then needs its own revision entry. Full-plan projection and the measured tree both sit under every enforced cap: kernel 34155 of 34202, protocol 13808 of 14606, reference max 19097 of 19101, descriptions 3793 of 5081, BUILD/PLAN/DEBUG/REVIEW 97361/85613/73399/71419 projected and 97407/85613/73399/71419 measured of 98180/86940/74204/72266. Live ceilings are re-ratcheted to the measured tree (all fall against origin/main, so ceiling_raises gains no entry) and enforce flips to true. REM-FIX (P12 doubt cycle 1, scope ALL_ISSUES): the kernel header sentence now reads \"(shared): canonical text lives in skills/_shared/, with Cursor.\" (it names the directory; byte-neutral, the kernel stays 34155 B; the new unit id 268002857f02 replaces be81e409f118 in the five dedupe rows and four xref rows that list it as the kept copy); the nine-site count is pinned by test_shared_with_cursor_boilerplate_collapsed (the ninth, Required sections, joins SHARED_TAGS); the Dispatcher note measures 795 B, not 793 B; test_enforce_ratchet_vs_origin_main pins enforce true (it fails when origin/main has true and this file false, and when enforce is false while P12 is in merged_phases); the five retargeted hook needles match the (shared) tag text only. The projection changed only in cutplan_sha256 (the header row text); every projected figure is unchanged, the policy map still holds 11 unsigned rows (10 Rewrites, 1 Rationale) and no ceiling rises. ADR-0073 states that the P2C confirmation holds only if the signer accepts the narrower router-description trigger surface (row 46d6f6359eeb). decided_by is pending-David."
+    },
+    {
+      "phase": "P13",
+      "from_projection_sha256": "953f1646bdb5e395beac81749f35c9da831996ee70d2b1e07bd77f5b9470fb98",
+      "to_projection_sha256": "2f4febd314ed2d55c53e911a22f53ab984da0f750db989d0258361fd92662d2f",
+      "fits_enforced_caps": true,
+      "decided_by": "David",
+      "cause": "P13 task 4: the two EnterPlanMode prose rules are deleted. David decided on 2026-10-23, on the strength of HV-4 (an interactive claude --plugin-dir session on f0d00f73: \"enter plan mode now\" was denied with craftflow-policy: native_plan_mode=never and the project hook log holds a native_plan_mode_denied row; the claude -p lane could not prove it, LV-3 was LIMITATION:enterplanmode_not_offered). The kernel loses its 'Never use EnterPlanMode' bullet (358 B, 34,155 to 33,797) and the shared protocol loses its 'NEVER use Claude Code's native plan mode' bullet (322 B, 13,808 to 13,486). The cut-plan rows p12-delete-enterplanmode-kernel and p12-delete-enterplanmode-protocol move from phase P12 to P13 and conditions.live_verified_enterplanmode becomes true; policy-map rows a01e2c640767 and c403449266e4 become deleted / live_verified true (signed by David in 4cc1a428). Every start set falls by 680 B: BUILD/PLAN/DEBUG/REVIEW 97407/85613/73399/71419 to 96727/84933/72719/70739 (measured); live ceilings are re-ratcheted to the measured tree (kernel 33797, protocol 13486; reference max 19097 and descriptions 3793 unchanged), none rises, so ceiling_raises gains no entry. enforced_caps, targets and enforce are untouched. David signed the two P13 rows and this revision in 4cc1a428, and the projection was regenerated then. decided_by is David."
     }
   ],
   "enforce": true,

@@ -14,9 +14,11 @@ import itertools
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Optional, Tuple
 
 # Allow importing scripts from scripts/ directory
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../scripts"))
@@ -486,6 +488,90 @@ try:
     )
 finally:
     shutil.rmtree(direct_tmp.parent.parent)
+
+
+# --- CLI contract: next_version is null when no bump is due ---
+SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "craftflow_version_bump.py"
+
+
+def _run_cli_over_range(subjects: list, *cli_args: str) -> Tuple[int, Optional[dict], str]:
+    """Build a temp git repo (fake repo root + tools/craftflow-plugin subtree)
+    at version 1.34.1, tag it craftflow-v1.34.1, add one subtree-touching
+    commit per subject, then run the real CLI. Returns (exit, json|None, stderr)."""
+    subtree = _build_temp_plugin_tree("1.34.1")
+    repo_root = subtree.parent.parent
+
+    def _git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(repo_root), *args], check=True, capture_output=True)
+
+    try:
+        _git("init", "-q")
+        _git("config", "user.email", "fixture@example.invalid")
+        _git("config", "user.name", "fixture")
+        _git("config", "commit.gpgsign", "false")
+        _git("config", "tag.gpgsign", "false")
+        _git("add", "-A")
+        _git("commit", "-q", "-m", "chore(craftflow): release v1.34.1")
+        _git("tag", "-a", "craftflow-v1.34.1", "-m", "baseline")
+        for i, subject in enumerate(subjects):
+            (subtree / f"NOTE-{i}.txt").write_text(subject + "\n", encoding="utf-8")
+            _git("add", "-A")
+            _git("commit", "-q", "-m", subject)
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--subtree-root", str(subtree), *cli_args],
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout) if result.returncode == 0 else None
+        return result.returncode, payload, result.stderr
+    finally:
+        shutil.rmtree(repo_root)
+
+
+def _workflow_next(payload: dict) -> str:
+    """Mirror of publish-craftflow-plugin.yml `Compute bump`: the step that
+    gates `No release-worthy commits — stopping cleanly` on NEXT == ''."""
+    return payload["next_version"] or ""
+
+
+print("\n[Regression: docs-only range -> bump null AND next_version null (workflow stops cleanly)]")
+rc, out, err = _run_cli_over_range(
+    ["docs(craftflow): attribute cc10x (MIT) in NOTICE"], "--dry-run"
+)
+check("docs-only --dry-run exits 0", rc, 0)
+if out is not None:
+    check("docs-only: bump is null", out["bump"], None)
+    check("docs-only: current_version still reported", out["current_version"], "1.34.1")
+    check("docs-only: next_version is null, not current_version", out["next_version"], None)
+    check("docs-only: workflow NEXT is '' so the clean-stop step runs", _workflow_next(out), "")
+
+print("\n[Variant: chore/test/refactor-only range -> next_version null]")
+rc, out, err = _run_cli_over_range(
+    ["chore(craftflow): tidy", "test(craftflow): add case", "refactor: rename"], "--dry-run"
+)
+check("chore/test/refactor-only --dry-run exits 0", rc, 0)
+if out is not None:
+    check("chore/test/refactor-only: bump is null", out["bump"], None)
+    check("chore/test/refactor-only: next_version is null", out["next_version"], None)
+
+print("\n[Variant: --apply --expect-version <current> over a no-bump range fails closed]")
+rc, out, err = _run_cli_over_range(
+    ["docs(craftflow): attribute cc10x (MIT) in NOTICE"],
+    "--apply",
+    "--expect-version",
+    "1.34.1",
+)
+check("no-bump --apply asserting current version exits 3 (mismatch)", rc, 3)
+
+print("\n[Variant (positive control): fix in range -> next_version is the bumped version]")
+rc, out, err = _run_cli_over_range(
+    ["docs(craftflow): notice", "fix(craftflow): stop cleanly"], "--dry-run"
+)
+check("fix range --dry-run exits 0", rc, 0)
+if out is not None:
+    check("fix range: bump is patch", out["bump"], "patch")
+    check("fix range: next_version is 1.34.2", out["next_version"], "1.34.2")
+    check("fix range: workflow NEXT is non-empty", _workflow_next(out), "1.34.2")
 
 # --- Summary ---
 print(f"\n{'='*40}")

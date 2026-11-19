@@ -41,7 +41,7 @@ def make_fixture(directory: Path, name: str, failed) -> None:
     (directory / name).write_text(body, encoding="utf-8")
 
 
-def run(files: dict, known: str, ci=None) -> subprocess.CompletedProcess:
+def run(files: dict, known: str, ci=None, extra_env=None) -> subprocess.CompletedProcess:
     with tempfile.TemporaryDirectory() as tmp:
         fixtures = Path(tmp) / "fixtures"
         fixtures.mkdir()
@@ -49,9 +49,24 @@ def run(files: dict, known: str, ci=None) -> subprocess.CompletedProcess:
             make_fixture(fixtures, name, failed)
         env = dict(os.environ, FIXTURE_DIR=str(fixtures), RUNNER_TEMP=tmp, CRAFTFLOW_CI_KNOWN_ENV_FAILURES=known)
         env.pop("CI", None)
+        env.pop("FIXTURE_SHARD", None)
         if ci is not None:
             env["CI"] = ci
+        env.update(extra_env or {})
         return subprocess.run(["bash", str(RUNNER)], capture_output=True, text=True, env=env)
+
+
+def ran_files(files: dict, shard) -> tuple:
+    """(exit code, output, names of the fixtures that actually ran) for FIXTURE_SHARD=shard (None = unset)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        log = Path(tmp) / "ran.log"
+        body = "import os\nopen(os.environ['SHARD_LOG'], 'a').write(os.path.basename(__file__) + '\\n')\n"
+        spec = {name: (body + ("raise SystemExit(1)\n" if failed else "")) for name, failed in files.items()}
+        env = {"SHARD_LOG": str(log)}
+        if shard is not None:
+            env["FIXTURE_SHARD"] = shard
+        res = run(spec, "", extra_env=env)
+        return res.returncode, res.stdout, (log.read_text().split() if log.exists() else [])
 
 
 def test_pinned_failure_is_excused_only_with_the_pinned_count() -> None:
@@ -62,6 +77,22 @@ def test_pinned_failure_is_excused_only_with_the_pinned_count() -> None:
     check("H-H5 listed file failing with exactly the pinned count passes", same.returncode == 0, same.stdout + same.stderr)
     check("H-H5 count mismatch (more failures) fails the job", more.returncode != 0 and "pins 11" in more.stdout, more.stdout)
     check("H-H5 count mismatch (fewer failures) fails the job", fewer.returncode != 0 and "pins 11" in fewer.stdout, fewer.stdout)
+
+
+def test_fixture_shard_runs_a_sorted_index_slice() -> None:
+    five = {f"test_{c}.py": False for c in "abcde"}
+    _, _, everything = ran_files(five, None)
+    rc1, _, first = ran_files(five, "1/2")
+    rc2, _, second = ran_files(five, "2/2")
+    check("shard: unset runs every fixture", sorted(everything) == sorted(five), str(everything))
+    check("shard 1/2 runs the odd sorted positions", first == ["test_a.py", "test_c.py", "test_e.py"] and rc1 == 0, str(first))
+    check("shard 2/2 runs the even sorted positions", second == ["test_b.py", "test_d.py"] and rc2 == 0, str(second))
+    failing = dict(five, **{"test_b.py": True})
+    check("shard: a failure in the other shard does not fail this one", ran_files(failing, "1/2")[0] == 0, "shard 1/2 failed")
+    check("shard: a failure inside the shard still fails it", ran_files(failing, "2/2")[0] != 0, "shard 2/2 passed")
+    for bad in ("0/2", "3/2", "1/0", "x", "1/2/3", "/2", "1/"):
+        rc, out, ran = ran_files(five, bad)
+        check(f"shard: malformed FIXTURE_SHARD {bad!r} fails before running anything", rc != 0 and "FIXTURE_SHARD" in out and ran == [], out)
 
 
 def test_unexpected_pass_fails() -> None:

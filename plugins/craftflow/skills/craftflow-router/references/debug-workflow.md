@@ -4,6 +4,8 @@
 2. Immediately write `[DEBUG-RESET: wf:{workflow_uuid}]` once the workflow id exists.
 3. Preserve failed attempt counting semantics: the investigator counts `[DEBUG-N]:` entries after the most recent reset marker.
 
+Record BASE once before the first investigator; follow-ups keep it.
+
 ### DEBUG task graph
 
 ```text

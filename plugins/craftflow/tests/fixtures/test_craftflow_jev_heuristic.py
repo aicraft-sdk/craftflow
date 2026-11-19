@@ -25,6 +25,7 @@ from craftflow_jev_heuristic import (  # noqa: E402
     parse_intent_table,
     parse_risk_table,
 )
+from craftflow_routing_law import ROUTING_TABLE  # noqa: E402
 
 _passes = 0
 _errors: list[str] = []
@@ -59,12 +60,44 @@ def test_parity_with_fast_path_markdown() -> None:
         fail("parity-fast-path", f"parsed={parsed!r} RISK_KEYWORDS={RISK_KEYWORDS!r}")
 
 
-def test_priority_error_wins_over_plan() -> None:
-    r = classify("plan how to fix the crash")
-    if r["workflow"] == "DEBUG" and "fix" in r["matched"] and "crash" in r["matched"]:
-        ok("ERROR priority wins over PLAN keyword in same prompt")
+def test_intent_table_is_literal_copy_of_routing_law_keyword_rows() -> None:
+    expected = [(signal, kws, wf) for _prio, signal, kws, wf in ROUTING_TABLE if signal != "DEFAULT"]
+    if INTENT_TABLE == expected and len(INTENT_TABLE) == 7:
+        ok("INTENT_TABLE equals the 7 keyword rows of craftflow_routing_law.ROUTING_TABLE")
     else:
-        fail("priority-error-wins", f"r={r!r}")
+        fail("intent-table-routing-law-copy", f"INTENT_TABLE={INTENT_TABLE!r}")
+
+
+def test_deliverable_law_decides_error_versus_plan() -> None:
+    # Pre-harvest priority made ERROR win unconditionally ("plan how to fix the
+    # crash" -> DEBUG). The deliverable law (ADR-0075) routes by the earliest
+    # nomination in the lead clause: planning is the deliverable here.
+    plan_first = classify("plan how to fix the crash")
+    fix_first = classify("fix the crash and plan the retry")
+    if (
+        plan_first["workflow"] == "PLAN"
+        and plan_first["matched"] == ["plan"]
+        and fix_first["workflow"] == "DEBUG"
+        and "fix" in fix_first["matched"]
+        and "crash" in fix_first["matched"]
+    ):
+        ok("classify() follows the deliverable law: earliest nomination wins, ERROR wins when the deliverable is a fix")
+    else:
+        fail("deliverable-law-error-vs-plan", f"plan_first={plan_first!r} fix_first={fix_first!r}")
+
+
+def test_classify_reaches_the_new_routes() -> None:
+    got = {
+        "orient": classify("how does the router work")["workflow"],
+        "qa": classify("write e2e tests for checkout")["workflow"],
+        "triage": classify("triage incoming issues")["workflow"],
+        "health": classify("codebase health check")["workflow"],
+        "verb": classify("add a toggle and fix the alignment")["workflow"],
+    }
+    if got == {"orient": "ORIENT", "qa": "QA", "triage": "TRIAGE", "health": "CODEBASE-HEALTH", "verb": "BUILD"}:
+        ok("classify() routes through craftflow_routing_law.route() to the four new routes and the change-verb override")
+    else:
+        fail("classify-new-routes", f"got={got!r}")
 
 
 def test_default_is_build_and_word_boundaries() -> None:
@@ -126,7 +159,9 @@ def main() -> int:
     print("test_craftflow_jev_heuristic: running")
     test_parity_with_router_protocol_markdown()
     test_parity_with_fast_path_markdown()
-    test_priority_error_wins_over_plan()
+    test_intent_table_is_literal_copy_of_routing_law_keyword_rows()
+    test_deliverable_law_decides_error_versus_plan()
+    test_classify_reaches_the_new_routes()
     test_default_is_build_and_word_boundaries()
     test_risk_signals_and_skill_rule()
     test_skill_rule_source_lines_still_present()

@@ -39,11 +39,12 @@ def _init_repo(root: Path) -> None:
     subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=root, check=True)
 
 
-def run_cli(project_root: Path) -> subprocess.CompletedProcess:
+def run_cli(project_root: Path, extra: "list | None" = None, env: "dict | None" = None) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(SCRIPT), "--project-root", str(project_root), "--format", "json"],
+        [sys.executable, str(SCRIPT), "--project-root", str(project_root), "--format", "json", *(extra or [])],
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
@@ -506,8 +507,8 @@ def test_eslint_disable_comments_are_not_false_positives() -> None:
 
 def test_python_suppression_directives_are_not_false_positives() -> None:
     # Regression: _DISABLE_COMMENT_RE only recognized eslint/@ts-/prettier
-    # idioms -- Python suppression comments (# noqa, # type: ignore,
-    # # pylint: disable=...) are common in this Python-heavy plugin repo and
+    # idioms -- Python suppression comments (noqa, type-ignore and
+    # pylint-disable directives) are common in this Python-heavy plugin repo and
     # would false-positive as a commented-code-block once they contain a
     # code-like token (e.g. `disable=`).
     with tempfile.TemporaryDirectory() as tmp:
@@ -526,6 +527,335 @@ def test_python_suppression_directives_are_not_false_positives() -> None:
             ok("python_suppression_directives_are_not_false_positives")
         else:
             fail("python_suppression_directives_are_not_false_positives", f"expected no findings, got {hits}")
+
+
+# ---------------------------------------------------------------------------
+# Unexplained-suppression class (newly added Python noqa / type: ignore)
+# ---------------------------------------------------------------------------
+# Every expected-bad / expected-good source line below lives inside a Python
+# string literal in THIS file. That is deliberate: the detector judges real
+# comment tokens only, so these fixtures are never flagged as part of this
+# repo's own diff (see test_detector_ignores_its_own_fixture_strings).
+
+_SUPPRESSION_BAD = [
+    ("bare_noqa", "import os  # noqa\n"),
+    ("bare_noqa_uppercase", "import os  # NOQA\n"),
+    ("noqa_empty_codes", "import os  # noqa:\n"),
+    ("noqa_code_without_reason", "import os  # noqa: E402\n"),
+    ("noqa_multi_code_without_reason", "import os  # noqa: E402,F401\n"),
+    ("noqa_dash_with_empty_reason", "import os  # noqa: E402 -\n"),
+    ("noqa_reason_too_short", "import os  # noqa: E402 - ok\n"),
+    ("noqa_reason_without_delimiter", "import os  # noqa: E402 because reasons\n"),
+    ("flake8_file_level_blanket", "# flake8: noqa\n"),
+    ("bare_type_ignore", "x = 1  # type: ignore\n"),
+    ("type_ignore_without_code", "x = 1  # type: ignore - checker is wrong here\n"),
+    ("type_ignore_code_without_reason", "x = 1  # type: ignore[attr-defined]\n"),
+]
+
+_SUPPRESSION_GOOD = [
+    ("noqa_dash_reason", "import os  # noqa: E402 - late import after path fixup\n"),
+    ("noqa_double_dash_reason", "import os  # noqa: BLE001 -- fail-open by contract\n"),
+    ("noqa_em_dash_reason", "import os  # noqa: E402 \u2014 late import after path fixup\n"),
+    ("noqa_paren_reason", "import os  # noqa: E402  (shared fixtures; importing it runs nothing)\n"),
+    ("noqa_hash_reason", "import os  # noqa: E402  # late import after path fixup\n"),
+    ("noqa_multi_code_reason", "import os  # noqa: E402,F401 - re-exported after path fixup\n"),
+    ("noqa_space_separated_codes", "import os  # noqa: E402 F401 - re-exported after path fixup\n"),
+    ("flake8_file_level_with_code_and_reason", "# flake8: noqa: E501 - generated table, wrapping would corrupt it\n"),
+    ("type_ignore_code_dash_reason", "x = 1  # type: ignore[attr-defined] - stub lacks the attribute\n"),
+    ("type_ignore_multi_code_reason", "x = 1  # type: ignore[attr-defined, misc] - stub lacks the attribute\n"),
+    ("type_ignore_hash_reason", "x = 1  # type: ignore[no-redef]  # fallback shim for missing module\n"),
+    ("type_ignore_paren_reason", "x = 1  # type: ignore[arg-type] (deliberately passes a bad type)\n"),
+    ("no_suppression_at_all", "x = 1  # plain comment\n"),
+]
+
+
+def _suppression_findings(source: str, extra: "list | None" = None, filename: str = "mod.py") -> tuple:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / filename).write_text(source)
+        result = run_cli(root, extra)
+        data = json.loads(result.stdout) if result.stdout else {}
+        hits = [f for f in data.get("findings", []) if f.get("pattern") == "unexplained-suppression"]
+        return result, data, hits
+
+
+def test_unexplained_suppressions_rejected_in_block_mode() -> None:
+    for label, source in _SUPPRESSION_BAD:
+        result, _data, hits = _suppression_findings(source, ["--suppression-mode", "block"])
+        msg = hits[0]["message"] if hits else ""
+        if (
+            result.returncode == 2
+            and len(hits) == 1
+            and hits[0]["severity"] == "blocking"
+            and hits[0]["line"] == 1
+            and "rule code" in msg
+            and "written reason" in msg
+            and "report it to the user" in msg
+        ):
+            ok(f"suppression_rejected_block[{label}]")
+        else:
+            fail(f"suppression_rejected_block[{label}]", f"exit={result.returncode} hits={hits} err={result.stderr!r}")
+
+
+def test_explained_suppressions_accepted_in_block_mode() -> None:
+    for label, source in _SUPPRESSION_GOOD:
+        result, _data, hits = _suppression_findings(source, ["--suppression-mode", "block"])
+        if result.returncode == 0 and hits == []:
+            ok(f"suppression_accepted_block[{label}]")
+        else:
+            fail(f"suppression_accepted_block[{label}]", f"exit={result.returncode} hits={hits}")
+
+
+def test_audit_mode_reports_but_never_blocks() -> None:
+    result, data, hits = _suppression_findings("import os  # noqa\n", ["--suppression-mode", "audit"])
+    if (
+        result.returncode == 0
+        and len(hits) == 1
+        and hits[0]["severity"] == "advisory"
+        and data.get("suppression_mode") == "audit"
+        and data.get("summary") == {"total": 1, "blocking": 0, "advisory": 1}
+    ):
+        ok("suppression_audit_mode_reports_but_never_blocks")
+    else:
+        fail("suppression_audit_mode_reports_but_never_blocks", f"exit={result.returncode} data={data}")
+
+
+def _plugin_root_with_mode(tmp: Path, value) -> dict:
+    cfg = tmp / "plugin_root" / "config"
+    cfg.mkdir(parents=True)
+    body = {} if value is None else {"cleanStateSuppressions": value}
+    (cfg / "hook-mode.json").write_text(json.dumps(body))
+    env = dict(os.environ)
+    env["CLAUDE_PLUGIN_ROOT"] = str(tmp / "plugin_root")
+    return env
+
+
+def test_mode_comes_from_hook_mode_json_and_flag_overrides_it() -> None:
+    with tempfile.TemporaryDirectory() as plug, tempfile.TemporaryDirectory() as tmp:
+        env = _plugin_root_with_mode(Path(plug), "block")
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "mod.py").write_text("import os  # noqa\n")
+        from_config = run_cli(root, env=env)
+        overridden = run_cli(root, ["--suppression-mode", "audit"], env=env)
+        if from_config.returncode == 2 and overridden.returncode == 0:
+            ok("suppression_mode_from_hook_mode_json_and_flag_overrides")
+        else:
+            fail("suppression_mode_from_hook_mode_json_and_flag_overrides",
+                 f"config exit={from_config.returncode} override exit={overridden.returncode}")
+
+
+def test_missing_or_bad_config_defaults_to_audit_and_is_reported() -> None:
+    with tempfile.TemporaryDirectory() as plug, tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "mod.py").write_text("import os  # noqa\n")
+        # key absent from a valid file: audit, no warning
+        env = _plugin_root_with_mode(Path(plug), None)
+        absent = run_cli(root, env=env)
+        data = json.loads(absent.stdout)
+        if absent.returncode == 0 and data["suppression_mode"] == "audit" and "config_warning" not in data:
+            ok("suppression_config_key_absent_defaults_to_audit")
+        else:
+            fail("suppression_config_key_absent_defaults_to_audit", f"exit={absent.returncode} data={data}")
+    with tempfile.TemporaryDirectory() as plug, tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "mod.py").write_text("import os  # noqa\n")
+        env = _plugin_root_with_mode(Path(plug), "Block")  # wrong case: unrecognised
+        typo = run_cli(root, env=env)
+        data = json.loads(typo.stdout)
+        if typo.returncode == 0 and data["suppression_mode"] == "audit" and "Block" in data.get("config_warning", ""):
+            ok("suppression_config_unrecognised_value_defaults_to_audit_with_warning")
+        else:
+            fail("suppression_config_unrecognised_value_defaults_to_audit_with_warning", f"exit={typo.returncode} data={data}")
+    with tempfile.TemporaryDirectory() as plug, tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        cfg = Path(plug) / "config"
+        cfg.mkdir()
+        (cfg / "hook-mode.json").write_text("{not json")
+        env = dict(os.environ)
+        env["CLAUDE_PLUGIN_ROOT"] = plug
+        broken = run_cli(root, env=env)
+        data = json.loads(broken.stdout)
+        if broken.returncode == 0 and data["suppression_mode"] == "audit" and data.get("config_warning"):
+            ok("suppression_config_unreadable_defaults_to_audit_with_warning")
+        else:
+            fail("suppression_config_unreadable_defaults_to_audit_with_warning", f"exit={broken.returncode} data={data}")
+
+
+def test_shipped_default_is_audit() -> None:
+    cfg = json.loads((PLUGIN_ROOT / "config" / "hook-mode.json").read_text())
+    if cfg.get("cleanStateSuppressions") == "audit":
+        ok("shipped_hook_mode_json_has_cleanStateSuppressions_audit")
+    else:
+        fail("shipped_hook_mode_json_has_cleanStateSuppressions_audit", f"got {cfg.get('cleanStateSuppressions')!r}")
+
+
+def test_existing_suppressions_are_never_flagged() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "legacy.py").write_text("import os  # noqa\nx = 1  # type: ignore\ny = 2  # noqa: E402\n")
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=root, check=True)
+        # untouched: nothing in the diff
+        untouched = run_cli(root, ["--suppression-mode", "block"])
+        # touched elsewhere in the file: the old suppression lines are not in the diff
+        (root / "legacy.py").write_text(
+            "import os  # noqa\nx = 1  # type: ignore\ny = 2  # noqa: E402\nz = 3\n"
+        )
+        appended = run_cli(root, ["--suppression-mode", "block"])
+        # the code on a suppressed line is edited but its suppression comment is unchanged
+        (root / "legacy.py").write_text(
+            "import sys  # noqa\nx = 1  # type: ignore\ny = 2  # noqa: E402\n"
+        )
+        edited = run_cli(root, ["--suppression-mode", "block"])
+        results = [r for r in (untouched, appended, edited)]
+        if all(r.returncode == 0 and json.loads(r.stdout)["findings"] == [] for r in results):
+            ok("existing_suppressions_never_flagged_even_when_line_is_edited")
+        else:
+            fail("existing_suppressions_never_flagged_even_when_line_is_edited",
+                 f"exits={[r.returncode for r in results]} out={[r.stdout[:200] for r in results]}")
+        # ...but a NEW bare suppression in the same file is still caught
+        (root / "legacy.py").write_text(
+            "import os  # noqa\nx = 1  # type: ignore\ny = 2  # noqa: E402\nw = 4  # noqa\n"
+        )
+        added = run_cli(root, ["--suppression-mode", "block"])
+        hits = [f for f in json.loads(added.stdout)["findings"] if f["pattern"] == "unexplained-suppression"]
+        if added.returncode == 2 and [h["line"] for h in hits] == [4]:
+            ok("new_suppression_in_file_with_legacy_ones_is_flagged_alone")
+        else:
+            fail("new_suppression_in_file_with_legacy_ones_is_flagged_alone", f"exit={added.returncode} hits={hits}")
+
+
+def test_detector_ignores_string_literals_and_docstrings() -> None:
+    source = (
+        'PATTERN = "import os  # noqa"\n'
+        'OTHER = "x = 1  # type: ignore"\n'
+        'DOC = """\n'
+        "# noqa\n"
+        "# type: ignore\n"
+        '"""\n'
+        "def f():\n"
+        '    """Docs may say # noqa or # type: ignore freely."""\n'
+        "    return 1\n"
+    )
+    result, _data, hits = _suppression_findings(source, ["--suppression-mode", "block"])
+    if result.returncode == 0 and hits == []:
+        ok("detector_ignores_string_literals_and_docstrings")
+    else:
+        fail("detector_ignores_string_literals_and_docstrings", f"exit={result.returncode} hits={hits}")
+
+
+def test_detector_ignores_its_own_fixture_strings() -> None:
+    # The script's own source and this very test file carry suppression-looking
+    # text inside strings; scanning them as an untracked diff must stay clean.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        for src in (SCRIPT, Path(__file__).resolve()):
+            (root / src.name).write_text(src.read_text(encoding="utf-8"))
+        result = run_cli(root, ["--suppression-mode", "block"])
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "unexplained-suppression"]
+        if result.returncode == 0 and hits == []:
+            ok("detector_ignores_its_own_fixture_strings")
+        else:
+            fail("detector_ignores_its_own_fixture_strings", f"exit={result.returncode} hits={hits}")
+
+
+def test_non_python_files_are_not_judged() -> None:
+    result, _data, hits = _suppression_findings("echo hi  # noqa\n", ["--suppression-mode", "block"], filename="run.sh")
+    ts_result, _d, ts_hits = _suppression_findings(
+        "// eslint-disable-next-line no-console\n// @ts-ignore\nconst a = 1;\n",
+        ["--suppression-mode", "block"], filename="a.ts",
+    )
+    if result.returncode == 0 and hits == [] and ts_result.returncode == 0 and ts_hits == []:
+        ok("non_python_files_are_not_judged")
+    else:
+        fail("non_python_files_are_not_judged", f"sh exit={result.returncode} ts exit={ts_result.returncode}")
+
+
+def test_untokenizable_python_is_surfaced_in_skipped_not_clean() -> None:
+    result, data, hits = _suppression_findings("x = (  # noqa\n", ["--suppression-mode", "block"])
+    skipped = [s for s in data.get("skipped", []) if s.get("file") == "mod.py" and "tokenize" in s.get("error", "")]
+    if result.returncode == 0 and hits == [] and len(skipped) == 1:
+        ok("untokenizable_python_is_surfaced_in_skipped_not_clean")
+    else:
+        fail("untokenizable_python_is_surfaced_in_skipped_not_clean", f"exit={result.returncode} data={data}")
+
+
+def test_other_classes_stay_advisory_in_block_mode() -> None:
+    source = "console.log('x');\n// TODO fix\n"
+    result, data, _hits = _suppression_findings(source, ["--suppression-mode", "block"], filename="a.ts")
+    sev = {f["pattern"]: f["severity"] for f in data.get("findings", [])}
+    if result.returncode == 0 and sev.get("console.log") == "advisory" and sev.get("todo-without-ticket") == "advisory":
+        ok("other_finding_classes_stay_advisory_in_block_mode")
+    else:
+        fail("other_finding_classes_stay_advisory_in_block_mode", f"exit={result.returncode} sev={sev}")
+
+
+def test_tracked_modified_file_new_bare_noqa_blocks() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "mod.py").write_text("x = 1\n")
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "add"], cwd=root, check=True)
+        (root / "mod.py").write_text("x = 1\ny = 2  # noqa\n")
+        result = run_cli(root, ["--suppression-mode", "block"])
+        data = json.loads(result.stdout)
+        hits = [f for f in data["findings"] if f["pattern"] == "unexplained-suppression"]
+        if result.returncode == 2 and len(hits) == 1 and hits[0]["file"] == "mod.py" and hits[0]["line"] == 2:
+            ok("tracked_modified_file_new_bare_noqa_blocks")
+        else:
+            fail("tracked_modified_file_new_bare_noqa_blocks", f"exit={result.returncode} data={data}")
+
+
+def test_text_output_states_the_fix_and_summary() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_repo(root)
+        (root / "mod.py").write_text("import os  # noqa\n")
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--project-root", str(root), "--suppression-mode", "block"],
+            capture_output=True, text=True,
+        )
+        out = result.stdout
+        if (
+            result.returncode == 2
+            and "BLOCKING unexplained-suppression: mod.py:1" in out
+            and "# noqa: E402 - " in out
+            and "report it to the user" in out
+            and "1 blocking, 0 advisory" in out
+        ):
+            ok("text_output_states_the_fix_and_summary")
+        else:
+            fail("text_output_states_the_fix_and_summary", f"exit={result.returncode} out={out!r}")
+
+
+def test_usage_error_is_exit_one_not_two() -> None:
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--suppression-mode", "maybe"], capture_output=True, text=True
+    )
+    if result.returncode == 1 and "usage error" in result.stderr:
+        ok("usage_error_is_exit_one_not_two")
+    else:
+        fail("usage_error_is_exit_one_not_two", f"exit={result.returncode} err={result.stderr!r}")
+
+
+def test_not_a_git_repo_is_still_exit_one() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        result = run_cli(Path(tmp), ["--suppression-mode", "block"])
+        if result.returncode == 1 and "git error" in result.stderr:
+            ok("not_a_git_repo_still_exit_one_in_block_mode")
+        else:
+            fail("not_a_git_repo_still_exit_one_in_block_mode", f"exit={result.returncode} err={result.stderr!r}")
 
 
 def main() -> int:
@@ -553,6 +883,22 @@ def main() -> int:
     test_todo_ticket_regex_does_not_match_mid_identifier()
     test_eslint_disable_comments_are_not_false_positives()
     test_python_suppression_directives_are_not_false_positives()
+    test_unexplained_suppressions_rejected_in_block_mode()
+    test_explained_suppressions_accepted_in_block_mode()
+    test_audit_mode_reports_but_never_blocks()
+    test_mode_comes_from_hook_mode_json_and_flag_overrides_it()
+    test_missing_or_bad_config_defaults_to_audit_and_is_reported()
+    test_shipped_default_is_audit()
+    test_existing_suppressions_are_never_flagged()
+    test_detector_ignores_string_literals_and_docstrings()
+    test_detector_ignores_its_own_fixture_strings()
+    test_non_python_files_are_not_judged()
+    test_untokenizable_python_is_surfaced_in_skipped_not_clean()
+    test_other_classes_stay_advisory_in_block_mode()
+    test_tracked_modified_file_new_bare_noqa_blocks()
+    test_text_output_states_the_fix_and_summary()
+    test_usage_error_is_exit_one_not_two()
+    test_not_a_git_repo_is_still_exit_one()
     print()
     print("=" * 40)
     if _errors:

@@ -19,7 +19,8 @@ ALL_PHASES = [f"P{i}" for i in range(2, 14)]
 ROWLESS_PHASES = ("P2C",)  # a phase PR may append its id to merged_phases without owning cut-plan rows
 FLAG_NAMES = ("difference_17", "live_verified_enterplanmode")  # the keys of router-budget.json `conditions`
 CONDITION_NAMES = ("always",) + FLAG_NAMES
-WORKFLOWS = ("BUILD", "PLAN", "DEBUG", "REVIEW")
+WORKFLOWS = ("BUILD", "PLAN", "DEBUG", "REVIEW")  # the `affects` default and the bias columns: the legacy four
+KNOWN_WORKFLOWS = WORKFLOWS + ("ORIENT", "QA", "TRIAGE", "CODEBASE-HEALTH")  # what a row may name in `affects`
 KERNEL = "skills/craftflow-router/SKILL.md"
 
 
@@ -164,8 +165,8 @@ def unanchored_report(rows: Iterable[dict], descriptions: Dict[str, str]) -> Lis
                 raise ProjectionError(f"{r['id']}: a needs_anchor row must state direction add|cut and a non-negative integer est_bytes "
                                       "(its bytes are missing from every tier, so the size of the miss has to be disclosed; 0 means "
                                       "the row was evaluated and has no bytes to give, with the reason in its note)")
-            if not isinstance(affects, list) or set(affects) - set(WORKFLOWS):
-                raise ProjectionError(f"{r['id']}: affects must list workflows from {list(WORKFLOWS)}")
+            if not isinstance(affects, list) or set(affects) - set(KNOWN_WORKFLOWS):
+                raise ProjectionError(f"{r['id']}: affects must list workflows from {list(KNOWN_WORKFLOWS)}")
         out.append({"id": r["id"], "phase": r["phase"], "direction": direction, "est_bytes": est, "unit": _unit(r),
                     "affects": list(affects), "file": r.get("file"), "contingency": r.get("op") == "contingency", "note": r.get("note", "")})
     return out

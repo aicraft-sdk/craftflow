@@ -8,6 +8,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.37.0] - 2026-11-06
+
+### Features
+
+- add untangle-codebase skill
+- add tangle prevention rules and review checks
+
+### Fixes
+
+- carry untangle opt-in answers into the plan handoff
+- classify untangle contract tests in router-test-anchors
+
+### Refactoring
+
+- drop the CODEBASE-HEALTH stub hook from the untangle contract
+
+### Tests
+
+- content contract for untangle-codebase and tangle rules (red)
+
+### Chores
+
+- record the ADR-0076 description budget draw for untangle-codebase
+
+## [1.36.0] - 2026-11-06
+
+### Features
+
+- add the CODEBASE-HEALTH route
+
+### Fixes
+
+- make the CODEBASE-HEALTH replay treat every reply after the pick as a grill answer and name the no-question-asked case
+- make the replay re-ask a neither-number-nor-None reply and decline a fresh unrelated request in the Cursor gate row
+- align the scanner validator with the route law, add a replay parity check, and gate the report reply on JUST_GO
+- continue past the report under JUST_GO, require the workflow uuid for scanner validation, and close the judge gaps
+- constrain the scanner report path and harden the CODEBASE-HEALTH judge, replay and contract checks
+
+### Tests
+
+- accept an absolute in-project report path in the LV-CH open-call check
+
+### Chores
+
+- add the ADR-0074 H6 envelope rows
+
+## [1.35.0] - 2026-11-05
+
+### Features
+
+- add the advisory and auto-handoff law
+- mint linked child workflows for handoffs
+- diff review agents against the recorded BASE
+- add the BASE review package
+- add the ORIENT route live driver and announce rule
+- write the ORIENT route law and point the kernel, Cursor and README at it
+- accept the new workflow types and refuse an unguardable QA mint
+- route by primary deliverable, finalize the metadata tokens and stub the harvest route files
+- add signed behavior change rows to the rule inventory
+- model the primary-deliverable routing law and feed Jev from it
+- add the docs-rot ratchet with a seeded baseline
+- add the release gate runner
+
+### Fixes
+
+- take over stale handoff claims atomically and roll back on any interruption
+- make the handoff mint race-safe, derive the host from the parent, and validate its inputs
+- keep HEAD~1 out of the BASE fallback wording and fold the agent pins
+- define the BASE placeholder, harden the review package and the fallback wording
+- keep the TaskCreate( and Task( bans absolute in the route replay checker
+- make the ORIENT live proof non-vacuous and tighten the route replay checker
+- refuse a re-signature of ADR-0074 from the repo history alone, so a stale origin cannot launder decided_at_sha
+- make the routing model end the lead clause only where R1 says (no newline), pin the multi-line DEBUG case and drop the newline flip
+- make the routing model follow R4 (DEBUG beats QA) and end the lead clause at ! ? and newline
+- read ADR status from the front matter block only and classify the sbc cases in the test anchors
+- bind the ADR-0074 signature to the blob at decided_at_sha and tell a missing origin file from a git failure
+- harden signed behavior change rows before signature
+- stop the release cleanly when no bump is due
+
+### Documentation
+
+- David signs ADR-0074 and the 33 H2 signed-behavior cells
+- draft the H2 policy rows and ADR-0074 for signature
+- limit the release gate guarantee to post-gate refs
+- document the release gate
+- attribute cc10x (MIT) in NOTICE
+
+### Tests
+
+- count every tamper row before checking the BASE form
+- pin the BASE command forms, not the placeholder, and harden the package diff calls
+- pin every ORIENT route section and refuse plain-English hand-offs in the route replay checker
+- replay the ORIENT route, pin PP-3 and list the checker in the release gate
+- freeze a signed envelope against re-accept laundering and check envelope raises for ancestor at_sha and a consumed row
+- read the origin budget through git_show_state so a git failure is a skip, not a first introduction
+- derive the signature simulation's pending draft so it holds before and after the real signature
+- simulate the ADR-0074 signature in a scratch repo and read the ADR from the git top level
+- bind the ADR-0074 envelope signature to its content
+- bound router growth by the ADR-0074 envelope
+- check the release gate guard on the parsed workflow
+- allowlist the release gate step shape and ban status-function bypasses
+- guard the release gate step against continue-on-error and early exit
+
+### CI
+
+- install PyYAML before the fixture suite in CI
+- run the release gate on PRs
+- gate the plugin release on the release gate
+- shard the fixture suite across two release gate steps
+
+### Chores
+
+- add the ADR-0074 H5 envelope rows
+- add the ADR-0074 H4 envelope rows
+- apply the H3 envelope rows
+- apply the signed ADR-0074 envelope to the router budget
+
+## [1.34.1] - 2026-10-24
+
+### Fixes
+
+- retry the selfcheck policy validation once and report a double timeout as unconfirmed, not invalid
+
+## [1.34.0] - 2026-10-23
+
+### Features
+
+- let the impact report state how the human-verification cells were captured and the HV-3/4/5 outcomes
+- mark impact report DRAFT until the HV cells are filled
+- router context cut live lane LV-1..LV-5
+- router context impact report script
+
+### Fixes
+
+- HV-4 gate matches the word PASS, notes reject control and format characters; reword SC-010 and disclose post-signature prose edits
+- impact report needs an HV-4 PASS for the LV-3 limitation; LV-3 limitation needs a provably absent tool
+- impact report status line no longer claims the cells were typed from /context
+- live LV-3 treats a host-refused call to an unoffered EnterPlanMode as the not-offered limitation
+- live driver LV-3 requires a real session, Class A needs a passing load probe
+- impact report gates Status on the LV lane, rejects zero HV, fail-closed baseline and exit codes
+
+### Refactoring
+
+- delete the EnterPlanMode prose rules after the HV-4 live deny proof
+
+### Documentation
+
+- reword P13 acceptance to the disclosed evidence and put the signed P13 notes in past tense
+- sign P13 rows and projection revision
+
+### Tests
+
+- pin the effective-versus-guaranteed gap to the two EnterPlanMode delete rows
+
+### Chores
+
+- re-stamp router-budget measured_at_sha to the P13 commit
+
 ## [1.33.5] - 2026-10-21
 
 ### Fixes

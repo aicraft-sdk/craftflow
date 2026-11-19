@@ -189,7 +189,7 @@ def test_mint_workflow_id() -> None:
         ok(f"empty slug → 'task' fallback: {r_empty['workflow_uuid']}")
 
     # iso_timestamp must be a valid ISO 8601 string
-    from datetime import datetime, timezone
+    from datetime import datetime
     try:
         ts = datetime.fromisoformat(result["iso_timestamp"].replace("Z", "+00:00"))
         ok(f"iso_timestamp parses: {result['iso_timestamp']}")

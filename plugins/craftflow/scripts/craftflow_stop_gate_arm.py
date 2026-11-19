@@ -26,9 +26,9 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import craftflow_fcntl_compat as fcntl  # noqa: E402  (fcntl on POSIX; an msvcrt-backed flock on Windows)
-import craftflow_stop_gate_core as core  # noqa: E402
-import craftflow_stop_gate_report as report  # noqa: E402
+import craftflow_fcntl_compat as fcntl  # fcntl on POSIX; an msvcrt-backed flock on Windows
+import craftflow_stop_gate_core as core
+import craftflow_stop_gate_report as report
 
 HOURS_MIN, HOURS_MAX, HOURS_DEFAULT = 1, 24, 8
 EVENTS_SEGMENTS = (".craftflow", "state", "stop-gate", "events.jsonl")

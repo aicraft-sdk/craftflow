@@ -1,0 +1,46 @@
+{
+  "id": "advisory-pause-resume",
+  "workflow_type": "TRIAGE",
+  "scenarios": [
+    {
+      "name": "needs-info-pauses-then-resumes-to-a-terminal-memory",
+      "steps": [
+        {"op": "gate", "pending_gate": "needs_info"},
+        {"op": "resume", "re_asks": "needs_info"},
+        {"op": "answer", "text": "the reporter says it fails on Windows"},
+        {"op": "status", "value": "completed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"}
+      ]
+    },
+    {
+      "name": "candidate-choice-pause-has-no-memory-task",
+      "steps": [
+        {"op": "gate", "pending_gate": "candidate_choice"},
+        {"op": "resume", "re_asks": "candidate_choice"},
+        {"op": "answer", "text": "2"},
+        {"op": "status", "value": "completed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"}
+      ]
+    },
+    {
+      "name": "two-paused-workflows-ask-which",
+      "steps": [
+        {"op": "resume", "paused": ["wf-a-20261030-100000-aaaaaaaa", "wf-b-20261030-100001-bbbbbbbb"], "asks": "which"}
+      ]
+    },
+    {
+      "name": "agent-failure-stops-and-skip-is-reasked",
+      "steps": [
+        {"op": "gate", "pending_gate": "triage_agent_failed"},
+        {"op": "answer", "text": "skip", "outcome": "re_ask"},
+        {"op": "answer", "text": "(b)", "outcome": "re_ask"},
+        {"op": "answer", "text": "end"},
+        {"op": "status", "value": "failed"},
+        {"op": "memory_task_created"},
+        {"op": "memory_finalized"}
+      ]
+    }
+  ]
+}

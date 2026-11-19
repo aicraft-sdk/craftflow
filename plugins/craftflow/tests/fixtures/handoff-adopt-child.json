@@ -1,0 +1,38 @@
+{
+  "id": "handoff-adopt-child",
+  "workflow_type": "CODEBASE-HEALTH",
+  "scenarios": [
+    {
+      "name": "codebase-health-to-plan-adopts-the-minted-child",
+      "expected": {"child_workflow_started": 1, "workflow_adopted": 1},
+      "steps": [
+        {"op": "parent_terminal", "event": "memory_finalized"},
+        {"op": "cli", "prints": "child_workflow_uuid"},
+        {"op": "adopt", "skips": ["mint"], "appends": "workflow_adopted",
+         "runs": ["task_tools_capability", "workflow_memory_load", "task_metadata_contract", "plan_start_reads"]}
+      ]
+    },
+    {
+      "name": "crash-between-mint-and-adopt-adopts-the-existing-child",
+      "crash": true,
+      "expected": {"child_workflow_started": 1, "workflow_adopted": 1},
+      "steps": [
+        {"op": "parent_terminal", "event": "memory_finalized"},
+        {"op": "cli", "prints": "child_workflow_uuid"},
+        {"op": "session_ends"},
+        {"op": "cli", "prints": "already_handed_off"},
+        {"op": "adopt", "skips": ["mint"], "appends": "workflow_adopted",
+         "runs": ["task_tools_capability", "workflow_memory_load", "task_metadata_contract", "plan_start_reads"]}
+      ]
+    },
+    {
+      "name": "non-interactive-triage-to-build-is-declined-with-tool-unavailable",
+      "expected": {"child_workflow_started": 0, "workflow_adopted": 0},
+      "steps": [
+        {"op": "parent_terminal", "event": "memory_finalized"},
+        {"op": "offer", "target": "BUILD", "tool": "AskUserQuestion", "available": false},
+        {"op": "handoff_declined", "reason": "non_interactive", "detail": "tool_unavailable"}
+      ]
+    }
+  ]
+}

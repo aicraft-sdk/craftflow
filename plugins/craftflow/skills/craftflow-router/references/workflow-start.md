@@ -33,10 +33,10 @@ Every CRAFTFLOW task description starts with normalized metadata lines:
 ```text
 wf:{workflow_uuid}
 kind:{workflow|agent|remfix|memory|reverify|research}
-origin:{router|component-builder|bug-investigator|code-reviewer|silent-failure-hunter|integration-verifier|planner}
-phase:{build|build-implement|build-review|build-hunt|build-verify|build-doc-sync|learn-distill|skill-distill|debug|debug-investigate|debug-review|debug-verify|doubt-verify|review|review-audit|plan|plan-create|plan-review-gap-1|plan-review-gap-2|memory-finalize|re-review|re-hunt|re-verify|re-plan|research-web|research-github|plan-bakeoff-candidate-opus|plan-bakeoff-candidate-sonnet|plan-bakeoff-candidate-haiku|plan-bakeoff-candidate-fable|plan-bakeoff-judge}
+origin:{router|component-builder|bug-investigator|code-reviewer|silent-failure-hunter|integration-verifier|planner|qa-harness-builder}
+phase:{build|build-implement|build-review|build-hunt|build-verify|build-doc-sync|learn-distill|skill-distill|debug|debug-investigate|debug-review|debug-verify|doubt-verify|review|review-audit|plan|plan-create|plan-review-gap-1|plan-review-gap-2|memory-finalize|re-review|re-hunt|re-verify|re-plan|research-web|research-github|plan-bakeoff-candidate-opus|plan-bakeoff-candidate-sonnet|plan-bakeoff-candidate-haiku|plan-bakeoff-candidate-fable|plan-bakeoff-judge|triage|codebase-health|qa|qa-research|qa-plan|qa-re-plan|qa-plan-review|qa-plan-review-2|qa-preflight|qa-build|re-qa-build|qa-review|qa-hunt|qa-execute|re-qa-execute}
 plan:{path|N/A}
-scope:{ALL_ISSUES|CRITICAL_ONLY|N/A}
+scope:{ALL_ISSUES|CRITICAL_ONLY|N/A|{source}|code:{repo}}
 reason:{short reason or N/A}
 ```
 
@@ -97,3 +97,6 @@ TaskCreate({
 
 Only create child tasks after the v10 artifact and state directory exist (step 1 guarantees both). The `workflows/{workflow_uuid}/` directory is where the memory-finalize task writes workflow-scoped memory (activeContext.md, patterns.md, progress.md for this workflow only).
 
+New routes pass their own `--workflow-type`/`--phase`; see the route file's `### {ROUTE} phases`.
+
+A child minted by `craftflow_workflow_handoff.py` in this turn is adopted, not minted again: skip step 1 only and run every other start step for its type; see `_shared/route-advisory.md` `### Adopting the handoff child`.

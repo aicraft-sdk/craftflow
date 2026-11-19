@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 MARK_BEGIN = "<!-- readmap:begin -->"
 MARK_END = "<!-- readmap:end -->"
 DEFAULT_VARIANTS = {"BUILD": ["fast_path", "standard"], "PLAN": ["standard"], "DEBUG": ["standard"], "REVIEW": ["standard"]}
-WORKFLOWS = ("BUILD", "PLAN", "DEBUG", "REVIEW")
+WORKFLOWS = ("BUILD", "PLAN", "DEBUG", "REVIEW")  # the legacy four: a mandatory floor of every read map
 CLASSES = ("kernel", "start", "stage", "maintainer")
 MENTION = re.compile(r"(?:references|_shared)/[A-Za-z0-9_-]+\.md")
 
@@ -26,6 +26,15 @@ def variants_of(readmap: dict) -> Dict[str, List[str]]:
     if not isinstance(v, dict) or not v or not all(isinstance(x, list) and x for x in v.values()):
         raise ReadsetError("read map 'variants' must map each workflow to a non-empty list")
     return v
+
+
+def workflows_of(readmap: dict) -> Tuple[str, ...]:
+    """Every workflow the map declares: the legacy four first (a map missing one is an error), then the others in map order."""
+    v = variants_of(readmap)
+    missing = [w for w in WORKFLOWS if w not in v]
+    if missing:
+        raise ReadsetError(f"read map 'variants' must keep the legacy workflows; missing {missing}")
+    return WORKFLOWS + tuple(w for w in v if w not in WORKFLOWS)
 
 
 def entry_pairs(readmap: dict, e: dict) -> List[Tuple[str, str]]:

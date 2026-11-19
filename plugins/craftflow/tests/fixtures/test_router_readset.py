@@ -708,10 +708,27 @@ def test_effective_block_uses_the_recorded_conditions() -> None:
     assumed = cli_json_args_project(["--assume-reach-amendment"])["effective"]["tier"]
     # K4: true in both legitimate states of the budget's `reach_amendment` (the decision record test owns the key itself). G2: every
     # difference_17 row is tagged, so without the recorded amendment the flag adds nothing to `effective`; with it `effective` is what the flag gives.
+    # P13: live_verified_enterplanmode is true, so the two EnterPlanMode delete rows (tagged by that flag, not by difference_17) are in `effective`
+    # and `effective` sits below `guaranteed` by exactly them; with that flag off the old premise still holds.
+    flag_off = cli_json_args_project(["--conditions", "difference_17=%s,live_verified_enterplanmode=false" % str(budget["conditions"]["difference_17"]).lower()])
+    enterplan_on = budget["conditions"]["live_verified_enterplanmode"]
     state_ok = (recorded["effective"]["tier"] == assumed) if budget["reach_amendment"] else \
-        (recorded["effective"]["tier"] == recorded["tiers"]["guaranteed"] and assumed != recorded["tiers"]["guaranteed"])
+        ((recorded["effective"]["tier"] == recorded["tiers"]["guaranteed"]) != enterplan_on
+         and flag_off["effective"]["tier"] == flag_off["tiers"]["guaranteed"] and assumed != recorded["tiers"]["guaranteed"])
+    # The gap between `guaranteed` and `effective` must be exactly the bytes of the two flag-tagged delete rows (each anchor line plus its
+    # newline: 358 kernel + 322 protocol = 680), in every workflow variant; with the flag off the gap is zero (the control).
+    deleted = sum(len(r["start_anchor"].encode("utf-8")) + 1 for r in json.loads(CUTPLAN.read_text(encoding="utf-8"))["rows"]
+                  if r.get("condition") == "live_verified_enterplanmode" and r["op"] == "delete")
+
+    def gaps(out: dict) -> list:
+        g, e = out["tiers"]["guaranteed"], out["effective"]["tier"]
+        return [g[w] - e[w] for w in ("DEBUG", "PLAN", "REVIEW")] + [g["BUILD"][v] - e["BUILD"][v] for v in ("fast_path", "max", "standard")]
+
+    gap_ok = deleted == 680
+    if not budget["reach_amendment"]:
+        gap_ok = gap_ok and gaps(recorded) == [deleted if enterplan_on else 0] * 6 and gaps(flag_off) == [0] * 6
     check("effective_block_uses_the_recorded_conditions",
-          {k: recorded["effective_conditions"][k] for k in budget["conditions"]} == budget["conditions"]
+          gap_ok and {k: recorded["effective_conditions"][k] for k in budget["conditions"]} == budget["conditions"]
           and recorded["effective_conditions"]["reach_amendment"] == budget["reach_amendment"] and recorded["effective_conditions_source"] == "router-budget.json"
           and state_ok
           and all_off["effective"]["tier"] == all_off["tiers"]["guaranteed"] and all_off["effective_conditions_source"] == "cli",
@@ -1166,8 +1183,9 @@ def test_signing_burden_buckets_are_disjoint_on_every_tier() -> None:
     # P11 remediation 2 (re-derived on the final text and the 169 unsigned rows read by the diff): 530 / 529 (499 / 498) become 532 / 531 (501 / 500)
     # P11 remediation 3 (re-derived on the final text and the 156 unsigned rows read by the diff): 532 / 531 (501 / 500) become 533 / 532 (502 / 501)
     # P12 (re-derived on the final text and the 11 unsigned rows read by the diff): 533 / 532 (502 / 501) become 544 / 543 (513 / 512)
-    signed_overlap = {"conditional": 544, "conditional_if_reach_amended": 543, "effective": 544, "effective_without_infeasible_rows": 544,
-                      "guaranteed": 544, "with_contingencies": 513, "with_contingencies_if_reach_amended": 512}
+    # P13 (re-derived on the final text and the 2 unsigned P13 rows read by the diff, the two EnterPlanMode deletions): 544 / 543 (513 / 512) become 546 / 545 (515 / 514); the guaranteed tier stays 544 (the flag-tagged delete rows are not in it)
+    signed_overlap = {"conditional": 546, "conditional_if_reach_amended": 545, "effective": 546, "effective_without_infeasible_rows": 546,
+                      "guaranteed": 544, "with_contingencies": 515, "with_contingencies_if_reach_amended": 514}
     bad = {}
     for name, v in tiers.items():
         b = v["signing_burden"]["buckets"]
@@ -1340,6 +1358,7 @@ def test_stage_files_have_triggers() -> None:
 
 
 P11_SHARED = {"router-protocol-multirepo.md", "skill-distill-approval.md", "verifier-handoff.md"}
+HARVEST_SHARED = {"route-orient.md", "route-advisory.md", "route-triage.md", "route-codebase-health.md", "route-qa.md"}
 
 
 def test_cursor_pointers_cover_shared_files() -> None:
@@ -1365,8 +1384,8 @@ def test_cursor_pointers_cover_shared_files() -> None:
     with_read = "`Read()` `skills/_shared/verifier-handoff.md` before dispatching the verifier.\n"
     controls = not ordered(bare, "verifier-handoff.md") and ordered(with_read, "verifier-handoff.md")
     check("cursor_pointers_cover_shared_files",
-          shared == P11_SHARED and not unnamed and not no_read_cursor and not no_read_protocol and controls,
-          f"shared={sorted(shared)} expected={sorted(P11_SHARED)} unnamed_in_cursor_router={unnamed} "
+          shared == P11_SHARED | HARVEST_SHARED and not unnamed and not no_read_cursor and not no_read_protocol and controls,
+          f"shared={sorted(shared)} expected={sorted(P11_SHARED | HARVEST_SHARED)} unnamed_in_cursor_router={unnamed} "
           f"no_read_instruction_in_cursor_router={no_read_cursor} in_protocol={no_read_protocol} controls={controls}")
 
 
@@ -1382,6 +1401,27 @@ def test_build_variant_files_declared() -> None:
     exists = all((PLUGIN_ROOT / REF / n).is_file() for n in want)
     declared = all(got[n] == (v, "start", ["BUILD"]) for n, v in want.items())
     check("build_variant_files_declared", exists and declared, f"got={got} exists={exists}")
+
+
+def test_harvest_workflows_follow_the_map() -> None:
+    """H2: the workflow set is a function of the loaded map; the legacy four are a mandatory floor."""
+    legacy, wanted = ("BUILD", "PLAN", "DEBUG", "REVIEW"), ("ORIENT", "QA", "TRIAGE", "CODEBASE-HEALTH")
+    no_build, qa, dup = syn_map(), syn_map(), syn_map()
+    del no_build["variants"]["BUILD"]
+    qa["variants"]["QA"] = ["standard", "probe"]
+    qa["files"].append({"file": REF + "qa-workflow.md", "class": "start", "workflows": ["QA"], "trigger": "QA preparation", "happy_path": True})
+    qa["files"].append({"file": REF + "qa-plan.md", "class": "stage", "workflows": ["QA"], "variant": "standard", "trigger": "x", "happy_path": True})
+    sizes = {e["file"]: 10 for e in qa["files"]}
+    dup["files"].append({"file": HSC, "class": "stage", "workflows": ["PLAN"], "trigger": "y", "happy_path": True})
+    all_, one = cli_json("--workflow", "ALL"), cli_json("--workflow", "QA")
+    check("harvest_workflows_follow_the_map",
+          core.workflows_of(rs.load_map(LIVE_MAP)) == legacy + wanted and core.workflows_of(syn_map()) == legacy
+          and raises(lambda: core.workflows_of(no_build), rs.ReadsetError) and raises(lambda: core.compute_from_sizes(syn_map(), sizes, "QA"), rs.ReadsetError)
+          and sorted(core.compute_from_sizes(qa, sizes, "QA")["variants"]) == ["probe", "standard"]
+          and raises(lambda: __import__("craftflow_rule_inventory_readmap").coverage(dup), ValueError)
+          and sorted(all_["workflows"]) == sorted(legacy + wanted) and one["workflow"] == "QA"
+          and sorted(one["variants"]) == ["probe", "standard"] and run_cli("--workflow", "NOPE").returncode == 2,
+          f"all={sorted(all_['workflows'])} qa={one['workflow']}")
 
 
 def main() -> int:

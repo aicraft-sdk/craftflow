@@ -1,0 +1,78 @@
+{
+  "id": "handoff-linked-workflow",
+  "workflow_type": "CODEBASE-HEALTH",
+  "scenarios": [
+    {
+      "name": "codebase-health-to-plan-is-automatic",
+      "matrix_source": "CODEBASE-HEALTH",
+      "target": "PLAN",
+      "just_go": false,
+      "expected": {"mode": "auto", "offered": false, "child_minted": true},
+      "steps": [
+        {"op": "parent_terminal", "event": "memory_finalized"},
+        {"op": "announce", "text": "-> handing off to PLAN (design: {path})"},
+        {"op": "mint", "target": "PLAN"}
+      ]
+    },
+    {
+      "name": "triage-to-build-offered-accepted-started",
+      "matrix_source": "TRIAGE",
+      "target": "BUILD",
+      "just_go": false,
+      "expected": {"mode": "asked", "offered": true, "child_minted": true},
+      "steps": [
+        {"op": "parent_terminal", "event": "memory_finalized"},
+        {"op": "offer", "target": "BUILD"},
+        {"op": "answer", "text": "yes, go"},
+        {"op": "handoff_accepted", "target": "BUILD"},
+        {"op": "mint", "target": "BUILD"}
+      ]
+    },
+    {
+      "name": "triage-to-build-declined-mints-nothing",
+      "matrix_source": "TRIAGE",
+      "target": "BUILD",
+      "just_go": false,
+      "expected": {"mode": "asked", "offered": true, "child_minted": false},
+      "steps": [
+        {"op": "parent_terminal", "event": "memory_finalized"},
+        {"op": "offer", "target": "BUILD"},
+        {"op": "answer", "text": "no"},
+        {"op": "handoff_declined", "reason": "user_declined"}
+      ]
+    },
+    {
+      "name": "just-go-triage-to-debug-is-asked-not-auto-accepted",
+      "matrix_source": "TRIAGE",
+      "target": "DEBUG",
+      "just_go": true,
+      "expected": {"mode": "asked", "offered": true, "child_minted": false},
+      "steps": [
+        {"op": "parent_terminal", "event": "memory_finalized"},
+        {"op": "offer", "target": "DEBUG"}
+      ]
+    },
+    {
+      "name": "qa-bug-candidate-to-debug-is-asked",
+      "matrix_source": "QA bug candidate",
+      "target": "DEBUG",
+      "just_go": false,
+      "expected": {"mode": "asked", "offered": true, "child_minted": false},
+      "steps": [
+        {"op": "parent_terminal", "event": "memory_finalized"},
+        {"op": "offer", "target": "DEBUG"}
+      ]
+    },
+    {
+      "name": "qa-seeded-debug-verified-reruns-qa-automatically",
+      "matrix_source": "QA-seeded DEBUG",
+      "target": "QA",
+      "just_go": true,
+      "expected": {"mode": "auto", "offered": false, "child_minted": true},
+      "steps": [
+        {"op": "parent_terminal", "event": "memory_finalized"},
+        {"op": "mint", "target": "QA"}
+      ]
+    }
+  ]
+}

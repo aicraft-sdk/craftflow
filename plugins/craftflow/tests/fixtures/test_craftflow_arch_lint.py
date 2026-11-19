@@ -197,6 +197,200 @@ def test_corrupt_rules_json_fails_loudly() -> None:
             )
 
 
+def _write_rules(root: Path, rules: list) -> Path:
+    rules_path = root / "custom-rules.json"
+    rules_path.write_text(json.dumps({"schema_version": 1, "rules": rules}))
+    return rules_path
+
+
+def _rule(**extra) -> dict:
+    rule = {
+        "id": "no-tools-import-packages",
+        "scope_globs": ["tools/**/*.ts"],
+        "forbidden_import_prefixes": ["@ai-craft/"],
+        "what": "imports from @ai-craft/*",
+        "why": "boundary",
+        "fix": "move it",
+    }
+    rule.update(extra)
+    if rule.get("mode") == "blocking":  # blocking rules must carry provenance (schema)
+        rule.setdefault("origin", "test incident")
+        rule.setdefault("owner", "test owner")
+    return rule
+
+
+def _violating_root(root: Path) -> None:
+    (root / "tools" / "pkg").mkdir(parents=True)
+    (root / "tools" / "pkg" / "bad.ts").write_text("import { helper } from '@ai-craft/agent-loop';\n")
+
+
+def test_advisory_only_findings_exit_zero() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _violating_root(root)
+        rules = _write_rules(root, [_rule(mode="advisory")])
+        result = run_cli(["--format", "json", "--rules", str(rules)], root)
+        data = json.loads(result.stdout) if result.stdout else {}
+        if (
+            result.returncode == 0
+            and len(data.get("findings", [])) == 1
+            and data["findings"][0].get("mode") == "advisory"
+            and data.get("summary") == {"total": 1, "blocking": 0, "advisory": 1}
+        ):
+            ok("advisory_only_findings_exit_zero")
+        else:
+            fail("advisory_only_findings_exit_zero", f"exit={result.returncode} out={result.stdout!r} err={result.stderr!r}")
+
+
+def test_blocking_finding_exits_two_json() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _violating_root(root)
+        rules = _write_rules(root, [_rule(mode="blocking")])
+        result = run_cli(["--format", "json", "--rules", str(rules)], root)
+        data = json.loads(result.stdout) if result.stdout else {}
+        if (
+            result.returncode == 2
+            and len(data.get("findings", [])) == 1
+            and data["findings"][0].get("mode") == "blocking"
+            and data.get("summary") == {"total": 1, "blocking": 1, "advisory": 0}
+        ):
+            ok("blocking_finding_exits_two_json")
+        else:
+            fail("blocking_finding_exits_two_json", f"exit={result.returncode} out={result.stdout!r} err={result.stderr!r}")
+
+
+def test_blocking_finding_exits_two_text_shows_mode_and_counts() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _violating_root(root)
+        rules = _write_rules(root, [
+            _rule(mode="blocking"),
+            _rule(id="advisory-too", mode="advisory"),
+        ])
+        result = run_cli(["--format", "text", "--rules", str(rules)], root)
+        out = result.stdout
+        if (
+            result.returncode == 2
+            and "MODE: blocking" in out
+            and "MODE: advisory" in out
+            and "2 finding(s): 1 blocking, 1 advisory" in out
+        ):
+            ok("blocking_finding_exits_two_text_shows_mode_and_counts")
+        else:
+            fail("blocking_finding_exits_two_text_shows_mode_and_counts", f"exit={result.returncode} out={out!r}")
+
+
+def test_mixed_rules_advisory_does_not_mask_blocking() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _violating_root(root)
+        rules = _write_rules(root, [_rule(id="a", mode="advisory"), _rule(id="b", mode="blocking")])
+        result = run_cli(["--format", "json", "--rules", str(rules)], root)
+        data = json.loads(result.stdout) if result.stdout else {}
+        if result.returncode == 2 and data.get("summary") == {"total": 2, "blocking": 1, "advisory": 1}:
+            ok("mixed_rules_advisory_does_not_mask_blocking")
+        else:
+            fail("mixed_rules_advisory_does_not_mask_blocking", f"exit={result.returncode} out={result.stdout!r}")
+
+
+def test_blocking_rule_without_findings_exits_zero() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "tools" / "pkg").mkdir(parents=True)
+        (root / "tools" / "pkg" / "clean.ts").write_text("import { x } from './local';\n")
+        rules = _write_rules(root, [_rule(mode="blocking")])
+        result = run_cli(["--format", "json", "--rules", str(rules)], root)
+        if result.returncode == 0 and json.loads(result.stdout)["findings"] == []:
+            ok("blocking_rule_without_findings_exits_zero")
+        else:
+            fail("blocking_rule_without_findings_exits_zero", f"exit={result.returncode} out={result.stdout!r}")
+
+
+def test_invalid_mode_is_a_schema_error() -> None:
+    # Misspelled, wrong-case and non-string modes must all fail loudly (exit 1,
+    # naming the rule and the bad value) rather than degrade to advisory.
+    for label, bad in (("typo", "blocker"), ("case", "Blocking"), ("empty", ""), ("null", None), ("number", 2)):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _violating_root(root)
+            rules = _write_rules(root, [_rule(mode=bad)])
+            result = run_cli(["--format", "json", "--rules", str(rules)], root)
+            if (
+                result.returncode == 1
+                and result.stdout == ""
+                and "no-tools-import-packages" in result.stderr
+                and "mode" in result.stderr
+            ):
+                ok(f"invalid_mode_is_a_schema_error[{label}]")
+            else:
+                fail(
+                    f"invalid_mode_is_a_schema_error[{label}]",
+                    f"exit={result.returncode} out={result.stdout!r} err={result.stderr!r}",
+                )
+
+
+def test_missing_mode_defaults_to_advisory() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _violating_root(root)
+        rules = _write_rules(root, [_rule()])  # no "mode" key at all (pre-existing registry shape)
+        result = run_cli(["--format", "json", "--rules", str(rules)], root)
+        data = json.loads(result.stdout) if result.stdout else {}
+        if (
+            result.returncode == 0
+            and len(data.get("findings", [])) == 1
+            and data["findings"][0].get("mode") == "advisory"
+        ):
+            ok("missing_mode_defaults_to_advisory")
+        else:
+            fail("missing_mode_defaults_to_advisory", f"exit={result.returncode} out={result.stdout!r} err={result.stderr!r}")
+
+
+def test_seed_rule_is_advisory_and_seeded_violation_exits_zero() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _violating_root(root)
+        result = run_cli(["--format", "json"], root)
+        seeded = json.loads((root / ".craftflow" / "state" / "project" / "arch-rules.json").read_text())
+        seed_modes = {r.get("mode", "advisory") for r in seeded["rules"]}
+        if result.returncode == 0 and seed_modes == {"advisory"}:
+            ok("seed_rule_is_advisory_and_seeded_violation_exits_zero")
+        else:
+            fail("seed_rule_is_advisory_and_seeded_violation_exits_zero", f"exit={result.returncode} modes={seed_modes}")
+
+
+def test_bootstrap_is_surfaced_so_a_deleted_registry_is_visible() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "tools").mkdir()
+        first = json.loads(run_cli(["--format", "json"], root).stdout)
+        second = json.loads(run_cli(["--format", "json"], root).stdout)
+        text = run_cli(["--format", "text"], root)
+        (root / ".craftflow" / "state" / "project" / "arch-rules.json").unlink()
+        text_after_delete = run_cli(["--format", "text"], root)
+        if (
+            first.get("bootstrapped") is True
+            and second.get("bootstrapped") is False
+            and "was missing" not in text.stdout
+            and "was missing" in text_after_delete.stdout
+        ):
+            ok("bootstrap_is_surfaced_so_a_deleted_registry_is_visible")
+        else:
+            fail("bootstrap_is_surfaced_so_a_deleted_registry_is_visible", f"{first} {second} {text_after_delete.stdout!r}")
+
+
+def test_usage_error_is_exit_one_not_two() -> None:
+    # argparse's own usage-error exit is 2, which would be indistinguishable
+    # from "blocking findings present".
+    with tempfile.TemporaryDirectory() as tmp:
+        result = run_cli(["--format", "xml"], Path(tmp))
+        if result.returncode == 1 and "usage error" in result.stderr:
+            ok("usage_error_is_exit_one_not_two")
+        else:
+            fail("usage_error_is_exit_one_not_two", f"exit={result.returncode} err={result.stderr!r}")
+
+
 def main() -> int:
     print("test_craftflow_arch_lint: running")
     test_missing_rules_file_self_bootstraps_and_finds_nothing_clean()
@@ -207,6 +401,16 @@ def main() -> int:
     test_unreadable_file_reported_in_skipped_array()
     test_clean_scan_reports_empty_skipped_array()
     test_corrupt_rules_json_fails_loudly()
+    test_advisory_only_findings_exit_zero()
+    test_blocking_finding_exits_two_json()
+    test_blocking_finding_exits_two_text_shows_mode_and_counts()
+    test_mixed_rules_advisory_does_not_mask_blocking()
+    test_blocking_rule_without_findings_exits_zero()
+    test_invalid_mode_is_a_schema_error()
+    test_missing_mode_defaults_to_advisory()
+    test_seed_rule_is_advisory_and_seeded_violation_exits_zero()
+    test_bootstrap_is_surfaced_so_a_deleted_registry_is_visible()
+    test_usage_error_is_exit_one_not_two()
     print()
     print("=" * 40)
     if _errors:

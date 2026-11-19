@@ -186,8 +186,8 @@ def test_curl_hints() -> None:
 def test_exempt_block() -> None:
     t = CURSOR_ROUTER.read_text(encoding="utf-8")
     i = t.find("### Router-exempt inspection skills")
-    a = t.find("Only when both `pending_skill_approval` and `pending_gate` are null")
-    b = t.find("Route using the first matching signal:")
+    a = t.find("Only when `pending_skill_approval`, `pending_gate` and `pending_handoff` are all null")
+    b = t.find("Route by the shared doc's `## Intent Routing`")
     check("exempt_order", a != -1 and a < i < b, f"a={a} i={i} b={b}")
     if i == -1 or b == -1:
         return
@@ -221,9 +221,9 @@ def test_docs() -> None:
     docs = DOCS_CRAFTFLOW.read_text(encoding="utf-8")
     check("docs_craftflow_no_gap_note", "have no Cursor wiring yet" not in docs,
           "docs/craftflow.md still says status/failure-digest have no Cursor wiring")
-    line = next((ln for ln in docs.splitlines() if "All 34 skills" in ln), "")
+    line = next((ln for ln in docs.splitlines() if "All 35 skills" in ln), "")
     check("docs_craftflow_lists_three", "run router-exempt in Cursor" in line,
-          "All 34 skills line lacks 'run router-exempt in Cursor'")
+          "All 35 skills line lacks 'run router-exempt in Cursor'")
     readme = README_PLUGIN.read_text(encoding="utf-8")
     check("readme_install_lists_four",
           "symlinks the `cursor-router`, `retro`, `status` and `failure-digest` skills" in readme,

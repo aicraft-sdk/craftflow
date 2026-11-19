@@ -856,7 +856,7 @@ def test_append_event_returns_true_on_success_and_false_on_failure() -> None:
 # main() -- stdin-JSON-driven, fail-open PreToolUse hook (Phase 4, Task 4.1)
 # ---------------------------------------------------------------------------
 
-import os
+import os  # noqa: E402 - section-local import kept beside the tests that use it
 
 
 def run_hook(payload: dict, env: dict) -> tuple:
@@ -1130,7 +1130,7 @@ def test_root_cursor_hooks_json_does_not_register_risk_gate() -> None:
 # Real-subprocess "never blocks on hostile input" property test (Phase 4, Task 4.4)
 # ---------------------------------------------------------------------------
 
-import subprocess
+import subprocess  # noqa: E402 - section-local import kept beside the tests that use it
 
 
 def test_real_subprocess_never_blocks_on_hostile_stdin() -> None:

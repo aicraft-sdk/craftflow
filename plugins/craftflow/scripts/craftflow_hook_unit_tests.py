@@ -37,7 +37,6 @@ import craftflow_skill_propose as skill_propose  # noqa: E402
 import craftflow_status_report as status_report  # noqa: E402
 import craftflow_precompact_state as precompact_state  # noqa: E402
 import craftflow_postcompact_context as postcompact_context  # noqa: E402
-import craftflow_sessionstart_context as sessionstart_context  # noqa: E402
 import craftflow_memory_merge as memory_merge  # noqa: E402
 import craftflow_router_corpus as router_corpus  # noqa: E402
 
@@ -4385,6 +4384,145 @@ def test_pretooluse_guard_denies_bash_redirect_to_reliability_gates_ledger(tmp_d
         ok(name)
     else:
         fail(name, f"expected deny reliability-gates-write, got: {out!r}")
+
+
+def _is_deny(out: str) -> bool:
+    return '"permissionDecision": "deny"' in out or '"permissionDecision":"deny"' in out
+
+
+def _arch_rules_project(tmp_dir: Path) -> tuple:
+    project_root = tmp_dir / "project"
+    rules_path = project_root / ".craftflow" / "state" / "project" / "arch-rules.json"
+    rules_path.parent.mkdir(parents=True, exist_ok=True)
+    rules_path.write_text('{"schema_version": 1, "rules": [{"id": "r", "mode": "blocking"}]}')
+    return project_root, rules_path
+
+
+def test_pretooluse_guard_denies_edit_write_to_arch_rules_registry(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/denies-edit-write-to-arch-rules-registry"
+    project_root, rules_path = _arch_rules_project(tmp_dir)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    # Write replacing the registry, and Edit flipping a blocking rule to advisory.
+    payloads = [
+        {"tool_name": "Write", "cwd": str(project_root.resolve()),
+         "tool_input": {"file_path": str(rules_path), "content": '{"schema_version": 1, "rules": []}'}},
+        {"tool_name": "Edit", "cwd": str(project_root.resolve()),
+         "tool_input": {"file_path": str(rules_path), "old_string": '"blocking"', "new_string": '"advisory"'}},
+    ]
+    for payload in payloads:
+        _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+        if not (_is_deny(out) and "arch-rules-write" in out):
+            fail(name, f"expected deny arch-rules-write for {payload['tool_name']}; got: {out!r}")
+            return
+        for forbidden in ("skill_promote", "skill_propose", "skill-candidate ledger", "reliability-gates ledger"):
+            if forbidden in out:
+                fail(name, f"arch-rules-write message must not mention {forbidden!r}; got: {out!r}")
+                return
+        if "arch-rules" not in out:
+            fail(name, f"expected the message to describe the arch-rules registry; got: {out!r}")
+            return
+    if rules_path.read_text() != '{"schema_version": 1, "rules": [{"id": "r", "mode": "blocking"}]}':
+        fail(name, "the hook must not modify the registry itself")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_arch_rules_registry_case_variant_and_ancestor_cwd(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/denies-arch-rules-registry-case-variant-and-ancestor-cwd"
+    project_root, rules_path = _arch_rules_project(tmp_dir)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    variant = project_root / ".craftflow" / "State" / "project" / "Arch-Rules.json"
+    # cwd is an ANCESTOR of the project (a workspace root), so the registry sits
+    # deeper below cwd than its fixed relative path alone accounts for.
+    ancestor = tmp_dir
+    cases = [
+        ("case-variant spelling", {"tool_name": "Write", "cwd": str(project_root.resolve()),
+                                   "tool_input": {"file_path": str(variant), "content": "{}"}}),
+        ("cwd above the project root", {"tool_name": "Write", "cwd": str(ancestor.resolve()),
+                                        "tool_input": {"file_path": str(rules_path), "content": "{}"}}),
+    ]
+    for label, payload in cases:
+        _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+        if not (_is_deny(out) and "arch-rules-write" in out):
+            fail(name, f"expected deny arch-rules-write for {label}; got: {out!r}")
+            return
+    ok(name)
+
+
+def test_pretooluse_guard_allows_edit_write_to_other_project_state_files(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/allows-edit-write-to-non-registry-files"
+    project_root, _rules_path = _arch_rules_project(tmp_dir)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    for target in (
+        project_root / ".craftflow" / "state" / "project" / "arch-rules.notes.json",
+        project_root / "src" / "arch-rules.json",
+        project_root / "src" / "app.py",
+    ):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"tool_name": "Write", "cwd": str(project_root.resolve()),
+                   "tool_input": {"file_path": str(target), "content": "x"}}
+        _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+        if _is_deny(out):
+            fail(name, f"unexpected deny for {target.name}; got: {out!r}")
+            return
+    ok(name)
+
+
+def test_pretooluse_guard_denies_bash_writes_to_arch_rules_registry(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/denies-bash-writes-to-arch-rules-registry"
+    project_root, _rules_path = _arch_rules_project(tmp_dir)
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    commands = {
+        "redirect": "echo '{}' > .craftflow/state/project/arch-rules.json",
+        "tee": "echo '{}' | tee .craftflow/state/project/arch-rules.json",
+        "cp": "cp /tmp/empty.json .craftflow/state/project/arch-rules.json",
+        "python": "python3 -c \"open('.craftflow/state/project/arch-rules.json','w').write('{}')\"",
+    }
+    for label, command in commands.items():
+        payload = {"tool_name": "Bash", "cwd": str(project_root.resolve()), "tool_input": {"command": command}}
+        _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+        if not (_is_deny(out) and "arch-rules.json" in out):
+            fail(name, f"expected deny naming arch-rules.json for Bash {label}; got: {out!r}")
+            return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_arch_rules_write_is_gated_by_protected_writes(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/bash-arch-rules-write-gated-by-protectedWrites-audit-allows"
+    fake_plugin_root = tmp_dir / "plugin_root"
+    (fake_plugin_root / "config").mkdir(parents=True)
+    (fake_plugin_root / "config" / "hook-mode.json").write_text(
+        json.dumps({"protectedWrites": "audit"}), encoding="utf-8"
+    )
+    project_root, _rules_path = _arch_rules_project(tmp_dir)
+    env = {"CLAUDE_PLUGIN_ROOT": str(fake_plugin_root), "CLAUDE_PROJECT_DIR": str(project_root)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo '{}' > .craftflow/state/project/arch-rules.json"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if _is_deny(out):
+        fail(name, f"protectedWrites=audit must log, not deny, a Bash write to the registry; got: {out!r}")
+        return
+    ok(name)
+
+
+def test_pretooluse_guard_bash_write_to_unrelated_arch_rules_name_allowed(tmp_dir: Path) -> None:
+    name = "pretooluse-guard/allows-bash-write-to-unrelated-arch-rules-name"
+    project_root, _rules_path = _arch_rules_project(tmp_dir)
+    (project_root / "docs").mkdir()
+    env = {"CLAUDE_PROJECT_DIR": str(project_root), "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(project_root.resolve()),
+        "tool_input": {"command": "echo '{}' > docs/arch-rules.json"},
+    }
+    _, out = run_hook("craftflow_pretooluse_guard.py", payload, env)
+    if _is_deny(out):
+        fail(name, f"a write to docs/arch-rules.json is not the registry; got: {out!r}")
+        return
+    ok(name)
 
 
 def test_pretooluse_guard_allows_authorized_reliability_gates_script_bash_invocation(tmp_dir: Path) -> None:
@@ -12248,8 +12386,10 @@ def test_selfcheck_internal_budget_stays_under_registered_hook_timeout() -> None
     )
     # P4: the policy --validate subprocess (2 s) is charged INSIDE the sweep budget, so it adds nothing to the worst case.
     policy_timeout = getattr(module, "POLICY_TIMEOUT_SECONDS", None)
-    if policy_timeout != 2 or policy_timeout > module.SELFCHECK_TIME_BUDGET_SECONDS:
-        fail(name, f"POLICY_TIMEOUT_SECONDS must be 2 and fit inside SELFCHECK_TIME_BUDGET_SECONDS; got {policy_timeout!r}")
+    policy_attempts = getattr(module, "POLICY_ATTEMPTS", None)
+    if policy_timeout != 2 or policy_attempts != 2 or policy_timeout * policy_attempts > module.SELFCHECK_TIME_BUDGET_SECONDS:
+        fail(name, f"POLICY_TIMEOUT_SECONDS (2) x POLICY_ATTEMPTS (2) must fit inside SELFCHECK_TIME_BUDGET_SECONDS; "
+                   f"got {policy_timeout!r} x {policy_attempts!r}")
         return
     if worst_case > 12:
         fail(name, f"internal worst-case budget is {worst_case}s; the policy check must be charged inside the sweep budget (<= 12s)")
@@ -12354,6 +12494,45 @@ def test_selfcheck_policy_validator_non_utf8_output(tmp_dir: Path) -> None:
         return
     if result.returncode != 0 or "CRAFTFLOW policy.json invalid: " not in context or "�" in context:
         fail(name, f"unexpected warning: rc={result.returncode} context={context!r}")
+        return
+    ok(name)
+
+
+_SELFCHECK_SLOW_VALIDATOR = (
+    "import os, sys, time\n"
+    "marker = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'first-call-seen')\n"
+    "if %s or not os.path.exists(marker):\n"
+    "    open(marker, 'w').close()\n"
+    "    time.sleep(30)\n"
+    "print('{\"status\": \"ok\", \"errors\": []}')\n"
+)
+
+
+def test_selfcheck_policy_timeout_retries_once(tmp_dir: Path) -> None:
+    """A validator that overruns once (cold start under load) but answers on the retry stays silent."""
+    name = "hook-selfcheck/policy-timeout-retries-once"
+    checker = _selfcheck_policy_layout(tmp_dir / "retry", b"{}")
+    (checker.parent / "craftflow_policy.py").write_text(_SELFCHECK_SLOW_VALIDATOR % "False", encoding="utf-8")
+    result = _selfcheck_run_policy(checker, tmp_dir / "cfg")
+    if result.returncode != 0 or "CRAFTFLOW policy.json" in result.stdout:
+        fail(name, f"expected silence after a successful retry; got rc={result.returncode} stdout={result.stdout!r}")
+        return
+    ok(name)
+
+
+def test_selfcheck_policy_timeout_twice_is_unconfirmed_not_invalid(tmp_dir: Path) -> None:
+    """Two timeouts report the policy as unconfirmed; the line must not claim the policy is invalid or that gates fail closed."""
+    name = "hook-selfcheck/policy-timeout-twice-unconfirmed"
+    checker = _selfcheck_policy_layout(tmp_dir / "twice", b"{}")
+    (checker.parent / "craftflow_policy.py").write_text(_SELFCHECK_SLOW_VALIDATOR % "True", encoding="utf-8")
+    result = _selfcheck_run_policy(checker, tmp_dir / "cfg")
+    try:
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+    except (ValueError, KeyError):
+        fail(name, f"expected a warning line; got rc={result.returncode} stdout={result.stdout!r}")
+        return
+    if "timed out after 2 attempts of 2s" not in context or "invalid" in context or "fail closed" in context:
+        fail(name, f"unexpected warning: {context!r}")
         return
     ok(name)
 
@@ -18093,6 +18272,7 @@ _MEMORY_UPDATE_POINTER_COUNTS = {
     "build-graph-fast.md": 1,
     "debug-workflow.md": 1,
     "review-workflow.md": 1,
+    "codebase-health-workflow.md": 1,
 }
 _MEMORY_UPDATE_POINTER = "Follow references/memory-finalize.md § Memory Update task instructions"
 
@@ -18376,6 +18556,31 @@ def test_router_phase_enum_registers_skill_distill_learn_distill_doubt_verify() 
         if phase not in enum_line:
             fail(name, f"phase:{{...}} enum line missing {phase!r}: {enum_line}")
             return
+    ok(name)
+
+
+def test_router_phase_enum_registers_harvest_tokens() -> None:
+    name = "router/metadata-fence-registers-harvest-phase-origin-scope-tokens"
+    content = _router_section_or_none("## 3. Task Metadata Contract") or ""
+    lines = {k: re.search(rf"^{k}:\{{[^\n]*\}}$", content, re.MULTILINE) for k in ("phase", "origin", "scope")}
+    if not all(lines.values()):
+        fail(name, "Task Metadata Contract fence is missing a phase:/origin:/scope: enum line")
+        return
+    phase_tokens = set(lines["phase"].group(0)[len("phase:{"):-1].split("|"))
+    wanted = ("triage", "codebase-health", "qa", "qa-research", "qa-plan", "qa-re-plan", "qa-plan-review", "qa-plan-review-2",
+              "qa-preflight", "qa-build", "re-qa-build", "qa-review", "qa-hunt", "qa-execute", "re-qa-execute")
+    legacy = ("build", "plan-create", "plan-review-gap-2", "doubt-verify", "re-plan", "plan-bakeoff-judge")
+    missing = [t for t in wanted + legacy if t not in phase_tokens]
+    if missing:
+        fail(name, f"phase:{{...}} enum line missing {missing!r}")
+        return
+    if "qa-harness-builder" not in lines["origin"].group(0)[len("origin:{"):-1].split("|"):
+        fail(name, f"origin:{{...}} enum line missing qa-harness-builder: {lines['origin'].group(0)}")
+        return
+    scope = lines["scope"].group(0)
+    if "{source}" not in scope or "code:{repo}" not in scope:
+        fail(name, f"scope:{{...}} enum line missing {{source}} or code:{{repo}}: {scope}")
+        return
     ok(name)
 
 
@@ -29219,6 +29424,8 @@ def main() -> int:
         test_selfcheck_warns_when_shipped_policy_missing(tmp / "hp2b")
         test_selfcheck_policy_validator_non_utf8_output(tmp / "hp2c")
         test_selfcheck_policy_validator_exit_0_unparseable_output(tmp / "hp2d")
+        test_selfcheck_policy_timeout_retries_once(tmp / "hp2e")
+        test_selfcheck_policy_timeout_twice_is_unconfirmed_not_invalid(tmp / "hp2f")
         test_selfcheck_version_drift_line(tmp / "hp3")
         test_selfcheck_flushes_before_external_kill_when_sweep_runs_long(tmp / "hc5")
         test_selfcheck_concurrent_sweep_fits_budget_that_truncates_sequentially(tmp / "hc5b")
@@ -29399,6 +29606,15 @@ def main() -> int:
         test_pretooluse_guard_denies_edit_write_to_reliability_gates_ledger(tmp / "pg-rg1")
         test_pretooluse_guard_denies_bash_redirect_to_reliability_gates_ledger(tmp / "pg-rg2")
         test_pretooluse_guard_allows_authorized_reliability_gates_script_bash_invocation(tmp / "pg-rg3")
+
+        print()
+        print("[ pretooluse-guard: arch-rules registry protection (blocking/advisory mode must not be agent-editable) ]")
+        test_pretooluse_guard_denies_edit_write_to_arch_rules_registry(tmp / "pg-ar1")
+        test_pretooluse_guard_denies_arch_rules_registry_case_variant_and_ancestor_cwd(tmp / "pg-ar2")
+        test_pretooluse_guard_allows_edit_write_to_other_project_state_files(tmp / "pg-ar3")
+        test_pretooluse_guard_denies_bash_writes_to_arch_rules_registry(tmp / "pg-ar4")
+        test_pretooluse_guard_bash_arch_rules_write_is_gated_by_protected_writes(tmp / "pg-ar5")
+        test_pretooluse_guard_bash_write_to_unrelated_arch_rules_name_allowed(tmp / "pg-ar6")
 
         print()
         print(
@@ -29590,6 +29806,7 @@ def main() -> int:
     print()
     print("[ structural: skill-distill router wiring (Phase 3) ]")
     test_router_phase_enum_registers_skill_distill_learn_distill_doubt_verify()
+    test_router_phase_enum_registers_harvest_tokens()
     test_router_dispatcher_table_includes_skill_distill()
     test_router_effort_dispatch_includes_skill_distill_low()
     test_router_contract_overrides_includes_skill_author()
