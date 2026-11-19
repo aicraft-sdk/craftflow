@@ -23,9 +23,13 @@ released once a write under the lock had moved that position.
 """
 from __future__ import annotations
 
-try:
+import sys
+
+__all__ = ["LOCK_EX", "LOCK_NB", "LOCK_SH", "LOCK_UN", "flock"]
+
+if sys.platform != "win32":
     from fcntl import LOCK_EX, LOCK_NB, LOCK_SH, LOCK_UN, flock  # POSIX: re-exported unchanged
-except ImportError:  # Windows
+else:  # Windows
     import errno
     import msvcrt
     import os
@@ -57,7 +61,7 @@ except ImportError:  # Windows
         finally:
             os.lseek(fd, position, os.SEEK_SET)
 
-    def flock(fd: Any, operation: int) -> None:  # type: ignore[no-redef]
+    def flock(fd: Any, operation: int) -> None:
         fd = _fileno(fd)
         if operation & LOCK_UN:
             try:

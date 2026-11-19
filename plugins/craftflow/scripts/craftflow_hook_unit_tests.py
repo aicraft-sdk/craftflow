@@ -27,7 +27,6 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = PLUGIN_ROOT / "scripts"
 
 sys.path.insert(0, str(SCRIPTS))
-import craftflow_fcntl_compat as fcntl  # noqa: E402  (fcntl on POSIX; an msvcrt-backed flock on Windows)
 import craftflow_hooklib as hooklib  # noqa: E402
 import craftflow_pretooluse_bash_guard as bash_guard  # noqa: E402
 import craftflow_pretooluse_guard as pretooluse_guard  # noqa: E402
@@ -39,6 +38,8 @@ import craftflow_precompact_state as precompact_state  # noqa: E402
 import craftflow_postcompact_context as postcompact_context  # noqa: E402
 import craftflow_memory_merge as memory_merge  # noqa: E402
 import craftflow_router_corpus as router_corpus  # noqa: E402
+
+fcntl = hooklib.fcntl  # fcntl on POSIX; an msvcrt-backed flock on Windows (craftflow_fcntl_compat, imported by hooklib)
 
 _errors: list[str] = []
 _passes: int = 0
