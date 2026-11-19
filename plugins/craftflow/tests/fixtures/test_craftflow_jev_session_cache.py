@@ -29,7 +29,6 @@ from craftflow_jev_session_cache import (  # noqa: E402
 )
 
 fcntl = craftflow_jev_session_cache.fcntl  # fcntl on POSIX; an msvcrt-backed flock on Windows (craftflow_fcntl_compat)
-
 _passes = 0
 _errors: list[str] = []
 
