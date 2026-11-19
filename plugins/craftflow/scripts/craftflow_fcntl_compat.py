@@ -57,7 +57,7 @@ except ImportError:  # Windows
         finally:
             os.lseek(fd, position, os.SEEK_SET)
 
-    def flock(fd: Any, operation: int) -> None:  # type: ignore[no-redef]
+    def flock(fd: Any, operation: int) -> None:
         fd = _fileno(fd)
         if operation & LOCK_UN:
             try:

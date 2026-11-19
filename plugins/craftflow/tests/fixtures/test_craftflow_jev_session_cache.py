@@ -17,7 +17,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import craftflow_fcntl_compat as fcntl  # noqa: E402  (fcntl on POSIX; an msvcrt-backed flock on Windows)
+import craftflow_fcntl_compat as fcntl  # fcntl on POSIX; an msvcrt-backed flock on Windows)
 import craftflow_jev_session_cache  # noqa: E402
 from craftflow_jev_session_cache import (  # noqa: E402
     session_cache_path,
