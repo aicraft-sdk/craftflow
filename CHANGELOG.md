@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.38.0] - 2026-11-19
+
+### Features
+
+- check guardrail references and prove proposed arch-lint rules
+- make code-health checks enforceable (#1)
+
+### Documentation
+
+- sign the ADR-0077 policy-map rows and accept ADR-0077
+- date the draft policy-map rows' Evidence cell
+- draft ADR-0077 and the policy-map rows for the code-health blocking mode
+
 ## [1.37.0] - 2026-11-06
 
 ### Features
