@@ -913,7 +913,7 @@ def _apply_to_file(target_arg: str, raw_stdin: str) -> int:
     archive spec -> merge -> validate result -> archive append (fsync) -> atomic replace.
     Any failure exits 1 with the target left byte-identical."""
     try:
-        import fcntl
+        import craftflow_fcntl_compat as fcntl  # fcntl on POSIX; an msvcrt-backed flock on Windows
     except ImportError:
         return _apply_error("file locking (fcntl) is unavailable; refusing to write")
     try:

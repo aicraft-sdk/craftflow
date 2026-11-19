@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import fcntl
 import importlib.util
 import json
 import os
@@ -39,6 +38,8 @@ import craftflow_precompact_state as precompact_state  # noqa: E402
 import craftflow_postcompact_context as postcompact_context  # noqa: E402
 import craftflow_memory_merge as memory_merge  # noqa: E402
 import craftflow_router_corpus as router_corpus  # noqa: E402
+
+fcntl = hooklib.fcntl  # fcntl on POSIX; an msvcrt-backed flock on Windows (craftflow_fcntl_compat, imported by hooklib)
 
 _errors: list[str] = []
 _passes: int = 0
@@ -11640,14 +11641,17 @@ def test_selfcheck_main_emits_distinct_warning_when_discovery_times_out(tmp_dir:
 
 
 def _selfcheck_scratch_checker_with_constants(
-    tmp_dir: Path, per_script_timeout: float, time_budget: float
+    tmp_dir: Path, per_script_timeout: float, time_budget: float, sweep_workers: int | None = None
 ) -> Path:
     """Like _selfcheck_scratch_checker, but rewrites the real checker's own
     PER_SCRIPT_TIMEOUT_SECONDS / SELFCHECK_TIME_BUDGET_SECONDS constants to
     small values in the scratch copy, so timing-sensitive regression tests
     run in a few seconds instead of minutes while still exercising the exact
-    same algorithm at proportionally the same scale. Does not add any sibling
-    scripts -- callers add their own."""
+    same algorithm at proportionally the same scale. When sweep_workers is
+    given, SWEEP_WORKERS is pinned too: its real value follows os.cpu_count(),
+    so a timing test that assumes a sequential (1) or a 4-wide sweep must not
+    depend on the runner's CPU count. Does not add any sibling scripts --
+    callers add their own."""
     tmp_dir.mkdir(parents=True)
     real_checker = SCRIPTS / "craftflow_hook_selfcheck.py"
     content = real_checker.read_text(encoding="utf-8")
@@ -11667,6 +11671,15 @@ def _selfcheck_scratch_checker_with_constants(
             f"and one SELFCHECK_TIME_BUDGET_SECONDS assignment (found {n_budget}) in "
             f"craftflow_hook_selfcheck.py -- constant name likely changed without updating this helper"
         )
+    if sweep_workers is not None:
+        content, n_workers = re.subn(
+            r"^SWEEP_WORKERS = .*$", f"SWEEP_WORKERS = {sweep_workers}", content, flags=re.M
+        )
+        if n_workers != 1:
+            raise AssertionError(
+                f"expected exactly one SWEEP_WORKERS assignment (found {n_workers}) in "
+                f"craftflow_hook_selfcheck.py -- constant name likely changed without updating this helper"
+            )
     scratch_checker = tmp_dir / "craftflow_hook_selfcheck.py"
     scratch_checker.write_text(content, encoding="utf-8")
     return scratch_checker
@@ -11697,7 +11710,12 @@ def test_selfcheck_flushes_before_external_kill_when_sweep_runs_long(tmp_dir: Pa
     name = "hook-selfcheck/flushes-before-external-kill"
     per_script_timeout = 5  # unchanged hard cap; well above sleep_each below
     time_budget = 3  # small, scaled-down internal soft deadline for this test
-    scratch_checker = _selfcheck_scratch_checker_with_constants(tmp_dir, per_script_timeout, time_budget)
+    # The timing arithmetic below assumes a sequential sweep (a 4-wide sweep
+    # would finish all six slow siblings inside the budget and never truncate),
+    # so pin SWEEP_WORKERS = 1 rather than inherit the runner's CPU count.
+    scratch_checker = _selfcheck_scratch_checker_with_constants(
+        tmp_dir, per_script_timeout, time_budget, sweep_workers=1
+    )
     # "a_broken" sorts alphabetically before the "b_slow_*" scripts, so its
     # failure is captured near-instantly, before the slow scripts consume the
     # time budget.
@@ -11793,80 +11811,6 @@ def test_selfcheck_never_imports_hooklib_directly() -> None:
         return
     if re.search(r'getattr\(\s*\w+\s*,\s*["\']import_module["\']\s*\)', content):
         fail(name, 'checker must not dynamically import craftflow_hooklib via getattr(..., "import_module")')
-        return
-    ok(name)
-
-
-def _subprocess_run_arg_lists(content: str) -> list[str]:
-    """Return the literal text of every argv list/tuple passed as
-    subprocess.run's first positional argument -- either inline
-    (subprocess.run(["python3", ...])) or via a bare-name variable that was
-    itself assigned a list/tuple literal earlier in the file
-    (CMD = ["python3", ...]; subprocess.run(CMD, ...)). Capture is
-    best-effort (not a real parser) but only the FIRST element of each
-    returned string is ever inspected by the caller, so imprecise capture of
-    later elements (e.g. across a nested call like str(x)) doesn't matter.
-    """
-    inline = re.findall(r"subprocess\.run\(\s*(\[[^\]]*\]|\([^)]*\))", content)
-    var_names = re.findall(r"subprocess\.run\(\s*(\w+)\s*[,)]", content)
-    via_var = []
-    for var in var_names:
-        m = re.search(rf"\b{re.escape(var)}\s*=\s*(\[[^\]]*\]|\([^)]*\))", content)
-        if m:
-            via_var.append(m.group(1))
-    return inline + via_var
-
-
-def _first_argv_element_matches(content: str, argv_lists: list[str], value_pattern: str) -> bool:
-    """True if any captured argv list/tuple's FIRST element matches
-    value_pattern -- either directly (a literal expression) or indirectly via
-    a bare identifier that was itself assigned a value matching value_pattern
-    elsewhere in the file (e.g. INTERPRETER = "python3")."""
-    for argv in argv_lists:
-        # NOTE: no trailing \b after value_pattern -- both patterns this is
-        # called with end in a non-word character (a closing quote for
-        # "python3", a dot-separated identifier for sys.executable's own
-        # \b already anchoring it internally), so a trailing \b would sit
-        # between two non-word characters and never match. The quotes (or
-        # the dotted-attribute pattern itself) already delimit the literal
-        # precisely enough without it.
-        if re.match(rf"[\[\(]\s*{value_pattern}", argv):
-            return True
-        ident_match = re.match(r"[\[\(]\s*(\w+)\s*[,\)\]]", argv)
-        if ident_match:
-            ident = ident_match.group(1)
-            if re.search(rf"\b{re.escape(ident)}\s*=\s*{value_pattern}", content):
-                return True
-    return False
-
-
-def test_selfcheck_resolves_bare_python3_not_sys_executable() -> None:
-    name = "hook-selfcheck/resolves-bare-python3"
-    path = SCRIPTS / "craftflow_hook_selfcheck.py"
-    if not path.exists():
-        fail(name, f"craftflow_hook_selfcheck.py not found at {path}")
-        return
-    content = path.read_text(encoding="utf-8")
-    # Both the accept and reject checks require actual call-site usage as the
-    # first element of a real subprocess.run() argv list/tuple -- not just
-    # presence anywhere in the file. A bare content-substring check would
-    # false-FAIL on legitimate prose (e.g. this checker's own module
-    # docstring explaining "never sys.executable") and false-PASS on a stray
-    # comment or unused variable. Accepts either a direct literal or a
-    # same-file constant/variable assigned that value and then used as the
-    # argv list's first element (covers both `INTERPRETER = "python3"` and
-    # `CMD = ["python3", ...]; subprocess.run(CMD, ...)` idioms, plus the
-    # tuple form `subprocess.run(("python3", ...))`).
-    argv_lists = _subprocess_run_arg_lists(content)
-    if _first_argv_element_matches(content, argv_lists, r"sys\.executable"):
-        fail(name, "checker must resolve the interpreter as bare python3 on PATH, not sys.executable")
-        return
-    if not _first_argv_element_matches(content, argv_lists, r'"python3"'):
-        fail(
-            name,
-            "checker's subprocess.run call does not appear to pass a literal "
-            "'python3' (or a constant/variable assigned to it) as its first argument",
-        )
         return
     ok(name)
 
@@ -29103,8 +29047,18 @@ def main() -> int:
         test_selfcheck_policy_timeout_twice_is_unconfirmed_not_invalid(tmp / "hp2f")
         test_selfcheck_version_drift_line(tmp / "hp3")
         test_selfcheck_flushes_before_external_kill_when_sweep_runs_long(tmp / "hc5")
+        import craftflow_hook_unit_tests_fcntl_selfcheck as fcntl_selfcheck_tests
+        fcntl_selfcheck_tests.test_selfcheck_concurrent_sweep_fits_budget_that_truncates_sequentially(tmp / "hc5b")
+        fcntl_selfcheck_tests.test_selfcheck_concurrent_sweep_reports_broken_siblings_in_sibling_order(tmp / "hc5c")
+        fcntl_selfcheck_tests.test_selfcheck_concurrent_sweep_starts_no_check_after_deadline(tmp / "hc5d")
         test_selfcheck_discovery_itself_bounded_by_timeout(tmp / "hc6")
         test_selfcheck_main_emits_distinct_warning_when_discovery_times_out(tmp / "hc7")
+
+        print()
+        print("[ fcntl-compat ]")
+        fcntl_selfcheck_tests.test_fcntl_compat_platform_branch(tmp / "fc1")
+        fcntl_selfcheck_tests.test_fcntl_compat_cross_process_contention_then_release(tmp / "fc2")
+        fcntl_selfcheck_tests.test_fcntl_compat_bad_fd_fails_fast_with_ebadf(tmp / "fc3")
 
         print()
         print("[ skill-ledger ]")
@@ -29401,7 +29355,7 @@ def main() -> int:
     test_hooks_json_registers_safe_shell_guard()
     test_hooks_json_registers_stop_verify()
     test_selfcheck_never_imports_hooklib_directly()
-    test_selfcheck_resolves_bare_python3_not_sys_executable()
+    fcntl_selfcheck_tests.test_selfcheck_resolves_bare_python3_not_sys_executable()
     test_hooks_json_registers_selfcheck_sessionstart()
     test_root_hooks_json_registers_selfcheck_sessionstart()
     test_root_hooks_json_registers_repeat_tool_call_guard()

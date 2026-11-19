@@ -23,7 +23,7 @@ Python 3.9 compatible; stdlib plus craftflow_policy.
 from __future__ import annotations
 
 import argparse
-import fcntl
+import craftflow_fcntl_compat as fcntl  # fcntl on POSIX; an msvcrt-backed flock on Windows
 import json
 import re
 import stat

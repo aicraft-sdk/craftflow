@@ -5,7 +5,6 @@ Run: python3 tests/fixtures/test_craftflow_jev_session_cache.py
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import sys
@@ -29,6 +28,7 @@ from craftflow_jev_session_cache import (  # noqa: E402
     status_changed,
 )
 
+fcntl = craftflow_jev_session_cache.fcntl  # fcntl on POSIX; an msvcrt-backed flock on Windows (craftflow_fcntl_compat)
 _passes = 0
 _errors: list[str] = []
 

@@ -61,7 +61,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
 import hashlib
 import json
 import os
@@ -564,6 +563,7 @@ def _ledger_file_lock(ledger_path: Path):
     file itself and is never cleaned up (cheap, reused across calls)."""
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = ledger_path.with_suffix(ledger_path.suffix + ".lock")
+    import craftflow_fcntl_compat as fcntl  # fcntl on POSIX; an msvcrt-backed flock on Windows
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
