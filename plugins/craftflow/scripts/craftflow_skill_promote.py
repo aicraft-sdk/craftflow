@@ -66,7 +66,6 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-import craftflow_fcntl_compat as fcntl  # fcntl on POSIX; an msvcrt-backed flock on Windows)
 import craftflow_skill_ledger as ledger_mod  # noqa: E402
 
 DEFAULT_PROPOSALS_DIR = ".craftflow/state/project/skill-proposals"
@@ -297,6 +296,8 @@ def _skill_promote_lock(canonical_dir: Path):
     promotion."""
     canonical_dir.parent.mkdir(parents=True, exist_ok=True)
     lock_path = canonical_dir.parent / f".{canonical_dir.name}.promote.lock"
+    import craftflow_fcntl_compat as fcntl  # fcntl on POSIX; an msvcrt-backed flock on Windows
+
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)

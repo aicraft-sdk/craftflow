@@ -39,6 +39,8 @@ import craftflow_postcompact_context as postcompact_context  # noqa: E402
 import craftflow_memory_merge as memory_merge  # noqa: E402
 import craftflow_router_corpus as router_corpus  # noqa: E402
 
+fcntl = hooklib.fcntl  # fcntl on POSIX; an msvcrt-backed flock on Windows (craftflow_fcntl_compat, imported by hooklib)
+
 _errors: list[str] = []
 _passes: int = 0
 _skips: list[str] = []
@@ -15622,7 +15624,6 @@ def test_ledger_main_wraps_oserror_as_clean_json_not_traceback(tmp_dir: Path) ->
 
 
 def test_ledger_observe_acquires_and_releases_lock(tmp_dir: Path) -> None:
-    import craftflow_fcntl_compat as fcntl  # fcntl on POSIX; an msvcrt-backed flock on Windows
     name = "skill-ledger/observe-acquires-and-releases-file-lock"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     state_dir = tmp_dir / ".craftflow" / "state"
