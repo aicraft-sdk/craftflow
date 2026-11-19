@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.38.1] - 2026-11-19
+
+### Fixes
+
+- add no new lint suppressions for the fcntl compat imports
+- make hook scripts and the SessionStart self-check work on Windows
+
+### Tests
+
+- keep the three grandfathered files at their file-size baselines
+- keep the ratchets green after the Windows fcntl/self-check fix
+
 ## [1.38.0] - 2026-11-19
 
 ### Features
