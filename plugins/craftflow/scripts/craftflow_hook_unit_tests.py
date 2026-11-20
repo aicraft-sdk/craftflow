@@ -28499,7 +28499,7 @@ CORE_REQUIRED_PHRASES = {
     "test-driven-development": [
         "NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST",
         "MANDATORY: it must fail",
-        "Before claiming the phase complete: coverage >= 80%",
+        "Before adding or changing a test: pass the test-value gate",
     ],
 }
 

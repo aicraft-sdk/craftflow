@@ -87,6 +87,8 @@ Use the minimum relevant context for verification. Prefer project `CLAUDE.md`, a
 ```
 
 **Note:** In DEBUG workflows, Silent Failure Hunter is not in the chain — its findings will be absent. Skip it when reviewing.
+
+**DEBUG repro:** when the bug-investigator reported a `REPRO_COMMAND`, re-run it yourself against the original scenario and record it as a scenario row. It must exit 0 now; a non-zero exit means the user's symptom is not fixed, whatever the regression test says.
 Any CRITICAL issues from either agent should influence your PASS/FAIL verdict.
 
 ## Process
@@ -176,6 +178,21 @@ Forbidden language before final proof:
 
 Use evidence, not narrative confidence. Spec compliance and goal achievement come before code-quality polish.
 
+## Bite Check (MANDATORY for new or changed tests)
+
+A passing test proves nothing until it has failed on the bug its rule describes. For every test in the builder's
+`TEST_GATE` (no `TEST_GATE`: every test file added or changed in the phase diff), up to 5 per phase, newest first:
+
+1. Pick one mutation that breaks the behavior the test's rule names (flip a condition, drop a branch, change a bound).
+2. Run `python3 <plugin-root>/scripts/craftflow_bite_check.py --root <worktree> --file <production file> --from "<text>" --to "<mutated text>" --test-cmd "<command that runs only that test>" --match "<the test's rule id or expected failure message>"`. The script first runs the test unmutated and refuses if it doesn't pass. For a strict expected-failure test, the mutation is a temporary fix, the command runs the test with its marker disabled (for example `pytest --runxfail`), and you add `--expect pass`.
+3. Record its JSON in `EVIDENCE.bite_checks`. Only `verdict: bites` counts. `survived` means the test guards nothing for that rule; `error` (import, syntax, timeout) proves nothing, so pick another mutation.
+4. The script restores the file and reports `restored`. Exit 3 (`restored: false`) is a CRITICAL issue: stop and report it.
+5. `<plugin-root>` is the craftflow plugin folder (the one holding `agents/` and `scripts/`). If you cannot locate the script, do the same by hand: run the test unmutated, apply the mutation, run it, revert, prove `git diff --exit-code -- <file>` is clean, and record the same row.
+
+A new or changed test with no `bite_checks` row, or whose only rows are `survived` or `error`, is a gap
+(`Partial`, HIGH). More than 5 tests in a phase: check the 5 the phase's rules depend on most, and list the rest under
+`Triggered Deep Checks Run` as not bite-checked.
+
 ## Task Completion & Self-Healing (MANDATORY)
 
 **SINGLE FINAL RESPONSE RULE (CRITICAL — this is why output reaches the router):**
@@ -253,6 +270,8 @@ EVIDENCE:
     - "[test name] → exit [code]: [result]"
   edge_cases:
     - "[case name]: [command] → exit [code]: [result]"
+  bite_checks:
+    - "[test] | [file]: [from] → [to] | verdict=[bites|survived|error] | exit=[code] | restored=[true|false]"
 ```
 **Rule:** SCENARIOS_PASSED count MUST equal number of entries in `EVIDENCE.scenarios` with exit 0 and Result=PASS. Mismatch = INVALID.
 **Rule:** `SCENARIOS_TOTAL = SCENARIOS_PASSED + SCENARIOS_FAILED`. Mismatch = INVALID.

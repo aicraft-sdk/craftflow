@@ -29,26 +29,23 @@ Unit tests are not enough when the task depends on:
 In those cases, keep TDD for the inner loop and escalate verification depth for
 the outer proof.
 
-## Coverage Threshold (Project Default)
+## Coverage (Reported, Not a Gate)
 
-Target: **80%+ code coverage** across:
-- Branches: 80%
-- Functions: 80%
-- Lines: 80%
-- Statements: 80%
-
-**Verify with:** `npm run test:coverage` or equivalent.
-
-**Below threshold?** Add missing tests before claiming completion.
+Report coverage when the project has a coverage command (`npm run test:coverage` or equivalent), but do not add tests
+only to raise the number. Which tests to write is decided by the test-value gate in `test-value-gate.md`: each test
+names its rule, the regression that breaks it, and why existing coverage misses it. A project that wants a hard floor
+opts in with `coverage-thresholds.json` (the component-builder then enforces it).
 
 ### Test Prioritization
 
-80% coverage means deliberate choices about what to test first. Focus effort on:
+Focus test effort where the keep bar in `test-value-gate.md` points:
 - Critical user-facing paths (auth, payments, data integrity)
-- Complex logic with multiple branches
+- Complex logic with multiple branches, concurrency, time and ordering
 - Code that has broken before (regression-prone areas)
+- External boundaries and public contracts
 
-Do NOT skip tests because code "looks simple" — simple code breaks too. The 80% target is a floor, not a ceiling.
+Simple code still breaks: a rule that matters gets a test even when the code looks trivial. A rule that a reader or the
+type system can check by looking does not need one.
 
 ## When Stuck
 
