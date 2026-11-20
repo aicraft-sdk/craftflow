@@ -1,0 +1,102 @@
+{
+  "id": "debug",
+  "route": "DEBUG",
+  "version": 1,
+  "initial": "debug-investigate",
+  "$comment": "Stage A model of references/debug-workflow.md; investigate re-invocations share the remediation cap (to confirm)",
+  "counters": {
+    "investigate": {
+      "cap": "policy:remediation_cycles_max",
+      "on_cap": "research-gate"
+    },
+    "fix_verify": {
+      "cap": "policy:fix_verify_cycles_max",
+      "on_cap": "research-gate"
+    }
+  },
+  "states": {
+    "debug-investigate": {
+      "phases": [
+        "debug-investigate"
+      ],
+      "agent": "bug-investigator",
+      "actions": [
+        "reinvoke_investigator"
+      ],
+      "on": {
+        "FIXED": "debug-review",
+        "INVESTIGATING": {
+          "target": "debug-investigate",
+          "inc": "investigate"
+        },
+        "BLOCKED": "needs-info"
+      }
+    },
+    "debug-review": {
+      "phases": [
+        "debug-review"
+      ],
+      "agent": "code-reviewer",
+      "actions": [
+        "debug_review"
+      ],
+      "on": {
+        "CLEAN": "fix-verify",
+        "FINDINGS": {
+          "target": "debug-investigate",
+          "inc": "investigate"
+        }
+      }
+    },
+    "fix-verify": {
+      "phases": [
+        "fix-verify",
+        "debug-verify"
+      ],
+      "agent": "integration-verifier",
+      "on": {
+        "PASS": "memory-finalize",
+        "FAIL": {
+          "target": "debug-investigate",
+          "inc": "fix_verify"
+        }
+      }
+    },
+    "needs-info": {
+      "type": "gate",
+      "gate": "needs_info",
+      "actions": [],
+      "on": {
+        "USER_REPLY": "debug-investigate",
+        "ABORT": "memory-finalize"
+      }
+    },
+    "research-gate": {
+      "type": "gate",
+      "gate": "human_checkpoint",
+      "actions": [],
+      "on": {
+        "USER_REPLY": "debug-investigate",
+        "ABORT": "memory-finalize"
+      }
+    },
+    "memory-finalize": {
+      "phases": [
+        "memory-finalize"
+      ],
+      "effects": [
+        "finalize_memory"
+      ],
+      "actions": [
+        "memory_finalize",
+        "stop_after_memory_sync"
+      ],
+      "on": {
+        "DONE": "done"
+      }
+    },
+    "done": {
+      "type": "final"
+    }
+  }
+}

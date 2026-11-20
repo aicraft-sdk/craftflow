@@ -1,0 +1,47 @@
+{
+  "id": "review",
+  "route": "REVIEW",
+  "version": 1,
+  "initial": "review-audit",
+  "$comment": "Stage A model of references/review-workflow.md; REVIEW is advisory and never creates REM-FIX",
+  "counters": {},
+  "states": {
+    "review-audit": {
+      "phases": [
+        "review-audit"
+      ],
+      "agent": "code-reviewer",
+      "on": {
+        "APPROVE": "memory-finalize",
+        "CHANGES_REQUESTED": "offer-build"
+      }
+    },
+    "offer-build": {
+      "type": "gate",
+      "gate": "build_transition",
+      "actions": [
+        "offer_build_transition"
+      ],
+      "on": {
+        "USER_REPLY": "memory-finalize"
+      }
+    },
+    "memory-finalize": {
+      "phases": [
+        "memory-finalize"
+      ],
+      "effects": [
+        "finalize_memory"
+      ],
+      "actions": [
+        "memory_finalize"
+      ],
+      "on": {
+        "DONE": "done"
+      }
+    },
+    "done": {
+      "type": "final"
+    }
+  }
+}

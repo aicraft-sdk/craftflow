@@ -1,0 +1,226 @@
+{
+  "id": "build-fast",
+  "route": "BUILD",
+  "version": 1,
+  "initial": "build-implement",
+  "$comment": "Stage A model of references/build-graph-fast.md and build-fast-path-escalation.md",
+  "counters": {
+    "remediation": {
+      "cap": "policy:remediation_cycles_max",
+      "on_cap": "circuit-breaker"
+    },
+    "phases": {
+      "cap": "plan:phases",
+      "on_cap": "phase-overflow"
+    }
+  },
+  "states": {
+    "build-implement": {
+      "phases": [
+        "build-implement"
+      ],
+      "agent": "component-builder",
+      "actions": [
+        "respect_user_standard"
+      ],
+      "on": {
+        "PASS": "build-verify",
+        "BLOCKED": "phase-blocked",
+        "INVALID": "invalid-output",
+        "SCOPE": "scope-gate"
+      }
+    },
+    "build-verify": {
+      "phases": [
+        "build-verify",
+        "doubt-verify"
+      ],
+      "agent": "integration-verifier",
+      "on": {
+        "PASS": "phase-exit",
+        "FAIL": "fast-path-escalated",
+        "REFUTED": {
+          "target": "remfix",
+          "inc": "remediation"
+        },
+        "THEATER": "doubt-escalation",
+        "CHECKPOINT": "checkpoint-gate"
+      }
+    },
+    "fast-path-escalated": {
+      "phases": [
+        "build-review",
+        "build-hunt"
+      ],
+      "agent": "code-reviewer+silent-failure-hunter",
+      "actions": [
+        "review"
+      ],
+      "on": {
+        "CLEAN": {
+          "target": "remfix",
+          "inc": "remediation"
+        },
+        "FINDINGS": {
+          "target": "remfix",
+          "inc": "remediation"
+        }
+      }
+    },
+    "remfix": {
+      "phases": [
+        "remfix"
+      ],
+      "agent": "component-builder",
+      "actions": [
+        "create_remfix_from_refuted_claim"
+      ],
+      "on": {
+        "PASS": "recheck",
+        "BLOCKED": "phase-blocked"
+      }
+    },
+    "recheck": {
+      "phases": [
+        "re-review",
+        "re-hunt",
+        "re-verify"
+      ],
+      "actions": [
+        "spawn_recheck_tasks"
+      ],
+      "on": {
+        "CLEAN": "phase-exit",
+        "FINDINGS": {
+          "target": "remfix",
+          "inc": "remediation"
+        }
+      }
+    },
+    "phase-exit": {
+      "type": "choice",
+      "actions": [
+        "advance_to_next_phase"
+      ],
+      "on": {
+        "MORE_PHASES": {
+          "target": "build-implement",
+          "inc": "phases"
+        },
+        "LAST_PHASE": "build-doc-sync"
+      }
+    },
+    "phase-blocked": {
+      "type": "gate",
+      "gate": "human_checkpoint",
+      "actions": [
+        "stop_for_blocked_phase"
+      ],
+      "on": {
+        "USER_REPLY": "build-implement",
+        "ABORT": "memory-finalize"
+      }
+    },
+    "invalid-output": {
+      "type": "gate",
+      "gate": "human_checkpoint",
+      "actions": [
+        "stop_invalid_output"
+      ],
+      "on": {
+        "USER_REPLY": "build-implement",
+        "ABORT": "memory-finalize"
+      }
+    },
+    "scope-gate": {
+      "type": "gate",
+      "gate": "scope_selection",
+      "actions": [
+        "pause_for_scope_decision"
+      ],
+      "on": {
+        "USER_REPLY": "build-implement",
+        "ABORT": "memory-finalize"
+      }
+    },
+    "checkpoint-gate": {
+      "type": "gate",
+      "gate": "checkpoint_decision",
+      "actions": [
+        "pause_for_checkpoint_decision"
+      ],
+      "on": {
+        "USER_REPLY": "phase-exit",
+        "ABORT": "memory-finalize"
+      }
+    },
+    "circuit-breaker": {
+      "type": "gate",
+      "gate": "loop_cap_check_failed",
+      "actions": [],
+      "on": {
+        "USER_REPLY": "build-implement",
+        "ABORT": "memory-finalize"
+      }
+    },
+    "doubt-escalation": {
+      "type": "gate",
+      "gate": "human_checkpoint",
+      "actions": [
+        "escalate_doubt_theater"
+      ],
+      "on": {
+        "USER_REPLY": "build-verify",
+        "ABORT": "memory-finalize"
+      }
+    },
+    "phase-overflow": {
+      "type": "gate",
+      "gate": "human_checkpoint",
+      "actions": [],
+      "on": {
+        "USER_REPLY": "build-doc-sync",
+        "ABORT": "memory-finalize"
+      }
+    },
+    "build-doc-sync": {
+      "phases": [
+        "build-doc-sync"
+      ],
+      "agent": "doc-syncer",
+      "on": {
+        "COMPLETE": "distill",
+        "SKIPPED": "distill"
+      }
+    },
+    "distill": {
+      "phases": [
+        "learn-distill",
+        "skill-distill"
+      ],
+      "agent": "learn-distiller",
+      "on": {
+        "DONE": "memory-finalize",
+        "SKIPPED": "memory-finalize"
+      }
+    },
+    "memory-finalize": {
+      "phases": [
+        "memory-finalize"
+      ],
+      "effects": [
+        "finalize_memory"
+      ],
+      "actions": [
+        "memory_finalize",
+        "report_latency_breakdown"
+      ],
+      "on": {
+        "DONE": "done"
+      }
+    },
+    "done": {
+      "type": "final"
+    }
+  }
+}
