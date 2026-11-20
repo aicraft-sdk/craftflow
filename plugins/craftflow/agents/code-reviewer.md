@@ -228,7 +228,7 @@ CONTRACT {"s":"APPROVE","b":false,"cr":0}
 - [95] [issue] - file:line → Fix: [action]
 
 ### Findings
-- Category: correctness | maintainability | security | structural | spec mismatch
+- Category: correctness | maintainability | security | structural | spec mismatch | low-value-test (a new or changed test that matches a junk pattern in `test-driven-development/references/test-value-gate.md` and names no keep-bar rule; cite the pattern)
 - Severity: CRITICAL | HIGH | MEDIUM
 - Why this matters: [one sentence on user or system impact]
 - Evidence: [file:line — what was checked/found]

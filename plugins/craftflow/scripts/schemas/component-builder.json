@@ -18,6 +18,7 @@
   "INPUTS": {"type": "array", "required": true, "nested_under": "rationale"},
   "EXPECTED_ARTIFACTS": {"type": "array", "required": true, "nested_under": "rationale"},
   "SCENARIOS": {"type": "array", "required": true, "nested_under": "rationale"},
+  "TEST_GATE": {"type": "array", "required": false, "nested_under": "rationale"},
   "ASSUMPTIONS": {"type": "array", "required": true, "nested_under": "rationale"},
   "DECISIONS": {"type": "array", "required": true, "nested_under": "rationale"},
   "BLOCKED_ITEMS": {"type": "array", "required": true, "nested_under": "rationale"},

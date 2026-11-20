@@ -98,7 +98,7 @@ SUITES = [
     ("test_learn_scan", ""), ("test_memory_merge", ""),
     ("test_reliability_gates", ""), ("test_route_law_static", ""), ("test_route_replay_ch", "slow"),
     ("test_route_replay_handoff", "slow"), ("test_router_relocation_drills", ""), ("test_router_test_anchors", "slow"),
-    ("test_router_xrefs", ""), ("test_rule_inventory_hardening", ""), ("test_version_bump", ""),
+    ("test_router_xrefs", ""), ("test_rule_inventory_hardening", ""), ("test_test_value_gate", ""), ("test_version_bump", ""),
     ("test_version_consistency", ""), ("test_workflow_id_and_progress", ""), ("test_workspace_init", ""),
     ("test_worktree_finalize", "slow"),
 ]
