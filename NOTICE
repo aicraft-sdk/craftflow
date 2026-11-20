@@ -83,3 +83,36 @@ skills/debugging-patterns/references/feedback-loops.md is adapted from the diagn
   Pinned at commit abeeaf95660ba9e8b7c753eb38f441ca707a8823
 
 Concepts only; no text copied verbatim.
+
+---
+
+plugins/craftflow/scripts/craftflow_ui_tells.py is adapted from count_tells.py in felipebasurto/unslop-ui, and
+the fixtures under plugins/craftflow/tests/fixtures/ui-tells/ (incidents and before/after examples) and
+plugins/craftflow/templates/taste.md are copied or adapted from the same repository:
+
+  https://github.com/felipebasurto/unslop-ui
+  Pinned at commit 32279dec96ef20a4a0ac47a5b113e48dda6b3b6e
+
+The counter code is copied with changes (taste-file path, Keep items, docstring), so its license follows in full:
+
+  MIT License
+
+  Copyright (c) 2026 Felipe Basurto
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
