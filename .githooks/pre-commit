@@ -19,7 +19,7 @@ fi
 
 python3 -B plugins/craftflow/scripts/craftflow_local_gate.py \
     --only ruff --only suppression-ratchet --only file-size-ratchet \
-    --only clean-state --only baseline-integrity --only py-compile --only guardrail-refs
+    --only clean-state --only baseline-integrity --only py-compile --only guardrail-refs --only prose-budget
 status=$?
 
 if [ "$status" -ne 0 ]; then

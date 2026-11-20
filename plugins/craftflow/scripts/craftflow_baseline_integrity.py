@@ -7,6 +7,7 @@ upward in the same change. This check closes that gap by comparing the working t
 
     tests/fixtures/suppression-baseline.json  any file/key added, or any count raised                -> violation
     tests/fixtures/file-size-baseline.json    any file added, any line count raised, or `limit` raised -> violation
+    tests/fixtures/prose-budget-baseline.json any file added, or any byte ceiling raised                -> violation
     ruff.toml                                 `per-file-ignores`, `external`, `ignore`, `exclude` (and their `extend-`
                                               forms) gained an entry, or `select` lost one            -> violation
     config/hook-mode.json                     a key removed, or a value weakened (block -> audit/off,
@@ -48,9 +49,10 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 ROOT = Path(__file__).resolve().parents[3]
 SUPPRESSION_REL = "plugins/craftflow/tests/fixtures/suppression-baseline.json"
 FILE_SIZE_REL = "plugins/craftflow/tests/fixtures/file-size-baseline.json"
+PROSE_REL = "plugins/craftflow/tests/fixtures/prose-budget-baseline.json"
 RUFF_REL = "ruff.toml"
 HOOK_MODE_REL = "plugins/craftflow/config/hook-mode.json"
-GUARDED = (SUPPRESSION_REL, FILE_SIZE_REL, RUFF_REL, HOOK_MODE_REL)
+GUARDED = (SUPPRESSION_REL, FILE_SIZE_REL, PROSE_REL, RUFF_REL, HOOK_MODE_REL)
 DEFAULT_BASE_CANDIDATES = ("origin/HEAD", "origin/main", "origin/master", "main", "master")
 EXIT_OK, EXIT_TOOL_ERROR, EXIT_VIOLATION = 0, 1, 2
 
@@ -288,6 +290,7 @@ def compare_hook_mode(base_text: str, cur_text: str) -> List[str]:
 COMPARATORS = {
     SUPPRESSION_REL: lambda b, c: compare_counts(b, c, "suppression-baseline.json"),
     FILE_SIZE_REL: lambda b, c: compare_counts(b, c, "file-size-baseline.json"),
+    PROSE_REL: lambda b, c: compare_counts(b, c, "prose-budget-baseline.json"),
     RUFF_REL: compare_ruff,
     HOOK_MODE_REL: compare_hook_mode,
 }
