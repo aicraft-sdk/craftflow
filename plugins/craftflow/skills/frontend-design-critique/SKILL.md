@@ -31,7 +31,7 @@ If both assessments ran inside one reasoning pass, you did not critique — you 
 craftflow already runs the **code-reviewer** and **silent-failure-hunter** in parallel on purpose (see `code-review-patterns`). Apply the same isolation to design.
 
 - **Assessment A — design-director qualitative review.** An LLM reads the UI as a senior design director would: hierarchy, rhythm, restraint, whether the layout serves the task, whether it feels intentional or assembled. Score the rubric below. A forms its opinion WITHOUT running the ban-list scan.
-- **Assessment B — AI-slop / pattern scan.** A SEPARATE pass that walks the ban-list and the deterministic detector (if available). B must NOT see A's conclusions — give it the artifact, not A's writeup. A checklist pass that can read the design-director's narrative silently converges on it.
+- **Assessment B — AI-slop / pattern scan.** A SEPARATE pass that runs the built-in detector first, then walks the ban-list. B must NOT see A's conclusions — give it the artifact, not A's writeup. A checklist pass that can read the design-director's narrative silently converges on it.
 - **Synthesis — reconcile only after both commit.** Where A and B independently agree → high confidence. Where B caught what A's eye glossed → keep it (a finding the other missed is the value of two passes, not noise). Where B's match is a false positive on inspection → drop it with a one-line reason.
 
 **Why isolation is non-negotiable:** collapse A and B into one head and the first concern read biases the second — the director rationalizes away a slop smell, or the checklist over-weights a pattern the director already excused. Reconcile AFTER both have committed their lists, never during.
@@ -84,18 +84,37 @@ Assessment B matches the artifact against the current clichés below and refuses
 | Modal as the first-thought container | Reaching for a modal before considering inline/page | Refuse |
 | Cream + serif + terracotta "editorial" palette | The current anti-AI reflex (reflex #2) | Refuse |
 | Black + acid-lime/green accent | The current anti-corporate reflex (reflex #2) | Refuse |
+| Eyebrow labels (small uppercase, wide tracking, above a heading) | Says the section name twice | Refuse |
+| Decorative numbering (`01`, `02 //`) on things with no order | Order the content does not have | Refuse |
+| Subtitle reflex (a grey line under every heading restating it) | Copy written to fill a slot | Refuse |
+| Botsplaining ("This section lists...", "Click here to...") | Narrates the UI instead of being it | Refuse |
+| Badges and dots without real state (`NEW`, a pulsing dot) | Decoration posing as status | Refuse |
+| Chart title that names the chart ("Bar chart of revenue") or reading instructions ("hover to see") | Says what the eye already sees | Refuse |
+| Emoji and icon-in-tinted-tile as section decoration | Template ornament | Refuse |
+
+**The real-state test.** A badge, a dot or a status string must render from a condition or a value in the code
+(`{deploy.isLive && <Badge>Live</Badge>}`, a dot tied to `connection.status`). If nothing in the code decides it, it is
+decoration, and the ban-list applies. A pulsing loading skeleton is not a status dot.
+
+**Project taste.** Read `.craftflow/state/project/taste.md` if it exists (template: `templates/taste.md`). Its
+`## Bans` add tells for this project. Its `## Keep` items are reported under "Kept on purpose" and never flagged.
 
 **Two-altitude reflex check (cross-reference, do not duplicate).** `frontend-patterns` owns the full first-order / second-order definition. As a critique reflex: (1) could you guess the theme + palette from the **category alone**? (2) could you guess it from **category + anti-references** (what the category now flees toward)? If either is yes, flag it as generic and require rework. See `frontend-patterns` → "Two-Altitude Reflex Check" for the canonical version.
 
 A ban-list match is a finding, not an automatic 0 — record it in B, then let synthesis decide severity against A's read. A single justified glassmorphism panel in an otherwise distinctive UI is not the same as glassmorphism-as-default.
 
-## Optional Deterministic Detector (Best-Effort)
+## Built-In Detector
 
-The upstream `impeccable` technique ships an npx slop-detector. craftflow must NOT hard-depend on it. Treat any external detector as best-effort:
+Assessment B runs `python3 <plugin-root>/scripts/craftflow_ui_tells.py <ui-paths>` first (add `--surface` for
+gradients, off-scale spacing, heavy weights and motion). It is standard library only: no network, no `npx`, nothing to
+install. It prints a count and `file:line` examples per rule, and echoes the taste file's Keep items under `keep`.
 
-- If a detector is configured/available (e.g. an `npx` tool the repo already uses), run it in Assessment B and fold its output into the scan.
-- If no detector is present, the ban-list scan still runs by hand — the checklist above IS the floor. Never block the critique on a missing tool, and never invent a tool call.
-- Probe cheaply before assuming: `Glob`/`Grep` for an existing config, or check `package.json` scripts. Do not install anything.
+- Every count is a candidate. Open the line and confirm it before it becomes a finding; drop false positives with a
+  one-line reason in Synthesis.
+- It cannot see the tells that need reading (meaning, hierarchy, claims). The ban-list scan by hand still runs.
+- Record the total as the **before** count. When the fix brief has been built, rerun it for the **after** count.
+- If the script cannot run, scan by hand and say so. Another detector the repo already uses may be added, never
+  installed.
 
 ## RTL / Hebrew-Aware Notes
 
@@ -117,7 +136,8 @@ When the UI is RTL (Hebrew, Arabic), the critique adds:
 ### Assessment B — Slop / Pattern Scan
 - [match] Gradient text heading at `file:line` — ban-list: gradient text
 - [match] Equal 4-card grid, no hierarchy at `file:line`
-- Detector: [ran / not available — manual scan only]
+- Detector: `craftflow_ui_tells.py` total [n] (before), [rules with counts]; or "could not run, manual scan only"
+- Kept on purpose: [taste-file Keep items seen]
 
 ### Synthesis
 | Heuristic | Score 0-4 | Note |
@@ -139,7 +159,18 @@ When the UI is RTL (Hebrew, Arabic), the critique adds:
 | Severity | Finding | Location | Fix direction |
 |----------|---------|----------|---------------|
 | P1 | [finding] | `file:line` | [direction, not a diff] |
+
+### Fix brief (for BUILD)
+- Delete: [each decoration to remove, `file:line`]
+- Rewrite: [only strings the code itself supports, each listed old → new]
+- Keep: `aria-label`, `alt`, visible labels, real-state badges, taste-file Keep items
+- [or "none": nothing to cut]
 ```
+
+The critique never edits. The fix brief is subtractive and goes to the builder: **delete first**, rewrite a string
+only from what the code shows (never invent a product fact or a number), keep every accessible name (`aria-label`,
+`alt`, visible labels), and list every rewritten string. "None" is a valid fix brief; it never excuses zero findings in
+the scores.
 
 ## Red Flags — STOP and Re-critique
 
