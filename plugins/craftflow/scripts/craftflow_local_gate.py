@@ -21,6 +21,7 @@ Steps, always in this order, each a subprocess (see --list):
     py-compile            every tracked .py under plugins/craftflow/scripts and tests/fixtures compiles (compile(); no
                           .pyc is written)
     guardrail-refs        craftflow_guardrail_refs.py: every backticked path in AGENT_CRITICAL_GUARDRAILS.md resolves here
+    prose-budget          craftflow_prose_budget.py: agent prompts and SKILL.md files may only shrink (byte ceilings)
     suite:<name>          the curated test suites in SUITES below
 
 Every step runs even after a failure (so one run shows everything that is wrong); fail-closed means a step that cannot
@@ -81,7 +82,7 @@ SUITES = [
     ("test_agent_structure", ""), ("test_architecture_scanner_agent", ""), ("test_contract_validate", ""),
     ("test_contract_validate_impact", ""), ("test_contract_validate_pilot", ""), ("test_contract_validate_scanner", ""),
     ("test_craftflow_arch_lint", "root"), ("test_craftflow_arch_rule_selftest", ""),
-    ("test_craftflow_baseline_integrity", ""), ("test_craftflow_bite_check", ""), ("test_repro_first_debug", ""), ("test_craftflow_ui_tells", ""), ("test_two_axis_review", ""), ("test_plan_check_levels", ""),
+    ("test_craftflow_baseline_integrity", ""), ("test_craftflow_bite_check", ""), ("test_repro_first_debug", ""), ("test_craftflow_ui_tells", ""), ("test_two_axis_review", ""), ("test_plan_check_levels", ""), ("test_prose_budget", ""),
     ("test_craftflow_clean_state_check", "slow"), ("test_craftflow_conductor_inspection", ""),
     ("test_craftflow_feature_backlog", ""), ("test_craftflow_file_size_ratchet", ""), ("test_craftflow_guardrail_refs", ""),
     ("test_craftflow_harness_capabilities_impact", ""), ("test_craftflow_jev_ab_report", ""),
@@ -130,6 +131,8 @@ def build_steps(root: Path, args: argparse.Namespace) -> List[Dict[str, object]]
                   desc="tracked scripts/ and tests/fixtures .py files compile"),
         make_step("guardrail-refs", [py, "-B", script("craftflow_guardrail_refs.py"), "--root", str(root)],
                   desc="paths cited in AGENT_CRITICAL_GUARDRAILS.md exist in this repository"),
+        make_step("prose-budget", [py, "-B", script("craftflow_prose_budget.py")],
+                  desc="agent prompts and SKILL.md files may not grow; no new ones"),
     ] + [suite_step(stem, tags) for stem, tags in SUITES]
 
 

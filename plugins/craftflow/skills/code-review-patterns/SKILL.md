@@ -172,6 +172,8 @@ Each smell reads *what it is* → *how to fix*; match against the diff:
 - **Speculative Generality** — abstraction or hooks added for needs the spec doesn't have. → delete it; inline back until a real need shows.
 - **Message Chains** — long `a.b().c().d()` navigation the caller shouldn't depend on. → hide the walk behind one method on the first object.
 - **Middle Man** — a class or function that mostly just delegates onward. → cut it, call the real target directly.
+- **Agent justification comment** — a comment that argues for the change ("this is safe because", "added to fix the review") instead of saying why the code is the way it is. → delete it; keep only a why the next reader needs.
+- **Timer workaround** — `setTimeout`, `requestAnimationFrame` or a retry used to paper over an ordering or race bug. → fix the ordering (await, event, state); a timer stays only with a stated reason.
 - **Refused Bequest** — a subclass or implementer that ignores most of what it inherits. → drop the inheritance, use composition.
 
 ## Tangle Checks (Stage 2)

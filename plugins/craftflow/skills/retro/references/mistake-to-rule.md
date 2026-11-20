@@ -29,6 +29,11 @@ If one fails, do not write a check; use the "judgment" row below.
 
 Never add steering-file prose for something a check can decide, and never add a check for something only judgment can decide.
 
+**Order of work for a rule** (after Lauren Tan's talk): lint rule first, then clean the existing examples it finds so it
+can block, then the verification step that proves it holds, and automation last. A lint message names the
+root-cause fix, not only the symptom ("import from `core/` instead", not "bad import"). New always-loaded prose must justify why
+it could not be a check: the prose budget (`craftflow_prose_budget.py`) only lets it shrink.
+
 ## Steps for an arch-lint rule
 
 Registry rule fields: `id`, `scope_globs`, `forbidden_import_prefixes`, `what`, `why`, `fix`, optional `mode`
