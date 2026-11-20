@@ -182,9 +182,10 @@ A passing test proves nothing until it has failed on the bug its rule describes.
 `TEST_GATE` (no `TEST_GATE`: every test file added or changed in the phase diff), up to 5 per phase, newest first:
 
 1. Pick one mutation that breaks the behavior the test's rule names (flip a condition, drop a branch, change a bound).
-2. Run `python3 {plugin_root}/scripts/craftflow_bite_check.py --root <worktree> --file <production file> --from "<text>" --to "<mutated text>" --test-cmd "<command that runs only that test>" --match "<the test's rule id or expected failure message>"`. The script first runs the test unmutated and refuses if it doesn't pass. For a strict expected-failure test, the mutation is a temporary fix, the command runs the test with its marker disabled (for example `pytest --runxfail`), and you add `--expect pass`.
+2. Run `python3 <plugin-root>/scripts/craftflow_bite_check.py --root <worktree> --file <production file> --from "<text>" --to "<mutated text>" --test-cmd "<command that runs only that test>" --match "<the test's rule id or expected failure message>"`. The script first runs the test unmutated and refuses if it doesn't pass. For a strict expected-failure test, the mutation is a temporary fix, the command runs the test with its marker disabled (for example `pytest --runxfail`), and you add `--expect pass`.
 3. Record its JSON in `EVIDENCE.bite_checks`. Only `verdict: bites` counts. `survived` means the test guards nothing for that rule; `error` (import, syntax, timeout) proves nothing, so pick another mutation.
 4. The script restores the file and reports `restored`. Exit 3 (`restored: false`) is a CRITICAL issue: stop and report it.
+5. `<plugin-root>` is the craftflow plugin folder (the one holding `agents/` and `scripts/`). If you cannot locate the script, do the same by hand: run the test unmutated, apply the mutation, run it, revert, prove `git diff --exit-code -- <file>` is clean, and record the same row.
 
 A new or changed test with no `bite_checks` row, or whose only rows are `survived` or `error`, is a gap
 (`Partial`, HIGH). More than 5 tests in a phase: check the 5 the phase's rules depend on most, and list the rest under
