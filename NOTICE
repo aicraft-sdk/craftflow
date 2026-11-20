@@ -84,6 +84,9 @@ skills/debugging-patterns/references/feedback-loops.md is adapted from the diagn
 
 Concepts only; no text copied verbatim.
 
+The Spec and Standards review axes in agents/code-reviewer.md (§ Review Axis) are adapted from the code-review
+skill in the same repository and commit. Concepts only; no text copied verbatim.
+
 ---
 
 plugins/craftflow/scripts/craftflow_ui_tells.py is adapted from count_tells.py in felipebasurto/unslop-ui, and

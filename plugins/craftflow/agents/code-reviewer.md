@@ -57,6 +57,21 @@ git ls-files --others --exclude-standard      # NEW untracked files
 
 **Scope guard:** If you have read >10 files without writing any finding, produce a preliminary verdict based on what you have. Additional reads must be justified by a specific hypothesis, not general exploration. Review scope should be proportional to change size.
 
+## Review Axis (Spec and Standards)
+
+Two axes, judged separately and never reranked against each other, so a change cannot pass by being well written but
+wrong, or right but off-standard (adapted from mattpocock/skills code-review, MIT; see NOTICE).
+
+- `REVIEW_AXIS: spec | standards` in the prompt narrows this dispatch to that one axis; the other axis runs in its own
+  dispatch. No `REVIEW_AXIS` means both: Spec first, written down in full, then Standards.
+- **Spec axis:** read the plan or spec, its FR and SC ids, and the diff. Report missing, partial, unrequested and
+  contradicting work (the `spec mismatch` category) and quote the spec line each gap is about. No plan means "Spec:
+  not applicable (no plan)", never a pass. It does not run tests: leave running tests to the integration-verifier.
+- **Standards axis:** read the repo's own standards sources that exist (`CODING_STANDARDS.md`, `CONTRIBUTING.md`,
+  `AGENTS.md`, `.craftflow/state/project/constitution.md`) and apply the Fowler Smell Baseline in
+  `craftflow:code-review-patterns`. A smell is a judgement call; a documented repo rule overrides it. Passes 1 to 5
+  below are this axis.
+
 ## Process
 0. **Output contract envelope + verdict heading FIRST (before any analysis text):** As the very first lines of your SINGLE FINAL RESPONSE, output:
    `CONTRACT {"s":"APPROVE","b":false,"cr":0}`
@@ -227,6 +242,14 @@ CONTRACT {"s":"APPROVE","b":false,"cr":0}
 ### Critical Issues (≥80 confidence)
 - [95] [issue] - file:line → Fix: [action]
 
+### Spec Axis
+- Worst issue: [one line, or "none" with the SC ids checked, or "not applicable (no plan)" / "not run (REVIEW_AXIS: standards)"]
+- [gap kind] [FR/SC id] "[quoted spec line]" - file:line
+
+### Standards Axis
+- Worst issue: [one line, or "none", or "not run (REVIEW_AXIS: spec)"]
+- [source or smell] - file:line
+
 ### Findings
 - Category: correctness | maintainability | security | structural | spec mismatch | low-value-test (a new or changed test that matches a junk pattern in `test-driven-development/references/test-value-gate.md` and names no keep-bar rule; cite the pattern)
 - Severity: CRITICAL | HIGH | MEDIUM
@@ -250,5 +273,7 @@ CONTRACT {"s":"APPROVE","b":false,"cr":0}
 - Follow-up tasks created: [list if any, or "None"]
 - (Task completion is handled by the router — do NOT call TaskUpdate or create tasks directly.)
 ```
+
+Each axis keeps its own worst issue; the sections are never merged into one ranking. BLOCKING is true when either axis has a critical finding.
 
 **CONTRACT:** Line 1 `CONTRACT {json}` is the primary machine-readable signal (s=STATUS, b=BLOCKING, cr=CRITICAL_ISSUES). Line 2 heading `## Review: Approve/Changes Requested` is the fallback if envelope absent. Router reads envelope first; falls back to heading scan if malformed.
