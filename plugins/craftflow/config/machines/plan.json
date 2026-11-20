@@ -1,0 +1,117 @@
+{
+  "id": "plan",
+  "route": "PLAN",
+  "version": 1,
+  "initial": "intake",
+  "$comment": "Stage A model of references/plan-workflow.md",
+  "counters": {
+    "plan_review": {
+      "cap": "policy:plan_review_passes_max",
+      "on_cap": "review-exhausted"
+    }
+  },
+  "states": {
+    "intake": {
+      "type": "choice",
+      "on": {
+        "VAGUE": "brainstorm",
+        "CLEAR": "plan-create"
+      }
+    },
+    "brainstorm": {
+      "phases": [
+        "brainstorm"
+      ],
+      "actions": [
+        "skip_to_brainstorming"
+      ],
+      "on": {
+        "DONE": "plan-create"
+      }
+    },
+    "plan-create": {
+      "phases": [
+        "plan-create",
+        "re-plan"
+      ],
+      "agent": "planner",
+      "actions": [
+        "dispatch_planner_with_intent_contract",
+        "run_planner_with_design_file",
+        "run_planner_replan"
+      ],
+      "on": {
+        "PLAN_CREATED": "plan-review",
+        "DECISION_RFC_CREATED": "plan-review",
+        "NEEDS_CLARIFICATION": "clarification"
+      }
+    },
+    "plan-review": {
+      "phases": [
+        "plan-review-gap-1",
+        "plan-review-gap-2"
+      ],
+      "agent": "plan-gap-reviewer",
+      "actions": [
+        "run_plan_review_pass1"
+      ],
+      "on": {
+        "PASS": "approval",
+        "FINDINGS": {
+          "target": "plan-create",
+          "inc": "plan_review"
+        }
+      }
+    },
+    "clarification": {
+      "type": "gate",
+      "gate": "clarification",
+      "actions": [
+        "ask_user"
+      ],
+      "on": {
+        "USER_REPLY": "plan-create",
+        "ABORT": "memory-finalize"
+      }
+    },
+    "review-exhausted": {
+      "type": "gate",
+      "gate": "human_checkpoint",
+      "actions": [
+        "ask_user"
+      ],
+      "on": {
+        "USER_REPLY": "approval",
+        "ABORT": "memory-finalize"
+      }
+    },
+    "approval": {
+      "type": "gate",
+      "gate": "build_transition",
+      "actions": [
+        "create_build_workflow"
+      ],
+      "on": {
+        "USER_REPLY": "memory-finalize",
+        "REVISE": "plan-create"
+      }
+    },
+    "memory-finalize": {
+      "phases": [
+        "memory-finalize"
+      ],
+      "effects": [
+        "finalize_memory"
+      ],
+      "actions": [
+        "memory_finalize"
+      ],
+      "on": {
+        "DONE": "done"
+      }
+    },
+    "done": {
+      "type": "final"
+    }
+  }
+}
