@@ -142,6 +142,7 @@ as today (backward-compatible default for any direct/non-router invocation).
 3. **Choose plan mode + rigor** - `PLAN_MODE` and `VERIFICATION_RIGOR` are explicit, not implied.
 4. **Agreement Snapshot first** - Request summary, requirements snapshot, constraints snapshot, in-scope, out-of-scope, open decisions, differences from agreement. Use the user's and repo's domain language in scenario names and acceptance criteria.
 4.5. **AC Lint (tech-agnostic check)** — Each acceptance criterion in the intent contract must describe a user-observable outcome, not an implementation metric. Restate technical criteria ("API latency < 200ms") in user terms ("User sees results within X seconds"). Flag any criterion that references a specific technology, internal metric, or implementation detail — move it to Risks or verification strategy instead.
+4.6. **Rule check levels** — Write each acceptance rule as `- SC-### [check: type | read | test | phase: P# | keep: <reason>] <rule>`. `check` defaults to `read`; `type` is for what the type checker proves; `test` needs a `keep:` reason from the test-value gate (`test-driven-development/references/test-value-gate.md`). The rule text says what the user sees and never names an internal function, so a rename cannot stale it. Lint the saved plan with `python3 <plugin-root>/scripts/craftflow_plan_rules.py --plan <plan>`.
 5. **Codebase Reality Check (MANDATORY for non-trivial work)** - Identify the exact files, modules, patterns, and integration points that support or constrain the plan. Do not finalize a non-trivial plan before comparing it against the current codebase and surfacing mismatches.
    - **Living Spec Check:** If the project's `CLAUDE.md` `## Doc Targets` overlay declares a `living-spec: {dir, map}` key (same convention as `doc-syncer.md`'s "Living Spec Sync" section and `diff-driven-docs/SKILL.md`'s "Living Spec Layer" section — reuse that vocabulary verbatim, do not invent new field names), locate the single impacted spec the same way `doc-syncer` does: via the spec's `## Impacted Packages` markdown table (a `Package | Action` table — this is NOT front matter), matching it against the package(s) this plan touches. `Read` that one spec before finalizing the plan and treat it as a durable source of truth — do not propose an approach that contradicts it without flagging the contradiction under `Open Decisions`. Scope this to the single relevant spec, consistent with the "smallest relevant context" guidance above (this is not a broad `AGENTS.md`-style load); if zero or multiple specs match, note the ambiguity rather than guessing which one applies.
    - **ADR Prior-Art Check:** Before proposing a new cross-cutting convention, ledger, or
@@ -359,6 +360,8 @@ not.
 | [Phase ID] | [none/human_verify/decision/human_action] | [AFK/HITL] | [why] |
 
 ### Acceptance Checks
+- SC-001 [check: test | phase: P1 | keep: <regression it catches>] [rule in user terms]
+- SC-002 [check: read | phase: P1] [rule a reviewer re-reads against the diff]
 - [command / scenario / review gate]
 
 ### Risks And Mitigations

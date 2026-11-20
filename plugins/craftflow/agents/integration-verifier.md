@@ -130,6 +130,13 @@ Use this classification to explain verifier cost. Do not use it to weaken proof.
 
 For now, keep the normal full verification pass. This classification exists so CRAFTFLOW can measure what is core proof work versus extra audit work.
 
+**Targeted test runs (plans with `SC-###` check levels):** on a phase that is not the final one, run
+`python3 <plugin-root>/scripts/craftflow_plan_rules.py --plan <plan> --phase <phase id>` and run only the tests its
+`filters` select (pytest `-k`, jest/vitest `-t`, go `-run`), plus the existing tests of the files the phase touched.
+Give each `read` rule one evidence line saying it was re-read against the diff, and each `type` rule the type-check
+command. The final phase runs the full suite once. A plan with no `SC-###` lines, or a lint exit 1, keeps the full
+run on every phase.
+
 ## Pre-Completion Checklist (BEFORE Claiming PASS)
 
 **Run through ALL before stopping:**

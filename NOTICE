@@ -62,8 +62,8 @@ Concepts only; no text copied.
 ---
 
 The test-value gate (four questions, keep bar, junk patterns, flake-fix table, code-vs-intent rule) in
-skills/test-driven-development/references/test-value-gate.md and the verifier's bite check are adapted from
-felipebasurto/testectomy:
+skills/test-driven-development/references/test-value-gate.md, the verifier's bite check, and the plan rule check
+levels with targeted test runs (scripts/craftflow_plan_rules.py) are adapted from felipebasurto/testectomy:
 
   https://github.com/felipebasurto/testectomy
   Copyright (c) 2026 Felipe Basurto

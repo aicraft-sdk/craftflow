@@ -54,6 +54,7 @@ Read the user's original request and compare against the plan:
 | Phase dependency map is present | Non-trivial phases do not say what they depend on or what they enable |
 | Durable Decisions present for multi-phase plans | A multi-phase plan omits foundational decisions (routes, schema, models, auth, third-party boundaries) that all phases should reference |
 | Decision-grade content present when needed | A `decision_rfc` is missing alternatives, drawbacks, or references |
+| Rule check levels are sound | `python3 <plugin-root>/scripts/craftflow_plan_rules.py --plan <plan>` exits 1: a `check: test` rule with no `keep:` reason, an unknown check level, a duplicated `SC-###` id, or a rule that names code instead of what the user sees |
 | Critical-path spec present when needed | A `critical_path` artifact is missing behavior contract, edge-case catalog, provable properties, purity boundary, or verification strategy |
 
 ### Check 3: Scope & Alignment — Is it right-sized and faithful?
