@@ -187,14 +187,14 @@ def validate_contract(agent_text: str, kind: str) -> dict:
     """
     Validate the Router Contract YAML block embedded in agent_text.
 
-    Returns {"valid": bool, "errors": list[str]}.
+    Returns {"valid": bool, "errors": list[str], "warnings": list[str]}. Warnings never affect `valid`.
     """
     errors: list = []
 
     # 1. Extract YAML block
     yaml_block = extract_yaml_block(agent_text)
     if yaml_block is None:
-        return {"valid": False, "errors": ["no Router Contract YAML block found"]}
+        return {"valid": False, "errors": ["no Router Contract YAML block found"], "warnings": []}
 
     # 2. Parse fields
     fields = parse_yaml_fields(yaml_block)
@@ -238,7 +238,37 @@ def validate_contract(agent_text: str, kind: str) -> dict:
                         f"(one of {sorted(VALID_GAP_SEVERITIES)}): {item!r}"
                     )
 
-    return {"valid": len(errors) == 0, "errors": errors}
+    warnings: list = []
+    if kind == "bug-investigator":
+        _check_repro_fields(fields, errors, warnings)
+
+    return {"valid": len(errors) == 0, "errors": errors, "warnings": warnings}
+
+
+def _int_or_none(value):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _check_repro_fields(fields: dict, errors: list, warnings: list) -> None:
+    """Repro-first DEBUG (see NOTICE: mattpocock/skills diagnosing-bugs). Checks REPRO_* values when present; a FIXED
+    contract that omits them gets a warning, not an error, for one release."""
+    fixed = fields.get("STATUS") == "FIXED"
+    if "REPRO_COMMAND" not in fields:
+        if fixed:
+            warnings.append("STATUS=FIXED without REPRO_COMMAND: report the one command that went red on the "
+                            "exact symptom (becomes required in a later release)")
+        return
+    if not str(fields["REPRO_COMMAND"]).strip().strip('"').strip("'"):
+        errors.append("REPRO_COMMAND is empty")
+    red = _int_or_none(fields.get("REPRO_RED_EXIT"))
+    if red is None or red == 0:
+        errors.append("REPRO_RED_EXIT must be the non-zero exit of REPRO_COMMAND before the fix")
+    green = _int_or_none(fields.get("REPRO_GREEN_EXIT"))
+    if fixed and green != 0:
+        errors.append("STATUS=FIXED requires REPRO_GREEN_EXIT=0 (the repro still fails or was not re-run)")
 
 
 # ---------------------------------------------------------------------------

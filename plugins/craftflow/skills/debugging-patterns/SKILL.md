@@ -18,6 +18,7 @@ This skill is advisory in v10. It deepens investigation quality. It does not aut
 
 Read only the references needed for the current investigation:
 
+- `references/feedback-loops.md` first, for building the one red command that reproduces the bug (ten ways, how to tighten it, what to ask for when you cannot)
 - `references/root-cause-playbooks.md` for build/type failures, flaky tests, runtime crashes, browser errors, git bisect, and boundary tracing
 - `references/investigation-hygiene.md` for context discipline, evidence logging, hypothesis tracking, restart protocol, and architectural escalation
 - `references/defensive-patterns.md` for hard-won bug-class rules to apply proactively when writing or reviewing subprocess/file/lock-handling code (e.g. guard scripts), not just when debugging one
