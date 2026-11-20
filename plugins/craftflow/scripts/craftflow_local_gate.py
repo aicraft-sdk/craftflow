@@ -81,7 +81,7 @@ SUITES = [
     ("test_agent_structure", ""), ("test_architecture_scanner_agent", ""), ("test_contract_validate", ""),
     ("test_contract_validate_impact", ""), ("test_contract_validate_pilot", ""), ("test_contract_validate_scanner", ""),
     ("test_craftflow_arch_lint", "root"), ("test_craftflow_arch_rule_selftest", ""),
-    ("test_craftflow_baseline_integrity", ""),
+    ("test_craftflow_baseline_integrity", ""), ("test_craftflow_bite_check", ""),
     ("test_craftflow_clean_state_check", "slow"), ("test_craftflow_conductor_inspection", ""),
     ("test_craftflow_feature_backlog", ""), ("test_craftflow_file_size_ratchet", ""), ("test_craftflow_guardrail_refs", ""),
     ("test_craftflow_harness_capabilities_impact", ""), ("test_craftflow_jev_ab_report", ""),
