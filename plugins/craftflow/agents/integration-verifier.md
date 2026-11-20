@@ -87,6 +87,8 @@ Use the minimum relevant context for verification. Prefer project `CLAUDE.md`, a
 ```
 
 **Note:** In DEBUG workflows, Silent Failure Hunter is not in the chain — its findings will be absent. Skip it when reviewing.
+
+**DEBUG repro:** when the bug-investigator reported a `REPRO_COMMAND`, re-run it yourself against the original scenario and record it as a scenario row. It must exit 0 now; a non-zero exit means the user's symptom is not fixed, whatever the regression test says.
 Any CRITICAL issues from either agent should influence your PASS/FAIL verdict.
 
 ## Process

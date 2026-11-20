@@ -82,6 +82,7 @@ def main() -> int:
 
     contract_valid = None
     contract_errors = []
+    contract_warnings = []
     if contract_found:
         validation_mode = mode.get("contractValidation", "audit")
         try:
@@ -89,6 +90,7 @@ def main() -> int:
             result = validate_contract(message, agent_type.split(":")[-1] if ":" in agent_type else agent_type)
             contract_valid = result.get("valid", False)
             contract_errors = result.get("errors", [])
+            contract_warnings = result.get("warnings", [])
         except Exception as exc:
             contract_errors = [f"validator_error: {exc}"]
             contract_valid = None
@@ -103,6 +105,7 @@ def main() -> int:
             "contract_found": contract_found,
             "contract_valid": contract_valid,
             "contract_errors": contract_errors,
+            "contract_warnings": contract_warnings,
             "message_len": len(message),
             "mode": mode.get("subagentStopAudit", "audit"),
             "task_id": None,

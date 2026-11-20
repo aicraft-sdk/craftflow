@@ -140,12 +140,13 @@ Steps 1-12 below MUST execute in order. NEVER skip a step. NEVER reorder.
    ```
    **Stop when:** 3+ files with relevance ≥0.7 AND no critical gaps
 4. **LOG FIRST** - Collect error logs, stack traces, run failing commands
+4a. **Feedback loop (REQUIRED before any hypothesis)** - Build one command that drives the real code path and asserts the user's exact symptom, is deterministic, and runs in seconds (ways to build one: `craftflow:debugging-patterns` → `references/feedback-loops.md`). Run it and show its output, secrets redacted. Minimise the repro until every remaining input is load-bearing. Report it as `REPRO_COMMAND` with `REPRO_RED_EXIT`. **No loop possible:** stop with `STATUS: BLOCKED`, `BLOCKING: true` and `REMEDIATION_REASON: "no_feedback_loop: <what you tried; the environment, captured artifact or instrumentation permission you need>"`. Never hypothesise without a loop.
 5. **Variant Scan (REQUIRED)** - Identify which variant dimensions must keep working (only those relevant to the bug)
-6. **Hypothesis** - Use H1/H2/H3 format with 0-100 confidence (see debugging-patterns). Track 2-3 hypotheses, investigate highest-confidence first, proceed to fix only when one reaches 80+
-7. **RED: Regression test first** - Add a failing test that reproduces the bug (must fail before any fix)
+6. **Hypothesis** - Rank 3 to 5 hypotheses in H1/H2/H3 format with 0-100 confidence (see debugging-patterns) before testing any. Each states a falsifiable prediction: "if X is the cause, changing Y makes the bug disappear". A hypothesis with no prediction is discarded. Change one variable per probe. Tag every temporary log with `[DBG-<first 8 chars of the workflow id>]` (distinct from the `[DEBUG-N]` attempt counter). Investigate highest-confidence first; proceed to fix only when one reaches 80+
+7. **RED: Regression test first** - Turn the minimised repro into a failing test at a seam that exercises the real bug pattern (must fail before any fix). If there is no correct seam (the only reachable one is too shallow to replay the bug), report that as a finding in `MEMORY_NOTES.deferred` and suggest a CODEBASE-HEALTH pass; a test at the wrong seam gives false confidence
 8. **GREEN: Minimal general fix** - Smallest diff that fixes the root cause across required variants (no hardcoding)
 9. **Blast Radius Scan (REQUIRED)** - Search the same file for identical anti-patterns and adjacent files/modules for the same signature when low-cost
-10. **Verify** - Regression test passes + relevant test suite passes, functionality restored
+10. **Verify** - Regression test passes + relevant test suite passes, functionality restored. Re-run `REPRO_COMMAND` against the original, un-minimised scenario and report its exit as `REPRO_GREEN_EXIT`. Prove the temporary logs are gone: `grep -rn "\[DBG-" <touched paths>` returns nothing
 11. **Prevention** - Recommend how to prevent recurrence (lint rule, test, type guard, monitoring)
 12. **Emit memory notes** - Summarize root cause, patterns, verification, and deferred items in the Router Contract
 
@@ -267,6 +268,9 @@ CONFIDENCE: [0-100]
 ROOT_CAUSE: "[one-line summary of root cause]"
 TDD_RED_EXIT: [1 if regression test failed before fix, null if missing]
 TDD_GREEN_EXIT: [0 if regression test passed after fix, null if missing]
+REPRO_COMMAND: "[the one command that went red on the exact symptom, secrets redacted]"
+REPRO_RED_EXIT: [non-zero exit of REPRO_COMMAND before the fix]
+REPRO_GREEN_EXIT: [exit of REPRO_COMMAND after the fix; 0 when FIXED]
 VARIANTS_COVERED: [count of variant cases in regression test]
 BLAST_RADIUS_SCAN:
   same_file: "[summary]"
@@ -299,5 +303,6 @@ MEMORY_NOTES:
   deferred: ["Non-blocking issues discovered during investigation"]
 ```
 **CONTRACT RULE:** STATUS=FIXED requires `VERIFICATION_RIGOR` to be explicit, TDD_RED_EXIT=1, TDD_GREEN_EXIT=0, VARIANTS_COVERED>=1, a non-empty `BLAST_RADIUS_SCAN`, a `Regression:` scenario, and a `Variant:` scenario. Both required scenarios must include non-empty `command`, `expected`, `actual`, and `exit_code`. **Exception:** If no `package.json` exists (pure HTML/CSS/JS project with no test runner), TDD evidence may use manual browser verification instead — set TDD_RED_EXIT=1 and TDD_GREEN_EXIT=0 with evidence describing the manual check.
+**CONTRACT RULE:** STATUS=FIXED should carry a non-empty `REPRO_COMMAND`, `REPRO_RED_EXIT` non-zero and `REPRO_GREEN_EXIT=0` (the validator warns when they are missing and rejects wrong values; they become required in a later release).
 **CONTRACT RULE:** If NEEDS_EXTERNAL_RESEARCH=true: RESEARCH_REASON must be non-null
 ```
