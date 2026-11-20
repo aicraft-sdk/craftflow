@@ -40,7 +40,8 @@ Code before test; test after implementation; test passes immediately; can't expl
 
 - Full RED/GREEN/REFACTOR examples, vertical-slicing rationale, bug-fix walkthrough, output format, final rule: `references/cycle-details.md`
 - Why-order-matters arguments, full red flags, rationalization table, completion checklist: `references/discipline-and-rationalizations.md`
-- Before claiming the phase complete: coverage >= 80% (branches/functions/lines/statements) or add the missing tests; also test prioritization, stuck-problems table, design for testability, behavioral focus, cross-agent test contracts: `references/coverage-and-design.md`
+- Before adding or changing a test: pass the test-value gate (rule, regression, why coverage misses it); keep bar, junk patterns, flakes: `references/test-value-gate.md`
+- Prioritization, stuck table, testability, behavioral focus, test contracts, coverage (reported, not a gate): `references/coverage-and-design.md`
 - Naming, AAA structure, near-miss negatives, smells: `references/testing-patterns.md`
 - Factories, mocks, env/time handling: `references/test-data-and-mocks.md`
 - Real APIs, seeded data, browser flows, stress proof: `references/integration-and-live-proof.md`
