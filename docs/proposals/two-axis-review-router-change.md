@@ -1,6 +1,6 @@
 # Two-axis review: router change for signature (P5)
 
-Status: **applied** in the ai-craft monorepo as ADR-0081 (`docs/ai/decisions/0081-craftflow-two-axis-code-review.md`),
+Status: **applied** in the ai-craft monorepo as ADR-0083 (`docs/ai/decisions/0083-craftflow-two-axis-code-review.md`),
 signed for David by Claude on David's delegation (2026-11-21). The policy-map rows are four signed behavior change rows,
 and the edit is byte-neutral, so no ceiling envelope was needed. As applied, REVIEW keeps one dispatch that runs both
 axes (its start read set has no headroom), `router-protocol.md` and `fast-path.md` are unchanged (their rows still hold),

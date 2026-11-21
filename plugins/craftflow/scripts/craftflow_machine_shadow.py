@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P8 Stage B: the workflow machine in shadow mode (ADR-0080, SPEC-0037).
+"""P8 Stage B: the workflow machine in shadow mode (ADR-0082, SPEC-0037).
 
 The SubagentStop audit hook calls `hook_observe()` after each craftflow agent returns. It works out which machine
 models the workflow, which agents that machine expected next, and whether the agent that just returned is one of them,

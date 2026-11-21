@@ -62,7 +62,7 @@ def _log_agent_usage(data, mode, agent_type, agent_id, agent_transcript_path, me
 
 
 def _log_machine_shadow(mode, agent_type, message) -> None:
-    """P8 Stage B (ADR-0080): log what the workflow machine expected next. Audit only; routing never reads it.
+    """P8 Stage B (ADR-0082): log what the workflow machine expected next. Audit only; routing never reads it.
     Fail-open: never raises."""
     try:
         if mode.get("machineShadow", "audit") == "off":
@@ -81,7 +81,7 @@ def _log_machine_shadow(mode, agent_type, message) -> None:
         policy = json.loads(Path(POLICY_PATH).read_text(encoding="utf-8"))
         row = hook_observe(logs_dir() / "craftflow-hook-events.log", workflow, agent_type, message, load_all(), policy)
         log_event("machine_shadow", row)
-    except Exception as exc:  # shadow mode is fail-open by design (ADR-0080)
+    except Exception as exc:  # shadow mode is fail-open by design (ADR-0082)
         try:
             log_event("machine_shadow", {"agent": agent_type, "error": "unexpected:" + type(exc).__name__})
         except Exception:  # last resort; still fail-open

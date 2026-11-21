@@ -1,6 +1,6 @@
 # ADR (draft): workflow state machines as data
 
-Status: **accepted as ADR-0080** in the ai-craft monorepo (`docs/ai/decisions/0080-craftflow-workflow-state-machine.md`),
+Status: **accepted as ADR-0082** in the ai-craft monorepo (`docs/ai/decisions/0082-craftflow-workflow-state-machine.md`),
 signed for David by Claude on David's delegation (2026-11-21). This copy ships with the plugin; the monorepo ADR wins
 where they differ. It continues ADR-0073 (policy values out of router prose).
 
@@ -42,5 +42,5 @@ for moving rules into checks. Both point the same way.
 
 ## Signatures
 
-- This ADR and the Stage B exit criterion (20 workflows): signed as ADR-0080 (delegated, 2026-11-21).
+- This ADR and the Stage B exit criterion (20 workflows): signed as ADR-0082 (delegated, 2026-11-21).
 - Still needed: each Stage C policy-map deletion row and ceiling change.

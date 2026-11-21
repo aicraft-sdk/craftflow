@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for P8 Stage B: the workflow machine in shadow mode (ADR-0080, SPEC-0037).
+"""Tests for P8 Stage B: the workflow machine in shadow mode (ADR-0082, SPEC-0037).
 
 After each craftflow agent returns, the SubagentStop audit hook asks scripts/craftflow_machine_shadow.py what the
 machine expects next and whether the agent that just returned is one the machine expected. It only logs
