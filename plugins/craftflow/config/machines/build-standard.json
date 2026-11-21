@@ -35,7 +35,7 @@
         "build-review",
         "build-hunt"
       ],
-      "agent": "code-reviewer+silent-failure-hunter",
+      "agent": "code-reviewer+code-reviewer+silent-failure-hunter",
       "actions": [
         "review"
       ],

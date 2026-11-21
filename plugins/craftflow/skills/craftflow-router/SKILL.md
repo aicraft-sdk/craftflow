@@ -416,19 +416,19 @@ After any agent returns, read `references/post-agent-validation.md` (once per co
 4. Otherwise, map each runnable task through the dispatcher table.
 4a. If `build_mode == "fast_path"` in the workflow artifact for this BUILD:
    - If `build_mode` is null (legacy artifact or non-BUILD workflow): treat as `"standard"` — skip this step, continue to step 5.
-   - code-reviewer and silent-failure-hunter tasks were NOT created — skip step 5 parallel dispatch check for them
+   - reviewer and hunter tasks were NOT created — skip step 5 for them
    - When integration-verifier completes with FAIL:
      - Read `references/build-fast-path-escalation.md → ### Fast Path Escalation` block and execute it
      - Do not advance phase cursor
-5. If `code-reviewer` and `silent-failure-hunter` are both ready in BUILD (build_mode == "standard" only):
-   - mark both in_progress first
+5. If both `code-reviewer` axis tasks and `silent-failure-hunter` are ready in BUILD (build_mode == "standard" only):
+   - mark all three in_progress first
    - invoke them in the same message
-   - If parallel invocation fails or is unavailable (API error, rate limit): fall back to sequential execution (reviewer first, then hunter). Never block a workflow because parallelism is unavailable. Log `event=parallel_fallback` in the workflow event log.
+   - If parallel invocation fails or is unavailable (API error, rate limit): fall back to sequential execution (spec, standards, then hunter). Never block a workflow because parallelism is unavailable. Log `event=parallel_fallback` in the workflow event log.
 6. After each agent returns:
    - capture memory payload immediately
    - validate output (§ 8)
    - persist task-state side effects
-   - if BUILD review and hunt are both complete for the current phase, write one router-owned merged findings summary into the existing workflow results before verifier handoff
+   - if BUILD review (both axes) and hunt are complete for the current phase, write one router-owned merged findings summary into the existing workflow results before verifier handoff
    - apply workflow rules
    - for BUILD, run `phase_exit_gate`; if the current phase is not complete, persist `phase_status={partial|blocked}` and stop
    - never advance to the next phase or workflow step on apology prose alone

@@ -1,11 +1,11 @@
 # Two-axis review: router change for signature (P5)
 
-Status: **draft, not applied.** The code-reviewer side ships now (`agents/code-reviewer.md` § Review Axis). With no
-`REVIEW_AXIS` in its prompt, the reviewer runs both axes in one dispatch, Spec first, then Standards, and reports
-them in two sections. That changes the reviewer's output but not the router's behavior. The router edits below
-rewrite inventoried router units. They also grow a start file whose read-set ceiling has no headroom today. Both
-need a person: signed policy-map rows (`Name (YYYY-MM-DD)`) and a ceiling envelope. An agent cannot sign either, so
-they are not in this PR.
+Status: **applied** in the ai-craft monorepo as ADR-0081 (`docs/ai/decisions/0081-craftflow-two-axis-code-review.md`),
+signed for David by Claude on David's delegation (2026-11-21). The policy-map rows are four signed behavior change rows,
+and the edit is byte-neutral, so no ceiling envelope was needed. As applied, REVIEW keeps one dispatch that runs both
+axes (its start read set has no headroom), `router-protocol.md` and `fast-path.md` are unchanged (their rows still hold),
+and the per-axis findings rule lives in `_shared/verifier-handoff.md` rather than `post-agent-validation.md`. The text
+below is the original draft.
 
 ## What changes when it is applied
 

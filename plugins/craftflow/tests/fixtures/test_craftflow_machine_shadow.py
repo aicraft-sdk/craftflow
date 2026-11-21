@@ -53,11 +53,11 @@ check("REVIEW", shadow.machine_for("REVIEW", None) == "review")
 check("an unmodeled route has no machine", shadow.machine_for("ORIENT", None) is None)
 
 print("[a standard BUILD that follows the machine]")
-rows = run([("component-builder", "PASS"), ("code-reviewer", "APPROVE"), ("silent-failure-hunter", "CLEAN"),
-            ("integration-verifier", "PASS"), ("doc-syncer", "COMPLETE")])
-check("every step agrees", [r["agree"] for r in rows] == [None, True, True, True, True], rows)
-check("the parallel pair advances only when both returned", rows[1]["state"] == "review-and-hunt" and rows[1]["next"] is None
-      and rows[2]["next"] == "build-verify", rows[1:3])
+rows = run([("component-builder", "PASS"), ("code-reviewer", "APPROVE"), ("code-reviewer", "APPROVE"),
+            ("silent-failure-hunter", "CLEAN"), ("integration-verifier", "PASS"), ("doc-syncer", "COMPLETE")])
+check("every step agrees", [r["agree"] for r in rows] == [None, True, True, True, True, True], rows)
+check("the parallel step advances only when all returned (two reviewer axes and the hunter)",
+      rows[1]["state"] == "review-and-hunt" and [r["next"] for r in rows[1:4]] == [None, None, "build-verify"], rows[1:4])
 check("rows name the machine", {r["machine"] for r in rows} == {"build-standard"}, rows)
 
 print("[disagreements]")
@@ -65,9 +65,9 @@ rows = run([("component-builder", "PASS"), ("integration-verifier", "PASS")])
 check("skipping review in a standard BUILD disagrees", rows[1]["agree"] is False and "code-reviewer" in rows[1]["expected"], rows[1])
 rows = run([("component-builder", "PASS"), ("integration-verifier", "PASS")], build_mode="fast_path")
 check("the same steps agree on the fast path", rows[1]["agree"] is True, rows[1])
-rows = run([("component-builder", "PASS"), ("code-reviewer", "CHANGES_REQUESTED"), ("silent-failure-hunter", "CLEAN"),
-            ("component-builder", "PASS")])
-check("findings route to remediation, and the builder is expected", rows[2]["next"] == "remfix" and rows[3]["agree"] is True, rows)
+rows = run([("component-builder", "PASS"), ("code-reviewer", "CHANGES_REQUESTED"), ("code-reviewer", "APPROVE"),
+            ("silent-failure-hunter", "CLEAN"), ("component-builder", "PASS")])
+check("findings route to remediation, and the builder is expected", rows[3]["next"] == "remfix" and rows[4]["agree"] is True, rows)
 
 print("[unmodeled input never raises]")
 rows = run([("component-builder", "PASS"), ("code-reviewer", "SOMETHING_ELSE")])
@@ -81,7 +81,8 @@ print("[report]")
 log = Path(tempfile.mkdtemp(prefix="shadow-")) / "craftflow-hook-events.log"
 lines = []
 for i in range(3):
-    for r in run([("component-builder", "PASS"), ("code-reviewer", "APPROVE"), ("silent-failure-hunter", "CLEAN")]):
+    for r in run([("component-builder", "PASS"), ("code-reviewer", "APPROVE"), ("code-reviewer", "APPROVE"),
+                  ("silent-failure-hunter", "CLEAN")]):
         lines.append({"event": "machine_shadow", "workflow": f"wf-{i}", **r})
 for r in run([("component-builder", "PASS"), ("integration-verifier", "PASS")]):
     lines.append({"event": "machine_shadow", "workflow": "wf-bad", **r})

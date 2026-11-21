@@ -27,9 +27,8 @@ agent. There is still no real task-tracking system in Cursor: no `TaskCreate`,
 
 **Core contract:** Each workflow phase is executed by a real, isolated Cursor `Task`
 call — `subagent_type: generalPurpose`, dispatched in foreground/blocking mode so the
-router receives that phase's result before advancing. code-reviewer and
-silent-failure-hunter, when both are ready in the same round, are dispatched via two
-`Task` calls in the same message for genuine parallel execution. The dispatched
+router receives that phase's result before advancing. Parallel-ready phases are
+dispatched in the same message (see the execution loop). The dispatched
 subagent starts with a fresh, clean context — it has not read this file or any prior
 phase's transcript — so every dispatch prompt must be fully self-contained (see § 5).
 
@@ -615,8 +614,7 @@ to the template above, in the exact sub-block format given in
 "Previous Agent Findings Handoff" (`Read()` that file now if you have not already this
 session).
 
-- **Fast path (no reviewer/hunter ran this round):** omit the `## Previous Agent
-  Findings` section entirely — same fast-path-omission logic given in
+- **Fast path:** omit the section — same fast-path-omission logic given in
   `tools/craftflow-plugin/plugins/craftflow/skills/_shared/verifier-handoff.md` §
   "Verifier Findings Handoff".
 - **DEBUG chain:** Silent Failure Hunter is not in the chain — omit its sub-block (or
@@ -636,16 +634,17 @@ For each phase in workflow chain:
      this round (standard chain): include the `## Previous Agent Findings` section per
      "Previous Agent Findings handoff (integration-verifier only)" above.
      If this is the fast path (no reviewer/hunter ran this round): omit that section.
-  2a. Append one agent_started event per agent about to be dispatched this round (two
-      lines if step 3 below dispatches a parallel pair) to
+  2a. Append one agent_started event per agent about to be dispatched this round (one
+      line per dispatch if step 3 below dispatches in parallel) to
       .craftflow/state/workflows/{wf_id}.events.jsonl — timestamp this fresh, right
       before invoking Task, not reused from workflow creation:
         {"ts":"{iso_now}","wf":"{wf_id}","event":"agent_started","host":"cursor","phase":"{phase}","agent":"{agent-name}","decision":"dispatch"}
   3. If this phase is code-reviewer or silent-failure-hunter AND the other one is
      ALSO ready to run in this same round:
-       Invoke Task TWICE in the SAME message — once per agent, each with its own
-       fully-built dispatch prompt (subagent_type: generalPurpose, foreground) — and
-       wait for BOTH results before proceeding.
+       Invoke Task once per dispatch in the SAME message (standard BUILD: code-reviewer
+       per `REVIEW_AXIS` plus the hunter), each with its own
+       fully-built dispatch prompt (subagent_type: generalPurpose, foreground), and
+       wait for ALL results before proceeding.
      Otherwise:
        Invoke Task ONCE (subagent_type: generalPurpose, foreground/blocking) with
        this phase's dispatch prompt, and wait for its result.
@@ -674,7 +673,7 @@ End loop → proceed to § 8 Memory Finalization
 ### Phase chains by workflow type
 
 **BUILD (fast path):** component-builder → integration-verifier
-**BUILD (standard — risk keywords matched):** component-builder → code-reviewer → silent-failure-hunter → integration-verifier
+**BUILD (standard — risk keywords matched):** component-builder → code-reviewer (spec ‖ standards) ‖ silent-failure-hunter → integration-verifier
 **DEBUG:** bug-investigator → code-reviewer → integration-verifier
 **REVIEW:** code-reviewer (advisory output only)
 **PLAN:** brainstorming (inline, see § 4b) → planner (dispatched) → plan-gap-reviewer (dispatched, 1-2 passes, see § 4b's bounded review loop)
@@ -1164,8 +1163,9 @@ When an agent file contains `TaskList()`, `TaskGet()`, or `Agent(...)` calls:
 - ALWAYS dispatch each phase via a real `Task` call (foreground/blocking,
   `subagent_type: generalPurpose`) — never execute a phase's actual work inline in the
   router's own turn anymore.
-- ALWAYS dispatch code-reviewer + silent-failure-hunter via two `Task` calls in the
-  SAME message when both are ready, for genuine parallel execution.
+- ALWAYS dispatch code-reviewer (once per `REVIEW_AXIS` in standard BUILD) +
+  silent-failure-hunter via three `Task` calls in the SAME message when all are ready,
+  for genuine parallel execution.
 - NEVER reference a custom `.cursor/agents/*.md` name as a Task `subagent_type` — it
   will not resolve; always use `generalPurpose` with a fully self-contained prompt.
 - NEVER skip the progress block emission — it is the user's only visibility into phase progress

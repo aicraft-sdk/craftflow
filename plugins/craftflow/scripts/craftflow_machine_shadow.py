@@ -113,7 +113,8 @@ def _step(machine: dict, policy: dict, shadow: dict, name: str, agent: str, verd
     parallel = state.get("agent", "").count("+") > 0
     if parallel:
         pending = shadow.get("waiting") if shadow.get("at") == name and shadow.get("waiting") else _agents(state)
-        pending = [a for a in pending if a != agent]
+        pending = list(pending)
+        pending.remove(agent)  # one occurrence: the reviewer runs once per axis
         results = (shadow.get("results") if shadow.get("at") == name else None) or []
         results = results + [event]
         if pending:

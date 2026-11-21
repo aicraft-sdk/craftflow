@@ -19,6 +19,11 @@ When invoking `integration-verifier`, pass:
 
 DEBUG skips hunter findings.
 
+Standard BUILD runs the reviewer once per axis: give one section per axis (`### Code Reviewer (spec axis)`, then
+`### Code Reviewer (standards axis)`), each with its own verdict and worst issue, not reranked. The merged result is
+blocking when either axis has a critical issue or `Changes Requested`. `results.reviewer` keeps both axes in one
+`findings` list, each entry tagged `axis`.
+
 (Host-specific note: Cursor's binding doc's own "Previous Agent Findings handoff
 (integration-verifier only)" section states it uses the same sub-block format and the same
 fast-path-omission rule as this one — see `cursor-router/SKILL.md` § 5 for its own dispatch
