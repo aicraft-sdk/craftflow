@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.39.0] - 2026-11-21
+
+### Features
+
+- review standard BUILD phases on two isolated axes (ADR-0081)
+- P8 Stage B machine shadow mode; sign ADR-0080 and SPEC-0037
+- model the workflows as JSON state machines (Stage A, no behavior change)
+- ratchet always-loaded prose and audit it for repeats
+- give plan rules check levels and run only the tests a phase cites
+- judge review on separate Spec and Standards axes
+- give the frontend critique a built-in UI tells detector
+- make DEBUG build a red feedback loop before any hypothesis
+- bite-check new and changed tests in the integration verifier
+- add a test-value gate to TDD and the builder contract
+
+### Fixes
+
+- renumber the state machine and two-axis ADRs to 0082 and 0083
+- name the bite-check script path the way agents do and give a manual fallback
+
+### Tests
+
+- keep test_router_context_impact.py at its file-size baseline
+
+### Chores
+
+- stop tracking two __pycache__ .pyc files
+
 ## [1.38.1] - 2026-11-19
 
 ### Fixes
