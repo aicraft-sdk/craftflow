@@ -272,8 +272,7 @@ def test_collect_head_matches_readset_tool() -> None:
     # H3 (ADR-0074 envelope; ORIENT pointer, workflow-start line): 100,895 -> 101,249
     # H4 (ADR-0074 envelope; Record BASE law, Review Base protocol bullet, artifact field and event): 101,249 -> 102,166 (the fix drops one blank line)
     # H5 (ADR-0074 envelope; handoff hard rule, JUST_GO carve-out, adopt sentence, artifact fields and events): 102,166 -> 103,281
-    # H6 (ADR-0074 envelope; CODEBASE-HEALTH kernel pointer and dispatcher row): 103,281 -> 103,560
-    # P5 two-axis review (ADR-0081, byte-neutral; a historical Learn-Distill opener cut): 103,560 -> 103,484
+    # H6 (ADR-0074 envelope; CODEBASE-HEALTH kernel pointer and dispatcher row): 103,281 -> 103,560; P5 two-axis review (ADR-0081, byte-neutral): 103,560 -> 103,484
     check("collect_head_build_standard_literal_103484", got == 103484, f"BUILD standard start_total is {got}; the BUILD standard literal is 103,484")
 
 
