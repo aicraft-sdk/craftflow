@@ -9,7 +9,7 @@ Each `config/machines/<name>.json` models one route variant:
                        "agent": str, "gate": <pending_gate value>, "effects": [str], "actions": [str],
                        "on": {EVENT: target | {"target": str, "inc": counter}}}}}
 
-Stage A changes no behavior: the router does not call this yet. Modes:
+Stage A changes no behavior: the router does not call this. Stage B (craftflow_machine_shadow.py) only logs. Modes:
 
     validate [--machine NAME|PATH]   soundness: every state reachable, every non-final state has an exit, every loop
                                      passes a gate or a capped counter whose cap ends in a gate, every gate has a resume
@@ -20,6 +20,8 @@ Stage A changes no behavior: the router does not call this yet. Modes:
     replay --machine M --events-file F.events.jsonl          check a workflow's agent_completed/agent_started rows
     fixtures [--dir DIR]                                     every replay fixture's expected next_action must be a
                                                              state or action of a machine for its workflow_type
+    shadow-report [--log F] [--need N]                       Stage B exit check over the hook log's machine_shadow
+                                                             rows: N workflows with zero disagreements (always exit 0)
 
 Prints one JSON line. Exit codes: 0 ok, 1 unsound machine or disagreements, 2 bad input. Python 3.9, stdlib only.
 """
@@ -246,7 +248,7 @@ def _load_machine(ref: str) -> dict:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Validate, step, simulate and replay workflow state machines.")
-    parser.add_argument("mode", choices=["validate", "next", "simulate", "replay", "fixtures"])
+    parser.add_argument("mode", choices=["validate", "next", "simulate", "replay", "fixtures", "shadow-report"])
     parser.add_argument("--machine")
     parser.add_argument("--state")
     parser.add_argument("--event")
@@ -254,6 +256,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--events-file")
     parser.add_argument("--counters", default="{}")
     parser.add_argument("--dir", default=str(FIXTURES_DIR))
+    parser.add_argument("--log", default=".craftflow/state/craftflow-hook-events.log")
+    parser.add_argument("--need", type=int, default=20)
     args = parser.parse_args(argv)
     try:
         policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
@@ -262,6 +266,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             report = {name: validate(mach, policy) for name, mach in machines.items()}
             print(json.dumps({"errors": report}, sort_keys=True))
             return 1 if any(report.values()) else 0
+        if args.mode == "shadow-report":
+            from craftflow_machine_shadow import report
+
+            print(json.dumps(report(Path(args.log), args.need), sort_keys=True))
+            return 0
         if args.mode == "fixtures":
             report = check_fixtures(load_all(), Path(args.dir))
             print(json.dumps(report, sort_keys=True))

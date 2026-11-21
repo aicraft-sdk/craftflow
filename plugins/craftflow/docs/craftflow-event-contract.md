@@ -458,6 +458,17 @@ The permit record the pretooluse guard already logs for a finalize-permitted mem
 {"ts": "2026-10-16T12:00:00Z", "event": "worktree_finalize", "wf": "wf-example-20261016-120000-0a1b2c3d", "outcome": "worktree_dirty_main_tree", "pending_gate": "worktree_dirty_main_tree", "worktree_mode": "auto_created", "details": {"merge_root": "/repo", "dirty_status": " M README.md"}}
 ```
 
+### Log event: `machine_shadow`
+
+- Emitter: `scripts/craftflow_subagent_stop_audit.py` (`_log_machine_shadow`, row built by `scripts/craftflow_machine_shadow.py`), once per craftflow agent that returns while a workflow artifact exists. P8 Stage B of the workflow state machine (ADR-0080, SPEC-0037). `hook-mode.json` key `machineShadow` (`audit`, or `off` to skip).
+- Trigger: SubagentStop for a craftflow agent. The hook picks the machine for the latest workflow's `workflow_type` and `build_mode`, reads the previous row of the same workflow back from this log, and records whether the returned agent is one the machine expected next.
+- Fail-open: any error writes a row with only `agent` and `error` (`unexpected:<Type>`) and never changes the hook's exit code.
+- Payload: `workflow` (the artifact's `workflow_uuid`), `machine` (null for a route with no machine), `state` (the state the agent ran in), `next` (the state after it, null while a parallel pair still waits or the input was unmodeled), `agree` (true, false, or null on the first agent and for unmodeled input), `expected` (the agents the machine allowed), `note` (starts with `unmodeled` for a verdict, agent or route no machine handles), `agent`, `verdict`, `shadow_state` (what the next row resumes from). Informational only: routing never reads it. `craftflow_machine.py shadow-report` summarizes the rows into the Stage B exit check.
+
+```json
+{"ts": "2026-11-21T12:00:00Z", "event": "machine_shadow", "workflow": "wf-example", "machine": "build-standard", "state": "build-verify", "next": "phase-exit", "agree": false, "expected": ["code-reviewer", "silent-failure-hunter"], "note": null, "agent": "integration-verifier", "verdict": "PASS", "shadow_state": {"at": "phase-exit", "waiting": [], "counters": {}}}
+```
+
 ## Keeping this doc honest
 
 `scripts/verify-craftflow-event-contract.mjs` (`pnpm run verify:event-contract`) asserts

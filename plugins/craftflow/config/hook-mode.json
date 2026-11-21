@@ -14,5 +14,6 @@
   "contractValidation": "audit",
   "stateReadCompaction": "block",
   "bashDestructiveTraversal": "block",
-  "cleanStateSuppressions": "audit"
+  "cleanStateSuppressions": "audit",
+  "machineShadow": "audit"
 }

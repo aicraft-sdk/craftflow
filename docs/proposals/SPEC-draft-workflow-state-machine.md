@@ -1,7 +1,9 @@
 # SPEC (draft): workflow state machines, Stage A
 
-Status: **draft, unsigned**; goes with the ADR draft in this folder. Stage A ships in this change and makes
-no behavior change: nothing in the router, the hooks or the Cursor router calls `craftflow_machine.py` yet.
+Status: **approved as SPEC-0037** in the ai-craft monorepo (`docs/ai/specs/0037-craftflow-workflow-state-machine.md`),
+signed for David by Claude on David's delegation (2026-11-21); the monorepo spec wins where they differ. Stage A makes
+no behavior change: the router and the Cursor router do not call `craftflow_machine.py`. Stage B (shadow mode) is in
+SPEC-0037: the audit hook only logs.
 
 ## Scope
 

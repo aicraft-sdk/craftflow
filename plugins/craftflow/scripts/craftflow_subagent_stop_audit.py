@@ -61,6 +61,33 @@ def _log_agent_usage(data, mode, agent_type, agent_id, agent_transcript_path, me
             pass
 
 
+def _log_machine_shadow(mode, agent_type, message) -> None:
+    """P8 Stage B (ADR-0080): log what the workflow machine expected next. Audit only; routing never reads it.
+    Fail-open: never raises."""
+    try:
+        if mode.get("machineShadow", "audit") == "off":
+            return
+        from pathlib import Path
+
+        from craftflow_hooklib import latest_workflow_payload, logs_dir
+        from craftflow_machine import POLICY_PATH, load_all
+        from craftflow_machine_shadow import hook_observe
+
+        workflow = latest_workflow_payload()
+        if not isinstance(workflow, dict) or not workflow.get("workflow_uuid"):
+            return
+        import json
+
+        policy = json.loads(Path(POLICY_PATH).read_text(encoding="utf-8"))
+        row = hook_observe(logs_dir() / "craftflow-hook-events.log", workflow, agent_type, message, load_all(), policy)
+        log_event("machine_shadow", row)
+    except Exception as exc:  # shadow mode is fail-open by design (ADR-0080)
+        try:
+            log_event("machine_shadow", {"agent": agent_type, "error": "unexpected:" + type(exc).__name__})
+        except Exception:  # last resort; still fail-open
+            pass
+
+
 def main() -> int:
     data = load_input()
     mode = load_mode()
@@ -129,6 +156,7 @@ def main() -> int:
 
     # Runs after the existing events so they are written even if this is slow.
     _log_agent_usage(data, mode, agent_type, agent_id, agent_transcript_path, message)
+    _log_machine_shadow(mode, agent_type, message)
 
     return 0
 
