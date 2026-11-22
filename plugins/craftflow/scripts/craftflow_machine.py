@@ -248,7 +248,8 @@ def _load_machine(ref: str) -> dict:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Validate, step, simulate and replay workflow state machines.")
-    parser.add_argument("mode", choices=["validate", "next", "simulate", "replay", "fixtures", "shadow-report"])
+    parser.add_argument("mode", choices=["validate", "next", "simulate", "replay", "fixtures", "shadow-report",
+                                         "backfill-check"])
     parser.add_argument("--machine")
     parser.add_argument("--state")
     parser.add_argument("--event")
@@ -258,6 +259,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--dir", default=str(FIXTURES_DIR))
     parser.add_argument("--log", default=".craftflow/state/craftflow-hook-events.log")
     parser.add_argument("--need", type=int, default=20)
+    parser.add_argument("--workflows", default=".craftflow/state/workflows")
     args = parser.parse_args(argv)
     try:
         policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
@@ -270,6 +272,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             from craftflow_machine_shadow import report
 
             print(json.dumps(report(Path(args.log), args.need), sort_keys=True))
+            return 0
+        if args.mode == "backfill-check":
+            from craftflow_machine_shadow import backfill_check
+
+            print(json.dumps(backfill_check(Path(args.log), Path(args.workflows), load_all(), policy), sort_keys=True))
             return 0
         if args.mode == "fixtures":
             report = check_fixtures(load_all(), Path(args.dir))

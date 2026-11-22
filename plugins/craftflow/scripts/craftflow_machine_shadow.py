@@ -159,20 +159,35 @@ def observe(machines: Dict[str, dict], policy: dict, shadow: dict, workflow_type
 
 
 def report_rows(rows: List[dict], need: int) -> dict:
+    """The Stage B exit check, plus measures that only describe the log (row counts by agreement, the divergence
+    rate over judged rows, the first and last row dates, the days with rows). Only `clean_workflows` and
+    `disagreements` decide `exit_criterion_met`; the measures never do (changing the rule is a SPEC-0037 decision)."""
     agreed: Dict[str, bool] = {}
     bad: Dict[str, int] = {}
+    counts = {True: 0, False: 0, None: 0}
+    days = set()
     for row in rows:
         if row.get("event") != "machine_shadow" or not row.get("workflow"):
             continue
         wf = str(row["workflow"])
-        if row.get("agree") is False:
+        agree = row.get("agree")
+        counts[agree if agree in (True, False) else None] += 1
+        ts = row.get("ts")
+        if isinstance(ts, str) and len(ts) >= 10:
+            days.add(ts[:10])
+        if agree is False:
             bad[wf] = bad.get(wf, 0) + 1
-        elif row.get("agree") is True:
+        elif agree is True:
             agreed[wf] = True
     clean = sorted(wf for wf in agreed if wf not in bad)
     disagreements = sum(bad.values())
+    judged = counts[True] + counts[False]
     return {"clean_workflows": len(clean), "need": need, "disagreements": disagreements,
-            "disagreeing_workflows": sorted(bad), "exit_criterion_met": len(clean) >= need and disagreements == 0}
+            "disagreeing_workflows": sorted(bad), "exit_criterion_met": len(clean) >= need and disagreements == 0,
+            "agree_rows": counts[True], "disagree_rows": counts[False], "unmodeled_rows": counts[None],
+            "divergence_rate": round(counts[False] / judged, 4) if judged else None,
+            "first_row": min(days) if days else None, "last_row": max(days) if days else None,
+            "active_days": len(days)}
 
 
 def _read_rows(log: Path, tail: Optional[int] = None) -> List[dict]:
@@ -197,6 +212,92 @@ def _read_rows(log: Path, tail: Optional[int] = None) -> List[dict]:
 
 def report(log: Path, need: int) -> dict:
     return report_rows(_read_rows(log), need)
+
+
+def _read_all(log: Path) -> List[dict]:
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out = []
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            out.append(row)
+    return out
+
+
+def _workflows_by_session(workflows_dir: Path) -> Dict[str, List[dict]]:
+    by_session: Dict[str, List[dict]] = {}
+    for path in sorted(workflows_dir.glob("*.json")) if workflows_dir.is_dir() else []:
+        try:
+            wf = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(wf, dict) and wf.get("workflow_uuid") and isinstance(wf.get("session_id"), str):
+            by_session.setdefault(wf["session_id"], []).append(wf)
+    return by_session
+
+
+def _final_text(transcript_path) -> Optional[str]:
+    from craftflow_transcript_usage import summarize_transcript
+
+    summary = summarize_transcript(transcript_path, want_final_text=True)
+    return None if summary.get("error") else (summary.get("final_text") or None)
+
+
+def backfill_check(log: Path, workflows_dir: Path, machines: Dict[str, dict], policy: dict,
+                   final_text=_final_text) -> dict:
+    """Read-only: could logs written before shadow mode be replayed through the machine?
+
+    Joins each craftflow `agent_usage` row to a workflow artifact by session id (a session with two or more
+    workflows is ambiguous and skipped, never guessed), recovers the agent's verdict from its transcript (path from
+    the matching `subagent_stop` row), then dry-runs only the workflows whose every return was recovered. Nothing is
+    written; whether such rows may count toward Stage B is a SPEC-0037 decision, so the result says they do not."""
+    rows = _read_all(log)
+    transcripts = {r.get("agent_id"): r.get("agent_transcript_path") for r in rows
+                   if r.get("event") == "subagent_stop" and r.get("agent_id")}
+    by_session = _workflows_by_session(workflows_dir)
+    returns = [r for r in rows if r.get("event") == "agent_usage"
+               and str(r.get("agent_type", "")).startswith("craftflow:")]
+    stats = {"craftflow_returns": len(returns), "with_workflow": 0, "ambiguous_session": 0, "no_workflow": 0,
+             "with_verdict": 0}
+    per_wf: Dict[str, List[Tuple[dict, str, Optional[str]]]] = {}
+    for ret in returns:
+        matches = by_session.get(str(ret.get("session_id")), [])
+        if len(matches) > 1:
+            stats["ambiguous_session"] += 1
+            continue
+        if not matches:
+            stats["no_workflow"] += 1
+            continue
+        stats["with_workflow"] += 1
+        wf = matches[0]
+        verdict = None
+        text = final_text(transcripts.get(ret.get("agent_id")))
+        if text:
+            verdict = verdict_of(text)
+        if verdict:
+            stats["with_verdict"] += 1
+        per_wf.setdefault(wf["workflow_uuid"], []).append((wf, ret["agent_type"], verdict))
+    dry_rows: List[dict] = []
+    incomplete = 0
+    for uuid, items in per_wf.items():
+        if any(v is None for _, _, v in items):
+            incomplete += 1
+            continue
+        state: dict = {}
+        for wf, agent, verdict in items:
+            row, state = observe(machines, policy, state, wf.get("workflow_type"), wf.get("build_mode"), agent, verdict)
+            dry_rows.append({"event": "machine_shadow", "workflow": uuid, **row})
+    dry = report_rows(dry_rows, need=0)
+    return {**stats, "replayable_workflows": len(per_wf) - incomplete, "incomplete_workflows": incomplete,
+            "dry_run": {k: dry[k] for k in ("agree_rows", "disagree_rows", "unmodeled_rows", "divergence_rate",
+                                            "disagreeing_workflows")},
+            "counts_toward_stage_b": False}
 
 
 def hook_observe(log: Path, workflow: dict, agent: str, message: str, machines: Dict[str, dict], policy: dict) -> dict:
