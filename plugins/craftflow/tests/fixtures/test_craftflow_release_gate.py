@@ -121,6 +121,30 @@ me = Path(gate.__file__).resolve()
 check("ROOT holds the gate script at its documented path",
       gate.ROOT / "tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_release_gate.py", me)
 check("PLUGIN is the parent of scripts/", gate.PLUGIN, me.parents[1])
+check("layout_error: None at the documented monorepo path", gate.layout_error(), None)
+
+# An installed plugin copy (~/.claude/plugins/cache/<mkt>/<name>/<ver>/scripts/) is not the monorepo layout. The
+# SessionStart import self-check imports every scripts/craftflow_*.py, so the module must import cleanly there, while
+# running the gate must still refuse.
+import subprocess  # noqa: E402
+import shutil as _shutil  # noqa: E402
+for label, rel in (("installed-copy layout", "plugins/cache/craftflow/craftflow/1.39.0/scripts"),
+                   ("shallow layout", "scripts")):
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / rel
+        dest.mkdir(parents=True)
+        _shutil.copy(SCRIPTS / "craftflow_release_gate.py", dest)
+        imp = subprocess.run([sys.executable, "-c", "import craftflow_release_gate"], cwd=dest,
+                             capture_output=True, text=True)
+        check(f"{label}: module imports cleanly", (imp.returncode, imp.stderr), (0, ""))
+        listed = subprocess.run([sys.executable, "craftflow_release_gate.py", "--list"], cwd=dest,
+                                capture_output=True, text=True)
+        check(f"{label}: --list still works", listed.returncode, 0)
+        ran = subprocess.run([sys.executable, "craftflow_release_gate.py"], cwd=dest, capture_output=True, text=True)
+        check(f"{label}: running the gate exits 2", ran.returncode, 2)
+        check_true(f"{label}: running the gate names the layout problem",
+                   "documented path" in ran.stderr and "RELEASE GATE: OK" not in ran.stdout, ran.stderr)
+
 steps = {s.id: s for s in gate.build_steps()}
 for shard, shard_step in (("1/2", "fixture_suite_a"), ("2/2", "fixture_suite_b")):
     check(f"{shard_step} runs shard {shard} of the suite from PLUGIN",

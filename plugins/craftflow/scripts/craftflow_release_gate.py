@@ -26,9 +26,19 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
 # <repo>/tools/craftflow-plugin/plugins/craftflow/scripts/craftflow_release_gate.py
-ROOT = Path(__file__).resolve().parents[5]
+# The layout is checked when the gate runs (main), not at import: the SessionStart hook self-check imports every
+# scripts/craftflow_*.py, and an installed plugin copy is not the monorepo layout.
+_HERE = Path(__file__).resolve()
+ROOT = _HERE.parents[5] if len(_HERE.parents) > 5 else _HERE.parents[-1]
 PLUGIN = ROOT / "tools/craftflow-plugin/plugins/craftflow"
-assert PLUGIN == Path(__file__).resolve().parents[1], "release gate is not at its documented path"
+
+
+def layout_error() -> Optional[str]:
+    """None when this file sits at its documented monorepo path, else why the gate cannot run here."""
+    if PLUGIN != _HERE.parents[1]:
+        return (f"release gate is not at its documented path "
+                f"(<repo>/tools/craftflow-plugin/plugins/craftflow/scripts/); found at {_HERE}")
+    return None
 
 STEP_CAP_S = 600
 TOTAL_BUDGET_S = 1200
@@ -190,6 +200,11 @@ def main(argv: Optional[Sequence[str]] = None, steps: Optional[Sequence[Step]] =
     if args.list:
         print("\n".join(ids))
         return 0
+    problem = layout_error()
+    if problem is not None:
+        print(problem, file=sys.stderr)
+        print("RELEASE GATE: FAIL (layout)")
+        return 2
     unknown = [s for s in args.only if s not in ids]
     if unknown:
         print(f"unknown step id(s): {', '.join(unknown)}; valid: {', '.join(ids)}", file=sys.stderr)
