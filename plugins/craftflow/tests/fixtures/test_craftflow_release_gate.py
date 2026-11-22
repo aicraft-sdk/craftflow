@@ -7,6 +7,8 @@ Run from anywhere:
 import contextlib
 import io
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -126,14 +128,12 @@ check("layout_error: None at the documented monorepo path", gate.layout_error(),
 # An installed plugin copy (~/.claude/plugins/cache/<mkt>/<name>/<ver>/scripts/) is not the monorepo layout. The
 # SessionStart import self-check imports every scripts/craftflow_*.py, so the module must import cleanly there, while
 # running the gate must still refuse.
-import subprocess  # noqa: E402
-import shutil as _shutil  # noqa: E402
 for label, rel in (("installed-copy layout", "plugins/cache/craftflow/craftflow/1.39.0/scripts"),
                    ("shallow layout", "scripts")):
     with tempfile.TemporaryDirectory() as tmp:
         dest = Path(tmp) / rel
         dest.mkdir(parents=True)
-        _shutil.copy(SCRIPTS / "craftflow_release_gate.py", dest)
+        shutil.copy(SCRIPTS / "craftflow_release_gate.py", dest)
         imp = subprocess.run([sys.executable, "-c", "import craftflow_release_gate"], cwd=dest,
                              capture_output=True, text=True)
         check(f"{label}: module imports cleanly", (imp.returncode, imp.stderr), (0, ""))
