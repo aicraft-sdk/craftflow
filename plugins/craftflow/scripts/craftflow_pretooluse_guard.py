@@ -1860,15 +1860,15 @@ def _edit_write_escapes_confinement(data: dict, path: Path) -> bool:
     if confined:
         return False
 
-    # Edit/Write-ONLY grant (never Bash confinement, never a protected-path
-    # lane -- those are separate violations appended by the caller): the
-    # exact current-session scratchpad directory and its descendants. The
-    # path comes only from the anchored trusted cwd, the uid, and the
-    # UUID-validated payload session_id (see session_scratchpad_dir()); the
-    # comparison uses the RESOLVED target. Any failure means no grant.
+    # Edit/Write-ONLY grants on the RESOLVED target (never Bash confinement or a protected-path lane); any failure
+    # means no grant. (1) The exact session scratchpad and descendants, from the anchored cwd, the uid and the
+    # UUID-validated payload session_id. (2) A `.md` file directly inside a cloud harness memory store (ADR 0084).
     try:
         scratch = session_scratchpad_dir(data.get("session_id"), anchor)
         if scratch is not None and (_resolved == scratch or scratch in _resolved.parents):
+            return False
+        from craftflow_memory_store import harness_memory_grant  # lazy: a partial cache sync loses only this grant
+        if harness_memory_grant(_resolved):
             return False
     except Exception as exc:
         log_event(
