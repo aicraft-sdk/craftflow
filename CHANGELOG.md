@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.39.1] - 2026-11-22
+
+### Fixes
+
+- avoid negative Path.parents index on Python 3.9
+- import the release gate cleanly from installed plugin copies
+
+### Tests
+
+- move release gate test imports to the top
+
 ## [1.39.0] - 2026-11-21
 
 ### Features
