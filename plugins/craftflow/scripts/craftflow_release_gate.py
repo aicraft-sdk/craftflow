@@ -29,7 +29,7 @@ from typing import Callable, Dict, List, Optional, Sequence
 # The layout is checked when the gate runs (main), not at import: the SessionStart hook self-check imports every
 # scripts/craftflow_*.py, and an installed plugin copy is not the monorepo layout.
 _HERE = Path(__file__).resolve()
-ROOT = _HERE.parents[5] if len(_HERE.parents) > 5 else _HERE.parents[-1]
+ROOT = _HERE.parents[5] if len(_HERE.parents) > 5 else Path(_HERE.anchor)
 PLUGIN = ROOT / "tools/craftflow-plugin/plugins/craftflow"
 
 
