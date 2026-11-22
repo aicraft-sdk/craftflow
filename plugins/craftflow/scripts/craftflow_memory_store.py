@@ -52,7 +52,7 @@ def harness_memory_store_dirs(env: Optional[Mapping[str, str]] = None) -> List[P
                 if cand.is_dir() and not cand.is_symlink() and cand.resolve() == cand and cand not in out:
                     out.append(cand)
         return out
-    except Exception:  # noqa: BLE001 - any failure means no grant
+    except Exception:  # any failure means no grant
         return []
 
 
@@ -61,5 +61,5 @@ def harness_memory_grant(resolved: Path, env: Optional[Mapping[str, str]] = None
     callers never use it for Bash confinement or the protected-path lanes. Never raises."""
     try:
         return resolved.suffix == ".md" and resolved.parent in harness_memory_store_dirs(env)
-    except Exception:  # noqa: BLE001
+    except Exception:  # never raise: no grant
         return False

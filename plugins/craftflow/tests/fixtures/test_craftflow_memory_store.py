@@ -7,6 +7,7 @@ nothing else.
 
 Run from anywhere: python3 tools/craftflow-plugin/plugins/craftflow/tests/fixtures/test_craftflow_memory_store.py
 """
+import importlib
 import json
 import os
 import sys
@@ -15,8 +16,8 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PLUGIN / "scripts"))
-import craftflow_memory_store as store_mod  # noqa: E402
-import craftflow_pretooluse_guard as guard  # noqa: E402
+store_mod = importlib.import_module("craftflow_memory_store")
+guard = importlib.import_module("craftflow_pretooluse_guard")
 
 FAILS = []
 ENV_KEYS = ("CLAUDE_COWORK_MEMORY_PATH_OVERRIDE", "CLAUDE_MEMORY_STORES")
