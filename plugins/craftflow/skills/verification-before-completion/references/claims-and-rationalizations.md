@@ -12,6 +12,26 @@
 | Agent completed | VCS diff shows changes | Agent reports "success" |
 | Requirements met | Line-by-line checklist | Tests passing |
 
+## Proof type must match the claim
+
+A passing test proves what the test asserts, not the claim built on it. Pick the proof by the kind of claim, then
+check the evidence is that kind. Evidence of a weaker kind leaves the claim UNVERIFIED, however green it is.
+After [The Software Factory Trap](https://dhasandev.substack.com/p/the-software-factory-trap).
+
+| Claim kind | Proof that settles it | Looks like proof, but isn't |
+|---|---|---|
+| A user can complete a flow (sign up, check out, export) | End-to-end run of that journey: browser, CLI session or API sequence | Unit tests of each step, mocked services |
+| An API or contract is correct | Contract test against the spec or a real client | Unit tests that mock the API boundary |
+| An integration works (DB, provider, queue, file format) | Run against the real dependency or a faithful local one | A fake you wrote that returns what the code expects |
+| A bug is fixed | The original reproduction now passes, and fails with the fix reverted | A new test that never failed on the old code |
+| No regression | The suite that guards that behavior, run fresh | A different suite, or a subset |
+| Performance or load holds | A measurement against a stated number | "Looks fast", a single local run |
+| Secure or authorized | A test that the unauthorized path is refused | The authorized path working |
+| A refactor changed no behavior | The behavior suite passes before and after, unchanged | Type check and lint |
+
+When the plan names a claim, the plan's verification strategy names its proof kind. A claim whose kind has no proof
+yet is reported as a gap, not upgraded to PASS.
+
 ## Rationalization Prevention
 
 | Excuse | Reality |

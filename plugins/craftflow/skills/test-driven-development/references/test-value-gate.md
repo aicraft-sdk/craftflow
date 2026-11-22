@@ -86,6 +86,29 @@ If the plan, spec, README or issue states the intent clearly and the code contra
 match the code. Write it from intent as a strict expected failure (`pytest.mark.xfail(strict=True)`, `test.fails`,
 or a skip that names the rule id) and report it as a bug. When the task itself is the fix, fix the code instead.
 
+## Behavior coverage and the oracle
+
+Line coverage says a line ran, not that its expected output is pinned. Behavior coverage asks a different question:
+for each named behavior, is the expected output asserted for its meaningful inputs? The hard part is not writing the
+test, it is knowing what the test should assert: the oracle. After
+[Loop-Driven Development](https://x.com/nfcampos/status/2064746971944956299).
+
+When a plan rule has `check: test`, the plan names its oracle, the source of the expected values. Prefer the
+strongest one available:
+
+| Oracle | Use when | Weakness |
+|---|---|---|
+| A reference implementation, queried and frozen | A real system defines correct output (Postgres for a SQL parser, a spreadsheet for formulas, a real API) | Needs a refresh script; the reference is never called from the test run |
+| A mined test suite | The domain has a public conformance suite (test262, CommonMark spec cases, SQLLogicTest) | Port only cases at the external boundary, not one project's internals |
+| The spec or plan rule, read by a person | No reference exists | Same agent interprets and grades: state the expected value in the rule |
+| A reviewer's judgment | Nothing above applies | Judgment, not measurement: say so in the `TEST_GATE` row |
+
+A frozen oracle answer is checked in as a fixture with the script that produced it. The test compares against the
+fixture: exact equality, or a stated tolerance (float error, edit distance, pixel diff) where equality can't hold.
+
+A phase is done when every behavior the plan names has at least one pinned case and its oracle is recorded, not just
+when every test passes: an empty suite also passes. A named behavior with no case is a gap to report.
+
 ## Coverage
 
 Coverage is a reported number, not the goal. Never add a test only to raise it: a junk test that lifts coverage is
