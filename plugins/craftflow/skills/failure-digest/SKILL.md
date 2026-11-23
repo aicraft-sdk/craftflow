@@ -29,13 +29,8 @@ buried in per-workflow memory. Never writes anything; safe to call at any point.
 
 Use this skill when: what keeps failing, what's breaking most, failure
 digest, recurring failures, what should we fix next, roadmap from failures,
-what's the most common blocker, top gotchas, failure taxonomy.
-
-Triggers: failure digest, what keeps failing, recurring failures, top
-blockers, what breaks most, failure roadmap, craftflow failure report.
-
-NOTE: This skill does NOT go through craftflow-router. It is an inspection
-tool — read-only, same exception as the `status` skill.
+what's the most common blocker, top blockers, top gotchas, failure
+taxonomy, failure roadmap, craftflow failure report.
 
 ## Step 1 — Resolve Script Path
 
@@ -74,6 +69,9 @@ python3 "$SCRIPT" --state-dir .craftflow/state
 Output is a JSON array of clusters: `signature`, `occurrences`, `example_reasons`,
 `first_seen`, `last_seen`, `event_types`. If the array is empty, report "No
 failure history recorded yet" and stop — do not fabricate findings.
+Add `--propose --transcripts ~/.claude/projects` to show, per cluster, the
+mechanism `retro/references/mistake-to-rule.md` would pick, plus edit thrashing
+and error loops.
 
 ## Step 3 — Rank and Present
 

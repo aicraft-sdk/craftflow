@@ -7,7 +7,7 @@ Deterministic failure-pattern miner. Reads all workflow event logs under
 into recurring patterns.
 
 Usage:
-    python3 scripts/craftflow_learn_scan.py [--state-dir PATH]
+    python3 scripts/craftflow_learn_scan.py [--state-dir PATH] [--propose [--transcripts DIR ...]]
 
 Output JSON on stdout:
     [
@@ -196,11 +196,23 @@ def main() -> int:
         default=".craftflow/state",
         help="Path to the craftflow state directory (default: .craftflow/state)",
     )
+    parser.add_argument("--propose", action="store_true",
+                        help="add a mistake-to-rule proposal per cluster (read-only; output becomes an object)")
+    parser.add_argument("--transcripts", nargs="*", default=None,
+                        help="with --propose: transcript dirs to scan for edit thrashing and error loops")
     args = parser.parse_args()
 
     state_dir = Path(args.state_dir)
     clusters = scan_state_dir(state_dir)
-    print(json.dumps(clusters, indent=2))
+    if not args.propose:
+        print(json.dumps(clusters, indent=2))
+        return 0
+    from craftflow_rule_proposals import propose, session_signals
+
+    out = {"clusters": propose(clusters)}
+    if args.transcripts is not None:
+        out["session_signals"] = session_signals(Path(d) for d in args.transcripts)
+    print(json.dumps(out, indent=2))
     return 0
 
 

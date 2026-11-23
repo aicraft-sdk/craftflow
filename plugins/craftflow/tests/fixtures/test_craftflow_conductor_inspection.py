@@ -39,6 +39,7 @@ FALLBACK_ALLOWLIST = [
     "craftflow_fcntl_compat.py",
     "craftflow_policy.py",
     "craftflow_learn_scan.py",
+    "craftflow_rule_proposals.py",
 ]
 
 _passes = 0
