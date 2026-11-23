@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.40.0] - 2026-11-23
+
+### Features
+
+- match proof to claim, walk an ordered edge-case pass, name test oracles
+- report Stage B divergence measures and a backfill dry run
+
+### Fixes
+
+- keep the memory-store grant within the suppression ratchet
+- let Edit/Write reach the cloud harness memory store (ADR-0084)
+
 ## [1.39.1] - 2026-11-22
 
 ### Fixes
