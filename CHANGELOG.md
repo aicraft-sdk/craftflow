@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.41.0] - 2026-11-23
+
+### Features
+
+- mistake-to-rule proposals in the failure digest
+- read-only provenance-and-prune report
+
+### Tests
+
+- behavior evals for TDD, debugging, review and verification
+
 ## [1.40.0] - 2026-11-23
 
 ### Features
