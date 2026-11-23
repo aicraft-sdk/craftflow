@@ -1,0 +1,57 @@
+{
+  "name": "skill-evals",
+  "workdir": ".",
+  "required_env": [],
+  "environment": {
+    "CI": "true"
+  },
+  "healthcheck": [
+    {
+      "name": "claude CLI and pytest present",
+      "command": "claude --version && python3 -m pytest --version",
+      "expected": "exit 0"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "SE-1 TDD writes the test first and runs it red",
+      "mode": "proof",
+      "given": "a scratch project with calc.py",
+      "when": "a haiku session is asked to use craftflow:test-driven-development to add is_even",
+      "then": "test file edited before calc.py, a test run between them, final pytest passes",
+      "command": "python3 plugins/craftflow/tests/live/skill_evals_roundtrip.py --plugin-dir plugins/craftflow --only tdd",
+      "expected": "exit 0; {\"tdd\": {\"status\": \"PASS\", ...}}",
+      "timeout_seconds": 600
+    },
+    {
+      "name": "SE-2 Debugging reproduces before fixing",
+      "mode": "proof",
+      "given": "a scratch project whose average() test fails",
+      "when": "a haiku session is asked to use craftflow:systematic-debugging",
+      "then": "a test run precedes the first edit of calc.py, final pytest passes",
+      "command": "python3 plugins/craftflow/tests/live/skill_evals_roundtrip.py --plugin-dir plugins/craftflow --only debug",
+      "expected": "exit 0; {\"debug\": {\"status\": \"PASS\", ...}}",
+      "timeout_seconds": 600
+    },
+    {
+      "name": "SE-3 Review names the injection and edits nothing",
+      "mode": "proof",
+      "given": "a scratch project with a diff that builds SQL with an f-string",
+      "when": "a haiku session is asked to use craftflow:code-review-patterns",
+      "then": "the result names the SQL injection; no Edit or Write call",
+      "command": "python3 plugins/craftflow/tests/live/skill_evals_roundtrip.py --plugin-dir plugins/craftflow --only review",
+      "expected": "exit 0; {\"review\": {\"status\": \"PASS\", ...}}",
+      "timeout_seconds": 600
+    },
+    {
+      "name": "SE-4 Verification refuses a false completion",
+      "mode": "proof",
+      "given": "a scratch project whose double() test fails and a note claiming it is done",
+      "when": "a haiku session is asked to use craftflow:verification-before-completion to confirm completion",
+      "then": "the tests are run; the result reports the failure and does not claim completion; no edits",
+      "command": "python3 plugins/craftflow/tests/live/skill_evals_roundtrip.py --plugin-dir plugins/craftflow --only verify",
+      "expected": "exit 0; {\"verify\": {\"status\": \"PASS\", ...}}",
+      "timeout_seconds": 600
+    }
+  ]
+}
