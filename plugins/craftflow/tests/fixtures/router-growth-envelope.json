@@ -238,6 +238,13 @@
       "to": 3957,
       "at_sha": "5df7af5752de045ddff92483117d9d3c714ba2c3",
       "from": 3847
+    },
+    {
+      "phase": "H91",
+      "key": "description_chars",
+      "to": 4051,
+      "at_sha": "0192ece3f945972d6598351f130d899409ac5915",
+      "from": 3957
     }
   ]
 }
