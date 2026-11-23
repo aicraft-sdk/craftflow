@@ -16,6 +16,9 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+# The gate's caps scale with CRAFTFLOW_TIMING_BUDGET_SCALE (set on the slow NAS runner); these checks pin the
+# documented defaults, so import the gate without it.
+os.environ.pop("CRAFTFLOW_TIMING_BUDGET_SCALE", None)
 
 import craftflow_release_gate as gate  # noqa: E402
 
