@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.42.0] - 2026-11-23
+
+### Features
+
+- Stage B tolerates a 0.5% divergence rate and counts backfilled rows
+
 ## [1.41.0] - 2026-11-23
 
 ### Features
