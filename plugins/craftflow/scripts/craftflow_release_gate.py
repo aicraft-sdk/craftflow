@@ -40,8 +40,17 @@ def layout_error() -> Optional[str]:
                 f"(<repo>/tools/craftflow-plugin/plugins/craftflow/scripts/); found at {_HERE}")
     return None
 
-STEP_CAP_S = 600
-TOTAL_BUDGET_S = 1200
+def _timing_scale() -> float:
+    """CRAFTFLOW_TIMING_BUDGET_SCALE (default 1, never below 1) stretches the gate's wall-clock caps on slow CI
+    hardware. craftflow-ci sets it only on the self-hosted NAS runner, whose CPU is about 3x slower."""
+    try:
+        return max(float(os.environ.get("CRAFTFLOW_TIMING_BUDGET_SCALE", "1") or "1"), 1.0)
+    except ValueError:
+        return 1.0
+
+
+STEP_CAP_S = 600 * _timing_scale()
+TOTAL_BUDGET_S = 1200 * _timing_scale()
 TIMED_OUT_RC = -1002
 
 
@@ -132,7 +141,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--list", action="store_true", help="print step ids and exit")
     parser.add_argument("--only", action="append", default=[], metavar="STEP", help="run only this step id (repeatable)")
     parser.add_argument("--allow-no-claude", action="store_true", help="skip plugin_validate when claude is not on PATH")
-    parser.add_argument("--total-seconds", type=float, default=TOTAL_BUDGET_S, help="total wall-clock budget (default 1200)")
+    parser.add_argument("--total-seconds", type=float, default=TOTAL_BUDGET_S, help="total wall-clock budget (default 1200 s, times CRAFTFLOW_TIMING_BUDGET_SCALE)")
     parser.add_argument("--max-step-seconds", type=float, default=STEP_CAP_S, help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
