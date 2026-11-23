@@ -4,7 +4,8 @@
 After each craftflow agent returns, the SubagentStop audit hook asks scripts/craftflow_machine_shadow.py what the
 machine expects next and whether the agent that just returned is one the machine expected. It only logs
 (`machine_shadow` rows); routing never reads it. `craftflow_machine.py shadow-report` turns the log into the Stage B
-exit check: an agreed number of workflows with zero disagreements.
+exit check: an agreed number of clean workflows, with at most a 0.5% divergence rate and never fewer than one
+disagreeing row tolerated, counting backfilled rows (ADR-0082 amended 2026-11-23).
 
 Run from anywhere: python3 tools/craftflow-plugin/plugins/craftflow/tests/fixtures/test_craftflow_machine_shadow.py
 """
@@ -91,7 +92,16 @@ log.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
 rep = shadow.report(log, need=3)
 check("counts workflows with zero disagreements", rep["clean_workflows"] == 3, rep)
 check("lists disagreements", rep["disagreements"] == 1 and rep["disagreeing_workflows"] == ["wf-bad"], rep)
-check("the exit criterion needs zero disagreements", rep["exit_criterion_met"] is False, rep)
+check("one disagreement is within the tolerance", rep["exit_criterion_met"] is True
+      and rep["allowed_disagreements"] == 1, rep)
+many = [x for x in lines] + [{"event": "machine_shadow", "workflow": "wf-bad", "agree": False}]
+check("a second disagreement is over the tolerance",
+      shadow.report_rows(many, need=3)["exit_criterion_met"] is False, shadow.report_rows(many, need=3))
+check("the tolerance grows with the judged rows at 0.5%",
+      (shadow.allowed_disagreements(0), shadow.allowed_disagreements(400), shadow.allowed_disagreements(1000))
+      == (1, 2, 5))
+check("too few clean workflows still fails whatever the rate",
+      shadow.report_rows(lines, need=9)["exit_criterion_met"] is False)
 check("the criterion holds when the disagreeing workflow is absent", shadow.report_rows(
     [x for x in lines if x.get("workflow") != "wf-bad"], need=3)["exit_criterion_met"] is True)
 print("[report: divergence measures, report only]")
@@ -107,8 +117,8 @@ check("counts agree, disagree and unmodeled rows", (m["agree_rows"], m["disagree
 check("divergence rate is disagreements over judged rows", m["divergence_rate"] == 0.25, m)
 check("first and last row dates come from ts", (m["first_row"], m["last_row"]) == ("2026-11-20", "2026-11-22"), m)
 check("days with rows are counted", m["active_days"] == 2, m)
-check("the new fields never change the exit criterion", m["exit_criterion_met"] is False and shadow.report_rows(
-    [x for x in timed if x["workflow"] != "b"], need=1)["exit_criterion_met"] is True, m)
+check("the measures are reported beside the criterion, not folded into it",
+      m["exit_criterion_met"] is True and m["max_divergence_rate"] == 0.005 and m["divergence_rate"] == 0.25, m)
 empty = shadow.report_rows([], need=20)
 check("an empty log has no rate and no dates", (empty["divergence_rate"], empty["first_row"], empty["last_row"],
                                                  empty["active_days"]) == (None, None, None, 0), empty)
@@ -118,7 +128,7 @@ proc = subprocess.run([sys.executable, str(PLUGIN / "scripts/craftflow_machine.p
 check("cli shadow-report prints the report and exits 0", proc.returncode == 0 and json.loads(proc.stdout)["clean_workflows"] == 3,
       proc.stdout + proc.stderr)
 
-print("[backfill check: dry run over older logs, never counted]")
+print("[backfill check: replay older logs, and count them when written]")
 bf = Path(tempfile.mkdtemp(prefix="shadow-backfill-"))
 (bf / "workflows").mkdir()
 (bf / "workflows/w1.json").write_text(json.dumps(
@@ -159,8 +169,19 @@ check("a verdict needs the transcript still on disk", b["with_verdict"] == 2, b)
 check("only workflows with every return recovered are replayable",
       (b["replayable_workflows"], b["incomplete_workflows"]) == (1, 1), b)
 check("dry-run rows are judged with the live machine", b["dry_run"]["disagree_rows"] == 1, b)
-check("the dry run is marked as not counted toward Stage B", b["counts_toward_stage_b"] is False, b)
-check("the backfill check never writes the log", bf_log.read_bytes() == before)
+check("backfilled rows count toward Stage B", b["counts_toward_stage_b"] is True, b)
+check("without --write the backfill check never writes the log",
+      b["written_rows"] == 0 and bf_log.read_bytes() == before)
+w = shadow.backfill_check(bf_log, bf / "workflows", MACHINES, POLICY, write=True)
+check("with write=True the recovered rows are appended", w["written_rows"] == 2
+      and bf_log.read_bytes() != before, w)
+appended = [json.loads(ln) for ln in bf_log.read_text(encoding="utf-8").splitlines()[-2:]]
+check("appended rows are tagged as backfilled and counted as such",
+      all(r["source"] == "backfill" for r in appended)
+      and shadow.report(bf_log, need=1)["backfilled_rows"] == 2, appended)
+again = shadow.backfill_check(bf_log, bf / "workflows", MACHINES, POLICY, write=True)
+check("a workflow already in the log is never appended twice",
+      again["written_rows"] == 0 and again["already_logged_workflows"] == 1, again)
 proc = subprocess.run([sys.executable, str(PLUGIN / "scripts/craftflow_machine.py"), "backfill-check", "--log", str(bf_log),
                        "--workflows", str(bf / "workflows")], capture_output=True, text=True)
 check("cli backfill-check prints the report and exits 0",

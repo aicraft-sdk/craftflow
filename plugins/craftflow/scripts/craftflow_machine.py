@@ -21,7 +21,10 @@ Stage A changes no behavior: the router does not call this. Stage B (craftflow_m
     fixtures [--dir DIR]                                     every replay fixture's expected next_action must be a
                                                              state or action of a machine for its workflow_type
     shadow-report [--log F] [--need N]                       Stage B exit check over the hook log's machine_shadow
-                                                             rows: N workflows with zero disagreements (always exit 0)
+                                                             rows: N clean workflows and at most
+                                                             allowed_disagreements() disagreeing rows (always exit 0)
+    backfill-check [--log F] [--workflows D] [--write]       replay pre-shadow logs through the machine; --write
+                                                             appends the recovered rows tagged source=backfill
 
 Prints one JSON line. Exit codes: 0 ok, 1 unsound machine or disagreements, 2 bad input. Python 3.9, stdlib only.
 """
@@ -260,6 +263,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--log", default=".craftflow/state/craftflow-hook-events.log")
     parser.add_argument("--need", type=int, default=20)
     parser.add_argument("--workflows", default=".craftflow/state/workflows")
+    parser.add_argument("--write", action="store_true",
+                        help="backfill-check: append the recovered rows to the log (tagged source=backfill)")
     args = parser.parse_args(argv)
     try:
         policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
@@ -276,7 +281,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.mode == "backfill-check":
             from craftflow_machine_shadow import backfill_check
 
-            print(json.dumps(backfill_check(Path(args.log), Path(args.workflows), load_all(), policy), sort_keys=True))
+            print(json.dumps(backfill_check(Path(args.log), Path(args.workflows), load_all(), policy,
+                                            write=args.write), sort_keys=True))
             return 0
         if args.mode == "fixtures":
             report = check_fixtures(load_all(), Path(args.dir))

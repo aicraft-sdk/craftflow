@@ -25,6 +25,8 @@ ALIASES = {"APPROVE": "CLEAN", "CHANGES_REQUESTED": "FINDINGS", "ISSUES_FOUND": 
 # Agentless states whose phases still dispatch agents (recheck re-runs review, hunt and verify as needed).
 PHASE_AGENTS = {"re-review": "code-reviewer", "re-hunt": "silent-failure-hunter", "re-verify": "integration-verifier"}
 LOG_TAIL_BYTES = 2_000_000
+MAX_DIVERGENCE_RATE = 0.005  # ADR-0082 amended 2026-11-23; see allowed_disagreements()
+BACKFILL_SOURCE = "backfill"
 ROUTES = {"PLAN": "plan", "DEBUG": "debug", "REVIEW": "review"}
 
 
@@ -158,20 +160,32 @@ def observe(machines: Dict[str, dict], policy: dict, shadow: dict, workflow_type
     return _row(machine_id, name, nxt, agree, expected, note, agent, verdict), new
 
 
+def allowed_disagreements(judged: int) -> int:
+    """How many disagreeing rows Stage B tolerates over `judged` judged rows (ADR-0082 amended 2026-11-23):
+    MAX_DIVERGENCE_RATE of them, and never fewer than one, because at Stage B volumes the rate rounds to zero."""
+    return max(1, int(judged * MAX_DIVERGENCE_RATE))
+
+
 def report_rows(rows: List[dict], need: int) -> dict:
-    """The Stage B exit check, plus measures that only describe the log (row counts by agreement, the divergence
-    rate over judged rows, the first and last row dates, the days with rows). Only `clean_workflows` and
-    `disagreements` decide `exit_criterion_met`; the measures never do (changing the rule is a SPEC-0037 decision)."""
+    """The Stage B exit check, plus measures that describe the log (row counts by agreement, the divergence rate over
+    judged rows, the first and last row dates, the days with rows, how many rows were backfilled).
+
+    `exit_criterion_met` is `clean_workflows >= need` and `disagree_rows <= allowed_disagreements(judged)`
+    (ADR-0082 amended 2026-11-23: a small rate is tolerated, and backfilled rows count like live ones). Each
+    disagreement is still read before Stage C; that is a person's step, not this check."""
     agreed: Dict[str, bool] = {}
     bad: Dict[str, int] = {}
     counts = {True: 0, False: 0, None: 0}
     days = set()
+    backfilled = 0
     for row in rows:
         if row.get("event") != "machine_shadow" or not row.get("workflow"):
             continue
         wf = str(row["workflow"])
         agree = row.get("agree")
         counts[agree if agree in (True, False) else None] += 1
+        if row.get("source") == BACKFILL_SOURCE:
+            backfilled += 1
         ts = row.get("ts")
         if isinstance(ts, str) and len(ts) >= 10:
             days.add(ts[:10])
@@ -182,9 +196,13 @@ def report_rows(rows: List[dict], need: int) -> dict:
     clean = sorted(wf for wf in agreed if wf not in bad)
     disagreements = sum(bad.values())
     judged = counts[True] + counts[False]
+    allowed = allowed_disagreements(judged)
     return {"clean_workflows": len(clean), "need": need, "disagreements": disagreements,
-            "disagreeing_workflows": sorted(bad), "exit_criterion_met": len(clean) >= need and disagreements == 0,
+            "disagreeing_workflows": sorted(bad), "allowed_disagreements": allowed,
+            "max_divergence_rate": MAX_DIVERGENCE_RATE,
+            "exit_criterion_met": len(clean) >= need and disagreements <= allowed,
             "agree_rows": counts[True], "disagree_rows": counts[False], "unmodeled_rows": counts[None],
+            "backfilled_rows": backfilled,
             "divergence_rate": round(counts[False] / judged, 4) if judged else None,
             "first_row": min(days) if days else None, "last_row": max(days) if days else None,
             "active_days": len(days)}
@@ -250,13 +268,16 @@ def _final_text(transcript_path) -> Optional[str]:
 
 
 def backfill_check(log: Path, workflows_dir: Path, machines: Dict[str, dict], policy: dict,
-                   final_text=_final_text) -> dict:
-    """Read-only: could logs written before shadow mode be replayed through the machine?
+                   final_text=_final_text, write: bool = False) -> dict:
+    """Could logs written before shadow mode be replayed through the machine? Read-only unless `write`.
 
     Joins each craftflow `agent_usage` row to a workflow artifact by session id (a session with two or more
     workflows is ambiguous and skipped, never guessed), recovers the agent's verdict from its transcript (path from
-    the matching `subagent_stop` row), then dry-runs only the workflows whose every return was recovered. Nothing is
-    written; whether such rows may count toward Stage B is a SPEC-0037 decision, so the result says they do not."""
+    the matching `subagent_stop` row), then dry-runs only the workflows whose every return was recovered.
+
+    With `write`, the recovered rows are appended to the log tagged `source: "backfill"`, where `shadow-report`
+    counts them like live rows (ADR-0082 amended 2026-11-23). A workflow already in the log is never appended twice.
+    Without it nothing is written and `written_rows` is 0."""
     rows = _read_all(log)
     transcripts = {r.get("agent_id"): r.get("agent_transcript_path") for r in rows
                    if r.get("event") == "subagent_stop" and r.get("agent_id")}
@@ -283,7 +304,9 @@ def backfill_check(log: Path, workflows_dir: Path, machines: Dict[str, dict], po
         if verdict:
             stats["with_verdict"] += 1
         per_wf.setdefault(wf["workflow_uuid"], []).append((wf, ret["agent_type"], verdict))
+    already = {str(r.get("workflow")) for r in rows if r.get("event") == "machine_shadow" and r.get("workflow")}
     dry_rows: List[dict] = []
+    new_rows: List[dict] = []
     incomplete = 0
     for uuid, items in per_wf.items():
         if any(v is None for _, _, v in items):
@@ -292,12 +315,25 @@ def backfill_check(log: Path, workflows_dir: Path, machines: Dict[str, dict], po
         state: dict = {}
         for wf, agent, verdict in items:
             row, state = observe(machines, policy, state, wf.get("workflow_type"), wf.get("build_mode"), agent, verdict)
-            dry_rows.append({"event": "machine_shadow", "workflow": uuid, **row})
+            built = {"event": "machine_shadow", "workflow": uuid, "source": BACKFILL_SOURCE, **row}
+            dry_rows.append(built)
+            if uuid not in already:
+                new_rows.append(built)
+    written = 0
+    if write and new_rows:
+        try:
+            with log.open("a", encoding="utf-8") as fh:
+                for row in new_rows:
+                    fh.write(json.dumps(row, sort_keys=True) + "\n")
+            written = len(new_rows)
+        except OSError as exc:
+            return {**stats, "error": f"cannot append to {log}: {exc}", "written_rows": 0}
     dry = report_rows(dry_rows, need=0)
     return {**stats, "replayable_workflows": len(per_wf) - incomplete, "incomplete_workflows": incomplete,
             "dry_run": {k: dry[k] for k in ("agree_rows", "disagree_rows", "unmodeled_rows", "divergence_rate",
                                             "disagreeing_workflows")},
-            "counts_toward_stage_b": False}
+            "already_logged_workflows": len([u for u in per_wf if u in already]),
+            "written_rows": written, "counts_toward_stage_b": True}
 
 
 def hook_observe(log: Path, workflow: dict, agent: str, message: str, machines: Dict[str, dict], policy: dict) -> dict:
