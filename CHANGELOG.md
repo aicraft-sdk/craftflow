@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.43.0] - 2026-11-24
+
+### Features
+
+- agent-native-repo skill for repos shared by many agents (#5)
+
+### Chores
+
+- raise the skill-descriptions budget for agent-native-repo (#6)
+
 ## [1.42.1] - 2026-11-24
 
 ### Fixes
