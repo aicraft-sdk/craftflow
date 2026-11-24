@@ -16,6 +16,9 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+# The gate's caps scale with CRAFTFLOW_TIMING_BUDGET_SCALE (set on the slow NAS runner); these checks pin the
+# documented defaults, so import the gate without it.
+os.environ.pop("CRAFTFLOW_TIMING_BUDGET_SCALE", None)
 
 import craftflow_release_gate as gate  # noqa: E402
 
@@ -277,8 +280,8 @@ check("dirty tree: the refusal message is printed",
 
 ci_job = CI.split("\n  release-gate:\n", 1)[1] if "\n  release-gate:\n" in CI else ""
 check("craftflow-ci has a release-gate job", bool(ci_job), True)
-check("release-gate job: ubuntu, python 3.12, node from .nvmrc, pinned claude CLI, full history",
-      all(s in ci_job for s in ("runs-on: ubuntu-latest", "python-version: '3.12'", "node-version-file: .nvmrc",
+check("release-gate job: NAS runner (ubuntu-latest when CI_RUNNER=hosted), python 3.12, node from .nvmrc, pinned claude CLI, full history",
+      all(s in ci_job for s in ("""runs-on: ${{ vars.CI_RUNNER == 'hosted' && 'ubuntu-latest' || fromJSON('["self-hosted","linux","nas"]') }}""","python-version: '3.12'", "node-version-file: .nvmrc",
                                "@anthropic-ai/claude-code@2.1.311", "fetch-depth: 0")), True)
 check("release-gate job: configures the CI git identity before the gate",
       "git config --global user.name craftflow-ci" in ci_job

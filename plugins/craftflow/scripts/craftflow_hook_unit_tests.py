@@ -46,6 +46,19 @@ _passes: int = 0
 _skips: list[str] = []
 
 
+
+def _timing_budget(seconds: float) -> float:
+    """Scale a wall-clock regression budget for slower CI hardware.
+
+    CRAFTFLOW_TIMING_BUDGET_SCALE (default 1) multiplies the budget. CI sets it above 1 only on the self-hosted NAS
+    runner, whose CPU is several times slower than a GitHub-hosted runner; the pre-fix timings these budgets guard
+    against are still well above the scaled budget there."""
+    try:
+        scale = float(os.environ.get("CRAFTFLOW_TIMING_BUDGET_SCALE", "1") or "1")
+    except ValueError:
+        scale = 1.0
+    return seconds * max(scale, 1.0)
+
 def fail(name: str, reason: str) -> None:
     _errors.append(f"FAIL [{name}]: {reason}")
 
@@ -14137,7 +14150,7 @@ def test_bash_guard_iter_brace_groups_bounded_time_for_deeply_nested_empty_brace
     name = "pretooluse-bash-guard/iter-brace-groups-bounded-time-for-deeply-nested-empty-braces"
     n = 900
     text = "{" * n + "}" * n
-    budget_seconds = 1.0
+    budget_seconds = _timing_budget(1.0)
     start = time.time()
     groups, malformed = bash_guard._iter_brace_groups(text)
     elapsed = time.time() - start
@@ -14296,7 +14309,7 @@ def test_bash_guard_bounded_time_for_many_brace_bearing_path_segments_end_to_end
         "cwd": str(cwd_dir.resolve()),
         "tool_input": {"command": f"rm -rf ./{target}"},
     }
-    budget_seconds = 2.0
+    budget_seconds = _timing_budget(2.0)
     start = time.time()
     _, out = run_hook("craftflow_pretooluse_bash_guard.py", payload, env)
     elapsed = time.time() - start

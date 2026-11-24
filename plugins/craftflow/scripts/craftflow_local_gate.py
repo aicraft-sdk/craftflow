@@ -93,7 +93,7 @@ SUITES = [
     ("test_craftflow_lvr5_script", ""), ("test_craftflow_model_report", ""),     ("test_craftflow_retro", ""), ("test_craftflow_retro_v2", ""), ("test_craftflow_retro_wiring", ""),
     ("test_craftflow_review_package", ""), ("test_craftflow_route_types", ""), ("test_craftflow_status_chains", ""),
     ("test_craftflow_stop_gate", "slow"), ("test_craftflow_stop_gate_act", "root"),
-    ("test_craftflow_suppression_ratchet", ""), ("test_craftflow_transcript_usage", ""),
+    ("test_craftflow_suppression_ratchet", ""), ("test_craftflow_subagent_stop_message", ""), ("test_craftflow_transcript_usage", ""),
     ("test_craftflow_untangle_rules", ""), ("test_craftflow_workflow_handoff", ""),
     ("test_craftflow_workflow_handoff_2", "slow"), ("test_cursor_routing_pointer", ""), ("test_gate_check", ""),
     ("test_learn_scan", ""), ("test_memory_merge", ""),

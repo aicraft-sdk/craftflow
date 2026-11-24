@@ -2,7 +2,24 @@
 from craftflow_hooklib import load_input, load_mode, log_event
 
 
-def _log_agent_usage(data, mode, agent_type, agent_id, agent_transcript_path, message) -> None:
+def _final_message(data, agent_transcript_path):
+    """(message, source). Claude Code sometimes sends an empty `last_assistant_message` (38 of 40 craftflow agent
+    stops in one project on 2026-11-23), which hid every CONTRACT from the audit and from shadow mode. Fall back to the
+    agent transcript's final text then. Never raises."""
+    message = data.get("last_assistant_message", "") or ""
+    if message or not agent_transcript_path:
+        return message, "hook_last_message"
+    try:
+        from craftflow_transcript_usage import summarize_transcript
+
+        text = summarize_transcript(agent_transcript_path, want_final_text=True).get("final_text") or ""
+    except Exception:  # fail-open: keep the empty hook message
+        text = ""
+    return (text, "transcript_final_text") if text else ("", "hook_last_message")
+
+
+def _log_agent_usage(data, mode, agent_type, agent_id, agent_transcript_path, message,
+                     source="hook_last_message") -> None:
     """Log one agent_usage record (SPEC-0014). Fail-open: never raises.
 
     DD-2: the payload must not contain an "event" key (log_event spreads the
@@ -39,7 +56,7 @@ def _log_agent_usage(data, mode, agent_type, agent_id, agent_transcript_path, me
                 "session_id": data.get("session_id") or None,
                 "stop_hook_active": bool(data.get("stop_hook_active", False)),
                 "mode": mode_str,
-                "contract_source": "hook_last_message",
+                "contract_source": source,
                 "contract_shape": contract["contract_shape"],
                 "contract_valid": contract["contract_valid"],
                 "contract_errors": contract["contract_errors"],
@@ -95,7 +112,7 @@ def main() -> int:
     agent_id = data.get("agent_id", "") or ""
     agent_transcript_path = data.get("agent_transcript_path", "") or ""
     stop_hook_active = data.get("stop_hook_active", False)
-    message = data.get("last_assistant_message", "") or ""
+    message, message_source = _final_message(data, agent_transcript_path)
     contract_found = "CONTRACT {" in message
 
     # Only audit craftflow agents to suppress noise from unrelated subagents
@@ -134,6 +151,7 @@ def main() -> int:
             "contract_errors": contract_errors,
             "contract_warnings": contract_warnings,
             "message_len": len(message),
+            "message_source": message_source,
             "mode": mode.get("subagentStopAudit", "audit"),
             "task_id": None,
             "agent": agent_type,
@@ -155,7 +173,7 @@ def main() -> int:
         )
 
     # Runs after the existing events so they are written even if this is slow.
-    _log_agent_usage(data, mode, agent_type, agent_id, agent_transcript_path, message)
+    _log_agent_usage(data, mode, agent_type, agent_id, agent_transcript_path, message, message_source)
     _log_machine_shadow(mode, agent_type, message)
 
     return 0
