@@ -79,7 +79,7 @@ STEP_TIMEOUT = 900
 # scripts/craftflow_hook_unit_tests.py (30k lines) is not a suite here: it crashes on a missing monorepo path
 # (/home/packages/agent-workflow/resources/craftflow/agents/bug-investigator.md).
 SUITES = [
-    ("test_agent_structure", ""), ("test_architecture_scanner_agent", ""), ("test_contract_validate", ""),
+    ("test_agent_native_guards", ""), ("test_agent_structure", ""), ("test_architecture_scanner_agent", ""), ("test_contract_validate", ""),
     ("test_contract_validate_impact", ""), ("test_contract_validate_pilot", ""), ("test_contract_validate_scanner", ""),
     ("test_craftflow_arch_lint", "root"), ("test_craftflow_arch_rule_selftest", ""),
     ("test_craftflow_baseline_integrity", ""), ("test_craftflow_bite_check", ""), ("test_repro_first_debug", ""), ("test_craftflow_ui_tells", ""), ("test_two_axis_review", ""), ("test_plan_check_levels", ""), ("test_prose_budget", ""), ("test_craftflow_machine", ""),
