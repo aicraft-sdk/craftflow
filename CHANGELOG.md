@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.42.1] - 2026-11-24
+
+### Fixes
+
+- read the agent's final text from its transcript when SubagentStop sends an empty message
+
+### CI
+
+- give every NAS job a current git, like GitHub-hosted runners
+- keep craftflow checks on the distro git and scale release-gate caps on the NAS
+- run the NAS runner as non-root and scale timing budgets on slow CPUs
+- run all workflows on the NAS self-hosted runner
+
 ## [1.42.0] - 2026-11-23
 
 ### Features
