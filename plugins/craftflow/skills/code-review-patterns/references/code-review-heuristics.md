@@ -9,6 +9,7 @@
 - [UI Quick Scan](#ui-quick-scan)
 - [Type Design Red Flags](#type-design-red-flags)
 - [Structural Simplification Scan](#structural-simplification-scan)
+- [Constraint Comment Scan](#constraint-comment-scan)
 
 ## Maintainability Scan
 
@@ -139,3 +140,21 @@ Prefer: push the logic into a dedicated abstraction, helper, state machine, or s
 
 Flag structural issues only when they materially worsen maintainability or represent a missed
 opportunity for a dramatic simplification. Do not surface cosmetic structure nits as regressions.
+
+## Constraint Comment Scan
+
+A comment that states a rule ("never null here", "keep in sync with X", "only call after init") is a check nobody
+runs. List the ones the diff adds with
+`python3 <plugin>/scripts/craftflow_constraint_comments.py <review-package.diff>`; it proposes a channel for each.
+
+For each comment, ask for the strongest channel that can hold the rule, in this order:
+
+- **type**: nullness, allowed values, shape (`Optional` removed, an enum, a `NewType` or branded id)
+- **runtime assertion**: ranges, ordering, call-once, preconditions the type system cannot express
+- **test**: "keep in sync with", "same as", behaviour across modules; the test fails when the two drift
+- **lint**: layer and import rules, via an arch-lint rule (see `skills/retro/references/mistake-to-rule.md`)
+
+Keep the comment only when no channel can hold the rule, and then it says why (an external contract, a measured
+reason). A comment the code already contradicts is a finding: the code or the comment is wrong, and the reviewer names
+which. Comments that explain *why* stay; this scan is about comments that state *what must hold*. These are
+maintainability findings, not blockers, unless the code breaks the stated rule.

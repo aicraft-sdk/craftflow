@@ -24,6 +24,7 @@ If one fails, do not write a check; use the "judgment" row below.
 | Another syntactic pattern in this repo's Python | ruff rule in `ruff.toml`, or a clean-state check class | human (agents never edit `ruff.toml`) |
 | Behavioural bug | regression test written to fail first, then fix | agent, in the normal TDD flow |
 | Process step skipped (ran X without Y) | hook in `hooks/hooks.json` | human reviews; hooks gate agent behaviour |
+| A rule written only as a code comment ("never null", "keep in sync with X") | the type, assertion, test or lint it names; `craftflow_constraint_comments.py` lists them in a diff | agent, in review or TDD |
 | Judgment call, preference, or anything with exceptions | reviewer prose in `skills/code-review-patterns/SKILL.md` | agent proposes text, human merges |
 | First occurrence, not severe | nothing yet | record it |
 
