@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are produced automatically by `.github/workflows/publish-craftflow-plugin.yml`.
 Do not hand-edit released sections.
 
+## [1.44.0] - 2026-11-24
+
+### Features
+
+- flag prompts repeated across sessions as skill candidates
+- list constraint comments a diff adds and the check each could become
+
 ## [1.43.0] - 2026-11-24
 
 ### Features
