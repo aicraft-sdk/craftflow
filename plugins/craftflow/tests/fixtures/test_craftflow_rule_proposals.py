@@ -75,6 +75,33 @@ check("3 or more tool errors in a row is an error loop",
       sig["error_loops"] == [{"session": "s1.jsonl", "longest_run": 3}], sig)
 check("sessions are counted", sig["sessions"] == 2, sig)
 
+print("[repeated prompts]")
+rp_dir = tmp / "prompts"
+rp_dir.mkdir()
+
+
+def prompt(text, **extra):
+    return json.dumps({"type": "user", "message": {"role": "user", "content": text}, **extra})
+
+
+ask = "Please run the release gate and summarize the failures"
+for i in range(3):
+    rows = [prompt(ask if i else ask.upper() + "!"), prompt("short one"), prompt("<command-name>/x</command-name>"),
+            prompt("Run the release gate twice", isMeta=True)]
+    (rp_dir / f"p{i}.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+(rp_dir / "p0.jsonl").open("a", encoding="utf-8").write(prompt(ask) + "\n")
+(rp_dir / "p3.jsonl").write_text(prompt("A prompt seen in only two sessions here") + "\n"
+                                 + json.dumps({"type": "user", "message": {"content": [
+                                     {"type": "tool_result", "content": ask}]}}) + "\n", encoding="utf-8")
+(rp_dir / "p4.jsonl").write_text(prompt("A prompt seen in only two sessions here") + "\n", encoding="utf-8")
+rep = rp.session_signals([rp_dir])["repeated_prompts"]
+check("a prompt typed in 3 or more sessions is listed once, with its session count",
+      rep == [{"prompt": "please run the release gate and summarize the failures", "sessions": 3}], rep)
+check("case and punctuation are ignored, repeats within a session count once", rep and rep[0]["sessions"] == 3, rep)
+check("short prompts, harness text, meta rows and tool results are never prompts",
+      not any("short" in r["prompt"] or "command" in r["prompt"] or "twice" in r["prompt"] for r in rep), rep)
+check("two sessions is not enough", not any("only two" in r["prompt"] for r in rep), rep)
+
 print("[cli]")
 state = tmp / "state" / "workflows"
 state.mkdir(parents=True)

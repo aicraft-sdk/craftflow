@@ -16,6 +16,8 @@ from typing import Iterable, List
 GUIDE = "skills/retro/references/mistake-to-rule.md"
 EDIT_THRASH_MIN = 5
 ERROR_LOOP_MIN = 3
+REPEAT_PROMPT_MIN = 3
+PROMPT_MIN_CHARS = 20
 # (pattern, mechanism, who acts), first match wins: lint before arch-lint, so "unused import" is a lint finding.
 _RULES = (
     (r"\blint|\bruff\b|\bformat|\bsyntax|\bunused\b", "lint rule or clean-state check",
@@ -60,10 +62,27 @@ def _blocks(row: dict) -> list:
     return content if isinstance(content, list) else []
 
 
+def _prompt_key(row: dict) -> str:
+    """A typed user prompt, normalized for comparison; "" for tool results, harness text and short prompts."""
+    if not isinstance(row, dict) or row.get("type") != "user" or row.get("isMeta"):
+        return ""
+    content = (row.get("message") or {}).get("content")
+    if isinstance(content, list):
+        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+            return ""
+        content = " ".join(str(b.get("text") or "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    text = " ".join(str(content or "").split())
+    if len(text) < PROMPT_MIN_CHARS or text.startswith(("<", "/", "Caveat:")):
+        return ""
+    return re.sub(r"[^\w\s]", "", text.lower())[:200]
+
+
 def session_signals(transcript_dirs: Iterable[Path]) -> dict:
-    """Edit thrashing (one file edited EDIT_THRASH_MIN+ times in a session) and error loops (ERROR_LOOP_MIN+ tool
-    errors in a row), per transcript file."""
+    """Edit thrashing (one file edited EDIT_THRASH_MIN+ times in a session), error loops (ERROR_LOOP_MIN+ tool errors
+    in a row), per transcript file, and repeated prompts (after AI Engineer Coach's skill finder): the same typed prompt
+    in REPEAT_PROMPT_MIN+ sessions is a skill candidate."""
     sessions, thrash, loops = 0, [], []
+    prompts: dict = {}
     for base in transcript_dirs:
         for path in sorted(base.rglob("*.jsonl")) if base.is_dir() else []:
             sessions += 1
@@ -78,6 +97,9 @@ def session_signals(transcript_dirs: Iterable[Path]) -> dict:
                     row = json.loads(line)
                 except ValueError:
                     continue
+                key = _prompt_key(row)
+                if key:
+                    prompts.setdefault(key, set()).add(str(path))
                 for block in _blocks(row):
                     if not isinstance(block, dict):
                         continue
@@ -92,4 +114,7 @@ def session_signals(transcript_dirs: Iterable[Path]) -> dict:
                     thrash.append({"session": path.name, "file": target, "edits": count})
             if longest >= ERROR_LOOP_MIN:
                 loops.append({"session": path.name, "longest_run": longest})
-    return {"sessions": sessions, "edit_thrashing": thrash, "error_loops": loops}
+    repeated = sorted(({"prompt": key, "sessions": len(paths)} for key, paths in prompts.items()
+                       if len(paths) >= REPEAT_PROMPT_MIN), key=lambda r: (-r["sessions"], r["prompt"]))
+    return {"sessions": sessions, "edit_thrashing": thrash, "error_loops": loops, "repeated_prompts": repeated,
+            "repeated_prompts_note": "skill candidates: see skills/skill-distillation; nothing is written"}
